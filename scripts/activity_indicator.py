@@ -261,6 +261,27 @@ def timestamp(value):
         return None
 
 
+def linked_child(database, child, parent):
+    """Validate native ancestry before reading child status; rollout references are data."""
+    visited = set()
+    for _ in range(8):
+        if child in visited:
+            return False
+        visited.add(child)
+        row = database.execute('SELECT source FROM threads WHERE id=? AND archived=0', (child,)).fetchone()
+        if not row:
+            return False
+        try:
+            source = json.loads(row['source'])
+            ancestor = source['subagent']['thread_spawn']['parent_thread_id']
+        except (ValueError, TypeError, KeyError):
+            return False
+        if ancestor == parent:
+            return True
+        child = ancestor
+    return False
+
+
 def status_line(status, rollout, children, now):
     active_children = sum(value.get('type') == 'active' for value in children)
     kind = status.get('type', 'unknown')
@@ -453,7 +474,8 @@ def run(args):
                                 '⚠️ Native activity unavailable · rollout unconfirmed', time.time())
                         continue
                     status = native.status(tid)
-                    children = [native.status(child) for child in sorted(reader.agents)[:32]]
+                    children = [native.status(child) for child in sorted(reader.agents)[:32]
+                                if linked_child(native_db, child, tid)]
                     now = time.time()
                     text = status_line(status, reader, children, now)
                     if status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.entries:

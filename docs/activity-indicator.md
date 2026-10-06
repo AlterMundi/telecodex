@@ -17,7 +17,8 @@ The observer uses only `initialize` and metadata-only `thread/read` on the exist
 Codex App Server proxy. It reads the bridge SQLite database and native index in
 read-only mode, selecting only topic bindings whose creator remains allowed.
 Linked rollout metadata supplies tool correlation and child references; native
-status reads establish current parent/child activity. No model inference, native
+index ancestry must link a referenced child back to the selected parent before
+its status is read. Native status reads establish current parent/child activity. No model inference, native
 turn/resume/steer, Telegram polling, Matrix operation or history import occurs.
 Raw commands, arguments, output, prompts, paths and agent identities never enter
 status text or logs. The native `sessions` root and first rollout metadata must

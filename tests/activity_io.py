@@ -167,6 +167,22 @@ class ActivityIO(unittest.TestCase):
                 native.rpc(method, {})
         self.assertEqual(self.calls, [])
 
+    def test_child_status_requires_native_ancestry_not_a_rollout_reference(self):
+        database = sqlite3.connect(':memory:')
+        database.row_factory = sqlite3.Row
+        database.execute('CREATE TABLE threads(id TEXT,source TEXT,archived INTEGER)')
+        for child, parent in [('child-a', 'parent-a'), ('nested', 'child-a'), ('foreign', 'parent-b'), ('cycle', 'cycle')]:
+            source = json.dumps({'subagent': {'thread_spawn': {'parent_thread_id': parent}}})
+            database.execute('INSERT INTO threads VALUES(?,?,0)', (child, source))
+        try:
+            self.assertTrue(activity.linked_child(database, 'child-a', 'parent-a'))
+            self.assertTrue(activity.linked_child(database, 'nested', 'parent-a'))
+            self.assertFalse(activity.linked_child(database, 'foreign', 'parent-a'))
+            self.assertFalse(activity.linked_child(database, 'cycle', 'parent-a'))
+            self.assertFalse(activity.linked_child(database, 'missing', 'parent-a'))
+        finally:
+            database.close()
+
 
 if __name__ == '__main__':
     unittest.main()
