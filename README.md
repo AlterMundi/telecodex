@@ -28,6 +28,10 @@
 
 ---
 
+## Maintained tribal fork
+
+AlterMundi maintains this fork for a dedicated human Telegram channel into the existing native Codex harness. See [deployment and continuity](docs/tribal-deployment.md) and [private-topic configuration](tribal.toml.example). Portable setup is distributed through AlterMundi/Skills. The qualified toolchain is Rust1.95.0; text builds use `--locked --no-default-features`.
+
 ## ✨ What it is
 
 **Telecodex** is a Rust bridge that connects a local `codex` CLI instance to Telegram.

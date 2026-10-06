@@ -21,6 +21,9 @@ pub(super) async fn process_turn(
     let turn_id = shared
         .store
         .record_turn_started(session.id, &queued.request)?;
+    if let Some(update_id) = queued.update_id {
+        shared.store.link_update_turn(update_id, turn_id)?;
+    }
     let turn_workspace = prepare_turn_workspace(&session, turn_id)?;
 
     let cancel = CancellationToken::new();
@@ -118,12 +121,25 @@ pub(super) async fn process_turn(
             let approval_cancel = cancel.clone();
             let requester_user_id = queued.request.from_user_id;
             let session_key = session.key;
+            let preserve_thread_binding = queued.request.review_mode.is_none();
             move |event| {
                 let sink = sink.clone();
                 let shared = shared.clone();
                 let cancel = approval_cancel.clone();
                 async move {
                     match event {
+                        CodexEvent::ThreadStarted(thread_id) => {
+                            if preserve_thread_binding {
+                                shared
+                                    .store
+                                    .set_session_codex_thread(session_key, &thread_id)?;
+                            }
+                            sink.lock()
+                                .await
+                                .handle_event(CodexEvent::ThreadStarted(thread_id))
+                                .await?;
+                            Ok(CodexEventOutcome::None)
+                        }
                         CodexEvent::ApprovalRequest(request) => {
                             if let Err(error) = sink
                                 .lock()
@@ -195,29 +211,9 @@ pub(super) async fn process_turn(
                 } else {
                     "failed"
                 };
-                let recovery_note = if should_reset_session_after_error(&error) {
-                    tracing::warn!(
-                        "resetting stale Codex thread binding for {:?} after error: {error:#}",
-                        session.key
-                    );
-                    match shared.store.clear_session_conversation(session.key) {
-                        Ok(()) => Some(
-                            "The saved Codex thread binding for this topic was reset. Retry the same request to start a fresh session."
-                                .to_string(),
-                        ),
-                        Err(clear_error) => {
-                            tracing::warn!(
-                                "failed to clear stale session conversation for {:?}: {clear_error:#}",
-                                session.key
-                            );
-                            shared.store.set_session_busy(session.key, false)?;
-                            None
-                        }
-                    }
-                } else {
-                    shared.store.set_session_busy(session.key, false)?;
-                    None
-                };
+                shared.store.set_session_busy(session.key, false)?;
+                let recovery_note = saved_thread_is_unavailable(&error).then(||
+                    "The saved native thread is unavailable. Its binding and your input are preserved. Recover the native context or explicitly clear this topic to start a new context.".to_string());
                 finish_failed_turn(&shared.store, turn_id, &sink, status, &error, recovery_note)
                     .await?;
                 Err(error)
@@ -512,7 +508,7 @@ pub(super) fn turn_completion_notification_text(usernames: &[String]) -> Option<
     Some(format!("Готово, {} fyi ✅", usernames.join(" ")))
 }
 
-pub(super) fn should_reset_session_after_error(error: &anyhow::Error) -> bool {
+pub(super) fn saved_thread_is_unavailable(error: &anyhow::Error) -> bool {
     let pretty = format!("{error:#}").to_ascii_lowercase();
     let display = error.to_string().to_ascii_lowercase();
     let matches = |text: &str| {
@@ -1207,7 +1203,7 @@ pub(super) fn resolve_session_codex_binding_from_history(
     shared: &Arc<AppShared>,
     session: crate::models::SessionRecord,
 ) -> Result<crate::models::SessionRecord> {
-    if session.force_fresh_thread {
+    if session.force_fresh_thread || !shared.config.codex.auto_attach_latest_history {
         return Ok(session);
     }
     let codex_home = default_codex_home();

@@ -28,7 +28,7 @@ mod turns;
 use crate::{
     codex::{
         AvailableModel, CodexApprovalDecision, CodexApprovalKind, CodexEvent, CodexEventOutcome,
-        CodexRunner, CodexSteerRequest,
+        CodexRunner, CodexSteerError, CodexSteerRequest,
     },
     codex_history::{
         CodexEnvironmentSummary, CodexHistoryEntry, CodexThreadSummary,
@@ -72,6 +72,7 @@ struct AppShared {
     telegram: TelegramClient,
     codex: CodexRunner,
     bot_username: Option<String>,
+    bot_has_topics: bool,
     service_user_id: i64,
     handy_model_dir: Option<PathBuf>,
     session_defaults: SessionDefaults,
@@ -100,6 +101,11 @@ struct ActiveTurnSteerHandle {
 struct QueuedTurn {
     request: TurnRequest,
     chat_kind: String,
+    update_id: Option<i64>,
+}
+
+tokio::task_local! {
+    static HUMAN_UPDATE_ID: i64;
 }
 
 #[derive(Clone)]
@@ -211,7 +217,8 @@ impl App {
             &config.startup_admin_ids,
             &session_defaults,
         )?;
-        let codex = CodexRunner::new(config.codex.binary.clone());
+        let codex = CodexRunner::new(config.codex.binary.clone())
+            .with_shared_app_server(config.codex.shared_app_server);
         let service_user_id = config.startup_admin_ids.first().copied().unwrap_or(0);
 
         Ok(Self {
@@ -221,6 +228,7 @@ impl App {
                 telegram,
                 codex,
                 bot_username: me.username,
+                bot_has_topics: me.has_topics_enabled.unwrap_or(false),
                 service_user_id,
                 handy_model_dir,
                 session_defaults,
@@ -250,12 +258,14 @@ impl App {
             heartbeat_app.run_instance_heartbeat_loop().await;
         });
 
-        let maintenance_app = self.clone();
-        tokio::spawn(async move {
-            if let Err(error) = maintenance_app.run_background_maintenance_loop().await {
-                tracing::error!("background maintenance loop failed: {error:#}");
-            }
-        });
+        if self.shared.config.background_maintenance {
+            let maintenance_app = self.clone();
+            tokio::spawn(async move {
+                if let Err(error) = maintenance_app.run_background_maintenance_loop().await {
+                    tracing::error!("background maintenance loop failed: {error:#}");
+                }
+            });
+        }
 
         let mut offset = self.shared.store.last_update_id()?.map(|value| value + 1);
         tracing::info!("telecodex started {}", app_version_label());
@@ -277,9 +287,16 @@ impl App {
                     match result {
                         Ok(updates) => {
                             for update in updates {
-                                offset = Some(update.update_id + 1);
-                                self.shared.store.save_last_update_id(update.update_id)?;
-                                if let Err(error) = self.process_update(update).await {
+                                let update_id = update.update_id;
+                                let admitted = self.shared.store.admit_update(&update)?;
+                                offset = self.shared.store.last_update_id()?.map(|id| id + 1);
+                                if !admitted {
+                                    continue;
+                                }
+                                self.shared.store.begin_update(update_id)?;
+                                let result = HUMAN_UPDATE_ID.scope(update_id, self.process_update(update)).await;
+                                self.shared.store.finish_update_dispatch(update_id, result.is_ok())?;
+                                if let Err(error) = result {
                                     tracing::error!("update processing failed: {error:#}");
                                 }
                             }
@@ -323,6 +340,9 @@ impl App {
     }
 
     async fn notify_primary_user(&self, text: &str) {
+        if !self.shared.config.telegram.lifecycle_notifications {
+            return;
+        }
         let Some(user_id) = self.shared.config.startup_admin_ids.first().copied() else {
             return;
         };
@@ -906,12 +926,13 @@ impl App {
                         .await?;
                     } else {
                         let session = self.ensure_resolved_session(session_key, user.tg_user_id)?;
-                        self.send_status(
-                            message.chat.id,
-                            message.message_thread_id,
-                            &format_session_status(&session, &message.chat),
-                        )
-                        .await?;
+                        let uncertain = self.shared.store.uncertain_update_ids(user.tg_user_id)?;
+                        let mut text = format_session_status(&session, &message.chat);
+                        if !uncertain.is_empty() {
+                            text.push_str(&format!("\n\nInterrupted input updates: `{uncertain:?}`. Their effects are undetermined; inspect this topic's history before explicitly retrying."));
+                        }
+                        self.send_status(message.chat.id, message.message_thread_id, &text)
+                            .await?;
                     }
                 }
                 BridgeCommand::Stop => {
@@ -1469,11 +1490,12 @@ impl App {
             .unwrap_or(message.chat.id);
         if self.shared.config.telegram.primary_forum_chat_id.is_none()
             && !message.chat.is_forum.unwrap_or(false)
+            && !(message.chat.kind == "private" && self.shared.bot_has_topics)
         {
             self.send_status(
                 message.chat.id,
                 message.message_thread_id,
-                "This chat is not a forum. Set `telegram.primary_forum_chat_id` to create topics in a dedicated forum.",
+                "Enable private-chat topics for this bot in BotFather, or set `telegram.primary_forum_chat_id` to use a dedicated forum.",
             )
             .await?;
             return Ok(());
@@ -1514,19 +1536,15 @@ impl App {
         self.send_status(
             target_chat_id,
             Some(topic.message_thread_id),
-            &format!(
-                "New topic ready.\nthread_id=`{}`\ncwd=`{}`",
-                topic.message_thread_id,
-                template.cwd.display()
-            ),
+            &format!("New topic ready.\nWorkspace: `{}`", template.cwd.display()),
         )
         .await?;
         self.send_status(
             message.chat.id,
             message.message_thread_id,
             &format!(
-                "Created topic `{}` in chat `{}` with thread_id `{}`.",
-                topic.name, target_chat_id, topic.message_thread_id
+                "Created topic `{}`. Open it to start an independent conversation.",
+                topic.name
             ),
         )
         .await?;
@@ -1630,18 +1648,28 @@ impl App {
     async fn enqueue_turn(&self, request: TurnRequest, chat_kind: &str) -> Result<()> {
         self.ensure_session(request.session_key, request.from_user_id)?;
         let handle = self.worker_for(request.session_key).await?;
-        handle
+        let update_id = HUMAN_UPDATE_ID.try_with(|id| *id).ok();
+        if let Some(id) = update_id {
+            self.shared.store.mark_update_queued(id)?;
+        }
+        let queued = handle
             .sender
             .send(QueuedTurn {
                 request,
                 chat_kind: chat_kind.to_string(),
+                update_id,
             })
-            .map_err(|_| anyhow!("session worker dropped"))?;
+            .map_err(|_| anyhow!("session worker dropped"));
+        if queued.is_err() {
+            if let Some(id) = update_id {
+                self.shared.store.finish_update_turn(id, false)?;
+            }
+        }
+        queued?;
         Ok(())
     }
 
-    /// Attempts to append text to the current turn and only permits queue fallback after a
-    /// terminal rejection or a closed response channel.
+    /// Queue fallback requires a definite rejection; uncertainty requires a human decision.
     async fn try_steer_active_turn(
         &self,
         session_key: SessionKey,
@@ -1653,12 +1681,16 @@ impl App {
             let Some(worker) = workers.get(&session_key) else {
                 return Ok(false);
             };
-            let active = worker.steer.lock().expect("steer mutex poisoned").clone();
-            active
+            worker.steer.lock().expect("steer mutex poisoned").clone()
         };
         let Some(active) = active else {
             return Ok(false);
         };
+
+        let update_id = HUMAN_UPDATE_ID.try_with(|id| *id).ok();
+        if let Some(id) = update_id {
+            self.shared.store.begin_update_steer(id, active.turn_id)?;
+        }
 
         let (response_tx, response_rx) = oneshot::channel();
         if active
@@ -1669,11 +1701,17 @@ impl App {
             })
             .is_err()
         {
+            if let Some(id) = update_id {
+                self.shared.store.reject_update_steer(id)?;
+            }
             return Ok(false);
         }
 
         match response_rx.await {
             Ok(Ok(())) => {
+                if let Some(id) = update_id {
+                    self.shared.store.accept_update_steer(id)?;
+                }
                 if let Err(error) = self.shared.store.audit(
                     Some(from_user_id),
                     "turn_steered",
@@ -1687,13 +1725,21 @@ impl App {
                 }
                 Ok(true)
             }
-            Ok(Err(error)) => {
+            Ok(Err(CodexSteerError::Rejected(error))) => {
+                if let Some(id) = update_id {
+                    self.shared.store.reject_update_steer(id)?;
+                }
                 tracing::debug!("active turn rejected steering; queueing as a new turn: {error}");
                 Ok(false)
             }
-            Err(_) => {
-                tracing::debug!("active turn steering channel closed; queueing as a new turn");
-                Ok(false)
+            Ok(Err(CodexSteerError::Undetermined(_))) | Err(_) => {
+                if let Some(id) = update_id {
+                    self.shared.store.mark_update_steer_undetermined(id)?;
+                }
+                self.send_status(session_key.chat_id,
+                    Some(session_key.thread_id).filter(|value| *value != 0),
+                    "The active turn may have received your message, but acceptance could not be verified. The input is preserved; use /status before deciding whether to retry.").await?;
+                Ok(true)
             }
         }
     }
@@ -1716,9 +1762,15 @@ impl App {
         let shared = self.shared.clone();
         tokio::spawn(async move {
             while let Some(turn) = rx.recv().await {
-                if let Err(error) =
-                    process_turn(shared.clone(), cancel.clone(), steer.clone(), turn).await
-                {
+                let update_id = turn.update_id;
+                let result =
+                    process_turn(shared.clone(), cancel.clone(), steer.clone(), turn).await;
+                if let Some(id) = update_id {
+                    if let Err(error) = shared.store.finish_update_turn(id, result.is_ok()) {
+                        tracing::error!("failed to record input turn outcome: {error:#}");
+                    }
+                }
+                if let Err(error) = result {
                     tracing::error!("turn failed for {:?}: {error:#}", key);
                 }
             }
