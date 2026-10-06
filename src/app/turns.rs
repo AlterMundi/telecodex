@@ -528,6 +528,7 @@ struct LiveTurnSink {
     limits_inline: Option<String>,
     pending_text: String,
     has_assistant_text: bool,
+    message_committed: bool,
     last_flushed_text: String,
     last_flush_at: Instant,
     edit_backoff_until: Option<Instant>,
@@ -548,6 +549,7 @@ impl LiveTurnSink {
             limits_inline,
             pending_text: "⏳".to_string(),
             has_assistant_text: false,
+            message_committed: false,
             last_flushed_text: String::new(),
             last_flush_at: Instant::now() - Duration::from_secs(60),
             edit_backoff_until: None,
@@ -568,6 +570,7 @@ impl LiveTurnSink {
             limits_inline,
             pending_text: "⏳".to_string(),
             has_assistant_text: false,
+            message_committed: false,
             last_flushed_text: String::new(),
             last_flush_at: Instant::now() - Duration::from_secs(60),
             edit_backoff_until: None,
@@ -582,8 +585,21 @@ impl LiveTurnSink {
                 }
             }
             CodexEvent::AssistantText(text) => {
+                self.begin_next_message();
                 self.pending_text = text;
                 self.has_assistant_text = true;
+            }
+            CodexEvent::CommentaryCompleted(text) => {
+                self.begin_next_message();
+                self.pending_text = text;
+                self.has_assistant_text = true;
+                self.flush(true).await?;
+                // Only an acknowledged permanent publication may freeze this message.
+                if self.last_flushed_text != self.pending_text {
+                    anyhow::bail!("completed commentary publication was deferred by Telegram");
+                }
+                self.message_committed = true;
+                return Ok(());
             }
             CodexEvent::ThreadStarted(thread_id) => {
                 tracing::debug!("codex thread started: {thread_id}");
@@ -606,6 +622,13 @@ impl LiveTurnSink {
     }
 
     async fn finish(&mut self, final_error: Option<String>) -> Result<()> {
+        if self.message_committed {
+            if final_error.is_none() {
+                return Ok(());
+            }
+            self.begin_next_message();
+            self.pending_text.clear();
+        }
         if let Some(final_error) = final_error {
             self.pending_text = if self.pending_text.trim().is_empty() {
                 final_error
@@ -613,7 +636,18 @@ impl LiveTurnSink {
                 format!("{}\n\n{}", self.pending_text, final_error)
             };
         }
-        self.flush(true).await
+        self.flush(true).await?;
+        self.message_committed = self.last_flushed_text == self.pending_text;
+        Ok(())
+    }
+
+    fn begin_next_message(&mut self) {
+        if self.message_committed {
+            // References to committed messages must never be reused for another item.
+            self.messages.clear();
+            self.last_flushed_text.clear();
+            self.message_committed = false;
+        }
     }
 
     async fn flush(&mut self, force: bool) -> Result<()> {

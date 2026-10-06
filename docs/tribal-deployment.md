@@ -60,3 +60,18 @@ Record the exact reviewed source commit, binary SHA256, toolchain, build feature
 Rollback replaces the binary and any explicitly changed configuration with their saved versions. Do not automatically restore an older database or roll back the polling offset: that can erase accepted input or repeat external effects. Additive incoming_updates state is retained. If a data recovery is required, first preserve the current database and inspect undetermined updates and native history.
 
 Live bot acceptance requires its dedicated local token and a human-originated message. Unit/loopback/native proxy checks qualify code and harness attachment separately; they do not claim a real Telegram exchange.
+
+## Keep completed messages in Telegram history
+
+A native turn may contain several completed commentary messages before its final
+answer. Each completed commentary is published permanently and its Telegram
+message references are then protected from later preview edits. The final answer
+is published once; finishing a turn whose last message was already committed
+does not duplicate that message. Long completed messages are split without
+truncating their stored text.
+
+`use_message_drafts=true` uses Telegram drafts only while the current message is
+streaming. Those previews are temporary and can disappear. Select
+`use_message_drafts=false` for a persistent, edited preview instead. In either
+mode, completed commentary must remain in history while the turn continues.
+The native thread and input journal remain unchanged.
