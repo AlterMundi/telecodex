@@ -36,6 +36,8 @@ pub struct TelegramConfig {
     pub api_base: String,
     #[serde(default = "default_true")]
     pub use_message_drafts: bool,
+    #[serde(default = "default_true")]
+    pub show_unfinished_messages: bool,
     pub primary_forum_chat_id: Option<i64>,
     #[serde(default)]
     pub auto_create_topics: bool,

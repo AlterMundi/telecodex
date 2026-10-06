@@ -87,6 +87,7 @@ fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
             lifecycle_notifications: false,
             api_base: "https://api.telegram.org".to_string(),
             use_message_drafts: false,
+            show_unfinished_messages: true,
             primary_forum_chat_id: None,
             auto_create_topics: false,
             forum_sync_topics_per_poll: 2,

@@ -75,3 +75,10 @@ streaming. Those previews are temporary and can disappear. Select
 `use_message_drafts=false` for a persistent, edited preview instead. In either
 mode, completed commentary must remain in history while the turn continues.
 The native thread and input journal remain unchanged.
+
+For completed messages only, set `telegram.show_unfinished_messages=false`.
+This suppresses streaming text, tool-progress previews and initial placeholders,
+including drafts when `use_message_drafts=true`. Each completed commentary and
+the final response are still published permanently, with normal long-message
+splitting. Interactive approval prompts and final error reports remain available.
+The default is `true`, preserving existing preview behavior.
