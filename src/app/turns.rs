@@ -651,6 +651,9 @@ impl LiveTurnSink {
     }
 
     async fn flush(&mut self, force: bool) -> Result<()> {
+        if self.message_committed {
+            return Ok(());
+        }
         if self
             .edit_backoff_until
             .is_some_and(|until| until <= Instant::now())

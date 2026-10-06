@@ -160,6 +160,10 @@ def scenario(mode):
                                 send({'method': 'item/completed', 'params': {'item': {
                                     'type': 'agentMessage', 'id': item_id, 'text': text,
                                     'phase': 'commentary' if index < 2 else 'final_answer'}}})
+                                if index < 2:
+                                    send({'method': 'item/completed', 'params': {'item': {
+                                        'type': 'commandExecution', 'command': 'synthetic command',
+                                        'status': 'completed', 'aggregatedOutput': 'synthetic tool progress'}}})
                         if commentary_only:
                             send({'method': 'turn/completed', 'params': {'turn': {
                                 'id': 'synthetic-native-turn', 'status': 'completed'}}})
