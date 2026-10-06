@@ -50,6 +50,7 @@ pub struct AvailableModel {
 pub enum CodexEvent {
     Progress(String),
     AssistantText(String),
+    CommentaryCompleted(String),
     ThreadStarted(String),
     ApprovalRequest(CodexApprovalRequest),
 }
@@ -697,6 +698,10 @@ where
         }
         "item/started" => {
             if let Some(item) = params.get("item") {
+                if item.get("type").and_then(Value::as_str) == Some("agentMessage") {
+                    summary.assistant_text.clear();
+                    *assistant_message_completed = false;
+                }
                 if item.get("type").and_then(Value::as_str) == Some("commandExecution") {
                     let command = item
                         .get("command")
@@ -717,7 +722,13 @@ where
                             .to_string();
                         *assistant_message_completed = true;
                         summary.assistant_text = text.clone();
-                        let _ = on_event(CodexEvent::AssistantText(text)).await?;
+                        let event =
+                            if item.get("phase").and_then(Value::as_str) == Some("commentary") {
+                                CodexEvent::CommentaryCompleted(text)
+                            } else {
+                                CodexEvent::AssistantText(text)
+                            };
+                        let _ = on_event(event).await?;
                         if item.get("phase").and_then(Value::as_str) == Some("final_answer") {
                             *active_turn_id = None;
                             *turn_completed = true;
@@ -846,7 +857,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)=>summary.assistant_text=text.clone(),CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -2198,6 +2209,61 @@ while True:
         assert!(turn_completed);
         assert!(active_turn_id.is_none());
         assert!(turn_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn commentary_is_committed_separately_and_next_message_deltas_start_empty() {
+        let mut summary = RunSummary {
+            codex_thread_id: None,
+            assistant_text: String::new(),
+            stderr_text: String::new(),
+        };
+        let mut active_turn_id = Some("turn-1".to_string());
+        let mut turn_error = None;
+        let mut turn_completed = false;
+        let mut assistant_message_completed = false;
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = events.clone();
+        let mut on_event = move |event| {
+            observed.lock().unwrap().push(event);
+            async { Ok(CodexEventOutcome::None) }
+        };
+        for (method, params) in [
+            ("item/started", json!({"item":{"type":"agentMessage"}})),
+            ("item/agentMessage/delta", json!({"delta":"Progress."})),
+            (
+                "item/completed",
+                json!({"item":{"type":"agentMessage",
+                "text":"Progress.","phase":"commentary"}}),
+            ),
+            ("item/started", json!({"item":{"type":"agentMessage"}})),
+            ("item/agentMessage/delta", json!({"delta":"Final "})),
+            ("item/agentMessage/delta", json!({"delta":"answer."})),
+            (
+                "item/completed",
+                json!({"item":{"type":"agentMessage",
+                "text":"Final answer.","phase":"final_answer"}}),
+            ),
+        ] {
+            handle_notification(
+                method,
+                &params,
+                &mut summary,
+                &mut active_turn_id,
+                &mut turn_error,
+                &mut turn_completed,
+                &mut assistant_message_completed,
+                &mut on_event,
+            )
+            .await
+            .unwrap();
+        }
+        let events = events.lock().unwrap();
+        assert!(matches!(&events[1], CodexEvent::CommentaryCompleted(text) if text == "Progress."));
+        assert!(matches!(&events[2], CodexEvent::AssistantText(text) if text == "Final "));
+        assert!(matches!(&events[3], CodexEvent::AssistantText(text) if text == "Final answer."));
+        assert_eq!(summary.assistant_text, "Final answer.");
+        assert!(turn_completed);
     }
 
     #[tokio::test]

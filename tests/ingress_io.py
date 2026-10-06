@@ -7,6 +7,7 @@ Reports behavior without encoding candidate-specific expected assertions.
 """
 import base64
 import hashlib
+import html
 import http.server
 import json
 import pathlib
@@ -74,6 +75,11 @@ import_desktop_history=false
 
 
 def scenario(mode):
+    retain_commentary = mode.startswith('retained_commentary')
+    drafts = mode == 'retained_commentary_drafts'
+    commentary_only = mode == 'retained_commentary_only'
+    commentary = ['First completed progress.', 'Second progress: ' + 'x' * 3800]
+    final_answer = 'Final answer.'
     acknowledge_steer = mode == 'accepted_steer'
     missing_binding = mode == 'missing_saved_binding'
     with tempfile.TemporaryDirectory(prefix='telecodex-review-steer-') as name:
@@ -142,6 +148,25 @@ def scenario(mode):
                     elif method == 'turn/start':
                         send({'id': request_id, 'result': {'turn': {'id': 'synthetic-native-turn'}}})
                         started.set()
+                        if retain_commentary:
+                            for index, text in enumerate(commentary if commentary_only else [*commentary, final_answer]):
+                                item_id = f'agent-{index}'
+                                send({'method': 'item/started', 'params': {'item': {
+                                    'type': 'agentMessage', 'id': item_id}}})
+                                midpoint = len(text) // 2
+                                for delta in (text[:midpoint], text[midpoint:]):
+                                    send({'method': 'item/agentMessage/delta', 'params': {
+                                        'itemId': item_id, 'delta': delta}})
+                                send({'method': 'item/completed', 'params': {'item': {
+                                    'type': 'agentMessage', 'id': item_id, 'text': text,
+                                    'phase': 'commentary' if index < 2 else 'final_answer'}}})
+                                if index < 2:
+                                    send({'method': 'item/completed', 'params': {'item': {
+                                        'type': 'commandExecution', 'command': 'synthetic command',
+                                        'status': 'completed', 'aggregatedOutput': 'synthetic tool progress'}}})
+                        if commentary_only:
+                            send({'method': 'turn/completed', 'params': {'turn': {
+                                'id': 'synthetic-native-turn', 'status': 'completed'}}})
                         if steered.is_set():
                             send({'method': 'turn/completed', 'params': {'turn': {
                                 'id': 'synthetic-native-turn', 'status': 'failed',
@@ -181,6 +206,7 @@ while True:
 ''')
         fake.chmod(0o700)
         polls, message_id = 0, 30
+        permanent, outbound = {}, []
         lock = threading.Lock()
 
         def update(number, text):
@@ -192,7 +218,7 @@ while True:
         class Telegram(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 nonlocal polls, message_id
-                self.rfile.read(int(self.headers.get('Content-Length', '0')))
+                payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
                 method = self.path.rsplit('/', 1)[-1]
                 if method == 'getMe':
                     result = {'id': 123, 'is_bot': True, 'first_name': 'Fixture',
@@ -203,7 +229,7 @@ while True:
                         poll = polls
                     if poll == 1:
                         result = [update(1, '/status' if missing_binding else 'first human input')]
-                    elif poll == 2:
+                    elif poll == 2 and not retain_commentary:
                         if missing_binding:
                             with sqlite3.connect(root / 'state.sqlite') as db:
                                 changed = db.execute("UPDATE sessions SET codex_thread_id='missing-native-context',force_fresh_thread=0 WHERE chat_id=100 AND thread_id=7").rowcount
@@ -215,8 +241,15 @@ while True:
                         time.sleep(.15)
                         result = []
                 elif method in ('sendMessage', 'editMessageText'):
-                    message_id += 1
-                    result = {'message_id': message_id, 'chat': {'id': 100, 'type': 'private'}}
+                    with lock:
+                        if method == 'sendMessage':
+                            message_id += 1
+                            target_id = message_id
+                        else:
+                            target_id = payload['message_id']
+                        permanent[target_id] = html.unescape(payload['text'])
+                        outbound.append((method, target_id, permanent[target_id]))
+                    result = {'message_id': target_id, 'chat': {'id': 100, 'type': 'private'}}
                 else:
                     result = True
                 data = json.dumps({'ok': True, 'result': result}).encode()
@@ -244,7 +277,7 @@ edit_debounce_ms=100
 [telegram]
 bot_token_file="{token}"
 api_base="http://127.0.0.1:{telegram.server_port}"
-use_message_drafts=false
+use_message_drafts={str(drafts).lower()}
 [codex]
 binary="{fake}"
 default_cwd="{root}"
@@ -265,6 +298,8 @@ import_desktop_history=false
                     with sqlite3.connect(root / 'state.sqlite') as db:
                         rows = db.execute('SELECT update_id,status,turn_id FROM incoming_updates ORDER BY update_id').fetchall()
                         sessions = db.execute('SELECT codex_thread_id FROM sessions').fetchall()
+                    if retain_commentary and rows == [(1, 'settled', 1)]:
+                        break
                     if len(rows) == 2:
                         if missing_binding and rows[1][1] == 'undetermined':
                             break
@@ -279,6 +314,32 @@ import_desktop_history=false
                 starts = [p['input'][0]['text'] for m, p in rpc if m == 'turn/start']
                 steers = [p['input'][0]['text'] for m, p in rpc if m == 'turn/steer']
                 threads = [m for m, p in rpc if m in ('thread/start', 'thread/resume')]
+            if retain_commentary:
+                assert rows == [(1, 'settled', 1)], (mode, rows, err)
+                with lock:
+                    messages = [text for text in permanent.values()
+                                if not text.startswith("Current Codex session:")]
+                    edits = list(outbound)
+                assert len(messages) == (3 if commentary_only else 4), (mode, messages)
+                assert messages[0] == commentary[0], (mode, messages[0])
+                assert sum(text.count('x') for text in messages[1:3]) == 3800
+                assert messages[1].startswith('Second progress: ')
+                if not commentary_only:
+                    assert messages[3] == final_answer, (mode, messages[3])
+                expected_finals = 0 if commentary_only else 1
+                assert sum(text == final_answer for text in messages) == expected_finals
+                first_commit = next(i for i, (_, _, text) in enumerate(edits)
+                                    if text == commentary[0])
+                first_id = edits[first_commit][1]
+                assert all(target != first_id for _, target, _ in edits[first_commit + 1:])
+                with sqlite3.connect(root / 'state.sqlite') as db:
+                    assert db.execute('select status,assistant_text from turns').fetchall() == [
+                        ('completed', commentary[-1] if commentary_only else final_answer)]
+                print(json.dumps({'scenario': mode, 'permanent_message_count': len(messages),
+                                  'first_commentary_preserved': True,
+                                  'long_commentary_characters': 3800,
+                                  'final_answer_count': expected_finals, 'exit': process.returncode}), flush=True)
+                return
             assert len(rows) == 2, (mode, rows)
             assert rows[1][1] == 'undetermined', (mode, rows)
             if missing_binding:
@@ -309,3 +370,6 @@ token_probe()
 scenario('accepted_steer')
 scenario('unacknowledged_steer')
 scenario('missing_saved_binding')
+scenario('retained_commentary_drafts')
+scenario('retained_commentary_preview')
+scenario('retained_commentary_only')
