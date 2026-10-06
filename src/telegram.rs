@@ -1040,6 +1040,9 @@ pub(crate) mod tests {
                         Err(error) => panic!("test HTTP accept: {error}"),
                     }
                 };
+                // macOS inherits the listener's nonblocking flag on accepted sockets.
+                // The fixture uses bounded blocking reads on every supported platform.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
