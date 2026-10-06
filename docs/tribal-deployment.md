@@ -45,7 +45,9 @@ Use `/status` to obtain the native thread identifier when intentionally continui
 
 ## Input durability and uncertain effects
 
-Each authorized Telegram update's bounded raw payload and the polling cursor commit in one SQLite transaction before dispatch. Exact duplicate update IDs do not re-execute; the same ID with different content is refused. Queuing/starting a native turn is linked to that admitted update.
+Each authorized Telegram update's bounded raw payload and the polling cursor commit in one SQLite transaction before dispatch. Exact duplicate update IDs do not re-execute; the same ID with different content is refused. Queuing/starting a native turn is linked to that admitted update. Text appended to an active turn is durably linked before transmission; acknowledged input shares the turn's outcome. Sent but unacknowledged input stays undetermined and is never automatically submitted again. Only a definite rejection permits queue fallback.
+
+Native thread bindings persist as soon as the harness returns the thread identifier, before the first turn starts. A failed turn retains that binding. An unavailable saved thread also retains its identifier and input; recover its native history or use an explicit human `/new` to create a fresh context.
 
 After a bridge restart, previously unfinished updates retain their raw payload and become undetermined rather than being automatically replayed. `/status` exposes the authorized user's uncertain update IDs. Inspect the topic's native history and explicitly retry only when the human intends it. A delivery failure can leave an externally completed effect uncertain; neither a local offset nor handler completion proves the human received a reply.
 

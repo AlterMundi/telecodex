@@ -81,14 +81,20 @@ pub enum CodexEventOutcome {
     Approval(CodexApprovalDecision),
 }
 
-/// Result returned to the Telegram routing layer after Codex resolves a steering request.
-pub type CodexSteerResponse = std::result::Result<(), String>;
+/// Only a definite rejection permits submitting the input as a new turn.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CodexSteerError {
+    Rejected(String),
+    Undetermined(String),
+}
+
+pub type CodexSteerResponse = std::result::Result<(), CodexSteerError>;
 
 /// Plain-text input waiting to be appended to an active Codex turn.
 pub struct CodexSteerRequest {
     /// User text to append to the in-flight turn.
     pub text: String,
-    /// Completion channel resolved after Codex accepts or terminally rejects the request.
+    /// Completion channel reports acceptance, definite rejection or uncertainty.
     pub response: oneshot::Sender<CodexSteerResponse>,
 }
 
@@ -573,31 +579,42 @@ fn steer_response(
     error: Option<&RpcError>,
 ) -> CodexSteerResponse {
     if let Some(error) = error {
-        return Err(format_rpc_error(error));
+        let message = format_rpc_error(error);
+        return Err(if matches!(error.code, Some(-32602..=-32600)) {
+            CodexSteerError::Rejected(message)
+        } else {
+            CodexSteerError::Undetermined(message)
+        });
     }
     match result
         .and_then(|value| value.get("turnId"))
         .and_then(Value::as_str)
     {
         Some(turn_id) if turn_id == expected_turn_id => Ok(()),
-        Some(turn_id) => Err(format!(
+        Some(turn_id) => Err(CodexSteerError::Undetermined(format!(
             "turn/steer targeted `{turn_id}` instead of active turn `{expected_turn_id}`"
+        ))),
+        None => Err(CodexSteerError::Undetermined(
+            "turn/steer response missing turnId".to_string(),
         )),
-        None => Err("turn/steer response missing turnId".to_string()),
     }
 }
 
-/// Resolves all unacknowledged steering requests as rejected when turn execution ends.
+/// Distinguishes never-sent input from input whose native acceptance is unknown.
 fn reject_outstanding_steers(
     queued_steers: VecDeque<CodexSteerRequest>,
     pending_steers: HashMap<u64, PendingSteer>,
 ) {
     let reason = "active turn finished before turn/steer was accepted";
     for steer in queued_steers {
-        let _ = steer.response.send(Err(reason.to_string()));
+        let _ = steer
+            .response
+            .send(Err(CodexSteerError::Rejected(reason.to_string())));
     }
     for pending in pending_steers.into_values() {
-        let _ = pending.response.send(Err(reason.to_string()));
+        let _ = pending
+            .response
+            .send(Err(CodexSteerError::Undetermined(reason.to_string())));
     }
 }
 
@@ -1991,11 +2008,8 @@ while True:
     fn rejects_mismatched_turn_steer_response() {
         let result = json!({"turnId": "turn-8"});
 
-        assert!(
-            steer_response("turn-7", Some(&result), None)
-                .unwrap_err()
-                .contains("turn-8")
-        );
+        assert!(matches!(steer_response("turn-7", Some(&result), None),
+            Err(CodexSteerError::Undetermined(message)) if message.contains("turn-8")));
     }
 
     #[test]

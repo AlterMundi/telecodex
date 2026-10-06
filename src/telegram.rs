@@ -392,8 +392,10 @@ impl TelegramClient {
             .into());
         }
 
+        // Serde's error can quote a server-controlled value, including a reflected token.
+        // Retain the method diagnostic without retaining the raw decoding cause.
         let parsed: ApiResponse<R> = serde_json::from_str(&body)
-            .with_context(|| format!("telegram {method} JSON decode failed"))?;
+            .map_err(|_| anyhow::anyhow!("telegram {method} JSON decode failed"))?;
         if !parsed.ok {
             return Err(TelegramError {
                 status,
@@ -491,7 +493,7 @@ impl TelegramClient {
         }
 
         let parsed: ApiResponse<Message> = serde_json::from_str(&body)
-            .with_context(|| format!("telegram {method} JSON decode failed"))?;
+            .map_err(|_| anyhow::anyhow!("telegram {method} JSON decode failed"))?;
         if !parsed.ok {
             if let Some(retry_after) = parsed
                 .parameters
@@ -1065,7 +1067,7 @@ pub(crate) mod tests {
                 assert_eq!(split, header.len());
                 requests.push((
                     header.lines().next().unwrap().to_string(),
-                    if body.is_empty() {
+                    if body.is_empty() || header.contains("multipart/form-data") {
                         serde_json::Value::Null
                     } else {
                         serde_json::from_slice(&body).unwrap()
@@ -1096,6 +1098,35 @@ pub(crate) mod tests {
         let error = client.get_me().await.unwrap_err();
         assert!(!format!("{error:#}").contains(token));
         assert!(!format!("{error:?}").contains(token));
+    }
+
+    #[tokio::test]
+    async fn malformed_success_decoding_never_retains_a_reflected_token() {
+        let token = "synthetic-secret-token";
+        let (api, server) = serve_api(vec![
+            (200, serde_json::json!({"ok":true,"result":token})),
+            (200, serde_json::json!({"ok":true,"result":token})),
+        ]);
+        let client = TelegramClient::new(token.to_string(), api);
+        let error = client.get_me().await.unwrap_err();
+        assert!(!format!("{error:#}").contains(token));
+        assert!(!format!("{error:?}").contains(token));
+        assert!(error.to_string().contains("getMe JSON decode failed"));
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "synthetic upload").unwrap();
+        let error = client
+            .send_document(100, Some(7), file.path(), "fixture.txt", None)
+            .await
+            .unwrap_err();
+        assert!(!format!("{error:#}").contains(token));
+        assert!(!format!("{error:?}").contains(token));
+        assert!(
+            error
+                .to_string()
+                .contains("sendDocument JSON decode failed")
+        );
+        let requests = server.join().unwrap();
+        assert!(requests[1].0.contains("/sendDocument"));
     }
 
     #[test]

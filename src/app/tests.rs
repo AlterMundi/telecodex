@@ -371,7 +371,9 @@ async fn falls_back_when_the_active_turn_rejects_steering() {
         let steer = steer_rx.recv().await.expect("steer request");
         steer
             .response
-            .send(Err("turn already completed".to_string()))
+            .send(Err(CodexSteerError::Rejected(
+                "turn already completed".to_string(),
+            )))
             .expect("steer response");
     });
 
@@ -415,7 +417,9 @@ async fn keeps_steering_pending_past_the_previous_timeout() {
 
     steer
         .response
-        .send(Err("turn already completed".to_string()))
+        .send(Err(CodexSteerError::Rejected(
+            "turn already completed".to_string(),
+        )))
         .expect("steer response");
     assert!(!route.await.unwrap());
 }
@@ -442,7 +446,7 @@ fn only_plain_text_messages_are_steer_candidates() {
 fn detects_stale_codex_thread_errors() {
     let error = anyhow::anyhow!("no rollout found for thread id 019abc | code -32600");
 
-    assert!(should_reset_session_after_error(&error));
+    assert!(saved_thread_is_unavailable(&error));
 }
 
 #[test]
@@ -475,14 +479,14 @@ fn detects_stale_codex_thread_errors_in_error_context() {
     let error = anyhow::anyhow!("codex turn failed")
         .context("no rollout found for thread id 019abc | code -32600");
 
-    assert!(should_reset_session_after_error(&error));
+    assert!(saved_thread_is_unavailable(&error));
 }
 
 #[test]
 fn ignores_unrelated_invalid_request_errors() {
     let error = anyhow::anyhow!("json-rpc request rejected with code -32600");
 
-    assert!(!should_reset_session_after_error(&error));
+    assert!(!saved_thread_is_unavailable(&error));
 }
 
 #[test]

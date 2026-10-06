@@ -68,7 +68,7 @@ impl Store {
             let conn = store.conn.lock().expect("store mutex poisoned");
             conn.execute(
                 "UPDATE incoming_updates SET status='undetermined',updated_at=?1
-                 WHERE status IN ('received','processing','queued','started')
+                 WHERE status IN ('received','processing','queued','steering','started')
                  AND instance_id!=?2",
                 params![now_string(), store.instance_id],
             )?;
@@ -276,6 +276,63 @@ impl Store {
                 now_string(),
                 self.instance_id
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Save the active turn link before an input can cross the native transport.
+    pub fn begin_update_steer(&self, update_id: i64, turn_id: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE incoming_updates SET status='steering',turn_id=?2,updated_at=?3
+             WHERE update_id=?1 AND status='processing' AND instance_id=?4",
+            params![update_id, turn_id, now_string(), self.instance_id],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!("telegram input cannot attempt another steer"));
+        }
+        Ok(())
+    }
+
+    /// A definite rejection allows the same admitted input to enter the normal queue.
+    pub fn reject_update_steer(&self, update_id: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE incoming_updates SET status='processing',turn_id=NULL,updated_at=?2
+             WHERE update_id=?1 AND status='steering' AND instance_id=?3",
+            params![update_id, now_string(), self.instance_id],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!(
+                "telegram steer is not available for queue fallback"
+            ));
+        }
+        Ok(())
+    }
+
+    /// The turn may finish between acknowledgement and recording acceptance.
+    pub fn accept_update_steer(&self, update_id: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE incoming_updates SET status=CASE
+               (SELECT status FROM turns WHERE id=incoming_updates.turn_id)
+               WHEN 'running' THEN 'started' WHEN 'completed' THEN 'settled'
+               ELSE 'undetermined' END,updated_at=?2
+             WHERE update_id=?1 AND status='steering' AND instance_id=?3",
+            params![update_id, now_string(), self.instance_id],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!("telegram steer cannot be accepted twice"));
+        }
+        Ok(())
+    }
+
+    pub fn mark_update_steer_undetermined(&self, update_id: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            "UPDATE incoming_updates SET status='undetermined',updated_at=?2
+             WHERE update_id=?1 AND status='steering' AND instance_id=?3",
+            params![update_id, now_string(), self.instance_id],
         )?;
         Ok(())
     }
@@ -629,13 +686,31 @@ impl Store {
         assistant_text: Option<&str>,
     ) -> Result<()> {
         let now = now_string();
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute(
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE turns
              SET status = ?2, assistant_text = COALESCE(?3, assistant_text), completed_at = ?4
              WHERE id = ?1",
             params![turn_id, status, assistant_text, now],
         )?;
+        // An acknowledged steer shares this turn's outcome. Unacknowledged attempts
+        // remain uncertain even if the original turn completes successfully.
+        tx.execute(
+            "UPDATE incoming_updates SET status=?2,updated_at=?3
+             WHERE turn_id=?1 AND status='started' AND instance_id=?4",
+            params![
+                turn_id,
+                if status == "completed" {
+                    "settled"
+                } else {
+                    "undetermined"
+                },
+                now,
+                self.instance_id
+            ],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1084,6 +1159,88 @@ mod tests {
         }
         store.finish_update_turn(1, false).unwrap();
         assert_eq!(store.uncertain_update_ids(100).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn acknowledged_steers_share_outcome_even_when_ack_is_recorded_after_completion() {
+        for (status, expected) in [("completed", "settled"), ("failed", "undetermined")] {
+            for late_ack in [false, true] {
+                let tmp = NamedTempFile::new().unwrap();
+                let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+                let key = SessionKey::new(100, Some(7));
+                let session = store.ensure_session(key, 100, &defaults()).unwrap();
+                let request = TurnRequest {
+                    session_key: key,
+                    from_user_id: 100,
+                    prompt: "first".to_string(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                };
+                let turn_id = store.record_turn_started(session.id, &request).unwrap();
+                for id in [1, 2, 3] {
+                    store
+                        .admit_update(&input(id, 100, "additional input"))
+                        .unwrap();
+                    store.begin_update(id).unwrap();
+                    store.begin_update_steer(id, turn_id).unwrap();
+                }
+                if !late_ack {
+                    store.accept_update_steer(1).unwrap();
+                }
+                store.record_turn_finished(turn_id, status, None).unwrap();
+                if late_ack {
+                    store.accept_update_steer(1).unwrap();
+                }
+                // Completion cannot confirm that an unacknowledged input was accepted.
+                store.mark_update_steer_undetermined(2).unwrap();
+                // A never-sent or definitely rejected input may still enter the queue.
+                store.reject_update_steer(3).unwrap();
+                store.mark_update_queued(3).unwrap();
+                store.finish_update_dispatch(1, true).unwrap();
+                let conn = store.conn.lock().unwrap();
+                let states: Vec<(String, Option<i64>)> = conn
+                    .prepare("SELECT status,turn_id FROM incoming_updates ORDER BY update_id")
+                    .unwrap()
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .unwrap()
+                    .collect::<rusqlite::Result<_>>()
+                    .unwrap();
+                assert_eq!(
+                    states,
+                    vec![
+                        (expected.to_string(), Some(turn_id)),
+                        ("undetermined".to_string(), Some(turn_id)),
+                        ("queued".to_string(), None)
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn restart_preserves_an_unacknowledged_steer_and_its_turn_link() {
+        let tmp = NamedTempFile::new().unwrap();
+        {
+            let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+            store
+                .admit_update(&input(1, 100, "possibly transmitted"))
+                .unwrap();
+            store.begin_update(1).unwrap();
+            store.begin_update_steer(1, 42).unwrap();
+        }
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        assert_eq!(store.uncertain_update_ids(100).unwrap(), vec![1]);
+        let conn = store.conn.lock().unwrap();
+        let turn: i64 = conn
+            .query_row(
+                "SELECT turn_id FROM incoming_updates WHERE update_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(turn, 42);
     }
 
     fn defaults() -> SessionDefaults {

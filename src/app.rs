@@ -28,7 +28,7 @@ mod turns;
 use crate::{
     codex::{
         AvailableModel, CodexApprovalDecision, CodexApprovalKind, CodexEvent, CodexEventOutcome,
-        CodexRunner, CodexSteerRequest,
+        CodexRunner, CodexSteerError, CodexSteerRequest,
     },
     codex_history::{
         CodexEnvironmentSummary, CodexHistoryEntry, CodexThreadSummary,
@@ -1669,8 +1669,7 @@ impl App {
         Ok(())
     }
 
-    /// Attempts to append text to the current turn and only permits queue fallback after a
-    /// terminal rejection or a closed response channel.
+    /// Queue fallback requires a definite rejection; uncertainty requires a human decision.
     async fn try_steer_active_turn(
         &self,
         session_key: SessionKey,
@@ -1688,6 +1687,11 @@ impl App {
             return Ok(false);
         };
 
+        let update_id = HUMAN_UPDATE_ID.try_with(|id| *id).ok();
+        if let Some(id) = update_id {
+            self.shared.store.begin_update_steer(id, active.turn_id)?;
+        }
+
         let (response_tx, response_rx) = oneshot::channel();
         if active
             .sender
@@ -1697,11 +1701,17 @@ impl App {
             })
             .is_err()
         {
+            if let Some(id) = update_id {
+                self.shared.store.reject_update_steer(id)?;
+            }
             return Ok(false);
         }
 
         match response_rx.await {
             Ok(Ok(())) => {
+                if let Some(id) = update_id {
+                    self.shared.store.accept_update_steer(id)?;
+                }
                 if let Err(error) = self.shared.store.audit(
                     Some(from_user_id),
                     "turn_steered",
@@ -1715,13 +1725,21 @@ impl App {
                 }
                 Ok(true)
             }
-            Ok(Err(error)) => {
+            Ok(Err(CodexSteerError::Rejected(error))) => {
+                if let Some(id) = update_id {
+                    self.shared.store.reject_update_steer(id)?;
+                }
                 tracing::debug!("active turn rejected steering; queueing as a new turn: {error}");
                 Ok(false)
             }
-            Err(_) => {
-                tracing::debug!("active turn steering channel closed; queueing as a new turn");
-                Ok(false)
+            Ok(Err(CodexSteerError::Undetermined(_))) | Err(_) => {
+                if let Some(id) = update_id {
+                    self.shared.store.mark_update_steer_undetermined(id)?;
+                }
+                self.send_status(session_key.chat_id,
+                    Some(session_key.thread_id).filter(|value| *value != 0),
+                    "The active turn may have received your message, but acceptance could not be verified. The input is preserved; use /status before deciding whether to retry.").await?;
+                Ok(true)
             }
         }
     }
