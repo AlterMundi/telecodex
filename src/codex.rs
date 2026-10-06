@@ -4,27 +4,32 @@ use crate::{
     models::{SessionRecord, TurnRequest},
 };
 use anyhow::{Context, Result, anyhow, bail};
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     fs,
     path::{Path, PathBuf},
+    pin::Pin,
     process::Stdio,
     sync::Arc,
+    task::{Context as TaskContext, Poll},
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf},
     process::{Child, ChildStdin, ChildStdout, Command},
     sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
     time::{Duration, Instant, sleep_until},
 };
+use tokio_tungstenite::{WebSocketStream, client_async, tungstenite::Message as WsMessage};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 pub struct CodexRunner {
     binary: PathBuf,
+    shared_app_server: bool,
 }
 pub struct RunSummary {
     pub codex_thread_id: Option<String>,
@@ -100,11 +105,51 @@ pub struct CommandSpec {
 }
 struct AppServerProcess {
     child: Child,
-    stdin: ChildStdin,
-    stdout_lines: tokio::io::Lines<BufReader<ChildStdout>>,
+    transport: AppServerTransport,
     stderr_buffer: Arc<Mutex<String>>,
     stderr_task: JoinHandle<()>,
     next_id: u64,
+}
+
+struct ProxyIo {
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+}
+
+impl AsyncRead for ProxyIo {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stdout).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for ProxyIo {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stdin).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stdin).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().stdin).poll_shutdown(cx)
+    }
+}
+
+enum AppServerTransport {
+    Stdio {
+        stdin: ChildStdin,
+        stdout_lines: tokio::io::Lines<BufReader<ChildStdout>>,
+    },
+    Shared(Box<WebSocketStream<ProxyIo>>),
 }
 enum RpcMessage {
     Response {
@@ -165,7 +210,14 @@ struct SimpleCommandOutput {
 
 impl CodexRunner {
     pub fn new(binary: PathBuf) -> Self {
-        Self { binary }
+        Self {
+            binary,
+            shared_app_server: false,
+        }
+    }
+    pub fn with_shared_app_server(mut self, shared: bool) -> Self {
+        self.shared_app_server = shared;
+        self
     }
     pub fn build_review_command(
         &self,
@@ -232,7 +284,7 @@ impl CodexRunner {
         })
     }
     pub async fn read_rate_limits(&self) -> Result<Option<LimitsSnapshot>> {
-        let mut process = AppServerProcess::spawn(&self.binary).await?;
+        let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
         process.initialize().await?;
         let request_id = process
             .send_request("account/rateLimits/read", Value::Null)
@@ -252,7 +304,7 @@ impl CodexRunner {
             .context("failed to parse rate limits response")
     }
     pub async fn read_models(&self) -> Result<Vec<AvailableModel>> {
-        let mut process = AppServerProcess::spawn(&self.binary).await?;
+        let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
         process.initialize().await?;
         let mut models = Vec::new();
         let mut cursor: Option<String> = None;
@@ -296,6 +348,7 @@ impl CodexRunner {
         }
         run_app_server_turn(
             &self.binary,
+            self.shared_app_server,
             session,
             request,
             cancel,
@@ -383,6 +436,7 @@ impl CodexDeviceAuthSession {
 
 async fn run_app_server_turn<F, Fut>(
     binary: &Path,
+    shared_app_server: bool,
     session: &SessionRecord,
     request: &TurnRequest,
     cancel: CancellationToken,
@@ -393,7 +447,7 @@ where
     F: FnMut(CodexEvent) -> Fut,
     Fut: std::future::Future<Output = Result<CodexEventOutcome>>,
 {
-    let mut process = AppServerProcess::spawn(binary).await?;
+    let mut process = AppServerProcess::spawn(binary, shared_app_server).await?;
     process.initialize().await?;
     let thread_id = process.start_or_resume_thread(session, request).await?;
     let mut summary = RunSummary {
@@ -1253,9 +1307,13 @@ fn push_common_config_args(
     }
 }
 impl AppServerProcess {
-    async fn spawn(binary: &Path) -> Result<Self> {
-        let spec = build_app_server_command(binary);
+    async fn spawn(binary: &Path, shared: bool) -> Result<Self> {
+        let mut spec = build_app_server_command(binary);
+        if shared {
+            spec.args.push("proxy".to_string());
+        }
         let mut command = spawnable_command(&spec);
+        command.kill_on_drop(true);
         let mut child = command.spawn().with_context(|| {
             format!(
                 "failed to spawn codex app-server: {} {}",
@@ -1288,10 +1346,33 @@ impl AppServerProcess {
                 tracing::warn!("codex stderr: {line}");
             }
         });
+        let transport = if shared {
+            let handshake = tokio::time::timeout(
+                Duration::from_secs(10),
+                client_async("ws://localhost/", ProxyIo { stdin, stdout }),
+            )
+            .await;
+            match handshake {
+                Ok(Ok((socket, _response))) => AppServerTransport::Shared(Box::new(socket)),
+                outcome => {
+                    terminate_child(&mut child).await;
+                    stderr_task.abort();
+                    match outcome {
+                        Err(_) => bail!("native Codex proxy WebSocket handshake timed out"),
+                        Ok(Err(_)) => bail!("native Codex proxy WebSocket handshake failed"),
+                        Ok(Ok(_)) => unreachable!(),
+                    }
+                }
+            }
+        } else {
+            AppServerTransport::Stdio {
+                stdin,
+                stdout_lines: BufReader::new(stdout).lines(),
+            }
+        };
         Ok(Self {
             child,
-            stdin,
-            stdout_lines: BufReader::new(stdout).lines(),
+            transport,
             stderr_buffer,
             stderr_task,
             next_id: 1,
@@ -1299,7 +1380,9 @@ impl AppServerProcess {
     }
     async fn initialize(&mut self) -> Result<()> {
         let request_id=self.send_request("initialize",json!({"clientInfo":{"name":"telecodex","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":false}})).await?;
-        let _ = self.await_response(request_id).await?;
+        let _ = tokio::time::timeout(Duration::from_secs(15), self.await_response(request_id))
+            .await
+            .context("Codex App Server initialize timed out")??;
         self.send_notification("initialized").await?;
         Ok(())
     }
@@ -1356,27 +1439,48 @@ impl AppServerProcess {
         }
     }
     async fn next_message(&mut self) -> Result<Option<RpcMessage>> {
-        let Some(line) = self
-            .stdout_lines
-            .next_line()
-            .await
-            .context("reading app-server stdout failed")?
-        else {
-            return Ok(None);
+        let line = match &mut self.transport {
+            AppServerTransport::Stdio { stdout_lines, .. } => {
+                let Some(line) = stdout_lines
+                    .next_line()
+                    .await
+                    .context("reading app-server stdout failed")?
+                else {
+                    return Ok(None);
+                };
+                line
+            }
+            AppServerTransport::Shared(socket) => loop {
+                match socket.next().await {
+                    Some(Ok(WsMessage::Text(text))) => break text.to_string(),
+                    Some(Ok(WsMessage::Ping(_) | WsMessage::Pong(_))) => continue,
+                    Some(Ok(WsMessage::Close(_))) | None => return Ok(None),
+                    Some(Ok(_)) => bail!("native Codex proxy returned an unsupported frame"),
+                    Some(Err(_)) => bail!("native Codex proxy WebSocket read failed"),
+                }
+            },
         };
         parse_rpc_message(&line)
     }
     async fn write_line(&mut self, value: &Value) -> Result<()> {
-        let mut line = serde_json::to_vec(value)?;
-        line.push(b'\n');
-        self.stdin
-            .write_all(&line)
-            .await
-            .context("writing app-server request failed")?;
-        self.stdin
-            .flush()
-            .await
-            .context("flushing app-server stdin failed")
+        match &mut self.transport {
+            AppServerTransport::Stdio { stdin, .. } => {
+                let mut line = serde_json::to_vec(value)?;
+                line.push(b'\n');
+                stdin
+                    .write_all(&line)
+                    .await
+                    .context("writing app-server request failed")?;
+                stdin
+                    .flush()
+                    .await
+                    .context("flushing app-server stdin failed")
+            }
+            AppServerTransport::Shared(socket) => socket
+                .send(WsMessage::Text(serde_json::to_string(value)?.into()))
+                .await
+                .map_err(|_| anyhow!("native Codex proxy WebSocket write failed")),
+        }
     }
     async fn shutdown(mut self) -> Result<String> {
         terminate_child(&mut self.child).await;
@@ -1389,6 +1493,39 @@ impl AppServerProcess {
         }
         Ok(self.stderr_buffer.lock().await.trim().to_string())
     }
+}
+
+/// Explicit owner-run native attachment qualification; never starts inference.
+pub async fn probe_native(binary: &Path, cwd: &Path, create_threads: bool) -> Result<Value> {
+    let mut process = AppServerProcess::spawn(binary, true).await?;
+    let qualification = async {
+        process.initialize().await?;
+        let request_id = process.send_request("skills/list", json!({"cwds": [cwd], "forceReload": true})).await?;
+        let skills = process.await_response(request_id).await?;
+        let mut names = BTreeSet::new();
+        let mut errors = 0;
+        for surface in skills["data"].as_array().into_iter().flatten() {
+            errors += surface["errors"].as_array().map_or(0, Vec::len);
+            for skill in surface["skills"].as_array().into_iter().flatten() {
+                if skill["enabled"].as_bool().unwrap_or(true) {
+                    if let Some(name) = skill["name"].as_str() { names.insert(name.to_string()); }
+                }
+            }
+        }
+        let mut threads = Vec::new();
+        if create_threads {
+            for _ in 0..2 {
+                let id = process.send_request("thread/start", json!({"cwd": cwd, "approvalPolicy": "never", "sandbox": "read-only", "serviceName": "telecodex-qualification", "ephemeral": false})).await?;
+                let started = process.await_response(id).await?;
+                let thread = started["thread"]["id"].as_str().context("native probe thread missing")?.to_string();
+                threads.push(thread);
+            }
+            if threads[0] == threads[1] { bail!("native probe contexts were not distinct"); }
+        }
+        Ok(json!({"proxy": "existing native control socket, WebSocket framing", "skills_force_reload": true, "enabled_skills": names, "skill_errors": errors, "model_turns_started": 0, "created_probe_threads": threads, "thread_persistence_qualified": false, "note": "Empty contexts have no persisted rollout history; resume acceptance requires a first native turn"}))
+    }.await;
+    process.shutdown().await?;
+    qualification
 }
 
 fn parse_rpc_message(line: &str) -> Result<Option<RpcMessage>> {
@@ -1558,6 +1695,118 @@ struct ExecItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn proxy_fixture(root: &Path, port: u16) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join("codex-proxy");
+        fs::write(
+            &path,
+            format!(
+                r#"#!/usr/bin/env python3
+import os,socket,sys,threading
+if sys.argv[1:] != ['app-server','proxy']: sys.exit(7)
+s=socket.create_connection(('127.0.0.1',{port}), timeout=3)
+def upload():
+    while True:
+        data=os.read(0,8192)
+        if not data: break
+        s.sendall(data)
+threading.Thread(target=upload,daemon=True).start()
+while True:
+    data=s.recv(8192)
+    if not data: break
+    os.write(1,data)
+"#
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_proxy_handshake_and_rpc_use_real_websocket_frames() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let binary = proxy_fixture(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let init: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(init["method"], "initialize");
+            socket
+                .send(WsMessage::Text(
+                    json!({"id": init["id"], "result": {}}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            let notification: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(notification["method"], "initialized");
+            let request: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(request["method"], "skills/list");
+            assert_eq!(request["params"]["forceReload"], true);
+            socket
+                .send(WsMessage::Text(
+                    json!({"id": request["id"], "result": {"data": []}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+        });
+        let mut process = AppServerProcess::spawn(&binary, true).await.unwrap();
+        process.initialize().await.unwrap();
+        let id = process
+            .send_request("skills/list", json!({"forceReload": true}))
+            .await
+            .unwrap();
+        assert_eq!(
+            process.await_response(id).await.unwrap(),
+            json!({"data": []})
+        );
+        process.shutdown().await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_native_proxy_handshake_is_bounded_and_does_not_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let binary = proxy_fixture(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.write_all(b"HTTP/1.1 400 Refused\r\nContent-Length: 21\r\nConnection: close\r\n\r\nSYNTHETIC_PRIVATE_KEY").await.unwrap();
+            drop(stream);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                    .await
+                    .is_err()
+            );
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            AppServerProcess::spawn(&binary, true),
+        )
+        .await
+        .unwrap()
+        .err()
+        .unwrap();
+        assert_eq!(
+            error.to_string(),
+            "native Codex proxy WebSocket handshake failed"
+        );
+        assert!(!format!("{error:?}").contains("SYNTHETIC_PRIVATE_KEY"));
+        server.await.unwrap();
+    }
 
     fn sample_workspace() -> PathBuf {
         std::env::temp_dir()

@@ -67,7 +67,7 @@ pub fn find_latest_limits_snapshot(codex_home: &Path) -> Result<Option<LimitsSna
     let mut candidates = Vec::new();
     collect_jsonl_files(&codex_home.join("sessions"), &mut candidates)?;
     collect_jsonl_files(&codex_home.join("archived_sessions"), &mut candidates)?;
-    candidates.sort_by(|left, right| right.1.cmp(&left.1));
+    candidates.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     let mut snapshots = Vec::new();
     for (path, _) in candidates.into_iter().take(200) {

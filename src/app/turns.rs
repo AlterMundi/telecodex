@@ -21,6 +21,9 @@ pub(super) async fn process_turn(
     let turn_id = shared
         .store
         .record_turn_started(session.id, &queued.request)?;
+    if let Some(update_id) = queued.update_id {
+        shared.store.link_update_turn(update_id, turn_id)?;
+    }
     let turn_workspace = prepare_turn_workspace(&session, turn_id)?;
 
     let cancel = CancellationToken::new();
@@ -1207,7 +1210,7 @@ pub(super) fn resolve_session_codex_binding_from_history(
     shared: &Arc<AppShared>,
     session: crate::models::SessionRecord,
 ) -> Result<crate::models::SessionRecord> {
-    if session.force_fresh_thread {
+    if session.force_fresh_thread || !shared.config.codex.auto_attach_latest_history {
         return Ok(session);
     }
     let codex_home = default_codex_home();

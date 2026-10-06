@@ -62,6 +62,17 @@ impl Store {
         store.init_schema()?;
         let stale_cutoff = stale_instance_cutoff();
         store.claim_instance_lock(&stale_cutoff)?;
+        // A restart does not authorize replaying a partially dispatched turn.
+        // Keep its input available and surface uncertainty for a human retry.
+        {
+            let conn = store.conn.lock().expect("store mutex poisoned");
+            conn.execute(
+                "UPDATE incoming_updates SET status='undetermined',updated_at=?1
+                 WHERE status IN ('received','processing','queued','started')
+                 AND instance_id!=?2",
+                params![now_string(), store.instance_id],
+            )?;
+        }
         let recovered = store.recover_interrupted_turns(&stale_cutoff)?;
         store.seed_admins(admin_ids)?;
         store.audit(
@@ -178,14 +189,123 @@ impl Store {
         .transpose()
     }
 
-    pub fn save_last_update_id(&self, update_id: i64) -> Result<()> {
+    /// Admit input and its Telegram acknowledgement boundary atomically.
+    /// A duplicate ID never dispatches the same input a second time.
+    pub fn admit_update(&self, update: &crate::telegram::Update) -> Result<bool> {
+        let payload = serde_json::to_string(update)?;
+        if payload.len() > 1_048_576 {
+            return Err(anyhow!("telegram update exceeds ingress journal bound"));
+        }
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT payload_json FROM incoming_updates WHERE update_id=?1",
+                params![update.update_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            if existing != payload {
+                return Err(anyhow!("telegram update ID content conflict"));
+            }
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO incoming_updates(update_id,payload_json,status,instance_id,updated_at)
+             VALUES(?1,?2,'received',?3,?4)",
+            params![update.update_id, payload, self.instance_id, now_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO bot_state(key,value) VALUES('last_update_id',?1)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value
+             WHERE CAST(bot_state.value AS INTEGER)<CAST(excluded.value AS INTEGER)",
+            params![update.update_id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn begin_update(&self, update_id: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE incoming_updates SET status='processing',updated_at=?2
+             WHERE update_id=?1 AND status='received' AND instance_id=?3",
+            params![update_id, now_string(), self.instance_id],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!("telegram update is not available for dispatch"));
+        }
+        Ok(())
+    }
+
+    pub fn mark_update_queued(&self, update_id: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE incoming_updates SET status='queued',updated_at=?2
+             WHERE update_id=?1 AND status='processing' AND instance_id=?3",
+            params![update_id, now_string(), self.instance_id],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!("telegram update cannot be queued twice"));
+        }
+        Ok(())
+    }
+
+    pub fn link_update_turn(&self, update_id: i64, turn_id: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE incoming_updates SET status='started',turn_id=?2,updated_at=?3
+             WHERE update_id=?1 AND status='queued' AND instance_id=?4",
+            params![update_id, turn_id, now_string(), self.instance_id],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!("telegram update cannot start another turn"));
+        }
+        Ok(())
+    }
+
+    pub fn finish_update_dispatch(&self, update_id: i64, success: bool) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute(
-            "INSERT INTO bot_state(key, value) VALUES ('last_update_id', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![update_id.to_string()],
+            "UPDATE incoming_updates SET status=?2,updated_at=?3
+             WHERE update_id=?1 AND instance_id=?4 AND status='processing'",
+            params![
+                update_id,
+                if success { "handled" } else { "undetermined" },
+                now_string(),
+                self.instance_id
+            ],
         )?;
         Ok(())
+    }
+
+    pub fn finish_update_turn(&self, update_id: i64, success: bool) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            "UPDATE incoming_updates SET status=?2,updated_at=?3
+             WHERE update_id=?1 AND instance_id=?4 AND status IN ('queued','started')",
+            params![
+                update_id,
+                if success { "settled" } else { "undetermined" },
+                now_string(),
+                self.instance_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn uncertain_update_ids(&self, user_id: i64) -> Result<Vec<i64>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut query = conn.prepare(
+            "SELECT update_id FROM incoming_updates WHERE status='undetermined'
+             AND COALESCE(json_extract(payload_json,'$.message.from.id'),
+                          json_extract(payload_json,'$.callback_query.from.id'))=?1
+             ORDER BY update_id DESC LIMIT 20",
+        )?;
+        Ok(query
+            .query_map(params![user_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<i64>>>()?)
     }
 
     pub fn bot_state_value(&self, key: &str) -> Result<Option<String>> {
@@ -653,6 +773,15 @@ impl Store {
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS incoming_updates(
+                update_id INTEGER PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                instance_id TEXT NOT NULL,
+                turn_id INTEGER,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS audit_log(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 actor_user_id INTEGER,
@@ -843,6 +972,119 @@ mod tests {
 
     use super::*;
     use crate::models::ReviewRequest;
+
+    fn input(update_id: i64, user_id: i64, text: &str) -> crate::telegram::Update {
+        serde_json::from_value(serde_json::json!({
+            "update_id":update_id,"message":{
+                "message_id":update_id,"message_thread_id":7,
+                "from":{"id":user_id,"is_bot":false,"first_name":"Test"},
+                "chat":{"id":user_id,"type":"private"},"text":text
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn input_admission_is_atomic_idempotent_and_does_not_rewind_offset() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        let first = input(40, 100, "one");
+        assert!(store.admit_update(&first).unwrap());
+        assert_eq!(store.last_update_id().unwrap(), Some(40));
+        assert!(!store.admit_update(&first).unwrap());
+        assert!(store.admit_update(&input(39, 100, "older")).unwrap());
+        assert_eq!(store.last_update_id().unwrap(), Some(40));
+        assert!(store.admit_update(&input(40, 100, "changed")).is_err());
+        store.begin_update(40).unwrap();
+        assert!(store.begin_update(40).is_err());
+        // An actual SQLite write fault cannot acknowledge absent input.
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute_batch(
+                "CREATE TRIGGER refuse_input BEFORE INSERT ON incoming_updates
+                BEGIN SELECT RAISE(ABORT, 'synthetic admission fault'); END;",
+            )
+            .unwrap();
+        }
+        assert!(store.admit_update(&input(41, 100, "fault")).is_err());
+        assert_eq!(store.last_update_id().unwrap(), Some(40));
+        let conn = store.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM incoming_updates WHERE update_id=41",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn restart_preserves_interrupted_input_without_automatic_replay() {
+        let tmp = NamedTempFile::new().unwrap();
+        {
+            let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+            store
+                .admit_update(&input(1, 100, "before dispatch"))
+                .unwrap();
+            store.admit_update(&input(2, 100, "queued")).unwrap();
+            store.begin_update(2).unwrap();
+            store.mark_update_queued(2).unwrap();
+            store.admit_update(&input(3, 200, "other human")).unwrap();
+            store.admit_update(&input(4, 100, "completed")).unwrap();
+            store.begin_update(4).unwrap();
+            store.finish_update_dispatch(4, true).unwrap();
+        }
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        assert_eq!(store.last_update_id().unwrap(), Some(4));
+        assert_eq!(store.uncertain_update_ids(100).unwrap(), vec![2, 1]);
+        assert_eq!(store.uncertain_update_ids(200).unwrap(), vec![3]);
+        assert!(!store.admit_update(&input(2, 100, "queued")).unwrap());
+        assert!(store.begin_update(2).is_err());
+        let conn = store.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM turns", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        let original: String = conn
+            .query_row(
+                "SELECT payload_json FROM incoming_updates WHERE update_id=2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&original).unwrap()["message"]["text"],
+            "queued"
+        );
+    }
+
+    #[test]
+    fn input_turn_link_cannot_be_replaced_or_finished_by_dispatcher() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        store.admit_update(&input(1, 100, "turn")).unwrap();
+        store.begin_update(1).unwrap();
+        store.mark_update_queued(1).unwrap();
+        store.link_update_turn(1, 42).unwrap();
+        assert!(store.link_update_turn(1, 43).is_err());
+        store.finish_update_dispatch(1, true).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            let row: (String, i64) = conn
+                .query_row(
+                    "SELECT status,turn_id FROM incoming_updates WHERE update_id=1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(row, ("started".to_string(), 42));
+        }
+        store.finish_update_turn(1, false).unwrap();
+        assert_eq!(store.uncertain_update_ids(100).unwrap(), vec![1]);
+    }
 
     fn defaults() -> SessionDefaults {
         SessionDefaults {
