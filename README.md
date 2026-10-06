@@ -62,6 +62,7 @@ No webhook infrastructure. No browser dependency. No cloud relay between Telegra
 - Polls Telegram Bot API via `getUpdates`.
 - Maintains one logical session per Telegram chat/topic pair.
 - Queues turns per session and streams progress with private chat drafts or in-place Telegram message edits.
+- Shows the remaining weekly Codex allowance and reset time above live progress; `/limits` shows both the 5-hour and weekly windows.
 - Steers an active Codex turn with new plain-text messages, matching Codex's mid-turn follow-up behavior; messages with attachments remain queued as separate turns.
 - Queues outbound Telegram deliveries per chat, applies a safer group/topic send cadence, and backs off when Telegram returns `retry_after`.
 - Supports `/new`, `/environments`, `/sessions`, `/use`, `/history`, `/status`, `/clear`, `/stop`, `/retry`, `/fast`, and per-session runtime settings.
