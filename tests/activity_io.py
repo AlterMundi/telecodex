@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Activity observer regressions using real files, SQLite and loopback Telegram HTTP."""
+import importlib.util
+import http.server
+import json
+import os
+import pathlib
+import sqlite3
+import tempfile
+import threading
+import time
+import unittest
+
+spec = importlib.util.spec_from_file_location('activity', pathlib.Path(__file__).resolve().parents[1] / 'scripts/activity_indicator.py')
+activity = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(activity)
+
+
+class ActivityIO(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.temporary.name)
+        self.calls = []
+        self.answers = []
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                method = self.path.rsplit('/', 1)[-1]
+                owner.calls.append((method, payload))
+                value = owner.answers.pop(0) if owner.answers else {'ok': True, 'result': {
+                    'message_id': payload.get('message_id', 101), 'chat': {'id': payload['chat_id']},
+                    'message_thread_id': payload.get('message_thread_id', 7)}}
+                if value is None:
+                    self.connection.shutdown(2)  # Actual ambiguous transport failure.
+                    return
+                body = json.dumps(value).encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        token = self.root / 'bot.token'
+        token.write_text('synthetic-activity-token')
+        token.chmod(0o600)
+        self.telegram = activity.Telegram({'bot_token_file': str(token), 'api_base': f'http://127.0.0.1:{self.server.server_port}'})
+        self.path = self.root / 'messages.json'
+        self.publisher = activity.Publisher(self.telegram, self.path)
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.temporary.cleanup()
+
+    def test_one_silent_message_survives_observer_restart_and_retires_itself(self):
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)
+        message = self.publisher.entries['100:7']['message_id']
+        restarted = activity.Publisher(self.telegram, self.path)
+        restarted.update('100:7', 100, 7, 'turn-a', 'Waiting for agents', 140)
+        restarted.update('100:7', 100, 7, 'turn-a', 'Too soon', 141)
+        restarted.update('100:7', 100, 7, 'turn-a', None, 180)
+        self.assertEqual([method for method, _ in self.calls], ['sendMessage', 'editMessageText', 'deleteMessage'])
+        self.assertTrue(self.calls[0][1]['disable_notification'])
+        self.assertEqual(self.calls[0][1]['message_thread_id'], 7)
+        self.assertTrue(all(payload['message_id'] == message for _, payload in self.calls[1:]))
+        self.assertEqual(json.loads(self.path.read_text()), {})
+
+    def test_ambiguous_send_is_not_repeated_after_restart(self):
+        self.answers = [None]
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)
+        restarted = activity.Publisher(self.telegram, self.path)
+        restarted.update('100:7', 100, 7, 'turn-a', 'Still working', 150)
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue(restarted.entries['100:7']['attempted'])
+
+    def test_disconnect_and_recovery_replace_live_claim_without_waiting_for_cadence(self):
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)
+        self.publisher.update('100:7', 100, 7, 'turn-a', '⚠️ Connection unavailable', 101)
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 102)
+        self.assertEqual([method for method, _ in self.calls], ['sendMessage', 'editMessageText', 'editMessageText'])
+        self.assertIn('Connection unavailable', self.calls[1][1]['text'])
+        self.assertEqual(self.calls[2][1]['text'], 'Working')
+
+    def test_wrong_topic_receipt_never_becomes_an_edit_target(self):
+        self.answers = [{'ok': True, 'result': {'message_id': 900, 'chat': {'id': 100}, 'message_thread_id': 8}}]
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Still working', 150)
+        self.publisher.update('100:7', 100, 7, 'turn-a', None, 200)
+        self.assertEqual([method for method, _ in self.calls], ['sendMessage'])
+
+    def test_delete_failure_makes_status_inactive_without_touching_assistant_messages(self):
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)
+        self.answers = [{'ok': False, 'error_code': 400, 'description': "message can't be deleted"}, {'ok': True, 'result': {}}]
+        self.publisher.update('100:7', 100, 7, 'turn-a', None, 140)
+        self.assertEqual(self.calls[-1][0], 'editMessageText')
+        self.assertIn('No active work', self.calls[-1][1]['text'])
+        self.assertEqual(self.calls[-1][1]['message_id'], 101)
+        self.assertEqual(self.publisher.entries, {})
+
+    def test_explicit_rate_limit_delays_safe_retry(self):
+        self.answers = [{'ok': False, 'error_code': 429, 'parameters': {'retry_after': 60}}]
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Still working', 140)
+        self.assertEqual(len(self.calls), 1)
+        self.publisher.update('100:7', 100, 7, 'turn-a', 'Still working', 161)
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.publisher.entries['100:7']['message_id'], 101)
+
+    def test_incremental_native_tools_agents_partial_records_and_binding(self):
+        path = self.root / 'rollout.jsonl'
+        records = [
+            {'type': 'session_meta', 'payload': {'id': 'native-a'}},
+            {'timestamp': '2026-10-06T12:00:00Z', 'type': 'event_msg', 'payload': {'type': 'task_started', 'turn_id': 'turn-a'}},
+            {'type': 'response_item', 'payload': {'type': 'function_call', 'call_id': 'tool-1', 'name': 'secret_command', 'arguments': 'NEVER DISPLAY'}},
+            {'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {'type': 'SubAgentActivity', 'kind': 'started', 'agent_thread_id': 'child-a'}}},
+        ]
+        path.write_text(''.join(json.dumps(record) + '\n' for record in records))
+        reader = activity.Rollout(path, 'native-a')
+        reader.refresh()
+        self.assertEqual(len(reader.calls), 1)
+        line = activity.status_line({'type': 'active'}, reader, [{'type': 'active'}], activity.timestamp('2026-10-06T12:02:00Z'))
+        self.assertIn('1 tool call(s) active', line)
+        self.assertIn('1 agent(s) active', line)
+        self.assertNotIn('secret', line)
+        self.assertNotIn('NEVER DISPLAY', line)
+        partial = json.dumps({'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'tool-1'}})
+        with path.open('a') as stream:
+            stream.write(partial[:20])
+        offset = reader.offset
+        reader.refresh()
+        self.assertEqual(reader.offset, offset)
+        with path.open('a') as stream:
+            stream.write(partial[20:] + '\n')
+        reader.refresh()
+        self.assertEqual(reader.calls, {})
+        self.assertIsNone(activity.status_line({'type': 'idle'}, reader, [{'type': 'idle'}], time.time()))
+        self.assertIn('Waiting for 1 agent', activity.status_line({'type': 'idle'}, reader, [{'type': 'active'}], time.time()))
+        with self.assertRaises(ValueError):
+            activity.Rollout(path, 'other-native-thread').refresh()
+
+    def test_sqlite_observation_is_readonly_and_never_reads_input_payloads(self):
+        path = self.root / 'bridge.sqlite'
+        with sqlite3.connect(path) as connection:
+            connection.execute('CREATE TABLE sessions(id INTEGER, codex_thread_id TEXT)')
+            connection.execute("INSERT INTO sessions VALUES(1,'bound-thread')")
+        connection = activity.readonly(path)
+        try:
+            self.assertEqual(connection.execute('SELECT codex_thread_id FROM sessions').fetchone()[0], 'bound-thread')
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute('DELETE FROM sessions')
+        finally:
+            connection.close()
+
+    def test_observer_methods_cannot_consume_updates_or_start_turns(self):
+        for method in ('getUpdates', 'getMe', 'sendDocument'):
+            with self.assertRaises(ValueError):
+                self.telegram.call(method, {})
+        native = object.__new__(activity.Native)
+        for method in ('turn/start', 'turn/steer', 'thread/resume'):
+            with self.assertRaises(ValueError):
+                native.rpc(method, {})
+        self.assertEqual(self.calls, [])
+
+
+if __name__ == '__main__':
+    unittest.main()
