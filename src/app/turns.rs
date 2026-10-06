@@ -47,7 +47,14 @@ pub(super) async fn process_turn(
     let placeholder_text = render_placeholder_html(thinking_text, turn_banner.as_deref());
     let thread_id = Some(session.key.thread_id).filter(|value| *value != 0);
     let draft_id = turn_id;
-    let sink = if shared.config.telegram.use_message_drafts && queued.chat_kind == "private" {
+    let sink = if !shared.config.telegram.show_unfinished_messages {
+        Arc::new(Mutex::new(LiveTurnSink::new_preview(
+            shared.clone(),
+            &session,
+            turn_banner,
+            None,
+        )))
+    } else if shared.config.telegram.use_message_drafts && queued.chat_kind == "private" {
         match shared
             .telegram
             .send_message_draft(SendMessageDraft::html(
@@ -281,10 +288,10 @@ async fn create_preview_sink_or_fail(
         shared,
         session,
         turn_banner,
-        TelegramMessageRef {
+        Some(TelegramMessageRef {
             chat_id: session.key.chat_id,
             message_id: placeholder.message_id,
-        },
+        }),
     ))))
 }
 
@@ -539,15 +546,20 @@ impl LiveTurnSink {
         shared: Arc<AppShared>,
         session: &crate::models::SessionRecord,
         limits_inline: Option<String>,
-        placeholder: TelegramMessageRef,
+        placeholder: Option<TelegramMessageRef>,
     ) -> Self {
+        let pending_text = if placeholder.is_some() {
+            "⏳".to_string()
+        } else {
+            String::new()
+        };
         Self {
             shared,
             session_key: session.key,
-            messages: vec![placeholder],
+            messages: placeholder.into_iter().collect(),
             draft_id: None,
             limits_inline,
-            pending_text: "⏳".to_string(),
+            pending_text,
             has_assistant_text: false,
             message_committed: false,
             last_flushed_text: String::new(),
@@ -580,7 +592,8 @@ impl LiveTurnSink {
     async fn handle_event(&mut self, event: CodexEvent) -> Result<()> {
         match event {
             CodexEvent::Progress(text) => {
-                if !self.has_assistant_text {
+                if self.shared.config.telegram.show_unfinished_messages && !self.has_assistant_text
+                {
                     self.pending_text = progress_status_text(&text);
                 }
             }
@@ -605,7 +618,8 @@ impl LiveTurnSink {
                 tracing::debug!("codex thread started: {thread_id}");
             }
             CodexEvent::ApprovalRequest(request) => {
-                if !self.has_assistant_text {
+                if self.shared.config.telegram.show_unfinished_messages && !self.has_assistant_text
+                {
                     self.pending_text = approval_waiting_text(request.kind);
                 }
             }
@@ -614,7 +628,7 @@ impl LiveTurnSink {
     }
 
     async fn set_progress(&mut self, text: impl Into<String>) -> Result<()> {
-        if !self.has_assistant_text {
+        if self.shared.config.telegram.show_unfinished_messages && !self.has_assistant_text {
             self.pending_text = progress_status_text(&text.into());
             self.flush(false).await?;
         }
@@ -651,6 +665,11 @@ impl LiveTurnSink {
     }
 
     async fn flush(&mut self, force: bool) -> Result<()> {
+        if (!force && !self.shared.config.telegram.show_unfinished_messages)
+            || (force && self.pending_text.trim().is_empty())
+        {
+            return Ok(());
+        }
         if self.message_committed {
             return Ok(());
         }

@@ -269,6 +269,7 @@ Telecodex will start `codex login --device-auth`, send a clickable `auth.openai.
 
 - `telegram.bot_token` or `telegram.bot_token_env` must be configured.
 - `telegram.use_message_drafts = true` enables `sendMessageDraft` previews for private chats; final replies are still sent as normal messages.
+- `telegram.show_unfinished_messages = false` hides unfinished text, tool progress and placeholders. Completed commentary and final responses are published permanently. This overrides draft previews; the default is `true`.
 - Group and topic previews use throttled `editMessageText` updates, and outbound Telegram deliveries are paced per chat to avoid Bot API rate limits.
 - `telegram.primary_forum_chat_id` is used by `/topic` to create topics in one dedicated forum.
 - `telegram.auto_create_topics = false` keeps environment import manual; set it to `true` to auto-create missing forum topics from history.

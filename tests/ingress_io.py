@@ -76,8 +76,9 @@ import_desktop_history=false
 
 def scenario(mode):
     retain_commentary = mode.startswith('retained_commentary')
-    drafts = mode == 'retained_commentary_drafts'
-    commentary_only = mode == 'retained_commentary_only'
+    drafts = mode.endswith('_drafts')
+    show_unfinished = '_hidden' not in mode
+    commentary_only = mode.endswith('_only')
     commentary = ['First completed progress.', 'Second progress: ' + 'x' * 3800]
     final_answer = 'Final answer.'
     acknowledge_steer = mode == 'accepted_steer'
@@ -206,7 +207,7 @@ while True:
 ''')
         fake.chmod(0o700)
         polls, message_id = 0, 30
-        permanent, outbound = {}, []
+        permanent, outbound, methods = {}, [], []
         lock = threading.Lock()
 
         def update(number, text):
@@ -220,6 +221,8 @@ while True:
                 nonlocal polls, message_id
                 payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
                 method = self.path.rsplit('/', 1)[-1]
+                with lock:
+                    methods.append(method)
                 if method == 'getMe':
                     result = {'id': 123, 'is_bot': True, 'first_name': 'Fixture',
                               'username': 'FixtureBot', 'has_topics_enabled': True}
@@ -278,6 +281,7 @@ edit_debounce_ms=100
 bot_token_file="{token}"
 api_base="http://127.0.0.1:{telegram.server_port}"
 use_message_drafts={str(drafts).lower()}
+show_unfinished_messages={str(show_unfinished).lower()}
 [codex]
 binary="{fake}"
 default_cwd="{root}"
@@ -320,6 +324,10 @@ import_desktop_history=false
                     messages = [text for text in permanent.values()
                                 if not text.startswith("Current Codex session:")]
                     edits = list(outbound)
+                    sent_methods = list(methods)
+                if not show_unfinished:
+                    assert 'sendMessageDraft' not in sent_methods, (mode, sent_methods)
+                    assert 'editMessageText' not in sent_methods, (mode, edits)
                 assert len(messages) == (3 if commentary_only else 4), (mode, messages)
                 assert messages[0] == commentary[0], (mode, messages[0])
                 assert sum(text.count('x') for text in messages[1:3]) == 3800
@@ -373,3 +381,6 @@ scenario('missing_saved_binding')
 scenario('retained_commentary_drafts')
 scenario('retained_commentary_preview')
 scenario('retained_commentary_only')
+scenario('retained_commentary_hidden')
+scenario('retained_commentary_hidden_drafts')
+scenario('retained_commentary_hidden_only')
