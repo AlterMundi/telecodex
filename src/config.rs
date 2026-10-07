@@ -97,8 +97,8 @@ pub struct CodexConfig {
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchMode {
-    #[default]
     Disabled,
+    #[default]
     Live,
     Cached,
 }
@@ -310,7 +310,7 @@ fn default_approval() -> String {
 }
 
 fn default_search_mode() -> SearchMode {
-    SearchMode::Disabled
+    SearchMode::Live
 }
 
 fn normalize_completion_notify_username(input: &str) -> Result<String> {
@@ -460,6 +460,17 @@ mod tests {
         assert!(!config.telegram.lifecycle_notifications);
         assert!(!config.codex.auto_attach_latest_history);
         assert!(!config.codex.shared_app_server);
+        assert_eq!(config.codex.default_search_mode, SearchMode::Live);
+        for (value, expected) in [
+            ("disabled", SearchMode::Disabled),
+            ("cached", SearchMode::Cached),
+        ] {
+            let raw = format!(
+                "[telegram]\nbot_token = 'synthetic'\n[codex]\ndefault_cwd = '/tmp'\ndefault_search_mode = '{value}'\n"
+            );
+            let explicit: Config = toml::from_str(&raw).unwrap();
+            assert_eq!(explicit.codex.default_search_mode, expected);
+        }
     }
 
     #[cfg(unix)]
