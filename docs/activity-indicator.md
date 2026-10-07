@@ -138,3 +138,12 @@ from a real Telegram receipt and the human's observation of the interface.
 
 Source comparison and owning task: [Telecodex #11](https://github.com/AlterMundi/telecodex/issues/11),
 within [the convergence pilot](https://github.com/AlterMundi/daimon-matrix/issues/262).
+
+An explicitly configured `--pending-update-record FILE` adds a finite bot
+update wait to its recorded topic. The owner-only producer receipt must identify
+the topic, live worker, wait reason, blockers, heartbeat and deadline. Fresh
+receipts show what blocks the update and the remaining deadline; stale or dead
+workers show uncertainty, never fabricated progress. This deadline is a maximum
+wait, not a scheduled wakeup. Native activity and external update work are shown
+as separate lines. No receipt means no inferred external task. Existing quiet
+grace, card relocation and completion cleanup still apply.

@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import sqlite3
+import subprocess
 import tempfile
 import threading
 import time
@@ -59,6 +60,36 @@ class ActivityIO(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.temporary.cleanup()
+
+    def test_explicit_update_receipt_explains_wait_deadline_and_liveness(self):
+        path = self.root / 'update.json'
+        record = {'activation':'waiting_for_idle', 'topic_key':'100:7',
+                  'waiting_for':'conversations_idle', 'worker_pid':os.getpid(),
+                  'busy_conversations':2, 'deadline_at':3700, 'at':100}
+        activity.atomic_json(path, record)
+        line = activity.pending_update_line(path, '100:7', 100)
+        self.assertIn('waiting for 2 conversation(s) to finish', line)
+        self.assertIn('deadline in 1h 0m', line)
+        self.assertIsNone(activity.pending_update_line(path, '100:8', 100))
+        report, active, automatic = activity.combine_update_status('◻️ Idle', None, None, line)
+        self.assertEqual((report, active, automatic), (line, line, line))
+        self.assertIn('heartbeat stale', activity.pending_update_line(path, '100:7', 130))
+        worker = subprocess.Popen(['/usr/bin/true'])
+        worker.wait()
+        record.update(worker_pid=worker.pid)
+        activity.atomic_json(path, record)
+        self.assertIn('process unavailable', activity.pending_update_line(path, '100:7', 100))
+        record.update(worker_pid=os.getpid())
+        record.update(at=3701)
+        activity.atomic_json(path, record)
+        self.assertIn('deadline elapsed', activity.pending_update_line(path, '100:7', 3701))
+        record.update(activation='active')
+        activity.atomic_json(path, record)
+        self.assertIsNone(activity.pending_update_line(path, '100:7', 3701))
+        record.update(activation='waiting_for_idle', at=100)
+        activity.atomic_json(path, record)
+        path.chmod(0o644)
+        self.assertIsNone(activity.pending_update_line(path, '100:7', 100))
 
     def test_one_silent_message_survives_observer_restart_and_retires_itself(self):
         self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)

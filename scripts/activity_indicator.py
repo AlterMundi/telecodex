@@ -422,6 +422,53 @@ def status_report(status, rollout, children, now):
     return '⚠️ Native activity unavailable'
 
 
+def pending_update_line(path, key, now):
+    """Project an explicitly configured local updater receipt, never infer tasks."""
+    if not path:
+        return None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor) as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                return None
+            data = json.loads(stream.read(65536))
+        if data.get('activation') != 'waiting_for_idle' or data.get('topic_key') != key:
+            return None
+        if data.get('waiting_for') != 'conversations_idle':
+            return '⚠️ Bot update pending · wait reason unconfirmed'
+        age = now - float(data['at'])
+        pid = int(data['worker_pid'])
+        if pid <= 0:
+            raise ValueError('invalid worker')
+        os.kill(pid, 0)
+        if not 0 <= age <= 25:
+            return '⚠️ Bot update pending · updater heartbeat stale'
+        remaining = math.ceil(float(data['deadline_at']) - now)
+        if remaining <= 0:
+            return '⚠️ Bot update deadline elapsed · outcome unconfirmed'
+        blockers = int(data['busy_conversations'])
+        if blockers < 0:
+            raise ValueError('invalid count')
+        minutes = math.ceil(remaining / 60)
+        duration = f'{minutes // 60}h {minutes % 60}m' if minutes >= 60 else f'{minutes}m'
+        reason = f'waiting for {blockers} conversation(s) to finish' if blockers else 'waiting for input delivery to settle'
+        return f'⏳ Bot update · {reason} · deadline in {duration}'
+    except ProcessLookupError:
+        return '⚠️ Bot update pending · updater process unavailable'
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def combine_update_status(report, active_text, automatic_text, update):
+    if not update:
+        return report, active_text, automatic_text
+    report = update if report == '◻️ Idle' else report + '\n' + update
+    active_text = active_text + '\n' + update if active_text else update
+    automatic_text = automatic_text + '\n' + update if automatic_text else update
+    return report, active_text, automatic_text
+
+
 class Telegram:
     def __init__(self, config):
         token_path = pathlib.Path(config['bot_token_file'])
@@ -790,6 +837,11 @@ def run(args):
                     report = status_report(status, reader, children, now)
                     active_text = status_line(status, reader, children, now)
                     text = status_line(status, reader, children, now, automatic=True)
+                    update = pending_update_line(args.pending_update_record, key, now)
+                    report, active_text, text = combine_update_status(report, active_text, text, update)
+                    exchange = timestamp(reader.last_exchange)
+                    if update and exchange is not None and now - exchange < 30:
+                        text = None
                     latest = latest_input(bridge, topic['chat_id'], topic['thread_id'])
                     position = {'exchange': reader.last_exchange,
                                 'input_id': latest['message_id'] if latest else None}
@@ -871,6 +923,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True)
     parser.add_argument('--state-dir', required=True)
+    parser.add_argument('--pending-update-record', help='owner-only heartbeat receipt for an explicitly configured finite bot updater')
     parser.add_argument('--probe', action='store_true', help='read-only; no token or Telegram calls')
     parser.add_argument('--status-requests', action='store_true',
                         help='supplement newly handled /status commands with activity and weekly quota')
