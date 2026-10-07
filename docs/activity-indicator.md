@@ -77,6 +77,18 @@ bot. Use a private state directory with mode 0700. One observer holds a local
 process lock. An optional owner-local service may manage it alongside the existing
 human listener; installing a skill alone must not activate it.
 
+Topics do not need manual subscription. Each polling pass reads the bridge's
+current session bindings and allowed creators. A new topic joins observation
+when its native Codex thread is bound; it is not observable before that binding.
+The scope is this configured bot/database, not other bots on the host.
+
+For a systemd deployment, give the listener a `Wants=` dependency on the observer
+and give the observer `After=` and `PartOf=` dependencies on the listener. Use
+the actual local unit names; `systemctl --user add-wants LISTENER OBSERVER`
+can create the startup dependency. `After=` alone only orders startup and
+`PartOf=` alone does not start the observer after separate listener stop/start
+operations. Verify both services are active after an executable cutover.
+
 `health.json` reports connection health and aggregate topic/publication counts.
 `messages.json` privately tracks only the observer's message receipts, correlation
 and retry timing. `retirements.json` retains at most 32 topic cleanup outcomes,
