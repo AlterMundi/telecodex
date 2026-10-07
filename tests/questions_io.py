@@ -269,10 +269,12 @@ import_desktop_history=false
                         self.thread_sequence += 1
                         thread = f'native-topic-{self.thread_sequence + 6}'
                     else:
+                        assert params.get('excludeTurns') is True, params
                         thread = params['threadId']
                 turn = 'turn-' + thread
                 question_id = 17 if self.mode == 'numeric' else 'question-' + thread
-                send({'id': request_id, 'result': {'thread': {'id': thread}, 'model': 'fixture-model'}})
+                # A metadata-only resume still binds the existing thread and receives live events.
+                send({'id': request_id, 'result': {'thread': {'id': thread, 'turns': []}, 'model': 'fixture-model'}})
             elif method == 'thread/name/set': send({'id': request_id, 'result': {}})
             elif method == 'turn/start':
                 assert params['collaborationMode']=={'mode': ('default' if params['input'][0]['text']=='implement after planning' else 'plan'),'settings':{
@@ -422,6 +424,7 @@ def scenario(binary, mode):
             starts=[m for m in j.rpc if m.get('method')=='turn/start']
             assert [m['params']['collaborationMode']['mode'] for m in starts] == ['plan','default']
             assert starts[0]['params']['threadId']==starts[1]['params']['threadId']
+            assert any(m[1].get('text') == 'Default mode continued the same native thread.' for m in j.messages)
         assert any(m.get('method')=='initialize' and m['params']['capabilities']['experimentalApi'] for m in j.rpc)
         print(json.dumps({'scenario':mode,'exact_request_answered_once':True,'new_turns_from_answers':0}),flush=True)
     finally:

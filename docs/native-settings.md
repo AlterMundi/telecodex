@@ -27,3 +27,21 @@ TUI; those differences do not imply shell, search or reasoning tools are absent.
 
 Native reference: [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference).
 Owning audit: [#14](https://github.com/AlterMundi/telecodex/issues/14).
+
+## Resuming long conversations
+
+Bound conversations use native `thread/resume` with `excludeTurns: true` by
+default. The bridge consumes the returned thread ID and model, then receives
+live turn events and typed questions; it does not need a copy of all persisted
+turns. This response option preserves the native thread and its model context.
+It does not delete history, compact the conversation or replay failed input.
+A future history view or delivery-recovery lookup must request the needed turns
+explicitly, preferably through native pagination.
+
+The option was verified against the installed Codex 0.160.0 native schema and
+proxy: a long existing thread returned 2,149 bytes with zero returned turns,
+while its persisted rollout remained unchanged. HTTP/WebSocket/SQLite journeys
+verify native questions followed by metadata-only resume and final delivery on
+the same thread. Those checks are separate from live Telegram receiving
+acceptance after deployment. The bounded 64 MiB transport remains available for
+other large native responses.
