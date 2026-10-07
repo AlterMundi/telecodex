@@ -6,6 +6,7 @@ import datetime as dt
 import fcntl
 import html
 import json
+import math
 import os
 import pathlib
 import queue
@@ -129,7 +130,7 @@ class Native:
         self.frame(json.dumps(value).encode())
 
     def rpc(self, method, params):
-        if method not in ('initialize', 'thread/read'):
+        if method not in ('initialize', 'thread/read', 'account/rateLimits/read'):
             raise ValueError('observer method forbidden')
         self.sequence += 1
         self.send({'id': self.sequence, 'method': method, 'params': params})
@@ -280,6 +281,45 @@ def linked_child(database, child, parent):
             return True
         child = ancestor
     return False
+
+
+def weekly_available(response):
+    if not isinstance(response, dict):
+        return None
+    buckets = response.get('rateLimitsByLimitId')
+    snapshot = buckets.get('codex') if isinstance(buckets, dict) else None
+    if snapshot is None:
+        snapshot = response.get('rateLimits', response.get('rate_limits'))
+    if not isinstance(snapshot, dict):
+        return None
+    for name in ('primary', 'secondary'):
+        window = snapshot.get(name)
+        if not isinstance(window, dict):
+            continue
+        duration = window.get('windowDurationMins', window.get('window_minutes'))
+        used = window.get('usedPercent', window.get('used_percent'))
+        if duration == 7 * 24 * 60 and isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used):
+            return max(0, min(100, 100 - used))
+    return None
+
+
+class WeeklyLimit:
+    def __init__(self):
+        self.available = None
+        self.next_read = 0
+
+    def read(self, native, now):
+        if now >= self.next_read:
+            self.next_read = now + 60
+            try:
+                self.available = weekly_available(native.rpc('account/rateLimits/read', None))
+            except (OSError, ValueError, queue.Empty, TimeoutError):
+                self.available = None  # Keep the activity indicator useful without quota data.
+        return self.available
+
+
+def weekly_label(available):
+    return 'weekly n/a' if available is None else f'weekly {available:.0f}% available'
 
 
 def status_line(status, rollout, children, now):
@@ -442,6 +482,7 @@ def run(args):
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
     readers, native = {}, None
+    weekly = WeeklyLimit()
     try:
         while not stopped.is_set():
             observations = []
@@ -488,6 +529,8 @@ def run(args):
                     started = timestamp(reader.started)
                     if text and started is not None and now - started < 8:
                         text = None
+                    if text:
+                        text += ' · ' + weekly_label(weekly.read(native, time.monotonic()))
                     observations.append({'status': status.get('type'), 'visible': bool(text)})
                     if publisher:
                         publisher.update(key, topic['chat_id'], topic['thread_id'], reader.turn_id, text, now)
@@ -497,9 +540,10 @@ def run(args):
                             publisher.retire(key, publisher.entries[key])
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
                             'topics': len(observations), 'active': sum(x['visible'] for x in observations),
+                            'weekly_available': weekly.available,
                             'published': sum(bool(x.get('message_id')) for x in publisher.entries.values()) if publisher else 0})
                 if args.probe:
-                    print(json.dumps({'connected': True, 'topics': observations}))
+                    print(json.dumps({'connected': True, 'topics': observations, 'weekly_available': weekly.available}))
                     return
             except (OSError, ValueError, sqlite3.Error, queue.Empty, TimeoutError):
                 if native:

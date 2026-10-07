@@ -183,6 +183,36 @@ class ActivityIO(unittest.TestCase):
         finally:
             database.close()
 
+    def test_weekly_available_uses_duration_and_codex_bucket(self):
+        window = lambda used, duration: {'usedPercent': used, 'windowDurationMins': duration}
+        response = {'rateLimits': {'primary': window(80, 300), 'secondary': window(25, 10080)}}
+        self.assertEqual(activity.weekly_available(response), 75)
+        response['rateLimitsByLimitId'] = {'codex': {'primary': window(40, 10080), 'secondary': window(70, 300)},
+                                         'other': {'secondary': window(90, 10080)}}
+        self.assertEqual(activity.weekly_available(response), 60)
+        self.assertEqual(activity.weekly_label(60), 'weekly 60% available')
+        for value in (None, {}, {'rateLimits': {'secondary': window(40, 300)}},
+                      {'rateLimits': {'secondary': window(float('nan'), 10080)}}):
+            self.assertIsNone(activity.weekly_available(value))
+
+    def test_weekly_read_is_cached_and_failure_never_keeps_an_old_percentage(self):
+        class FakeNative:
+            count = 0
+            def rpc(self, method, params):
+                self.count += 1
+                self.method, self.params = method, params
+                if self.count > 1:
+                    raise TimeoutError()
+                return {'rateLimits': {'secondary': {'usedPercent': 20, 'windowDurationMins': 10080}}}
+        native, limit = FakeNative(), activity.WeeklyLimit()
+        self.assertEqual(limit.read(native, 100), 80)
+        self.assertEqual(limit.read(native, 159), 80)
+        self.assertEqual(native.count, 1)
+        self.assertIsNone(limit.read(native, 160))
+        self.assertEqual(native.method, 'account/rateLimits/read')
+        self.assertIsNone(native.params)
+        self.assertEqual(activity.weekly_label(limit.available), 'weekly n/a')
+
 
 if __name__ == '__main__':
     unittest.main()

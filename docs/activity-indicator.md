@@ -8,13 +8,20 @@ remains the only Telegram update consumer.
 
 The message appears after eight seconds, updates at most every thirty seconds,
 and summarizes elapsed time, outstanding native tool calls, active child agents
-and native approval/input waits. Short answers remain clean. Completed assistant
-messages are never edited or deleted. The observer removes its own message when
+and native approval/input waits. Short answers remain clean. The line also shows
+the available weekly allowance from
+native `account/rateLimits/read`, cached for sixty seconds. The weekly window is
+identified by its seven-day duration; the Codex bucket is preferred when multiple
+buckets are returned. Missing or unavailable quota is shown as `weekly n/a` rather
+than guessed. This read starts no inference.
+
+Completed assistant messages are never edited or deleted. The observer removes its own message when
 native work and tracked child work end and foreground delivery is no longer
 running. If deletion is unavailable, it marks that message inactive.
 
-The observer uses only `initialize` and metadata-only `thread/read` on the existing
-Codex App Server proxy. It reads the bridge SQLite database and native index in
+The observer uses only `initialize`, metadata-only `thread/read` and
+`account/rateLimits/read` on the existing Codex App Server proxy. It reads the
+bridge SQLite database and native index in
 read-only mode, selecting only topic bindings whose creator remains allowed.
 Linked rollout metadata supplies tool correlation and child references; native
 index ancestry must link a referenced child back to the selected parent before
