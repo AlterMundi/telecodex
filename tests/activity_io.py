@@ -134,20 +134,21 @@ class ActivityIO(unittest.TestCase):
                                     (5, {'text': 'secret prompt'}), (6, {'status': 'processing'})]:
             add(identifier, **options)
         reports = {'100:7': '◻️ Idle'}
-        requests.respond(reports, lambda: 75)
+        quota = lambda: 'weekly 75% available · reset in 2d 3h'
+        requests.respond(reports, quota)
         self.assertEqual(len(self.calls), 1)
         payload = self.calls[0][1]
-        self.assertEqual(payload['text'], '◻️ Idle · weekly 75% available')
+        self.assertEqual(payload['text'], '◻️ Idle · weekly 75% available · reset in 2d 3h')
         self.assertEqual(payload['reply_parameters'], {'message_id': 1002})
         self.assertEqual(payload['message_thread_id'], 7)
         self.assertNotIn('secret', path.read_text())
         restarted = activity.StatusRequests(database, self.telegram, path)
-        restarted.respond(reports, lambda: 75)
+        restarted.respond(reports, quota)
         self.assertEqual(len(self.calls), 1)
         database.execute("UPDATE incoming_updates SET status='handled' WHERE update_id=6")
         self.answers = [None]
-        restarted.respond(reports, lambda: 75)
-        activity.StatusRequests(database, self.telegram, path).respond(reports, lambda: 75)
+        restarted.respond(reports, quota)
+        activity.StatusRequests(database, self.telegram, path).respond(reports, quota)
         self.assertEqual(len(self.calls), 2)  # Unknown delivery is never replayed.
         database.close()
 
@@ -263,7 +264,7 @@ class ActivityIO(unittest.TestCase):
         response['rateLimitsByLimitId'] = {'codex': {'primary': window(40, 10080), 'secondary': window(70, 300)},
                                          'other': {'secondary': window(90, 10080)}}
         self.assertEqual(activity.weekly_available(response), 60)
-        self.assertEqual(activity.weekly_label(60), 'weekly 60% available')
+        self.assertEqual(activity.weekly_label(60), 'weekly 60% available · reset n/a')
         for value in (None, {}, {'rateLimits': {'secondary': window(40, 300)}},
                       {'rateLimits': {'secondary': window(float('nan'), 10080)}}):
             self.assertIsNone(activity.weekly_available(value))
@@ -276,15 +277,30 @@ class ActivityIO(unittest.TestCase):
                 self.method, self.params = method, params
                 if self.count > 1:
                     raise TimeoutError()
-                return {'rateLimits': {'secondary': {'usedPercent': 20, 'windowDurationMins': 10080}}}
+                return {'rateLimits': {'secondary': {'usedPercent': 20, 'windowDurationMins': 10080, 'resetsAt': 200000}}}
         native, limit = FakeNative(), activity.WeeklyLimit()
         self.assertEqual(limit.read(native, 100), 80)
         self.assertEqual(limit.read(native, 159), 80)
         self.assertEqual(native.count, 1)
+        self.assertEqual(limit.resets_at, 200000)
         self.assertIsNone(limit.read(native, 160))
+        self.assertIsNone(limit.resets_at)
         self.assertEqual(native.method, 'account/rateLimits/read')
         self.assertIsNone(native.params)
         self.assertEqual(activity.weekly_label(limit.available), 'weekly n/a')
+
+    def test_weekly_reset_uses_same_window_and_countdown_changes_without_refetch(self):
+        window = lambda duration, reset: {'usedPercent': 25, 'windowDurationMins': duration, 'resetsAt': reset}
+        response = {'rateLimits': {'primary': window(300, 100), 'secondary': window(10080, 200000)}}
+        self.assertEqual(activity.weekly_snapshot(response), (75, 200000))
+        response['rateLimitsByLimitId'] = {'codex': {'primary': window(10080, 300000)}}
+        self.assertEqual(activity.weekly_snapshot(response), (75, 300000))
+        for seconds, expected in [(183600, '2d 3h'), (7500, '2h 5m'), (180, '3m'), (59, '<1m'), (-60, '<1m')]:
+            self.assertEqual(activity.weekly_label(75, 200000, 200000 - seconds),
+                             f'weekly 75% available · reset in {expected}')
+        for invalid in [None, True, '300000', float('nan'), float('inf'), -10]:
+            response['rateLimitsByLimitId']['codex']['primary']['resetsAt'] = invalid
+            self.assertEqual(activity.weekly_snapshot(response), (75, None))
 
 
 if __name__ == '__main__':

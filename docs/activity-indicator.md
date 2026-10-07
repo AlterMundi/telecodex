@@ -14,6 +14,10 @@ native `account/rateLimits/read`, cached for sixty seconds. The weekly window is
 identified by its seven-day duration; the Codex bucket is preferred when multiple
 buckets are returned. Missing or unavailable quota is shown as `weekly n/a` rather
 than guessed. This read starts no inference.
+The same weekly window's native `resetsAt` supplies a compact countdown, such as
+`weekly 78% available · reset in 2d 3h`, in both the indicator and `/status`.
+The countdown is recalculated from the cached reset timestamp whenever displayed;
+it needs no additional quota requests. Missing reset metadata shows `reset n/a`.
 
 There is no redundant `updated` clock in the message. A new human intervention
 replaces the previous indicator with a silent message near that intervention,

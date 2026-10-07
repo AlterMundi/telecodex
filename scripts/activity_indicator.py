@@ -301,15 +301,15 @@ def linked_child(database, child, parent):
     return False
 
 
-def weekly_available(response):
+def weekly_snapshot(response):
     if not isinstance(response, dict):
-        return None
+        return None, None
     buckets = response.get('rateLimitsByLimitId')
     snapshot = buckets.get('codex') if isinstance(buckets, dict) else None
     if snapshot is None:
         snapshot = response.get('rateLimits', response.get('rate_limits'))
     if not isinstance(snapshot, dict):
-        return None
+        return None, None
     for name in ('primary', 'secondary'):
         window = snapshot.get(name)
         if not isinstance(window, dict):
@@ -317,27 +317,49 @@ def weekly_available(response):
         duration = window.get('windowDurationMins', window.get('window_minutes'))
         used = window.get('usedPercent', window.get('used_percent'))
         if duration == 7 * 24 * 60 and isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used):
-            return max(0, min(100, 100 - used))
-    return None
+            reset = window.get('resetsAt', window.get('resets_at'))
+            if not isinstance(reset, (int, float)) or isinstance(reset, bool) or not math.isfinite(reset) or reset <= 0:
+                reset = None
+            return max(0, min(100, 100 - used)), reset
+    return None, None
+
+
+def weekly_available(response):
+    return weekly_snapshot(response)[0]
 
 
 class WeeklyLimit:
     def __init__(self):
         self.available = None
+        self.resets_at = None
         self.next_read = 0
 
     def read(self, native, now):
         if now >= self.next_read:
             self.next_read = now + 60
             try:
-                self.available = weekly_available(native.rpc('account/rateLimits/read', None))
+                self.available, self.resets_at = weekly_snapshot(native.rpc('account/rateLimits/read', None))
             except (OSError, ValueError, queue.Empty, TimeoutError):
                 self.available = None  # Keep the activity indicator useful without quota data.
+                self.resets_at = None
         return self.available
 
+    def label(self, native, now):
+        self.read(native, now)
+        return weekly_label(self.available, self.resets_at)
 
-def weekly_label(available):
-    return 'weekly n/a' if available is None else f'weekly {available:.0f}% available'
+
+def weekly_label(available, resets_at=None, now=None):
+    if available is None:
+        return 'weekly n/a'
+    label = f'weekly {available:.0f}% available'
+    if resets_at is None:
+        return label + ' · reset n/a'
+    remaining = max(0, int(resets_at - (time.time() if now is None else now)))
+    days, hours, minutes = remaining // 86400, remaining // 3600 % 24, remaining // 60 % 60
+    duration = f'{days}d {hours}h' if days else (
+        f'{hours}h {minutes}m' if hours else f'{minutes}m' if minutes else '<1m')
+    return label + f' · reset in {duration}'
 
 
 def status_line(status, rollout, children, now):
@@ -538,7 +560,7 @@ class StatusRequests:
                 self.state['floor'] = max(self.state['floor'], int(oldest))
                 del self.state['attempted'][oldest]
             atomic_json(self.path, self.state)  # Never replay an ambiguous delivery.
-            text = reports[key] + ' · ' + weekly_label(weekly())
+            text = reports[key] + ' · ' + weekly()
             payload = {'chat_id': row['chat'], 'text': html.escape(text),
                        'parse_mode': 'HTML', 'disable_notification': True,
                        'reply_parameters': {'message_id': row['message']}}
@@ -621,7 +643,7 @@ def run(args):
                     if text and started is not None and now - started < 8:
                         text = None
                     if text:
-                        text += ' · ' + weekly_label(weekly.read(native, time.monotonic()))
+                        text += ' · ' + weekly.label(native, time.monotonic())
                     observations.append({'status': status.get('type'), 'visible': bool(text)})
                     if publisher:
                         publisher.update(key, topic['chat_id'], topic['thread_id'], reader.request_id or reader.turn_id, text, now)
@@ -630,10 +652,11 @@ def run(args):
                         if key not in known:
                             publisher.retire(key, publisher.entries[key])
                 if requests:
-                    requests.respond(reports, lambda: weekly.read(native, time.monotonic()))
+                    requests.respond(reports, lambda: weekly.label(native, time.monotonic()))
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
                             'topics': len(observations), 'active': sum(x['visible'] for x in observations),
                             'weekly_available': weekly.available,
+                            'weekly_resets_at': weekly.resets_at,
                             'published': sum(bool(x.get('message_id')) for x in publisher.entries.values()) if publisher else 0})
                 if args.probe:
                     print(json.dumps({'connected': True, 'topics': observations, 'weekly_available': weekly.available}))
