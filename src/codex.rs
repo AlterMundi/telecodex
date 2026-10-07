@@ -620,11 +620,11 @@ where
               RpcMessage::ServerRequest{id,method,params}=>{
                 if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
                 if method == "item/tool/requestUserInput" {
+                    if open_inputs.contains_key(&id) || submitted_inputs.contains(&id) { continue; }
                     let input: UserInputRequest = serde_json::from_value(params)
                         .context("unsupported native user-input schema")?;
                     input.validate()?;
-                    if input.thread_id != thread_id || active_turn_id.as_deref() != Some(input.turn_id.as_str())
-                        || open_inputs.contains_key(&id) || submitted_inputs.contains(&id) { bail!("native question does not match the active turn"); }
+                    if input.thread_id != thread_id || active_turn_id.as_deref() != Some(input.turn_id.as_str()) { bail!("native question does not match the active turn"); }
                     let closed=CancellationToken::new();
                     open_inputs.insert(id.clone(),closed.clone());
                     match on_event(CodexEvent::UserInputRequest{id:id.clone(), request:input,closed:closed.clone()}).await? {

@@ -852,7 +852,7 @@ pub(super) fn format_session_status(
     let collaboration = session
         .collaboration_mode
         .map(|m| m.as_str())
-        .unwrap_or("native default");
+        .unwrap_or("native (not overridden)");
 
     format!(
         "**Current Telegram session:** {telegram_title}\n- codex session title: {codex_title}\n- state: `{state}`\n- cwd: `{}`\n- codex thread: `{}`\n- model: `{model}`\n- reasoning: `{reasoning}`\n- fast: `{fast}`\n- next-turn mode: `{collaboration}`\n- approval: `{}`\n- sandbox: `{}`\n- search: `{}`\n- prompt: `{prompt}`",

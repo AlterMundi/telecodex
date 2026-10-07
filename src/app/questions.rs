@@ -10,13 +10,18 @@ pub(super) struct PendingDialogue {
     request: UserInputRequest,
     index: usize,
     message_id: i64,
+    message_ids: Vec<i64>,
     awaiting_text: bool,
     answers: UserInputResponse,
     closed: CancellationToken,
     responder: oneshot::Sender<UserInputDecision>,
 }
 
-async fn show_question(shared: &AppShared, token: &str, pending: &PendingDialogue) -> Result<i64> {
+async fn show_question(
+    shared: &AppShared,
+    token: &str,
+    pending: &mut PendingDialogue,
+) -> Result<()> {
     let question = &pending.request.questions[pending.index];
     let mut text = format!(
         "Codex question {}/{}: {}\n\n{}",
@@ -57,20 +62,44 @@ async fn show_question(shared: &AppShared, token: &str, pending: &PendingDialogu
             url: None,
         },
     ]);
-    let mut message = SendMessage::html(
-        pending.session.chat_id,
-        Some(pending.session.thread_id).filter(|id| *id != 0),
-        html_escape::encode_safe(&text).to_string(),
-    );
-    message.reply_markup = Some(InlineKeyboardMarkup {
-        inline_keyboard: rows,
-    });
-    // Question controls must never fall back to a different Telegram topic.
-    let message = shared.telegram.send_message(message).await?;
-    shared.store.record_question_message(pending.session, message.message_id, pending.local_turn_id,
-        &serde_json::json!({"requestId":pending.request_id,"threadId":pending.request.thread_id,
-            "turnId":pending.request.turn_id,"itemId":pending.request.item_id,"questionId":question.id}))?;
-    Ok(message.message_id)
+    pending.message_ids.clear();
+    // Bound UTF-16 length too: Telegram entities count astral characters twice.
+    let chunks = split_text(&text, 1900);
+    let count = chunks.len();
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        let chunk = if index == 0 {
+            chunk
+        } else {
+            format!(
+                "Codex question {}/{} (continued)\n\n{chunk}",
+                pending.index + 1,
+                pending.request.questions.len()
+            )
+        };
+        let mut outgoing = SendMessage::html(
+            pending.session.chat_id,
+            Some(pending.session.thread_id).filter(|id| *id != 0),
+            html_escape::encode_safe(&chunk).to_string(),
+        );
+        if index + 1 == count {
+            outgoing.reply_markup = Some(InlineKeyboardMarkup {
+                inline_keyboard: rows.clone(),
+            });
+        }
+        // Controls must never fall back to a different Telegram topic.
+        let message = shared.telegram.send_message(outgoing).await?;
+        if message.chat.id != pending.session.chat_id
+            || message.message_thread_id.unwrap_or(0) != pending.session.thread_id
+        {
+            anyhow::bail!("native question delivery did not confirm its Telegram topic");
+        }
+        shared.store.record_question_message(pending.session, message.message_id, pending.local_turn_id,
+            &serde_json::json!({"requestId":pending.request_id,"threadId":pending.request.thread_id,
+                "turnId":pending.request.turn_id,"itemId":pending.request.item_id,"questionId":question.id}))?;
+        pending.message_id = message.message_id;
+        pending.message_ids.push(message.message_id);
+    }
+    Ok(())
 }
 
 pub(super) async fn begin_dialogue(
@@ -93,12 +122,13 @@ pub(super) async fn begin_dialogue(
         request,
         index: 0,
         message_id: 0,
+        message_ids: Vec::new(),
         awaiting_text: false,
         answers: UserInputResponse::default(),
         responder,
         closed,
     };
-    pending.message_id = show_question(&shared, &token, &pending).await?;
+    show_question(&shared, &token, &mut pending).await?;
     if !pending.closed.is_cancelled() && !pending.responder.is_closed() {
         shared.pending_questions.lock().await.insert(token, pending);
     }
@@ -155,7 +185,7 @@ async fn answer(
             .responder
             .send(UserInputDecision::Answers(pending.answers));
     } else {
-        pending.message_id = show_question(&shared, &token, &pending).await?;
+        show_question(&shared, &token, &mut pending).await?;
         if !pending.closed.is_cancelled() && !pending.responder.is_closed() {
             shared.pending_questions.lock().await.insert(token, pending);
         }
@@ -189,7 +219,7 @@ pub(super) async fn handle_callback(
         } else {
             let mut pending = guard.remove(token).expect("checked pending question");
             drop(guard);
-            pending.message_id = show_question(&shared, token, &pending).await?;
+            show_question(&shared, token, &mut pending).await?;
             if !pending.closed.is_cancelled() && !pending.responder.is_closed() {
                 shared
                     .pending_questions
@@ -298,7 +328,8 @@ pub(super) async fn handle_text_answer(
                 && p.requester == user
                 && !p.responder.is_closed()
                 && !p.closed.is_cancelled()
-                && (reply == Some(p.message_id) || (reply.is_none() && p.awaiting_text))
+                && (reply.is_some_and(|id| p.message_ids.contains(&id))
+                    || (reply.is_none() && p.awaiting_text))
         })
         .map(|(token, _)| token.clone());
     if let Some(token) = token {
@@ -309,7 +340,19 @@ pub(super) async fn handle_text_answer(
     }
     drop(guard);
     if let Some(reply) = reply {
-        if shared.store.is_question_message(key, reply)? {
+        // Telegram can display a question before its HTTP receipt reaches SQLite.
+        // A crash in that gap must not turn a quoted answer into a fresh prompt.
+        let unrecorded_question = message.reply_to_message.as_ref().is_some_and(|quoted| {
+            quoted
+                .from
+                .as_ref()
+                .is_some_and(|from| from.is_bot && from.id == shared.bot_id)
+                && quoted
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text.starts_with("Codex question "))
+        });
+        if shared.store.is_question_message(key, reply)? || unrecorded_question {
             notice(&shared,message,"This question is no longer waiting for your answer. No new turn was started; inspect /status before continuing.").await?;
             return Ok(true);
         }

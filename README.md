@@ -148,6 +148,9 @@ High-level flow:
 | `/environments` | Show importable Codex environments in the primary forum dashboard |
 | `/sessions` | Show topic sessions in dashboard root, or Codex sessions for the current `cwd` inside a work topic |
 | `/history` | Browse final assistant messages from the selected Codex session with an interactive pager |
+| `/plan [prompt]` | Select native Plan mode for the topic's next turn; optionally queue a prompt |
+| `/default [prompt]` | Select native Default mode for the next turn; optionally queue a prompt |
+| `/questions` | Reopen your pending native questions in this topic |
 | `/status` | Show the current Telegram session, selected Codex session, and runtime settings |
 | `/rename <new name>` | Rename the current Codex session and Telegram topic together |
 | `/stop` | Stop the active turn |
@@ -374,3 +377,5 @@ This project is licensed under the [MIT License](./LICENSE).
 Built for people who want Codex local, but reachable from Telegram.
 
 </div>
+
+Native planning, question controls and recovery are documented in [native questions](docs/native-questions.md). The [Telegram convergence pilot](docs/telegram-convergence.md) records source provenance and reuse decisions.

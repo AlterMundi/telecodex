@@ -677,6 +677,8 @@ pub struct ForumTopicEdited {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplyMessage {
     pub message_id: i64,
+    pub from: Option<User>,
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
