@@ -302,22 +302,114 @@ class ActivityIO(unittest.TestCase):
             response['rateLimitsByLimitId']['codex']['primary']['resetsAt'] = invalid
             self.assertEqual(activity.weekly_snapshot(response), (75, None))
 
-    def test_automatic_indicator_only_shows_pending_work_and_explicit_status_keeps_working(self):
+    def test_unloaded_native_session_is_idle_and_child_work_remains_visible(self):
         reader = activity.Rollout(self.root / 'unused', 'parent')
-        reader.work_running = True
         now = time.time()
+        reader.work_running = False
+        # Unloading a stored thread is a successful native read, not a lost connection.
+        self.assertEqual(activity.status_report({'type': 'notLoaded'}, reader, [], now), '◻️ Idle')
+        self.assertIsNone(activity.status_line({'type': 'notLoaded'}, reader, [], now, automatic=True))
+        self.assertIn('Waiting for 1 agent', activity.status_report(
+            {'type': 'notLoaded'}, reader, [{'type': 'active'}], now))
+        for kind in ('unknown', 'systemError'):
+            self.assertIn('unavailable', activity.status_report({'type': kind}, reader, [], now))
+
+    def test_automatic_indicator_shows_silent_work_and_ignores_tool_identity_churn(self):
+        reader = activity.Rollout(self.root / 'unused', 'parent')
+        now = int(time.time())
+        def exchange(kind, at):
+            reader.consume({'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(at)),
+                'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': kind}})
+        exchange({'type': 'UserMessage', 'id': 'request'}, now)
         self.assertIn('Working', activity.status_line({'type': 'active'}, reader, [], now))
         self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now, automatic=True))
-        reader.calls['pending'] = 'tools'
-        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now, automatic=True))
-        self.assertIn('tool call', activity.status_line({'type': 'active'}, reader, [], now + 8, automatic=True))
+        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now+29, automatic=True))
+        self.assertIn('Working', activity.status_line({'type': 'active'}, reader, [], now+30, automatic=True))
+        reader.calls['pending-a'] = 'tools'
+        self.assertIn('tool call', activity.status_line({'type': 'active'}, reader, [], now+31, automatic=True))
+        reader.calls = {'pending-b': 'tools'}
+        self.assertIn('tool call', activity.status_line({'type': 'active'}, reader, [], now+32, automatic=True))
+        exchange({'type': 'AgentMessage', 'phase': 'commentary'}, now+33)
+        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now+33, automatic=True))
+        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now+62, automatic=True))
+        self.assertIn('tool call', activity.status_line({'type': 'active'}, reader, [], now+63, automatic=True))
         reader.calls.clear()
-        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [{'type': 'active'}], now + 9, automatic=True))
-        self.assertIn('agent(s) active', activity.status_line({'type': 'active'}, reader, [{'type': 'active'}], now + 17, automatic=True))
-        for flag in ['waitingOnApproval', 'waitingOnUserInput']:
-            self.assertIsNone(activity.status_line({'type': 'active', 'activeFlags': [flag]}, reader, [], now + 18, automatic=True))
-            self.assertIn('Waiting', activity.status_line({'type': 'active', 'activeFlags': [flag]}, reader, [], now + 26, automatic=True))
-        self.assertIsNone(activity.status_line({'type': 'idle'}, reader, [], now, automatic=True))
+        exchange({'type': 'AgentMessage', 'phase': 'final_answer'}, now+64)
+        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now+94, automatic=True))
+        self.assertIsNone(activity.status_line({'type': 'idle'}, reader, [], now+94, automatic=True))
+
+    def test_status_cache_revalidates_binding_and_marks_stale_snapshots_unconfirmed(self):
+        db = sqlite3.connect(':memory:')
+        db.row_factory = sqlite3.Row
+        db.executescript('''CREATE TABLE incoming_updates(update_id INTEGER PRIMARY KEY,
+            payload_json TEXT,status TEXT,updated_at TEXT);
+            CREATE TABLE users(tg_user_id INTEGER PRIMARY KEY,allowed INTEGER);
+            CREATE TABLE sessions(chat_id INTEGER,thread_id INTEGER,codex_thread_id TEXT,creator_user_id INTEGER);
+            INSERT INTO users VALUES(1,1);
+            INSERT INTO sessions VALUES(100,7,'original',1);''')
+        requests = activity.StatusRequests(db, self.telegram, self.root / 'status-requests.json')
+        cache = activity.StatusCache()
+        quota = activity.WeeklyLimit()
+        quota.available, quota.resets_at = 75, time.time()+3600
+        cache.update({'100:7':'Working'}, {'100:7':'original'}, quota)
+        def add(identifier):
+            db.execute("INSERT INTO incoming_updates VALUES(?,?,?,datetime('now'))", (identifier,
+                json.dumps({'message':{'chat':{'id':100}, 'message_thread_id':7, 'from':{'id':1},
+                'message_id':identifier+1000,'text':'/status'}}), 'handled'))
+        add(1)
+        db.execute("UPDATE sessions SET codex_thread_id='replacement'")
+        cache.respond(requests)
+        self.assertEqual(self.calls, [])
+        cache.update({'100:7':'Working'}, {'100:7':'replacement'}, quota)
+        reports, bindings, available, reset, observed = cache.value
+        cache.value = (reports, bindings, available, reset, observed-30)
+        cache.respond(requests)
+        self.assertIn('unconfirmed', self.calls[0][1]['text'])
+        self.assertIn('weekly n/a', self.calls[0][1]['text'])
+        cache.respond(requests)
+        self.assertEqual(len(self.calls),1)
+        db.close()
+
+    def test_status_command_is_answered_while_native_observation_is_not_running(self):
+        path = self.root / 'bridge.sqlite3'
+        db = sqlite3.connect(path)
+        db.executescript('''CREATE TABLE incoming_updates(update_id INTEGER PRIMARY KEY,
+            payload_json TEXT,status TEXT,updated_at TEXT);
+            CREATE TABLE users(tg_user_id INTEGER PRIMARY KEY,allowed INTEGER);
+            CREATE TABLE sessions(chat_id INTEGER,thread_id INTEGER,codex_thread_id TEXT,creator_user_id INTEGER);
+            INSERT INTO users VALUES(1,1);
+            INSERT INTO sessions VALUES(100,7,'bound',1);''')
+        db.commit()
+        cache = activity.StatusCache()
+        quota = activity.WeeklyLimit()
+        quota.available, quota.resets_at = 78, time.time()+86400
+        cache.update({'100:7':'Working'}, {'100:7':'bound'}, quota)
+        stopped = threading.Event()
+        worker = threading.Thread(target=activity.watch_status_requests,
+            args=({'db_path':str(path)}, self.root, cache, stopped, self.telegram))
+        worker.start()
+        try:
+            deadline=time.monotonic()+2
+            while not (self.root/'status-requests.json').exists():
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.01)
+            started=time.monotonic()
+            db.execute("INSERT INTO incoming_updates VALUES(1,?,'handled',datetime('now'))", (json.dumps(
+                {'message':{'chat':{'id':100},'message_thread_id':7,'from':{'id':1},
+                'message_id':1001,'text':'/status'}}),))
+            db.commit()
+            while not self.calls:
+                self.assertLess(time.monotonic()-started, 1.5)
+                time.sleep(.01)
+            self.assertIn('Working',self.calls[0][1]['text'])
+            self.assertIn('weekly 78%',self.calls[0][1]['text'])
+            self.assertEqual(self.calls[0][1]['reply_parameters'], {'message_id':1001})
+        finally:
+            stopped.set()
+            worker.join(timeout=2)
+            db.close()
+        self.assertFalse(worker.is_alive())
+
 
 
 if __name__ == '__main__':

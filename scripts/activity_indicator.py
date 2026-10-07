@@ -179,8 +179,8 @@ class Rollout:
         self.last_signal = None
         self.work_running = None
         self.request_id = None
-        self.pending_signature = None
         self.pending_since = None
+        self.last_exchange = None
         self.skipping = False
 
     def consume(self, value):
@@ -195,6 +195,8 @@ class Rollout:
             self.started = value.get('timestamp')
             self.work_running = True
             self.request_id = self.turn_id
+            self.last_exchange = None
+            self.pending_since = None
         elif kind in ('task_complete', 'turn_aborted'):
             self.calls.clear()
             self.work_running = False
@@ -215,7 +217,10 @@ class Rollout:
                 self.request_id = item.get('id') or value.get('timestamp')
                 self.started = value.get('timestamp')
                 self.work_running = True
+                self.last_exchange = value.get('timestamp')
+                self.pending_since = None
             elif item.get('type') == 'AgentMessage':
+                self.last_exchange = value.get('timestamp')
                 if item.get('phase') == 'final_answer':
                     self.work_running = False
                 elif item.get('phase') == 'commentary':
@@ -243,6 +248,7 @@ class Rollout:
                 self.agents.clear()
                 self.started = self.turn_id = self.last_signal = None
                 self.work_running = self.request_id = None
+                self.last_exchange = None
                 self.skipping = False
                 self.offset = max(0, info.st_size - 4 * 1024 * 1024)
                 self.identity = identity
@@ -375,17 +381,18 @@ def status_line(status, rollout, children, now, *, automatic=False):
         rollout.work_running is not False or rollout.calls or waiting))
     if not active:
         if automatic:
-            rollout.pending_signature = rollout.pending_since = None
+            rollout.pending_since = None
         return None
-    if automatic and not (rollout.calls or active_children or waiting):
-        rollout.pending_signature = rollout.pending_since = None
-        return None  # Ordinary working/typing needs no second automatic indicator.
     if automatic:
-        signature = (tuple(sorted(rollout.calls)), active_children, tuple(sorted(flags)))
-        if signature != rollout.pending_signature:
-            rollout.pending_signature, rollout.pending_since = signature, now
-        if now - rollout.pending_since < 8:
-            return None  # Brief tool calls should not create chat clutter either.
+        # Native working does not guarantee that Telegram is showing typing.
+        # Keep active work visible after quiet exchanges, regardless of tool churn.
+        quiet_since = timestamp(rollout.last_exchange or rollout.started)
+        if quiet_since is None:
+            if rollout.pending_since is None:
+                rollout.pending_since = now
+            quiet_since = rollout.pending_since
+        if now - quiet_since < 30:
+            return None
     if 'waitingOnApproval' in flags:
         summary = 'Waiting for approval'
     elif 'waitingOnUserInput' in flags:
@@ -406,6 +413,15 @@ def status_line(status, rollout, children, now, *, automatic=False):
     return f'⏳ {summary} · {duration}'
 
 
+def status_report(status, rollout, children, now):
+    line = status_line(status, rollout, children, now)
+    if line:
+        return line
+    if status.get('type') in ('active', 'idle', 'notLoaded'):
+        return '◻️ Idle'
+    return '⚠️ Native activity unavailable'
+
+
 class Telegram:
     def __init__(self, config):
         token_path = pathlib.Path(config['bot_token_file'])
@@ -419,14 +435,17 @@ class Telegram:
                 raise ValueError('invalid bounded token file')
         self.base = config.get('api_base', 'https://api.telegram.org').rstrip('/')
         self.next_chat = {}
+        self.schedule_lock = threading.Lock()
 
     def call(self, method, payload):
         if method not in ('sendMessage', 'editMessageText', 'deleteMessage'):
             raise ValueError('observer Telegram method forbidden')
         chat = payload['chat_id']
-        now = time.monotonic()
-        time.sleep(max(0, self.next_chat.get(chat, now) - now))
-        self.next_chat[chat] = time.monotonic() + (3.5 if chat < 0 else 1)
+        with self.schedule_lock:
+            now = time.monotonic()
+            scheduled = max(now, self.next_chat.get(chat, now))
+            self.next_chat[chat] = scheduled + (3.5 if chat < 0 else 1)
+        time.sleep(max(0, scheduled - time.monotonic()))
         request = urllib.request.Request(f'{self.base}/bot{self.token}/{method}',
                                          data=json.dumps(payload).encode(),
                                          headers={'Content-Type': 'application/json'})
@@ -545,7 +564,7 @@ class StatusRequests:
             'attempted': {}}
         atomic_json(self.path, self.state)
 
-    def respond(self, reports, weekly):
+    def respond(self, reports, weekly, bindings=None):
         recent = self.database.execute("SELECT MIN(update_id) FROM incoming_updates WHERE datetime(updated_at)>=datetime('now','-120 seconds')").fetchone()[0]
         if recent is not None:
             self.state['floor'] = max(self.state['floor'], recent - 1)
@@ -567,6 +586,13 @@ class StatusRequests:
             key = f"{row['chat']}:{row['topic']}"
             if key not in reports:
                 continue  # Requires an authorized, current native topic binding.
+            if bindings is not None:
+                current = self.database.execute('''SELECT s.codex_thread_id FROM sessions s
+                    JOIN users u ON u.tg_user_id=s.creator_user_id
+                    WHERE s.chat_id=? AND s.thread_id=? AND u.allowed=1''',
+                    (row['chat'], row['topic'])).fetchone()
+                if not current or current['codex_thread_id'] != bindings.get(key):
+                    continue  # A cached report cannot follow a replaced binding.
             self.state['attempted'][identity] = {'attempted': True}
             if len(self.state['attempted']) > 256:
                 oldest = min(self.state['attempted'], key=int)
@@ -587,6 +613,44 @@ class StatusRequests:
                     atomic_json(self.path, self.state)
 
 
+class StatusCache:
+    """Replace complete snapshots atomically; command reads never wait on native I/O."""
+    def __init__(self):
+        self.value = None
+
+    def update(self, reports, bindings, weekly):
+        self.value = (dict(reports), dict(bindings), weekly.available, weekly.resets_at, time.time())
+
+    def respond(self, requests):
+        value = self.value
+        if value is None:
+            return
+        reports, bindings, available, resets_at, observed = value
+        if time.time() - observed > 20:
+            reports = {key: '⚠️ Native activity unavailable · state unconfirmed' for key in reports}
+            available = resets_at = None
+        requests.respond(reports, lambda: weekly_label(available, resets_at), bindings)
+
+
+def watch_status_requests(config, state, cache, stopped, telegram):
+    database = readonly(config['db_path'])
+    try:
+        requests = StatusRequests(database, telegram, state / 'status-requests.json')
+        version, snapshot = None, None
+        while not stopped.is_set():
+            try:
+                current = database.execute('PRAGMA data_version').fetchone()[0]
+                value = cache.value
+                if current != version or value is not snapshot:
+                    cache.respond(requests)
+                    version, snapshot = current, value
+            except (OSError, ValueError, sqlite3.Error):
+                pass  # Leave persisted attempts intact and retry observation, never delivery.
+            stopped.wait(.25)
+    finally:
+        database.close()
+
+
 def run(args):
     config = tomllib.loads(pathlib.Path(args.config).read_text())
     state = pathlib.Path(args.state_dir)
@@ -599,20 +663,27 @@ def run(args):
     native_home = pathlib.Path(os.environ.get('CODEX_HOME', pathlib.Path.home() / '.codex'))
     native_db = readonly(native_home / 'state_5.sqlite')
     publisher = None if args.probe else Publisher(Telegram(config['telegram']), state / 'messages.json')
-    requests = StatusRequests(bridge, publisher.telegram, state / 'status-requests.json') if (
-        publisher and args.status_requests) else None
     stopped = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
     readers, native = {}, None
     weekly = WeeklyLimit()
+    cache = StatusCache()
+    status_worker = None
+    if publisher and args.status_requests:
+        status_worker = threading.Thread(target=watch_status_requests,
+            args=(config, state, cache, stopped, publisher.telegram), daemon=True)
+        status_worker.start()
     try:
         while not stopped.is_set():
             observations = []
             reports = {}
+            bindings = {}
+            publications = []
             try:
                 if native is None:
                     native = Native(str(config['codex'].get('binary', 'codex')))
+                weekly.read(native, time.monotonic())
                 topics = bridge.execute('''SELECT s.chat_id,s.thread_id,s.codex_thread_id,
                     (SELECT status FROM turns WHERE session_id=s.id ORDER BY id DESC LIMIT 1) AS turn_status
                     FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
@@ -644,33 +715,37 @@ def run(args):
                     children = [native.status(child) for child in sorted(reader.agents)[:32]
                                 if linked_child(native_db, child, tid)]
                     now = time.time()
-                    report = status_line(status, reader, children, now)
+                    report = status_report(status, reader, children, now)
                     text = status_line(status, reader, children, now, automatic=True)
-                    reports[key] = report or ('◻️ Idle' if status.get('type') in ('active', 'idle') else
-                                            '⚠️ Native activity unavailable')
+                    reports[key] = report
+                    bindings[key] = tid
                     if status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.entries:
                         text = '⚠️ Native activity unavailable · state unconfirmed'
                     if text is None and status.get('type') == 'idle' and topic['turn_status'] == 'running':
                         text = '⏳ Finishing delivery · native work ended'
                     # Fast turns stay clean; existing active turns qualify immediately.
                     started = timestamp(reader.started)
-                    if text and started is not None and now - started < 8:
+                    if text and started is not None and now - started < 30:
                         text = None
                     if text:
                         text += ' · ' + weekly.label(native, time.monotonic())
                     observations.append({'status': status.get('type'), 'visible': bool(text)})
                     if publisher:
-                        publisher.update(key, topic['chat_id'], topic['thread_id'], reader.request_id or reader.turn_id, text, now)
+                        publications.append((key, topic['chat_id'], topic['thread_id'],
+                                             reader.request_id or reader.turn_id, text, now))
+                # Publish the native snapshot before automatic Telegram delivery can wait.
+                cache.update(reports, bindings, weekly)
                 if publisher:
+                    for publication in publications:
+                        publisher.update(*publication)
                     for key in list(publisher.entries):
                         if key not in known:
                             publisher.retire(key, publisher.entries[key])
-                if requests:
-                    requests.respond(reports, lambda: weekly.label(native, time.monotonic()))
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
                             'topics': len(observations), 'active': sum(x['visible'] for x in observations),
                             'weekly_available': weekly.available,
                             'weekly_resets_at': weekly.resets_at,
+                            'status_requests_alive': status_worker.is_alive() if status_worker else False,
                             'published': sum(bool(x.get('message_id')) for x in publisher.entries.values()) if publisher else 0})
                 if args.probe:
                     print(json.dumps({'connected': True, 'topics': observations, 'weekly_available': weekly.available}))
@@ -679,6 +754,13 @@ def run(args):
                 if native:
                     native.close()
                 native = None
+                # Keep routing, but never answer with an old live claim after disconnect.
+                if cache.value is not None:
+                    previous_reports, previous_bindings, *_ = cache.value
+                    unavailable = {key: '⚠️ Native connection unavailable · state unconfirmed'
+                                   for key in previous_reports}
+                    weekly.available = weekly.resets_at = None
+                    cache.update(unavailable, previous_bindings, weekly)
                 if publisher:
                     for key, entry in list(publisher.entries.items()):
                         publisher.update(key, entry['chat_id'], entry['topic'], entry['turn'],
@@ -688,6 +770,9 @@ def run(args):
                     raise RuntimeError('native activity probe unavailable') from None
             stopped.wait(8)
     finally:
+        stopped.set()
+        if status_worker:
+            status_worker.join(timeout=2)
         if native:
             native.close()
         if publisher:

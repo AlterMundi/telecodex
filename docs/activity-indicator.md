@@ -6,15 +6,19 @@ already running, including CLI continuations of the topic's bound native thread.
 Starting it does not restart Telecodex or the native daemon. The main bridge
 remains the only Telegram update consumer.
 
-The message appears after eight seconds, updates at most every thirty seconds,
+A single silent message is maintained per topic and edited in place while
+there are no new exchanges. The message appears when native work is active and
+thirty seconds have passed since the last human/assistant exchange. It updates at most every thirty seconds
 and summarizes elapsed time, outstanding native tool calls, active child agents
-and native approval/input waits. Ordinary `Working`/typing does not create an
-automatic indicator. Explicit `/status` still reports ordinary work as well as
-pending work and idle state. This selection uses native pending-work metadata;
-the Telegram Bot API does not expose the current typing indicator for this
-observer to query. Short answers remain clean. The line also shows
-the available weekly allowance from
-native `account/rateLimits/read`, cached for sixty seconds. The weekly window is
+and native approval/input waits. Silent ordinary work also shows `Working`:
+native activity does not guarantee Telegram typing, and the Bot API does not
+expose typing visibility for this observer to query. Recent exchanges keep the
+conversation clean; reasoning and changing tool identities do not reset the
+silence grace. Completed final answers still retire the indicator unless actual
+pending work remains.
+
+The line also shows the available weekly allowance from native
+`account/rateLimits/read`, cached for sixty seconds. The weekly window is
 identified by its seven-day duration; the Codex bucket is preferred when multiple
 buckets are returned. Missing or unavailable quota is shown as `weekly n/a` rather
 than guessed. This read starts no inference.
@@ -22,8 +26,6 @@ The same weekly window's native `resetsAt` supplies a compact countdown, such as
 `weekly 78% available · reset in 2d 3h`, in both the indicator and `/status`.
 The countdown is recalculated from the cached reset timestamp whenever displayed;
 it needs no additional quota requests. Missing reset metadata shows `reset n/a`.
-Pending work must persist across eight seconds of observation before an
-automatic message is created; transient tool calls remain quiet.
 
 There is no redundant `updated` clock in the message. A new human intervention
 replaces the previous indicator with a silent message near that intervention,
@@ -34,7 +36,13 @@ native approval/input waits still keep the indicator active.
 
 With explicit `--status-requests` opt-in, plain `/status` receives a compact
 activity/quota reply in addition to the bridge's existing session details. This
-also works while idle. The observer projects only routing metadata for new,
+also works while idle. A stored native thread reported as `notLoaded` is idle,
+not a connection failure; linked active children still take precedence. A separate command reader checks the existing journal
+every 250 ms and replies from the most recent activity/quota snapshot, without
+waiting for the eight-second native observation sweep or making a new native
+request. Native snapshots older than twenty seconds are reported as unconfirmed
+with quota unavailable. Each reply revalidates its current native binding and
+authorized creator. The observer projects only routing metadata for new,
 successfully handled `/status` commands from the bridge's durable ingress
 journal. It checks sender authorization and the current authorized topic binding.
 Activation does not reply to old commands. Requests older than two minutes are
@@ -108,7 +116,9 @@ ambiguous sends, persistent message reuse, topic receipt binding, cleanup,
 rate-limit retry, incremental native records and SQLite read-only access. The
 tests also cover final-answer cleanup while an outer task remains active, new
 request positioning, authorized `/status` routing and no replay after restart.
-The native probe establishes live attachment without inference. These are separate
+The tests include quiet ordinary work, changing tool identities, source-binding
+replacement, unloaded idle sessions, stale snapshots and a fast command reply while native observation
+is not running. The native probe establishes live attachment without inference. These are separate
 from a real Telegram receipt and the human's observation of the interface.
 
 Source comparison and owning task: [Telecodex #11](https://github.com/AlterMundi/telecodex/issues/11),
