@@ -15,6 +15,24 @@ identified by its seven-day duration; the Codex bucket is preferred when multipl
 buckets are returned. Missing or unavailable quota is shown as `weekly n/a` rather
 than guessed. This read starts no inference.
 
+There is no redundant `updated` clock in the message. A new human intervention
+replaces the previous indicator with a silent message near that intervention,
+so editing an older message does not leave all subsequent requests hidden above
+the conversation. Completed native final answers end the visible request even
+when steering keeps the outer native task open. Pending tools, child agents and
+native approval/input waits still keep the indicator active.
+
+With explicit `--status-requests` opt-in, plain `/status` receives a compact
+activity/quota reply in addition to the bridge's existing session details. This
+also works while idle. The observer projects only routing metadata for new,
+successfully handled `/status` commands from the bridge's durable ingress
+journal. It checks sender authorization and the current authorized topic binding.
+Activation does not reply to old commands. Requests older than two minutes are
+ignored, and bounded private attempt receipts prevent replay after restart or
+ambiguous delivery. A rejected/uncertain supplemental reply can be requested
+again with a new `/status`. The main bridge remains the sole update consumer;
+no command changes the input journal or starts a model turn.
+
 Completed assistant messages are never edited or deleted. The observer removes its own message when
 native work and tracked child work end and foreground delivery is no longer
 running. If deletion is unavailable, it marks that message inactive.
@@ -40,7 +58,7 @@ regular file; this observer currently supports `telegram.bot_token_file`.
 
 ```text
 python3 -B scripts/activity_indicator.py --config /absolute/local/config.toml --state-dir /absolute/private/activity-state --probe
-python3 -B scripts/activity_indicator.py --config /absolute/local/config.toml --state-dir /absolute/private/activity-state
+python3 -B scripts/activity_indicator.py --config /absolute/local/config.toml --state-dir /absolute/private/activity-state --status-requests
 ```
 
 The probe reads native status but never reads a bot token or contacts Telegram.
@@ -51,20 +69,24 @@ human listener; installing a skill alone must not activate it.
 
 `health.json` reports connection health and aggregate topic/publication counts.
 `messages.json` privately tracks only the observer's message receipts, correlation
-and retry timing. After an abrupt restart, these message IDs are reused instead
+and retry timing. `retirements.json` retains at most 32 topic cleanup outcomes,
+distinguishing confirmed deletion, an already absent message and an inactive
+fallback. `status-requests.json` bounds supplemental command attempt receipts.
+After an abrupt restart, activity message IDs are reused instead
 of sending duplicates. A graceful stop cleans up the observer's own messages.
 An ambiguous initial send is never automatically repeated for the same native
 turn. Explicit rate-limit rejection permits a delayed retry. Disconnects replace
-existing live claims with an unconfirmed-connection warning; the timestamp on
-every live line makes a stopped observer's last observation apparent. An abrupt
-kill may leave that timestamped message until restart; it cannot promise immediate
+existing live claims with an unconfirmed-connection warning. An abrupt
+kill may leave an old activity message until restart; it cannot promise immediate
 cleanup without a running observer. Stop the observer to roll back; preserve its
 state for cleanup and leave the bridge, input journal and polling offset intact.
 
 Qualification: `python3 -B tests/activity_io.py` exercises actual HTTP delivery,
 ambiguous sends, persistent message reuse, topic receipt binding, cleanup,
 rate-limit retry, incremental native records and SQLite read-only access. The
-native probe establishes live attachment without inference. These are separate
+tests also cover final-answer cleanup while an outer task remains active, new
+request positioning, authorized `/status` routing and no replay after restart.
+The native probe establishes live attachment without inference. These are separate
 from a real Telegram receipt and the human's observation of the interface.
 
 Source comparison and owning task: [Telecodex #11](https://github.com/AlterMundi/telecodex/issues/11),

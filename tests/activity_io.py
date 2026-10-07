@@ -29,9 +29,11 @@ class ActivityIO(unittest.TestCase):
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 method = self.path.rsplit('/', 1)[-1]
                 owner.calls.append((method, payload))
-                value = owner.answers.pop(0) if owner.answers else {'ok': True, 'result': {
-                    'message_id': payload.get('message_id', 101), 'chat': {'id': payload['chat_id']},
-                    'message_thread_id': payload.get('message_thread_id', 7)}}
+                default = True if method == 'deleteMessage' else {
+                    'message_id': payload.get('message_id', 100 + sum(m == 'sendMessage' for m, _ in owner.calls)),
+                    'chat': {'id': payload['chat_id']},
+                    'message_thread_id': payload.get('message_thread_id', 7)}
+                value = owner.answers.pop(0) if owner.answers else {'ok': True, 'result': default}
                 if value is None:
                     self.connection.shutdown(2)  # Actual ambiguous transport failure.
                     return
@@ -70,6 +72,9 @@ class ActivityIO(unittest.TestCase):
         self.assertEqual(self.calls[0][1]['message_thread_id'], 7)
         self.assertTrue(all(payload['message_id'] == message for _, payload in self.calls[1:]))
         self.assertEqual(json.loads(self.path.read_text()), {})
+        receipt = json.loads((self.root / 'retirements.json').read_text())['100:7']
+        self.assertEqual(receipt['outcome'], 'deleted')
+        self.assertEqual(receipt['message_id'], message)
 
     def test_ambiguous_send_is_not_repeated_after_restart(self):
         self.answers = [None]
@@ -78,6 +83,73 @@ class ActivityIO(unittest.TestCase):
         restarted.update('100:7', 100, 7, 'turn-a', 'Still working', 150)
         self.assertEqual(len(self.calls), 1)
         self.assertTrue(restarted.entries['100:7']['attempted'])
+
+    def test_new_human_request_reposts_once_and_final_answer_retires_active_outer_task(self):
+        reader = activity.Rollout(self.root / 'unused', 'parent')
+        now = time.time()
+        stamp = lambda: time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now - 20))
+        event = lambda item: {'timestamp': stamp(), 'type': 'event_msg',
+                              'payload': {'type': 'item_completed', 'item': item}}
+        reader.consume(event({'type': 'UserMessage', 'id': 'request-a'}))
+        line = activity.status_line({'type': 'active'}, reader, [], now)
+        self.assertNotIn('updated', line)
+        self.publisher.update('100:7', 100, 7, reader.request_id, line, now)
+        original_message = self.publisher.entries['100:7']['message_id']
+        reader.consume(event({'type': 'AgentMessage', 'phase': 'final_answer'}))
+        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now))
+        # A child or a pending tool must keep the indicator alive after a final.
+        self.assertIn('Waiting for 1 agent', activity.status_line({'type': 'active'}, reader, [{'type': 'active'}], now))
+        reader.calls['pending'] = 'tools'
+        self.assertIn('tool call', activity.status_line({'type': 'active'}, reader, [], now))
+        reader.calls.clear()
+        reader.consume(event({'type': 'UserMessage', 'id': 'request-b'}))
+        line = activity.status_line({'type': 'active'}, reader, [], now)
+        self.publisher.update('100:7', 100, 7, reader.request_id, line, now)
+        self.publisher.update('100:7', 100, 7, reader.request_id, line, now + 1)
+        self.assertEqual([m for m, _ in self.calls], ['sendMessage', 'deleteMessage', 'sendMessage'])
+        self.assertNotEqual(original_message, self.publisher.entries['100:7']['message_id'])
+        self.assertEqual(self.calls[1][1]['message_id'], original_message)
+        reader.consume(event({'type': 'AgentMessage', 'phase': 'final_answer'}))
+        self.publisher.update('100:7', 100, 7, reader.request_id,
+                              activity.status_line({'type': 'active'}, reader, [], now), now)
+        self.assertEqual(self.calls[-1][0], 'deleteMessage')
+        self.assertEqual(self.publisher.entries, {})
+
+    def test_status_only_answers_new_handled_authorized_bound_commands_once(self):
+        database = sqlite3.connect(':memory:')
+        database.row_factory = sqlite3.Row
+        database.executescript('''CREATE TABLE incoming_updates(update_id INTEGER PRIMARY KEY,
+            payload_json TEXT,status TEXT,updated_at TEXT);
+            CREATE TABLE users(tg_user_id INTEGER PRIMARY KEY,allowed INTEGER);
+            INSERT INTO users VALUES(1,1),(2,0);''')
+        def add(identifier, text='/status', user=1, topic=7, status='handled'):
+            payload = {'message': {'chat': {'id': 100}, 'message_thread_id': topic,
+                'from': {'id': user}, 'message_id': identifier + 1000, 'text': text}}
+            database.execute("INSERT INTO incoming_updates VALUES(?,?,?,datetime('now'))",
+                             (identifier, json.dumps(payload), status))
+        add(1)  # History must not trigger an unsolicited response at activation.
+        path = self.root / 'status-requests.json'
+        requests = activity.StatusRequests(database, self.telegram, path)
+        for identifier, options in [(2, {}), (3, {'user': 2}), (4, {'topic': 99}),
+                                    (5, {'text': 'secret prompt'}), (6, {'status': 'processing'})]:
+            add(identifier, **options)
+        reports = {'100:7': '◻️ Idle'}
+        requests.respond(reports, lambda: 75)
+        self.assertEqual(len(self.calls), 1)
+        payload = self.calls[0][1]
+        self.assertEqual(payload['text'], '◻️ Idle · weekly 75% available')
+        self.assertEqual(payload['reply_parameters'], {'message_id': 1002})
+        self.assertEqual(payload['message_thread_id'], 7)
+        self.assertNotIn('secret', path.read_text())
+        restarted = activity.StatusRequests(database, self.telegram, path)
+        restarted.respond(reports, lambda: 75)
+        self.assertEqual(len(self.calls), 1)
+        database.execute("UPDATE incoming_updates SET status='handled' WHERE update_id=6")
+        self.answers = [None]
+        restarted.respond(reports, lambda: 75)
+        activity.StatusRequests(database, self.telegram, path).respond(reports, lambda: 75)
+        self.assertEqual(len(self.calls), 2)  # Unknown delivery is never replayed.
+        database.close()
 
     def test_disconnect_and_recovery_replace_live_claim_without_waiting_for_cadence(self):
         self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)
@@ -102,6 +174,7 @@ class ActivityIO(unittest.TestCase):
         self.assertIn('Activity monitoring ended', self.calls[-1][1]['text'])
         self.assertEqual(self.calls[-1][1]['message_id'], 101)
         self.assertEqual(self.publisher.entries, {})
+        self.assertEqual(json.loads((self.root / 'retirements.json').read_text())['100:7']['outcome'], 'marked_inactive')
 
     def test_explicit_rate_limit_delays_safe_retry(self):
         self.answers = [{'ok': False, 'error_code': 429, 'parameters': {'retry_after': 60}}]
@@ -110,7 +183,7 @@ class ActivityIO(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.publisher.update('100:7', 100, 7, 'turn-a', 'Still working', 161)
         self.assertEqual(len(self.calls), 2)
-        self.assertEqual(self.publisher.entries['100:7']['message_id'], 101)
+        self.assertEqual(self.publisher.entries['100:7']['message_id'], 102)
 
     def test_incremental_native_tools_agents_partial_records_and_binding(self):
         path = self.root / 'rollout.jsonl'

@@ -177,6 +177,8 @@ class Rollout:
         self.turn_id = None
         self.started = None
         self.last_signal = None
+        self.work_running = None
+        self.request_id = None
         self.skipping = False
 
     def consume(self, value):
@@ -189,11 +191,15 @@ class Rollout:
             self.calls.clear()
             self.turn_id = p.get('turn_id')
             self.started = value.get('timestamp')
+            self.work_running = True
+            self.request_id = self.turn_id
         elif kind in ('task_complete', 'turn_aborted'):
             self.calls.clear()
+            self.work_running = False
         elif value.get('type') == 'response_item':
             call_id = p.get('call_id')
             if kind in ('function_call', 'custom_tool_call') and call_id:
+                self.work_running = True
                 # Names are classified, never copied into the public status.
                 name = str(p.get('name', '')).rsplit('.', 1)[-1]
                 self.calls[call_id] = 'agents' if name in ('wait', 'wait_agent') else 'tools'
@@ -203,6 +209,17 @@ class Rollout:
             item = p.get('item', {})
             if not isinstance(item, dict):
                 return
+            if item.get('type') == 'UserMessage':
+                self.request_id = item.get('id') or value.get('timestamp')
+                self.started = value.get('timestamp')
+                self.work_running = True
+            elif item.get('type') == 'AgentMessage':
+                if item.get('phase') == 'final_answer':
+                    self.work_running = False
+                elif item.get('phase') == 'commentary':
+                    self.work_running = True
+            elif item.get('type') == 'Reasoning':
+                self.work_running = True
             if item.get('type') == 'SubAgentActivity':
                 agent = item.get('agent_thread_id')
                 if agent and item.get('kind') == 'started':
@@ -223,6 +240,7 @@ class Rollout:
                 self.calls.clear()
                 self.agents.clear()
                 self.started = self.turn_id = self.last_signal = None
+                self.work_running = self.request_id = None
                 self.skipping = False
                 self.offset = max(0, info.st_size - 4 * 1024 * 1024)
                 self.identity = identity
@@ -325,15 +343,19 @@ def weekly_label(available):
 def status_line(status, rollout, children, now):
     active_children = sum(value.get('type') == 'active' for value in children)
     kind = status.get('type', 'unknown')
-    active = kind == 'active' or active_children > 0
+    flags = status.get('activeFlags', [])
+    waiting = any(flag in flags for flag in ('waitingOnApproval', 'waitingOnUserInput'))
+    # Steering may leave one native outer task open across several final answers.
+    # A completed answer ends the visible request unless actual work remains.
+    active = active_children > 0 or (kind == 'active' and (
+        rollout.work_running is not False or rollout.calls or waiting))
     if not active:
         return None
-    flags = status.get('activeFlags', [])
     if 'waitingOnApproval' in flags:
         summary = 'Waiting for approval'
     elif 'waitingOnUserInput' in flags:
         summary = 'Waiting for your answer'
-    elif active_children and (kind != 'active' or 'agents' in rollout.calls.values()):
+    elif active_children and (kind != 'active' or rollout.work_running is False or 'agents' in rollout.calls.values()):
         summary = f'Waiting for {active_children} agent(s)'
     elif rollout.calls:
         summary = f'{len(rollout.calls)} tool call(s) active'
@@ -346,8 +368,7 @@ def status_line(status, rollout, children, now):
     started = timestamp(rollout.started)
     elapsed = max(0, int(now - started)) if started is not None else 0
     duration = f'{elapsed // 60}m' if elapsed >= 60 else f'{elapsed}s'
-    updated = dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime('%H:%M:%S UTC')
-    return f'⏳ {summary} · {duration} · updated {updated}'
+    return f'⏳ {summary} · {duration}'
 
 
 class Telegram:
@@ -397,6 +418,12 @@ class Publisher:
 
     def update(self, key, chat, topic, turn, text, now):
         entry = self.entries.get(key)
+        if entry and entry.get('turn') != turn and entry.get('message_id'):
+            # Repost once for a new human request, rather than editing above it.
+            self.retire(key, entry)
+            entry = self.entries.get(key)
+            if entry:
+                return  # Cleanup must finish before another message is sent.
         if entry and entry.get('turn') != turn and not entry.get('message_id'):
             entry = None  # A new native turn does not replay the old status send.
         if text is None:
@@ -452,18 +479,77 @@ class Publisher:
         entry['cleanup_retry'] = time.time() + 30
         self.save()
         message_id = entry.get('message_id')
+        outcome = 'no_receipt'
         if message_id:
             payload = {'chat_id': entry['chat_id'], 'message_id': message_id}
             result = self.telegram.call('deleteMessage', payload)
             absent = result and result.get('error_code') == 400 and 'message to delete not found' in result.get('description', '').lower()
-            if (not result or not result.get('ok')) and not absent:
+            outcome = 'already_absent' if absent else 'deleted'
+            if not (result and result.get('ok') and result.get('result') is True) and not absent:
                 # Keep failed cleanup tracked across restart; never leave "Working".
                 payload.update(text='◻️ Activity monitoring ended', parse_mode='HTML')
                 result = self.telegram.call('editMessageText', payload)
                 if not result or not result.get('ok'):
                     return
+                outcome = 'marked_inactive'
+        receipt_path = self.path.with_name('retirements.json')
+        receipts = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
+        receipts[key] = {'message_id': message_id, 'outcome': outcome, 'at': time.time()}
+        receipts = dict(sorted(receipts.items(), key=lambda item: item[1]['at'])[-32:])
+        atomic_json(receipt_path, receipts)
         self.entries.pop(key, None)
         self.save()
+
+
+class StatusRequests:
+    """Supplement explicit /status commands already handled by the sole bridge."""
+    def __init__(self, database, telegram, path):
+        self.database, self.telegram, self.path = database, telegram, path
+        self.state = json.loads(path.read_text()) if path.exists() else {
+            'floor': database.execute('SELECT COALESCE(MAX(update_id),0) FROM incoming_updates').fetchone()[0],
+            'attempted': {}}
+        atomic_json(self.path, self.state)
+
+    def respond(self, reports, weekly):
+        recent = self.database.execute("SELECT MIN(update_id) FROM incoming_updates WHERE datetime(updated_at)>=datetime('now','-120 seconds')").fetchone()[0]
+        if recent is not None:
+            self.state['floor'] = max(self.state['floor'], recent - 1)
+        # Project only command routing metadata. No prompt or other input is read.
+        rows = self.database.execute('''SELECT i.update_id,
+            json_extract(i.payload_json,'$.message.chat.id') AS chat,
+            COALESCE(json_extract(i.payload_json,'$.message.message_thread_id'),0) AS topic,
+            json_extract(i.payload_json,'$.message.message_id') AS message
+            FROM incoming_updates i JOIN users u
+              ON u.tg_user_id=json_extract(i.payload_json,'$.message.from.id')
+            WHERE i.update_id>? AND i.status='handled' AND u.allowed=1
+              AND datetime(i.updated_at)>=datetime('now','-120 seconds')
+              AND trim(json_extract(i.payload_json,'$.message.text'))='/status'
+            ORDER BY i.update_id LIMIT 256''', (self.state['floor'],)).fetchall()
+        for row in rows:
+            identity = str(row['update_id'])
+            if identity in self.state['attempted']:
+                continue
+            key = f"{row['chat']}:{row['topic']}"
+            if key not in reports:
+                continue  # Requires an authorized, current native topic binding.
+            self.state['attempted'][identity] = {'attempted': True}
+            if len(self.state['attempted']) > 256:
+                oldest = min(self.state['attempted'], key=int)
+                self.state['floor'] = max(self.state['floor'], int(oldest))
+                del self.state['attempted'][oldest]
+            atomic_json(self.path, self.state)  # Never replay an ambiguous delivery.
+            text = reports[key] + ' · ' + weekly_label(weekly())
+            payload = {'chat_id': row['chat'], 'text': html.escape(text),
+                       'parse_mode': 'HTML', 'disable_notification': True,
+                       'reply_parameters': {'message_id': row['message']}}
+            if row['topic']:
+                payload['message_thread_id'] = row['topic']
+            result = self.telegram.call('sendMessage', payload)
+            if result and result.get('ok'):
+                message = result.get('result', {})
+                if message.get('chat', {}).get('id') == row['chat'] and message.get('message_thread_id', 0) == row['topic']:
+                    self.state['attempted'][identity]['message_id'] = message.get('message_id')
+                    atomic_json(self.path, self.state)
 
 
 def run(args):
@@ -478,6 +564,8 @@ def run(args):
     native_home = pathlib.Path(os.environ.get('CODEX_HOME', pathlib.Path.home() / '.codex'))
     native_db = readonly(native_home / 'state_5.sqlite')
     publisher = None if args.probe else Publisher(Telegram(config['telegram']), state / 'messages.json')
+    requests = StatusRequests(bridge, publisher.telegram, state / 'status-requests.json') if (
+        publisher and args.status_requests) else None
     stopped = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
@@ -486,6 +574,7 @@ def run(args):
     try:
         while not stopped.is_set():
             observations = []
+            reports = {}
             try:
                 if native is None:
                     native = Native(str(config['codex'].get('binary', 'codex')))
@@ -521,6 +610,8 @@ def run(args):
                                 if linked_child(native_db, child, tid)]
                     now = time.time()
                     text = status_line(status, reader, children, now)
+                    reports[key] = text or ('◻️ Idle' if status.get('type') in ('active', 'idle') else
+                                            '⚠️ Native activity unavailable')
                     if status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.entries:
                         text = '⚠️ Native activity unavailable · state unconfirmed'
                     if text is None and status.get('type') == 'idle' and topic['turn_status'] == 'running':
@@ -533,11 +624,13 @@ def run(args):
                         text += ' · ' + weekly_label(weekly.read(native, time.monotonic()))
                     observations.append({'status': status.get('type'), 'visible': bool(text)})
                     if publisher:
-                        publisher.update(key, topic['chat_id'], topic['thread_id'], reader.turn_id, text, now)
+                        publisher.update(key, topic['chat_id'], topic['thread_id'], reader.request_id or reader.turn_id, text, now)
                 if publisher:
                     for key in list(publisher.entries):
                         if key not in known:
                             publisher.retire(key, publisher.entries[key])
+                if requests:
+                    requests.respond(reports, lambda: weekly.read(native, time.monotonic()))
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
                             'topics': len(observations), 'active': sum(x['visible'] for x in observations),
                             'weekly_available': weekly.available,
@@ -573,6 +666,8 @@ if __name__ == '__main__':
     parser.add_argument('--config', required=True)
     parser.add_argument('--state-dir', required=True)
     parser.add_argument('--probe', action='store_true', help='read-only; no token or Telegram calls')
+    parser.add_argument('--status-requests', action='store_true',
+                        help='supplement newly handled /status commands with activity and weekly quota')
     try:
         run(parser.parse_args())
     except Exception as error:
