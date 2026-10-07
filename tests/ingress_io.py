@@ -76,9 +76,10 @@ import_desktop_history=false
 
 
 def scenario(mode):
+    stalled_steer = mode == 'stalled_steer'
     retain_commentary = mode.startswith('retained_commentary')
     drafts = mode.endswith('_drafts')
-    show_unfinished = '_hidden' not in mode
+    show_unfinished = '_hidden' not in mode and not stalled_steer
     foreign_events = mode.endswith('_foreign_events')
     stream_ended = mode.endswith('_eof')
     final_before_completion = mode.endswith('_continuation')
@@ -117,13 +118,19 @@ def scenario(mode):
                     b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n'
                     b'Connection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + b'\r\n\r\n')
 
+                native_thread = f'synthetic-native-thread-{id(self)}'
+                native_turn = f'synthetic-native-turn-{id(self)}'
+
                 def send(value):
                     if 'method' in value and value['method'].startswith(('turn/', 'item/', 'thread/status')):
                         params = value.setdefault('params', {})
                         params.setdefault('threadId', 'synthetic-native-thread')
                         if value['method'].startswith('item/'):
                             params.setdefault('turnId', 'synthetic-native-turn')
-                    data = json.dumps(value).encode()
+                    serialized = json.dumps(value)
+                    if stalled_steer:
+                        serialized = serialized.replace('synthetic-native-thread', native_thread).replace('synthetic-native-turn', native_turn)
+                    data = serialized.encode()
                     header = b'\x81' + (bytes([len(data)]) if len(data) < 126 else
                                          b'\x7e' + struct.pack('!H', len(data)))
                     self.request.sendall(header + data)
@@ -226,12 +233,14 @@ def scenario(mode):
                         if retain_commentary:
                             send({'method': 'turn/completed', 'params': {'turn': {
                                 'id': 'synthetic-native-turn', 'status': 'completed'}}})
-                        if steered.is_set():
+                        if steered.is_set() and not stalled_steer:
                             send({'method': 'turn/completed', 'params': {'turn': {
                                 'id': 'synthetic-native-turn', 'status': 'failed',
                                 'error': {'message': 'synthetic later failure'}}}})
                     elif method == 'turn/steer':
                         steered.set()
+                        if stalled_steer:
+                            continue
                         if acknowledge_steer:
                             send({'id': request_id, 'result': {'turnId': 'synthetic-native-turn'}})
                         time.sleep(.1)
@@ -290,6 +299,8 @@ while True:
                         poll = polls
                     if poll == 1:
                         result = [update(1, '/status' if missing_binding else 'first human input')]
+                        if stalled_steer:
+                            result = [dict(update(n, 'first human input'), message=dict(update(n, 'first human input')['message'], message_thread_id=6+n, chat={'id':99+n,'type':'private'})) for n in range(1,6)]
                     elif poll == 2 and not retain_commentary:
                         if missing_binding:
                             with sqlite3.connect(root / 'state.sqlite') as db:
@@ -297,7 +308,17 @@ while True:
                                 assert changed == 1
                         else:
                             started.wait(12)
-                        result = [update(2, 'second human input')]
+                        if stalled_steer:
+                            deadline = time.monotonic() + 8
+                            while time.monotonic() < deadline:
+                                with sqlite3.connect(root / 'state.sqlite') as db:
+                                    if db.execute("select count(*) from turns where status='running'").fetchone()[0] == 5: break
+                                time.sleep(.02)
+                        result = [update(6 if stalled_steer else 2, 'second human input')]
+                    elif poll == 3 and stalled_steer:
+                        steered.wait(8)
+                        result = [dict(update(7, '/status'), message=dict(update(7, '/status')['message'], message_thread_id=8, chat={'id':101,'type':'private'})),
+                                  update(8, '/status')]
                     else:
                         time.sleep(.15)
                         result = []
@@ -357,13 +378,22 @@ import_desktop_history=false
         process = subprocess.Popen([BINARY, str(cfg)], cwd=root, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         rows, sessions = [], []
-        deadline = time.monotonic() + 18
+        polling_while_steering = False
+        other_topic_while_steering = False
+        deadline = time.monotonic() + (30 if stalled_steer else 18)
         try:
             while time.monotonic() < deadline and process.poll() is None:
                 try:
                     with sqlite3.connect(root / 'state.sqlite') as db:
                         rows = db.execute('SELECT update_id,status,turn_id FROM incoming_updates ORDER BY update_id').fetchall()
                         sessions = db.execute('SELECT codex_thread_id FROM sessions').fetchall()
+                    if stalled_steer:
+                        states = dict((id, status) for id, status, _ in rows)
+                        if states.get(6) == 'steering':
+                            polling_while_steering |= polls >= 4
+                            other_topic_while_steering |= states.get(7) == 'handled'
+                        if states.get(6) == 'undetermined' and states.get(8) == 'handled':
+                            break
                     if stream_ended and rows and rows[0][1] == 'undetermined':
                         with lock:
                             failure_published = any('Turn failed:' in text for text in permanent.values())
@@ -385,6 +415,15 @@ import_desktop_history=false
                 starts = [p['input'][0]['text'] for m, p in rpc if m == 'turn/start']
                 steers = [p['input'][0]['text'] for m, p in rpc if m == 'turn/steer']
                 threads = [m for m, p in rpc if m in ('thread/start', 'thread/resume')]
+            if stalled_steer:
+                assert polling_while_steering, (rows, polls, out[-1800:], err)
+                assert other_topic_while_steering, (rows, out[-1800:], err)
+                assert dict((id, status) for id, status, _ in rows) == {**dict.fromkeys(range(1,6),'started'),6:'undetermined',7:'handled',8:'handled'}, rows
+                assert starts == ['first human input'] * 5 and steers == ['second human input'], (starts, steers)
+                assert len(set(thread for thread, in sessions)) == 5, sessions
+                print(json.dumps({'scenario':mode, 'active_topics':5, 'polling_continued':True, 'other_topic_responded':True,
+                                  'same_topic_controls_recovered':True, 'uncertain_input_not_replayed':True}), flush=True)
+                return
             if stream_ended:
                 with sqlite3.connect(root / 'state.sqlite') as db:
                     assert db.execute('SELECT status FROM turns').fetchall() == [('failed',)]
@@ -467,7 +506,7 @@ if __name__ == '__main__':
             scenario(mode)
     else:
         token_probe()
-        for mode in ['accepted_steer', 'unacknowledged_steer', 'missing_saved_binding',
+        for mode in ['stalled_steer', 'accepted_steer', 'unacknowledged_steer', 'missing_saved_binding',
                      'retained_commentary_drafts', 'retained_commentary_preview',
                      'retained_commentary_only', 'retained_commentary_hidden',
                      'retained_commentary_hidden_drafts', 'retained_commentary_hidden_only',

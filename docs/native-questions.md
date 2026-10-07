@@ -63,6 +63,14 @@ two simultaneous topics, mode transitions, stop/cancel, restart, lost receipt,
 disconnect, unavailable modes and mismatched Telegram delivery receipts.
 Synthetic qualification does not establish human Telegram acceptance.
 
+Polling admits updates durably without waiting for a topic's native steering or
+Telegram delivery. Each topic dispatches in arrival order independently. A
+steering acknowledgement has a ten-second deadline; an unconfirmed transmitted
+input remains undetermined and is never replayed automatically. This deadline
+does not interrupt the native turn. Empty native assistant items cannot erase
+published messages or qualify idle completion. A Markdown-only preview is sent
+as visible literal text until meaningful formatted content arrives.
+
 The bridge keeps the native thread binding. After the turn completes, continue
 it with the existing `codex resume THREAD_ID` shown by the binding in `/status`;
 the CLI owns its own UI and reads that native history. No history copying or

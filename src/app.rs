@@ -276,6 +276,10 @@ impl App {
             });
         }
 
+        // Polling must not wait for native steering, uploads or outbound rate limits.
+        // Preserve arrival order within a topic while other topics keep dispatching.
+        let mut dispatchers =
+            HashMap::<SessionKey, mpsc::UnboundedSender<crate::telegram::Update>>::new();
         let mut offset = self.shared.store.last_update_id()?.map(|value| value + 1);
         tracing::info!("telecodex started {}", app_version_label());
         let shutdown = shutdown_signal(self.shared.shutdown.clone());
@@ -296,18 +300,39 @@ impl App {
                     match result {
                         Ok(updates) => {
                             for update in updates {
-                                let update_id = update.update_id;
                                 let admitted = self.shared.store.admit_update(&update)?;
                                 offset = self.shared.store.last_update_id()?.map(|id| id + 1);
                                 if !admitted {
                                     continue;
                                 }
-                                self.shared.store.begin_update(update_id)?;
-                                let result = HUMAN_UPDATE_ID.scope(update_id, self.process_update(update)).await;
-                                self.shared.store.finish_update_dispatch(update_id, result.is_ok())?;
-                                if let Err(error) = result {
-                                    tracing::error!("update processing failed: {error:#}");
-                                }
+                                let message = update.message.as_ref().or_else(|| {
+                                    update.callback_query.as_ref().and_then(|callback| callback.message.as_ref())
+                                });
+                                let key = message.map(|message| SessionKey {
+                                    chat_id: message.chat.id,
+                                    thread_id: message.message_thread_id.unwrap_or(0),
+                                }).unwrap_or(SessionKey { chat_id: 0, thread_id: 0 });
+                                let sender = dispatchers.entry(key).or_insert_with(|| {
+                                    let (sender, mut receiver) = mpsc::unbounded_channel::<crate::telegram::Update>();
+                                    let app = self.clone();
+                                    tokio::spawn(async move {
+                                        while let Some(update) = receiver.recv().await {
+                                            let update_id = update.update_id;
+                                            let result = async {
+                                                app.shared.store.begin_update(update_id)?;
+                                                HUMAN_UPDATE_ID.scope(update_id, app.process_update(update)).await
+                                            }.await;
+                                            if let Err(error) = app.shared.store.finish_update_dispatch(update_id, result.is_ok()) {
+                                                tracing::error!("failed to record update dispatch: {error:#}");
+                                            }
+                                            if let Err(error) = result {
+                                                tracing::error!("update processing failed: {error:#}");
+                                            }
+                                        }
+                                    });
+                                    sender
+                                });
+                                sender.send(update).map_err(|_| anyhow!("topic update dispatcher dropped"))?;
                             }
                         }
                         Err(error) => {
@@ -1765,8 +1790,11 @@ impl App {
             return Ok(false);
         }
 
-        match response_rx.await {
-            Ok(Ok(())) => {
+        // An unconfirmed acknowledgement must not block later topic controls.
+        // Timing out never authorizes replay of an input already transmitted.
+        let response = tokio::time::timeout(Duration::from_secs(10), response_rx).await;
+        match response {
+            Ok(Ok(Ok(()))) => {
                 if let Some(id) = update_id {
                     self.shared.store.accept_update_steer(id)?;
                 }
@@ -1783,14 +1811,14 @@ impl App {
                 }
                 Ok(true)
             }
-            Ok(Err(CodexSteerError::Rejected(error))) => {
+            Ok(Ok(Err(CodexSteerError::Rejected(error)))) => {
                 if let Some(id) = update_id {
                     self.shared.store.reject_update_steer(id)?;
                 }
                 tracing::debug!("active turn rejected steering; queueing as a new turn: {error}");
                 Ok(false)
             }
-            Ok(Err(CodexSteerError::Undetermined(_))) | Err(_) => {
+            Ok(Ok(Err(CodexSteerError::Undetermined(_)))) | Ok(Err(_)) | Err(_) => {
                 if let Some(id) = update_id {
                     self.shared.store.mark_update_steer_undetermined(id)?;
                 }
