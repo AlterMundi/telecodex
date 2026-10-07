@@ -5,6 +5,50 @@ frontend. It preserves each harness's backend and existing session, authenticati
 and memory boundaries. It does not require a new shared agent runtime first.
 Parent: [Matrix #262](https://github.com/AlterMundi/daimon-matrix/issues/262).
 
+## Current delivery — 2026-10-07
+
+The first native Plan/question transfer is delivered and human-accepted. Runtime
+`5af79bdf0716dadf92ae982bfbeafdf2eb21f6a9` and the optional observer at `e77feab`
+are integrated in downstream master `6803092`; its Linux/macOS text, Linux audio
+and activity CI passed. The canonical shared package is `telegram-codex` 1.1.3,
+with an immutable runtime pin and archive digest. The seven approved runtime
+and package PRs are merged; activation is complete, with no pending cutover wait.
+
+Human Telegram acceptance verified genuine Plan mode, question reopening and a
+free-text Other answer through ForceReply reaching the original native request
+and continuing the same turn. Runtime evidence includes 157 locked Rust text
+tests and 16 HTTP/WebSocket/SQLite question journeys. The observer has 27 actual
+file/SQLite/HTTP tests, rerun successfully on the integrated tree. Interactive CLI
+resume was qualified on the native integration baseline; this does not claim a
+fresh human CLI roundtrip after the final free-text correction or adoption by
+another embodiment.
+
+The runtime contribution is submitted as
+[Headcrab/telecodex #15](https://github.com/Headcrab/telecodex/pull/15);
+submission and downstream acceptance do not establish upstream approval,
+merge or adoption. The activity observer is submitted separately as
+[Headcrab/telecodex #16](https://github.com/Headcrab/telecodex/pull/16),
+a draft with an explicit dependency on the native transport proposal.
+
+Remaining work:
+
+- [Client-mediated interactions #18](https://github.com/AlterMundi/telecodex/issues/18):
+  select and qualify one useful native interaction beyond the delivered question broker.
+- [Disappearing-preview investigation #8](https://github.com/AlterMundi/telecodex/issues/8):
+  correlate any remaining report with current delivery evidence before changing code.
+- [Mini App research #20](https://github.com/AlterMundi/telecodex/issues/20):
+  determine the smallest optional per-topic detail view; no dashboard implementation yet.
+- Qualify another receiving embodiment, reconcile the original channel/handoff
+  acceptance in Matrix #234, and record actual transfer costs and maintenance delta.
+- Evaluate a native handback shortcut and optional tool/todo presentation as
+  additional imports; do not claim they have been implemented by this pilot.
+
+Cross-topic admission under stalled steering was implemented in `2580fce` and
+qualified with actual ingress I/O across five active conversations. It is no
+longer an unimplemented prerequisite. The reported disappearing preview remains
+an independent, unverified case rather than evidence that retained commentary
+has not been delivered.
+
 ## Bounded source comparison
 
 These are inspected source baselines, not claims of current feature parity or
@@ -31,7 +75,7 @@ A disposable native Codex 0.160.0 qualification used the real App Server motor
 with loopback Telegram HTTP: Codex generated a question, the bridge rendered its
 choices, a synthetic authorized human chose one, and Codex continued with that
 choice in the same completed native turn. This establishes native integration,
-not a claim that the real human has tried the new Telegram controls.
+separate from the subsequent real human Telegram acceptance recorded above.
 
 The portable `telegram-codex` package remains one canonical directory in
 [AlterMundi/Skills](https://github.com/AlterMundi/Skills/tree/main/skills/telegram-codex).
