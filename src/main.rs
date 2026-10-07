@@ -9,6 +9,7 @@ mod render;
 mod store;
 mod telegram;
 mod transcribe;
+mod user_input;
 
 use anyhow::Result;
 use tokio::time::{Duration, sleep};

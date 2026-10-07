@@ -1,6 +1,10 @@
 use anyhow::{Result, bail};
 
-use crate::{config::SearchMode, models::ReviewRequest, telegram::BotCommand};
+use crate::{
+    config::SearchMode,
+    models::{CollaborationMode, ReviewRequest},
+    telegram::BotCommand,
+};
 
 #[derive(Debug, Clone)]
 pub struct CommandHelp {
@@ -18,36 +22,78 @@ pub enum ParsedInput {
 pub enum BridgeCommand {
     Login,
     Logout,
-    New { title: Option<String> },
-    Topic { title: Option<String> },
-    Use { thread_id_prefix: String },
+    New {
+        title: Option<String>,
+    },
+    Topic {
+        title: Option<String>,
+    },
+    Use {
+        thread_id_prefix: String,
+    },
     Review(ReviewRequest),
-    Cd { path: String },
+    Cd {
+        path: String,
+    },
     Pwd,
     Environments,
     Sessions,
     History,
     Status,
-    Rename { title: String },
+    Questions,
+    Rename {
+        title: String,
+    },
     Stop,
-    RetryTurn { turn_id: i64 },
-    Allow { user_id: i64 },
-    Deny { user_id: i64 },
-    Role { user_id: i64, role: String },
-    Model { model: Option<String> },
-    Think { level: Option<String> },
-    Fast { mode: FastMode },
-    Prompt { prompt: Option<String> },
-    Approval { approval: String },
-    Sandbox { sandbox: String },
-    Search { mode: SearchMode },
-    AddDir { path: String },
+    RetryTurn {
+        turn_id: i64,
+    },
+    Allow {
+        user_id: i64,
+    },
+    Deny {
+        user_id: i64,
+    },
+    Role {
+        user_id: i64,
+        role: String,
+    },
+    Model {
+        model: Option<String>,
+    },
+    Think {
+        level: Option<String>,
+    },
+    Collaboration {
+        mode: CollaborationMode,
+        prompt: Option<String>,
+    },
+    Fast {
+        mode: FastMode,
+    },
+    Prompt {
+        prompt: Option<String>,
+    },
+    Approval {
+        approval: String,
+    },
+    Sandbox {
+        sandbox: String,
+    },
+    Search {
+        mode: SearchMode,
+    },
+    AddDir {
+        path: String,
+    },
     Limits,
     LaneCheck,
     Copy,
     Clear,
     RestartBot,
-    Unsupported { command: String },
+    Unsupported {
+        command: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +158,7 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/sessions" => BridgeCommand::Sessions,
         "/history" => BridgeCommand::History,
         "/status" => BridgeCommand::Status,
+        "/questions" => BridgeCommand::Questions,
         "/rename" => BridgeCommand::Rename {
             title: required_arg(args, "/rename <new name>")?.to_string(),
         },
@@ -142,6 +189,14 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         },
         "/think" => BridgeCommand::Think {
             level: non_empty(args).map(ToOwned::to_owned),
+        },
+        "/plan" => BridgeCommand::Collaboration {
+            mode: CollaborationMode::Plan,
+            prompt: non_empty(args).map(ToOwned::to_owned),
+        },
+        "/default" => BridgeCommand::Collaboration {
+            mode: CollaborationMode::Default,
+            prompt: non_empty(args).map(ToOwned::to_owned),
         },
         "/fast" => BridgeCommand::Fast {
             mode: parse_fast_mode(args)?,
@@ -266,6 +321,7 @@ pub fn default_bot_commands() -> Vec<BotCommand> {
     vec![
         bot_command("help", "Show Codex help"),
         bot_command("status", "Show status for this session"),
+        bot_command("questions", "Open pending questions in this topic"),
         bot_command("rename", "Rename this session and Telegram topic"),
         bot_command("login", "Log in to Codex with device code"),
         bot_command("logout", "Remove stored Codex credentials"),
@@ -275,6 +331,8 @@ pub fn default_bot_commands() -> Vec<BotCommand> {
         bot_command("pwd", "Show current working directory"),
         bot_command("model", "Set or show current model"),
         bot_command("think", "Set or show reasoning effort"),
+        bot_command("plan", "Select native Plan mode for the next turn"),
+        bot_command("default", "Return to native default mode for the next turn"),
         bot_command("fast", "Set or show fast mode"),
         bot_command("prompt", "Set or show session prompt"),
         bot_command("approval", "Set approval policy"),
@@ -555,6 +613,9 @@ mod tests {
             ("/pwd", ParsedInputKind::Bridge),
             ("/model gpt-5.4", ParsedInputKind::Bridge),
             ("/think high", ParsedInputKind::Bridge),
+            ("/plan clarify the requirements", ParsedInputKind::Bridge),
+            ("/default", ParsedInputKind::Bridge),
+            ("/questions", ParsedInputKind::Bridge),
             ("/fast on", ParsedInputKind::Bridge),
             ("/prompt be concise", ParsedInputKind::Bridge),
             ("/approval never", ParsedInputKind::Bridge),

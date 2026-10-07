@@ -2,13 +2,14 @@ use crate::{
     config::SearchMode,
     limits::{LimitsSnapshot, default_codex_home},
     models::{SessionRecord, TurnRequest},
+    user_input::{NativeRequestId, UserInputDecision, UserInputRequest},
 };
 use anyhow::{Context, Result, anyhow, bail};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeSet, HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     fs,
     path::{Path, PathBuf},
     pin::Pin,
@@ -51,8 +52,16 @@ pub enum CodexEvent {
     Progress(String),
     AssistantText(String),
     CommentaryCompleted(String),
+    FinalAnswerCompleted(String),
     ThreadStarted(String),
     ApprovalRequest(CodexApprovalRequest),
+    UserInputRequest {
+        id: NativeRequestId,
+        request: UserInputRequest,
+        closed: CancellationToken,
+    },
+    UserInputClosed(NativeRequestId),
+    UserInputAnswered(NativeRequestId),
 }
 
 #[derive(Debug, Clone)]
@@ -76,10 +85,11 @@ pub enum CodexApprovalDecision {
     Cancel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum CodexEventOutcome {
     None,
     Approval(CodexApprovalDecision),
+    UserInput(oneshot::Receiver<UserInputDecision>),
 }
 
 /// Only a definite rejection permits submitting the input as a new turn.
@@ -169,7 +179,7 @@ enum RpcMessage {
         params: Value,
     },
     ServerRequest {
-        id: u64,
+        id: NativeRequestId,
         method: String,
         params: Value,
     },
@@ -473,7 +483,34 @@ where
 {
     let mut process = AppServerProcess::spawn(binary, shared_app_server).await?;
     process.initialize().await?;
-    let thread_id = process.start_or_resume_thread(session, request).await?;
+    if let Some(mode) = session.collaboration_mode {
+        let id = process
+            .send_request("collaborationMode/list", json!({}))
+            .await?;
+        let presets = process
+            .await_response(id)
+            .await
+            .context("Native collaboration modes unavailable; this turn was not submitted")?;
+        if !presets
+            .get("data")
+            .and_then(Value::as_array)
+            .is_some_and(|data| {
+                data.iter()
+                    .any(|p| p.get("mode").and_then(Value::as_str) == Some(mode.as_str()))
+            })
+        {
+            bail!(
+                "Native Codex does not advertise {} mode; this turn was not submitted",
+                mode.as_str()
+            );
+        }
+    }
+    let (thread_id, native_model) = process.start_or_resume_thread(session, request).await?;
+    let mut effective_session = session.clone();
+    effective_session.model = session.model.clone().or(native_model);
+    if session.collaboration_mode.is_some() && effective_session.model.is_none() {
+        bail!("Native mode requires the resolved thread model; this turn was not submitted");
+    }
     let mut summary = RunSummary {
         codex_thread_id: Some(thread_id.clone()),
         assistant_text: String::new(),
@@ -483,7 +520,7 @@ where
     let turn_request_id = process
         .send_request(
             "turn/start",
-            build_turn_start_params(&thread_id, session, request),
+            build_turn_start_params(&thread_id, &effective_session, request),
         )
         .await?;
     let mut active_turn_id: Option<String> = None;
@@ -496,8 +533,38 @@ where
     let mut cancelled = false;
     let mut turn_completed = false;
     let mut assistant_message_completed = false;
+    type PendingInput = Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = (
+                        NativeRequestId,
+                        std::result::Result<UserInputDecision, oneshot::error::RecvError>,
+                    ),
+                > + Send,
+        >,
+    >;
+    let mut pending_inputs = FuturesUnordered::<PendingInput>::new();
+    let mut open_inputs = HashMap::<NativeRequestId, CancellationToken>::new();
+    let mut submitted_inputs = HashSet::new();
     while !turn_completed {
         tokio::select! {
+          Some((id, decision)) = pending_inputs.next(), if !pending_inputs.is_empty() => {
+            if open_inputs.remove(&id).is_some() && !cancelled && !cancel.is_cancelled() {
+                match decision {
+                    Ok(UserInputDecision::Answers(answers)) => {
+                        process.send_result(&id, serde_json::to_value(answers)?).await?;
+                        submitted_inputs.insert(id);
+                    }
+                    Ok(UserInputDecision::Cancel) | Err(_) => {
+                        if let Some(turn_id) = active_turn_id.as_deref() {
+                            interrupt_request_id = Some(process.send_request("turn/interrupt", json!({"threadId":thread_id,"turnId":turn_id})).await?);
+                            cancelled = true;
+                            cancel_deadline = Some(Instant::now()+Duration::from_secs(5));
+                        } else { cancelled = true; break; }
+                    }
+                }
+            }
+          }
           _=cancel.cancelled(), if interrupt_request_id.is_none() => {
             if let Some(turn_id)=active_turn_id.as_deref(){interrupt_request_id=Some(process.send_request("turn/interrupt",json!({"threadId":thread_id,"turnId":turn_id})).await?); cancelled=true; cancel_deadline=Some(Instant::now()+Duration::from_secs(5)); let _ = on_event(CodexEvent::Progress("Interrupt requested.".to_string())).await?;} else {cancelled=true; break;}
           }
@@ -535,8 +602,43 @@ where
                     }
                 }
               }
-              RpcMessage::Notification{method,params}=>{handle_notification(&method,&params,&mut summary,&mut active_turn_id,&mut turn_error,&mut turn_completed,&mut assistant_message_completed,on_event).await?;}
-                RpcMessage::ServerRequest{id,method,params}=>{handle_server_request(&mut process,id,&method,&params,on_event).await?;}
+              RpcMessage::Notification{method,params}=>{
+                if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
+                if method == "serverRequest/resolved" {
+                    if let Some(id) = params.get("requestId") {
+                        let id: NativeRequestId = serde_json::from_value(id.clone())?;
+                        if submitted_inputs.remove(&id) && !cancelled {
+                            let _=on_event(CodexEvent::UserInputAnswered(id.clone())).await?;
+                        }
+                        if let Some(closed) = open_inputs.remove(&id) {
+                            closed.cancel();
+                            let _ = on_event(CodexEvent::UserInputClosed(id)).await?;
+                        }
+                    }
+                } else {handle_notification(&method,&params,&mut summary,&mut active_turn_id,&mut turn_error,&mut turn_completed,&mut assistant_message_completed,on_event).await?;}
+              }
+              RpcMessage::ServerRequest{id,method,params}=>{
+                if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
+                if method == "item/tool/requestUserInput" {
+                    if open_inputs.contains_key(&id) || submitted_inputs.contains(&id) { continue; }
+                    let input: UserInputRequest = serde_json::from_value(params)
+                        .context("unsupported native user-input schema")?;
+                    input.validate()?;
+                    if input.thread_id != thread_id || active_turn_id.as_deref() != Some(input.turn_id.as_str()) { bail!("native question does not match the active turn"); }
+                    let closed=CancellationToken::new();
+                    open_inputs.insert(id.clone(),closed.clone());
+                    match on_event(CodexEvent::UserInputRequest{id:id.clone(), request:input,closed:closed.clone()}).await? {
+                        CodexEventOutcome::UserInput(receiver) => pending_inputs.push(Box::pin(async move {
+                            let decision=tokio::select! {
+                                result=receiver=>result,
+                                _=closed.cancelled()=>Ok(UserInputDecision::Cancel),
+                            };
+                            (id,decision)
+                        })),
+                        _ => bail!("native question has no human response channel"),
+                    }
+                } else {handle_server_request(&mut process,id,&method,&params,on_event).await?;}
+              }
             }
             if let Some(turn_id)=active_turn_id.as_deref() {
                 while let Some(steer)=queued_steers.pop_front() {
@@ -546,7 +648,14 @@ where
           }
         }
     }
+    if !turn_completed && !cancelled && turn_error.is_none() {
+        turn_error =
+            Some("native event stream ended before the selected turn completed".to_string());
+    }
     reject_outstanding_steers(queued_steers, pending_steers);
+    for closed in open_inputs.into_values() {
+        closed.cancel();
+    }
     summary.stderr_text = process.shutdown().await?;
     if let Some(error) = turn_error {
         bail!("{error}");
@@ -555,6 +664,39 @@ where
         bail!("codex turn cancelled");
     }
     Ok(summary)
+}
+
+/// Route only the selected thread and its current turn on a shared native transport.
+/// Legacy private stdio transports may omit scopes, but explicit mismatches are rejected.
+fn event_matches_run(
+    thread_id: &str,
+    active_turn_id: Option<&str>,
+    method: &str,
+    params: &Value,
+    require_scope: bool,
+) -> bool {
+    let event_thread = params.get("threadId").and_then(Value::as_str).or_else(|| {
+        params
+            .get("thread")
+            .and_then(|thread| thread.get("id"))
+            .and_then(Value::as_str)
+    });
+    match event_thread {
+        Some(id) if id != thread_id => return false,
+        None if require_scope => return false,
+        _ => {}
+    }
+    let event_turn = params.get("turnId").and_then(Value::as_str).or_else(|| {
+        params
+            .get("turn")
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+    });
+    match (event_turn, active_turn_id) {
+        (Some(id), Some(active)) => id == active,
+        (Some(_), None) => method == "turn/started",
+        (None, _) => !require_scope || !method.starts_with("turn/") && !method.starts_with("item/"),
+    }
 }
 
 /// Sends one queued steering request and tracks its app-server response by request id.
@@ -737,19 +879,20 @@ where
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string();
+                        if text.trim().is_empty() {
+                            // A blank item cannot qualify assistant output or idle completion.
+                            return Ok(());
+                        }
                         *assistant_message_completed = true;
                         summary.assistant_text = text.clone();
-                        let event =
-                            if item.get("phase").and_then(Value::as_str) == Some("commentary") {
-                                CodexEvent::CommentaryCompleted(text)
-                            } else {
-                                CodexEvent::AssistantText(text)
-                            };
+                        let event = match item.get("phase").and_then(Value::as_str) {
+                            Some("commentary") => CodexEvent::CommentaryCompleted(text),
+                            Some("final_answer") => CodexEvent::FinalAnswerCompleted(text),
+                            _ => CodexEvent::AssistantText(text),
+                        };
                         let _ = on_event(event).await?;
-                        if item.get("phase").and_then(Value::as_str) == Some("final_answer") {
-                            *active_turn_id = None;
-                            *turn_completed = true;
-                        }
+                        // An answer can precede more work, steering or lifecycle hooks.
+                        // Keep listening until the owning native turn really ends.
                     }
                     Some("commandExecution") => {
                         let status = item
@@ -784,7 +927,7 @@ where
 
 async fn handle_server_request<F, Fut>(
     process: &mut AppServerProcess,
-    id: u64,
+    id: NativeRequestId,
     method: &str,
     params: &Value,
     on_event: &mut F,
@@ -799,7 +942,7 @@ where
             let outcome = on_event(CodexEvent::ApprovalRequest(request)).await?;
             process
                 .send_result(
-                    id,
+                    &id,
                     json!({"decision": approval_decision_value(outcome_to_approval_decision(outcome))}),
                 )
                 .await?;
@@ -809,17 +952,10 @@ where
             let outcome = on_event(CodexEvent::ApprovalRequest(request)).await?;
             process
                 .send_result(
-                    id,
+                    &id,
                     json!({"decision": approval_decision_value(outcome_to_approval_decision(outcome))}),
                 )
                 .await?;
-        }
-        "item/tool/requestUserInput" => {
-            process.send_result(id, json!({"answers":{}})).await?;
-            let _ = on_event(CodexEvent::Progress(
-                "Tool requested user input, but Telegram replies are not wired yet.".to_string(),
-            ))
-            .await?;
         }
         _ => {
             bail!("unsupported app-server server request `{method}`");
@@ -874,7 +1010,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -980,7 +1116,10 @@ fn build_turn_start_params(
         .as_deref()
         .map(Value::from)
         .unwrap_or(Value::Null);
-    json!({"threadId":thread_id,"input":input,"cwd":sanitize_arg_path(&session.cwd),"approvalPolicy":session.approval_policy,"sandboxPolicy":build_sandbox_policy(session),"model":session.model,"effort":session.reasoning_effort,"summary":Value::Null,"serviceTier":service_tier,"outputSchema":Value::Null,"personality":Value::Null,"collaborationMode":Value::Null,"config":build_config_overrides(effective_search_mode)})
+    let collaboration = session.collaboration_mode.map(|mode| json!({
+        "mode":mode.as_str(), "settings":{"model":session.model,"reasoning_effort":session.reasoning_effort,"developer_instructions":Value::Null}
+    }));
+    json!({"threadId":thread_id,"input":input,"cwd":sanitize_arg_path(&session.cwd),"approvalPolicy":session.approval_policy,"sandboxPolicy":build_sandbox_policy(session),"model":session.model,"effort":session.reasoning_effort,"summary":Value::Null,"serviceTier":service_tier,"outputSchema":Value::Null,"personality":Value::Null,"collaborationMode":collaboration,"config":build_config_overrides(effective_search_mode)})
 }
 
 fn build_sandbox_policy(session: &SessionRecord) -> Value {
@@ -1294,7 +1433,7 @@ fn approval_decision_value(decision: CodexApprovalDecision) -> &'static str {
 fn outcome_to_approval_decision(outcome: CodexEventOutcome) -> CodexApprovalDecision {
     match outcome {
         CodexEventOutcome::Approval(decision) => decision,
-        CodexEventOutcome::None => CodexApprovalDecision::Decline,
+        CodexEventOutcome::None | CodexEventOutcome::UserInput(_) => CodexApprovalDecision::Decline,
     }
 }
 
@@ -1424,7 +1563,7 @@ impl AppServerProcess {
         })
     }
     async fn initialize(&mut self) -> Result<()> {
-        let request_id=self.send_request("initialize",json!({"clientInfo":{"name":"telecodex","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":false}})).await?;
+        let request_id=self.send_request("initialize",json!({"clientInfo":{"name":"telecodex","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
         let _ = tokio::time::timeout(Duration::from_secs(15), self.await_response(request_id))
             .await
             .context("Codex App Server initialize timed out")??;
@@ -1435,16 +1574,21 @@ impl AppServerProcess {
         &mut self,
         session: &SessionRecord,
         request: &TurnRequest,
-    ) -> Result<String> {
+    ) -> Result<(String, Option<String>)> {
         let (method, params) = build_thread_request(session, request);
         let request_id = self.send_request(method, params).await?;
         let response = self.await_response(request_id).await?;
-        response
+        let thread_id = response
             .get("thread")
             .and_then(|thread| thread.get("id"))
             .and_then(Value::as_str)
             .map(str::to_string)
-            .ok_or_else(|| anyhow!("app-server `{method}` response missing thread id"))
+            .ok_or_else(|| anyhow!("app-server `{method}` response missing thread id"))?;
+        let model = response
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        Ok((thread_id, model))
     }
     async fn send_request(&mut self, method: &str, params: Value) -> Result<u64> {
         let id = self.next_id;
@@ -1456,7 +1600,7 @@ impl AppServerProcess {
     async fn send_notification(&mut self, method: &str) -> Result<()> {
         self.write_line(&json!({"method":method})).await
     }
-    async fn send_result(&mut self, id: u64, result: Value) -> Result<()> {
+    async fn send_result(&mut self, id: &NativeRequestId, result: Value) -> Result<()> {
         self.write_line(&json!({"id":id,"result":result})).await
     }
     async fn await_response(&mut self, expected_id: u64) -> Result<Value> {
@@ -1477,7 +1621,7 @@ impl AppServerProcess {
                 RpcMessage::Notification { .. } => {}
                 RpcMessage::ServerRequest { id, method, .. } => {
                     bail!(
-                        "unexpected server request `{method}` before response {expected_id} (request id {id})"
+                        "unexpected server request `{method}` before response {expected_id} (request id {id:?})"
                     );
                 }
             }
@@ -1585,6 +1729,13 @@ fn parse_rpc_message(line: &str) -> Result<Option<RpcMessage>> {
         .get("method")
         .and_then(Value::as_str)
         .map(str::to_string);
+    if let (Some(method), Some(id)) = (&method, value.get("id")) {
+        return Ok(Some(RpcMessage::ServerRequest {
+            id: serde_json::from_value(id.clone()).context("invalid native server request ID")?,
+            method: method.clone(),
+            params: value.get("params").cloned().unwrap_or(Value::Null),
+        }));
+    }
     let id = value.get("id").and_then(Value::as_u64);
     let params = value.get("params").cloned().unwrap_or(Value::Null);
     let result = value.get("result").cloned();
@@ -1594,7 +1745,7 @@ fn parse_rpc_message(line: &str) -> Result<Option<RpcMessage>> {
         .map(serde_json::from_value)
         .transpose()?;
     Ok(Some(match (method, id, result, error) {
-        (Some(method), Some(id), _, _) => RpcMessage::ServerRequest { id, method, params },
+        (Some(_), Some(_), _, _) => unreachable!(),
         (Some(method), None, _, _) => RpcMessage::Notification { method, params },
         (None, Some(id), result, error) => RpcMessage::Response { id, result, error },
         _ => return Ok(None),
@@ -1878,6 +2029,7 @@ while True:
             model: Some("gpt-5.4".to_string()),
             reasoning_effort: None,
             service_tier: None,
+            collaboration_mode: None,
             session_prompt: None,
             sandbox_mode: mode.to_string(),
             approval_policy: "never".to_string(),
@@ -2190,7 +2342,7 @@ while True:
     }
 
     #[tokio::test]
-    async fn completes_turn_on_final_answer_item_completed() {
+    async fn final_answer_is_published_without_closing_the_native_turn() {
         let mut summary = RunSummary {
             codex_thread_id: None,
             assistant_text: String::new(),
@@ -2223,8 +2375,8 @@ while True:
 
         assert_eq!(summary.assistant_text, "На связи.");
         assert!(assistant_message_completed);
-        assert!(turn_completed);
-        assert!(active_turn_id.is_none());
+        assert!(!turn_completed);
+        assert_eq!(active_turn_id.as_deref(), Some("turn-1"));
         assert!(turn_error.is_none());
     }
 
@@ -2279,8 +2431,11 @@ while True:
         assert!(matches!(&events[1], CodexEvent::CommentaryCompleted(text) if text == "Progress."));
         assert!(matches!(&events[2], CodexEvent::AssistantText(text) if text == "Final "));
         assert!(matches!(&events[3], CodexEvent::AssistantText(text) if text == "Final answer."));
+        assert!(
+            matches!(&events[4], CodexEvent::FinalAnswerCompleted(text) if text == "Final answer.")
+        );
         assert_eq!(summary.assistant_text, "Final answer.");
-        assert!(turn_completed);
+        assert!(!turn_completed);
     }
 
     #[tokio::test]

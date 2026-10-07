@@ -81,6 +81,36 @@ impl TelegramClient {
             .await
     }
 
+    /// Open Telegram's reply composer while retaining the same delivery limits.
+    pub async fn send_force_reply(&self, message: SendMessage) -> Result<Message> {
+        if message.reply_markup.is_some() {
+            bail!("ForceReply cannot be combined with an inline keyboard");
+        }
+        #[derive(Serialize)]
+        struct ForceReply {
+            force_reply: bool,
+            input_field_placeholder: &'static str,
+        }
+        #[derive(Serialize)]
+        struct Request<'a> {
+            #[serde(flatten)]
+            message: &'a SendMessage,
+            reply_markup: ForceReply,
+        }
+        self.post_outbound(
+            message.chat_id,
+            "sendMessage",
+            Some(&Request {
+                message: &message,
+                reply_markup: ForceReply {
+                    force_reply: true,
+                    input_field_placeholder: "Your answer",
+                },
+            }),
+        )
+        .await
+    }
+
     pub async fn send_chat_action(
         &self,
         chat_id: i64,
@@ -658,6 +688,7 @@ pub struct Message {
     pub from: Option<User>,
     pub chat: Chat,
     pub text: Option<String>,
+    pub reply_to_message: Option<ReplyMessage>,
     pub caption: Option<String>,
     #[serde(default)]
     pub photo: Vec<PhotoSize>,
@@ -671,6 +702,13 @@ pub struct Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForumTopicEdited {
     pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplyMessage {
+    pub message_id: i64,
+    pub from: Option<User>,
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

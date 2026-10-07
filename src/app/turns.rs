@@ -120,74 +120,109 @@ pub(super) async fn process_turn(
         });
     }
 
-    let run_result = shared
-        .codex
-        .run_turn(&session, &runtime_request, cancel.clone(), steer_rx, {
-            let sink = sink.clone();
-            let shared = shared.clone();
-            let approval_cancel = cancel.clone();
-            let requester_user_id = queued.request.from_user_id;
-            let session_key = session.key;
-            let preserve_thread_binding = queued.request.review_mode.is_none();
-            move |event| {
+    let run_result =
+        shared
+            .codex
+            .run_turn(&session, &runtime_request, cancel.clone(), steer_rx, {
                 let sink = sink.clone();
                 let shared = shared.clone();
-                let cancel = approval_cancel.clone();
-                async move {
-                    match event {
-                        CodexEvent::ThreadStarted(thread_id) => {
-                            if preserve_thread_binding {
-                                shared
-                                    .store
-                                    .set_session_codex_thread(session_key, &thread_id)?;
-                                if super::rename::sync_native_title(&shared, session_key).await.is_err() {
-                                    let _ = send_markdown_message(
-                                        &shared.telegram,
-                                        session_key.chat_id,
-                                        Some(session_key.thread_id).filter(|id| *id > 0),
-                                        "The saved name could not be confirmed in Codex. Retry /rename with the intended name.",
-                                        None,
-                                    ).await;
+                let approval_cancel = cancel.clone();
+                let requester_user_id = queued.request.from_user_id;
+                let session_key = session.key;
+                let preserve_thread_binding = queued.request.review_mode.is_none();
+                move |event| {
+                    let sink = sink.clone();
+                    let shared = shared.clone();
+                    let cancel = approval_cancel.clone();
+                    async move {
+                        match event {
+                            CodexEvent::ThreadStarted(thread_id) => {
+                                if preserve_thread_binding {
+                                    shared
+                                        .store
+                                        .set_session_codex_thread(session_key, &thread_id)?;
+                                    if super::rename::sync_native_title(&shared, session_key).await.is_err() {
+                                        let _ = send_markdown_message(
+                                            &shared.telegram,
+                                            session_key.chat_id,
+                                            Some(session_key.thread_id).filter(|id| *id > 0),
+                                            "The saved name could not be confirmed in Codex. Retry /rename with the intended name.",
+                                            None,
+                                        ).await;
+                                    }
                                 }
+                                sink.lock()
+                                    .await
+                                    .handle_event(CodexEvent::ThreadStarted(thread_id))
+                                    .await?;
+                                Ok(CodexEventOutcome::None)
                             }
-                            sink.lock()
-                                .await
-                                .handle_event(CodexEvent::ThreadStarted(thread_id))
+                            CodexEvent::ApprovalRequest(request) => {
+                                if let Err(error) = sink
+                                    .lock()
+                                    .await
+                                    .set_progress(approval_waiting_text(request.kind))
+                                    .await
+                                {
+                                    tracing::debug!(
+                                        "failed to update approval progress for {:?}: {error:#}",
+                                        session_key
+                                    );
+                                }
+                                let decision = request_telegram_approval(
+                                    shared,
+                                    session_key.chat_id,
+                                    Some(session_key.thread_id).filter(|value| *value != 0),
+                                    requester_user_id,
+                                    request,
+                                    cancel,
+                                )
                                 .await?;
-                            Ok(CodexEventOutcome::None)
-                        }
-                        CodexEvent::ApprovalRequest(request) => {
-                            if let Err(error) = sink
-                                .lock()
-                                .await
-                                .set_progress(approval_waiting_text(request.kind))
-                                .await
-                            {
-                                tracing::debug!(
-                                    "failed to update approval progress for {:?}: {error:#}",
-                                    session_key
-                                );
+                                Ok(CodexEventOutcome::Approval(decision))
                             }
-                            let decision = request_telegram_approval(
-                                shared,
-                                session_key.chat_id,
-                                Some(session_key.thread_id).filter(|value| *value != 0),
-                                requester_user_id,
+                            CodexEvent::UserInputRequest {
+                                id,
                                 request,
-                                cancel,
-                            )
-                            .await?;
-                            Ok(CodexEventOutcome::Approval(decision))
-                        }
-                        other => {
-                            sink.lock().await.handle_event(other).await?;
-                            Ok(CodexEventOutcome::None)
+                                closed,
+                            } => {
+                                let receiver = questions::begin_dialogue(
+                                    shared,
+                                    session_key,
+                                    turn_id,
+                                    requester_user_id,
+                                    id,
+                                    request,
+                                    closed,
+                                )
+                                .await?;
+                                Ok(CodexEventOutcome::UserInput(receiver))
+                            }
+                            CodexEvent::UserInputClosed(id) => {
+                                shared.store.resolve_question_answers(turn_id, &id, false)?;
+                                shared.pending_questions.lock().await.retain(|_, p| {
+                                    p.local_turn_id != turn_id || p.request_id != id
+                                });
+                                Ok(CodexEventOutcome::None)
+                            }
+                            CodexEvent::UserInputAnswered(id) => {
+                                shared.store.resolve_question_answers(turn_id, &id, true)?;
+                                Ok(CodexEventOutcome::None)
+                            }
+                            other => {
+                                sink.lock().await.handle_event(other).await?;
+                                Ok(CodexEventOutcome::None)
+                            }
                         }
                     }
                 }
-            }
-        })
-        .await;
+            })
+            .await;
+
+    shared
+        .pending_questions
+        .lock()
+        .await
+        .retain(|_, p| p.local_turn_id != turn_id);
 
     *steer_slot.lock().expect("steer mutex poisoned") = None;
     *cancel_slot.lock().expect("cancel mutex poisoned") = None;
@@ -600,6 +635,15 @@ impl LiveTurnSink {
 
     async fn handle_event(&mut self, event: CodexEvent) -> Result<()> {
         match event {
+            CodexEvent::AssistantText(ref text)
+            | CodexEvent::CommentaryCompleted(ref text)
+            | CodexEvent::FinalAnswerCompleted(ref text)
+                if text.trim().is_empty() =>
+            {
+                // Empty native items are lifecycle events, not Telegram messages.
+                // Do not erase a draft or mutate an already published answer.
+                return Ok(());
+            }
             CodexEvent::Progress(text) => {
                 if self.shared.config.telegram.show_unfinished_messages && !self.has_assistant_text
                 {
@@ -611,14 +655,14 @@ impl LiveTurnSink {
                 self.pending_text = text;
                 self.has_assistant_text = true;
             }
-            CodexEvent::CommentaryCompleted(text) => {
+            CodexEvent::CommentaryCompleted(text) | CodexEvent::FinalAnswerCompleted(text) => {
                 self.begin_next_message();
                 self.pending_text = text;
                 self.has_assistant_text = true;
                 self.flush(true).await?;
                 // Only an acknowledged permanent publication may freeze this message.
                 if self.last_flushed_text != self.pending_text {
-                    anyhow::bail!("completed commentary publication was deferred by Telegram");
+                    anyhow::bail!("completed assistant publication was deferred by Telegram");
                 }
                 self.message_committed = true;
                 return Ok(());
@@ -626,6 +670,9 @@ impl LiveTurnSink {
             CodexEvent::ThreadStarted(thread_id) => {
                 tracing::debug!("codex thread started: {thread_id}");
             }
+            CodexEvent::UserInputRequest { .. }
+            | CodexEvent::UserInputClosed(_)
+            | CodexEvent::UserInputAnswered(_) => {}
             CodexEvent::ApprovalRequest(request) => {
                 if self.shared.config.telegram.show_unfinished_messages && !self.has_assistant_text
                 {
@@ -1490,6 +1537,7 @@ mod tests {
             model: None,
             reasoning_effort: None,
             service_tier: service_tier.map(ToOwned::to_owned),
+            collaboration_mode: None,
             session_prompt: None,
             sandbox_mode: "workspace-write".to_string(),
             approval_policy: "never".to_string(),
