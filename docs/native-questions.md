@@ -1,5 +1,14 @@
 # Native planning and pending questions in Telegram
 
+Current delivery (2026-10-07): merged through downstream PR #19 at qualified
+runtime `5af79bdf0716dadf92ae982bfbeafdf2eb21f6a9`. Human Telegram acceptance
+verified native Plan mode, question reopening and free-text Other answer through
+ForceReply reaching the original request and continuing the turn. Current
+qualification includes 157 locked text tests and 16 actual question I/O journeys.
+The shared `telegram-codex` package is version 1.1.3. Historical synthetic-native
+proof below remains separate evidence, not a substitute for that human exchange.
+
+
 `/plan [prompt]` selects native Plan mode for the topic's next turn. `/default
 [prompt]` selects native Default mode. The optional prompt queues a new turn;
 it does not change a running turn's mode. Without a prompt these commands only
