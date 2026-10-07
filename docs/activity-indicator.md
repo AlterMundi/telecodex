@@ -7,7 +7,11 @@ Starting it does not restart Telecodex or the native daemon. The main bridge
 remains the only Telegram update consumer.
 
 A single silent message is maintained per topic and edited in place while
-there are no new exchanges. The message appears when native work is active and
+there are no new exchanges. If a human message, slash command or assistant
+response follows the card, the observer removes its old card. After the next
+thirty seconds of silence it posts the current status at the bottom of the
+conversation. Subsequent updates edit that new card until another exchange.
+The message appears when native work is active and
 thirty seconds have passed since the last human/assistant exchange. It updates at most every thirty seconds
 and summarizes elapsed time, outstanding native tool calls, active child agents
 and native approval/input waits. Silent ordinary work also shows `Working`:
@@ -27,8 +31,8 @@ The same weekly window's native `resetsAt` supplies a compact countdown, such as
 The countdown is recalculated from the cached reset timestamp whenever displayed;
 it needs no additional quota requests. Missing reset metadata shows `reset n/a`.
 
-There is no redundant `updated` clock in the message. A new human intervention
-replaces the previous indicator with a silent message near that intervention,
+There is no redundant `updated` clock in the message. A new exchange
+replaces the previous indicator with a silent message after that exchange,
 so editing an older message does not leave all subsequent requests hidden above
 the conversation. Completed native final answers end the visible request even
 when steering keeps the outer native task open. Pending tools, child agents and
@@ -38,9 +42,9 @@ With explicit `--status-requests` opt-in, plain `/status` receives a compact
 activity/quota response in addition to the bridge's existing session details.
 While work is active it creates or immediately edits the same live indicator;
 repeated commands do not leave separate frozen `Working` replies. An explicitly
-requested indicator continues updating every thirty seconds, including during
-recent exchanges, and is removed when its work ends. This opt-in lasts only for
-the current native request. Idle and unavailable results remain ordinary
+requested indicator continues updating every thirty seconds while it is the
+last message and is removed when its work ends. Subsequent exchanges retire it
+and restore the automatic thirty-second silence grace. Idle and unavailable results remain ordinary
 snapshots. A stored native thread reported as `notLoaded` is idle,
 not a connection failure; linked active children still take precedence. A separate command reader checks the existing journal
 every 250 ms and replies from the most recent activity/quota snapshot, without
@@ -65,6 +69,8 @@ The observer uses only `initialize`, metadata-only `thread/read` and
 bridge SQLite database and native index in
 read-only mode, selecting only topic bindings whose creator remains allowed.
 Linked rollout metadata supplies tool correlation and child references; native
+`SubAgentActivity.interacted` events re-register resumed children, and async
+question messages do not mark continuing native work completed. Native
 index ancestry must link a referenced child back to the selected parent before
 its status is read. Native status reads establish current parent/child activity. No model inference, native
 turn/resume/steer, Telegram polling, Matrix operation or history import occurs.
@@ -125,6 +131,8 @@ The tests include quiet ordinary work, changing tool identities, source-binding
 replacement, unloaded idle sessions, stale snapshots and a fast command reply while native observation
 is not running. Real HTTP regressions also exercise shared manual/automatic
 message reuse, concurrent publication, requested-card cleanup and retry deadlines.
+They also cover same-turn relocation after assistant responses and slash commands,
+child reactivation after a final answer and async question continuations.
 The native probe establishes live attachment without inference. These are separate
 from a real Telegram receipt and the human's observation of the interface.
 

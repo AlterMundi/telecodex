@@ -221,15 +221,15 @@ class Rollout:
                 self.pending_since = None
             elif item.get('type') == 'AgentMessage':
                 self.last_exchange = value.get('timestamp')
-                if item.get('phase') == 'final_answer':
+                if item.get('phase') == 'final_answer' and item.get('delivery') != 'async':
                     self.work_running = False
-                elif item.get('phase') == 'commentary':
+                elif item.get('phase') == 'commentary' or item.get('delivery') == 'async':
                     self.work_running = True
             elif item.get('type') == 'Reasoning':
                 self.work_running = True
             if item.get('type') == 'SubAgentActivity':
                 agent = item.get('agent_thread_id')
-                if agent and item.get('kind') == 'started':
+                if agent and item.get('kind') in ('started', 'interacted'):
                     self.agents.add(agent)
                 elif agent and item.get('kind') in ('completed', 'errored', 'shutdown'):
                     self.agents.discard(agent)
@@ -476,14 +476,14 @@ class Publisher:
         atomic_json(self.path, self.entries)
 
     def update(self, key, chat, topic, turn, text, now, *, requested=False,
-               reply_to=None, active_text=None):
+               reply_to=None, active_text=None, position=None):
         with self.lock:
             self._update(key, chat, topic, turn, text, now, requested=requested,
-                         reply_to=reply_to, active_text=active_text)
+                         reply_to=reply_to, active_text=active_text, position=position)
             return self.entries.get(key, {}).get('message_id')
 
     def _update(self, key, chat, topic, turn, text, now, *, requested,
-                reply_to, active_text):
+                reply_to, active_text, position):
         entry = self.entries.get(key)
         if entry and entry.get('turn') != turn and entry.get('message_id'):
             # Repost once for a new human request, rather than editing above it.
@@ -493,6 +493,13 @@ class Publisher:
                 return  # Cleanup must finish before another message is sent.
         if entry and entry.get('turn') != turn and not entry.get('message_id'):
             entry = None  # A new native turn does not replay the old status send.
+        if entry and entry.get('message_id') and position is not None and entry.get('position') != position:
+            # Telegram edits do not move a card below later messages. Retire it
+            # on a new exchange; automatic replacement still honors quiet grace.
+            self.retire(key, entry)
+            entry = self.entries.get(key)
+            if entry:
+                return
         if entry and entry.get('requested') and active_text:
             # Explicit status stays live during the automatic silence grace.
             text = active_text
@@ -503,6 +510,8 @@ class Publisher:
         if entry is None:
             entry = {'chat_id': chat, 'topic': topic, 'turn': turn, 'attempted': False}
             self.entries[key] = entry
+        if position is not None:
+            entry['position'] = dict(position)
         if requested:
             entry['requested'] = True
             self.save()
@@ -632,9 +641,12 @@ class StatusRequests:
             text = reports[key] + ' · ' + weekly()
             context = (contexts or {}).get(key, {})
             if publisher is not None and context.get('active'):
+                position = dict(context.get('position', {}))
+                latest = latest_input(self.database, row['chat'], row['topic'])
+                position['input_id'] = latest['message_id'] if latest else row['message']
                 message_id = publisher.update(key, row['chat'], row['topic'],
                     context['turn'], text, time.time(), requested=True,
-                    reply_to=row['message'])
+                    reply_to=row['message'], position=position if context.get('position') else None)
                 if message_id is not None:
                     self.state['attempted'][identity]['message_id'] = message_id
                     atomic_json(self.path, self.state)
@@ -694,6 +706,19 @@ def watch_status_requests(config, state, cache, stopped, telegram, publisher=Non
             stopped.wait(.25)
     finally:
         database.close()
+
+
+def latest_input(database, chat, topic):
+    """Telegram commands are exchanges even when they start no native model turn."""
+    return database.execute('''SELECT json_extract(i.payload_json,'$.message.message_id') AS message_id,
+        COALESCE(json_extract(i.payload_json,'$.message.date'),unixepoch(i.updated_at)) AS at
+        FROM incoming_updates i JOIN users u
+          ON u.tg_user_id=json_extract(i.payload_json,'$.message.from.id')
+        WHERE u.allowed=1 AND json_extract(i.payload_json,'$.message.chat.id')=?
+          AND COALESCE(json_extract(i.payload_json,'$.message.message_thread_id'),0)=?
+          AND json_extract(i.payload_json,'$.message.message_id') IS NOT NULL
+        ORDER BY i.update_id DESC LIMIT 1''',
+        (chat, topic)).fetchone()
 
 
 def run(args):
@@ -765,14 +790,19 @@ def run(args):
                     report = status_report(status, reader, children, now)
                     active_text = status_line(status, reader, children, now)
                     text = status_line(status, reader, children, now, automatic=True)
+                    latest = latest_input(bridge, topic['chat_id'], topic['thread_id'])
+                    position = {'exchange': reader.last_exchange,
+                                'input_id': latest['message_id'] if latest else None}
                     reports[key] = report
                     bindings[key] = tid
                     contexts[key] = {'turn': reader.request_id or reader.turn_id,
-                                     'active': bool(active_text)}
+                                     'active': bool(active_text), 'position': position}
                     if status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.snapshot():
                         text = '⚠️ Native activity unavailable · state unconfirmed'
                     if text is None and status.get('type') == 'idle' and topic['turn_status'] == 'running':
                         text = '⏳ Finishing delivery · native work ended'
+                    if latest and latest['at'] is not None and now - latest['at'] < 30:
+                        text = None
                     # Fast turns stay clean; existing active turns qualify immediately.
                     started = timestamp(reader.started)
                     if text and started is not None and now - started < 30:
@@ -785,12 +815,13 @@ def run(args):
                     if publisher:
                         publications.append((key, topic['chat_id'], topic['thread_id'],
                                              reader.request_id or reader.turn_id, text, now,
-                                             active_text))
+                                             active_text, position))
                 # Publish the native snapshot before automatic Telegram delivery can wait.
                 cache.update(reports, bindings, weekly, contexts)
                 if publisher:
                     for publication in publications:
-                        publisher.update(*publication[:6], active_text=publication[6])
+                        publisher.update(*publication[:6], active_text=publication[6],
+                                         position=publication[7])
                     for key, entry in publisher.snapshot().items():
                         if key not in known:
                             publisher.retire(key, entry)

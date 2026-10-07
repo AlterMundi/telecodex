@@ -471,6 +471,122 @@ class ActivityIO(unittest.TestCase):
         self.assertTrue(entry['requested'])
         self.assertEqual(entry['message_id'], 101)
 
+    def test_reactivated_child_shows_automatic_status_after_quiet_parent_final(self):
+        path = self.root / 'reactivated.jsonl'
+        now = time.time()
+        stamp = lambda seconds: time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now - seconds))
+        records = [
+            {'type': 'session_meta', 'payload': {'id': 'parent'}},
+            {'timestamp': stamp(90), 'type': 'event_msg',
+             'payload': {'type': 'task_started', 'turn_id': 'request-a'}},
+            {'timestamp': stamp(80), 'type': 'event_msg', 'payload': {'type': 'item_completed',
+             'item': {'type': 'AgentMessage', 'phase': 'final_answer'}}},
+            {'timestamp': stamp(75), 'type': 'event_msg', 'payload': {'type': 'item_completed',
+             'item': {'type': 'SubAgentActivity', 'kind': 'completed', 'agent_thread_id': 'child'}}},
+            {'timestamp': stamp(31), 'type': 'event_msg', 'payload': {'type': 'item_completed',
+             'item': {'type': 'SubAgentActivity', 'kind': 'interacted', 'agent_thread_id': 'child'}}},
+        ]
+        path.write_text(''.join(json.dumps(r) + '\n' for r in records))
+        index = sqlite3.connect(':memory:')
+        index.row_factory = sqlite3.Row
+        index.execute('CREATE TABLE threads(id TEXT,source TEXT,archived INTEGER)')
+        index.execute('INSERT INTO threads VALUES(?,?,0)', ('child', json.dumps(
+            {'subagent': {'thread_spawn': {'parent_thread_id': 'parent'}}})))
+        reader = activity.Rollout(path, 'parent')
+        reader.refresh()
+        self.assertFalse(reader.work_running)
+        self.assertEqual(reader.agents, {'child'})
+        children = [{'type': 'active'} for child in reader.agents
+                    if activity.linked_child(index, child, 'parent')]
+        line = activity.status_line({'type': 'idle'}, reader, children, now, automatic=True)
+        self.assertIn('Waiting for 1 agent', line)
+        self.publisher.update('100:7', 100, 7, reader.request_id, line, now)
+        self.assertEqual(self.calls[0][0], 'sendMessage')  # No /status command.
+        self.assertTrue(self.publisher.snapshot()['100:7']['message_id'])
+        # Routine subagent events must not restart the thirty-second silence grace.
+        self.assertEqual(reader.last_exchange, stamp(80))
+        records[-1]['payload']['item']['kind'] = 'completed'
+        with path.open('a') as stream:
+            stream.write(json.dumps(records[-1]) + '\n')
+        reader.refresh()
+        self.assertEqual(reader.agents, set())
+        line = activity.status_line({'type': 'idle'}, reader, [], now + 8, automatic=True)
+        self.publisher.update('100:7', 100, 7, reader.request_id, line, now + 8)
+        self.assertEqual(self.calls[-1][0], 'deleteMessage')
+        index.close()
+
+    def test_same_turn_card_moves_below_new_exchanges_then_edits_in_place(self):
+        old = {'exchange': 'commentary-a', 'input_id': 1000}
+        new = {'exchange': 'commentary-b', 'input_id': 1000}
+        self.publisher.update('100:7', 100, 7, 'request-a', 'Working', 100,
+                              requested=True, position=old)
+        first = self.publisher.snapshot()['100:7']['message_id']
+        # Same native request, but an assistant message is now below the card.
+        self.publisher.update('100:7', 100, 7, 'request-a', None, 101,
+                              active_text='Working', position=new)
+        self.assertEqual([m for m, _ in self.calls], ['sendMessage', 'deleteMessage'])
+        self.assertEqual(self.calls[-1][1]['message_id'], first)
+        self.assertEqual(self.publisher.snapshot(), {})
+        self.publisher.update('100:7', 100, 7, 'request-a', 'Working', 132,
+                              active_text='Working', position=new)
+        last = self.publisher.snapshot()['100:7']['message_id']
+        self.assertNotEqual(first, last)
+        self.publisher.update('100:7', 100, 7, 'request-a', 'Waiting for agent', 163,
+                              position=new)
+        self.assertEqual(self.calls[-1][0], 'editMessageText')
+        self.assertEqual(self.calls[-1][1]['message_id'], last)
+        # A slash command creates no native user item, but still moves the card.
+        command = dict(new, input_id=1004)
+        self.publisher.update('100:7', 100, 7, 'request-a', None, 164,
+                              active_text='Working', position=command)
+        self.assertEqual(self.calls[-1][0], 'deleteMessage')
+        self.assertEqual(self.publisher.snapshot(), {})
+
+    def test_status_command_repositions_card_after_standard_session_details(self):
+        db = sqlite3.connect(':memory:'); db.row_factory = sqlite3.Row
+        db.executescript('''CREATE TABLE incoming_updates(update_id INTEGER PRIMARY KEY,
+            payload_json TEXT,status TEXT,updated_at TEXT);
+            CREATE TABLE users(tg_user_id INTEGER PRIMARY KEY,allowed INTEGER);
+            CREATE TABLE sessions(chat_id INTEGER,thread_id INTEGER,codex_thread_id TEXT,creator_user_id INTEGER);
+            INSERT INTO users VALUES(1,1);
+            INSERT INTO users VALUES(2,0);
+            INSERT INTO sessions VALUES(100,7,'bound',1);''')
+        requests = activity.StatusRequests(db, self.telegram, self.root / 'requests.json')
+        old = {'exchange': 'commentary', 'input_id': 1000}
+        now = time.time()
+        self.publisher.update('100:7', 100, 7, 'request-a', 'Working', now, position=old)
+        original = self.publisher.snapshot()['100:7']['message_id']
+        for update, sender, topic in ((1, 1, 7), (2, 2, 7), (3, 1, 8)):
+            db.execute("INSERT INTO incoming_updates VALUES(?,?,'handled',datetime('now'))", (update,
+                json.dumps({'message': {'chat': {'id': 100}, 'message_thread_id': topic,
+                    'from': {'id': sender}, 'message_id': 1000 + update,
+                    'date': int(now), 'text': '/status'}})))
+        latest = activity.latest_input(db, 100, 7)
+        self.assertEqual(latest['message_id'], 1001)
+        self.assertEqual(latest['at'], int(now))
+        requests.respond({'100:7': 'Working'}, lambda: 'weekly 78% available', {'100:7': 'bound'},
+                         {'100:7': {'active': True, 'turn': 'request-a', 'position': old}}, self.publisher)
+        self.assertEqual([m for m, _ in self.calls], ['sendMessage', 'deleteMessage', 'sendMessage'])
+        self.assertNotEqual(original, self.publisher.snapshot()['100:7']['message_id'])
+        self.assertEqual(self.calls[-1][1]['reply_parameters'], {'message_id': 1001})
+        self.assertEqual(self.publisher.snapshot()['100:7']['position']['input_id'], 1001)
+        db.close()
+
+    def test_async_question_does_not_mark_continuing_native_work_completed(self):
+        reader = activity.Rollout(self.root / 'unused', 'parent')
+        now = time.time()
+        stamp = lambda seconds: time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now - seconds))
+        reader.consume({'timestamp': stamp(90), 'type': 'event_msg',
+                        'payload': {'type': 'task_started', 'turn_id': 'request-a'}})
+        reader.consume({'timestamp': stamp(31), 'type': 'event_msg', 'payload': {
+            'type': 'item_completed', 'item': {'type': 'AgentMessage',
+                'phase': 'final_answer', 'delivery': 'async', 'questions': [{}]}}})
+        line = activity.status_line({'type': 'active'}, reader, [], now, automatic=True)
+        self.assertIn('Working', line)
+        reader.consume({'timestamp': stamp(0), 'type': 'event_msg',
+                        'payload': {'type': 'task_complete'}})
+        self.assertIsNone(activity.status_line({'type': 'idle'}, reader, [], now, automatic=True))
+
     def test_manual_request_respects_retry_deadline_and_does_not_replay_ambiguous_send(self):
         self.answers = [{'ok': False, 'error_code': 429, 'parameters': {'retry_after': 60}}]
         self.publisher.update('100:7', 100, 7, 'request-a', 'Working', 100, requested=True)
