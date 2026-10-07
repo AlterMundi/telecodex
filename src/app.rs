@@ -22,6 +22,7 @@ mod auth;
 mod forum;
 mod io;
 mod presentation;
+mod rename;
 mod support;
 mod turns;
 
@@ -379,6 +380,13 @@ impl App {
             return Ok(());
         };
 
+        if let Some(edit) = &message.forum_topic_edited {
+            if let Some(title) = &edit.name {
+                self.rename_session(&user, &message, title, false).await?;
+            }
+            return Ok(());
+        }
+
         let text = message
             .text
             .as_deref()
@@ -679,6 +687,9 @@ impl App {
                 }
                 BridgeCommand::Topic { title } => {
                     self.handle_new_topic(user, message, title).await?;
+                }
+                BridgeCommand::Rename { title } => {
+                    self.rename_session(user, message, &title, true).await?;
                 }
                 BridgeCommand::Use { thread_id_prefix } => {
                     let session = self.ensure_session(session_key, user.tg_user_id)?;

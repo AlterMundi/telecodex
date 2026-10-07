@@ -133,6 +133,15 @@ pub(super) async fn process_turn(
                                 shared
                                     .store
                                     .set_session_codex_thread(session_key, &thread_id)?;
+                                if super::rename::sync_native_title(&shared, session_key).await.is_err() {
+                                    let _ = send_markdown_message(
+                                        &shared.telegram,
+                                        session_key.chat_id,
+                                        Some(session_key.thread_id).filter(|id| *id > 0),
+                                        "The saved name could not be confirmed in Codex. Retry /rename with the intended name.",
+                                        None,
+                                    ).await;
+                                }
                             }
                             sink.lock()
                                 .await
