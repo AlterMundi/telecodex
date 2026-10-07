@@ -11,7 +11,10 @@ use uuid::Uuid;
 
 use crate::{
     config::{CodexConfig, SearchMode},
-    models::{ReviewRequest, SessionKey, SessionRecord, TurnRequest, UserRecord, UserRole},
+    models::{
+        CollaborationMode, ReviewRequest, SessionKey, SessionRecord, TurnRequest, UserRecord,
+        UserRole,
+    },
 };
 
 pub const INSTANCE_LOCK_LOST_ERROR: &str = "Telecodex database instance lock was lost";
@@ -68,7 +71,7 @@ impl Store {
             let conn = store.conn.lock().expect("store mutex poisoned");
             conn.execute(
                 "UPDATE incoming_updates SET status='undetermined',updated_at=?1
-                 WHERE status IN ('received','processing','queued','steering','started')
+                 WHERE status IN ('received','processing','queued','steering','answering','started')
                  AND instance_id!=?2",
                 params![now_string(), store.instance_id],
             )?;
@@ -236,6 +239,53 @@ impl Store {
         if changed != 1 {
             return Err(anyhow!("telegram update is not available for dispatch"));
         }
+        Ok(())
+    }
+
+    pub fn begin_question_answer(
+        &self,
+        update_id: i64,
+        turn_id: i64,
+        request_id: &crate::user_input::NativeRequestId,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let changed=tx.execute(
+            "UPDATE incoming_updates SET status='answering',turn_id=?2,updated_at=?3 WHERE update_id=?1 AND status='processing' AND instance_id=?4",
+            params![update_id,turn_id,now_string(),self.instance_id],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!("question input cannot be answered twice"));
+        }
+        tx.execute(
+            "INSERT INTO question_answers(update_id,turn_id,request_id) VALUES(?1,?2,?3)",
+            params![update_id, turn_id, serde_json::to_string(request_id)?],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn resolve_question_answers(
+        &self,
+        turn_id: i64,
+        request_id: &crate::user_input::NativeRequestId,
+        submitted: bool,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            "UPDATE incoming_updates SET status=CASE WHEN ?3=0 THEN 'undetermined' ELSE
+             CASE (SELECT status FROM turns WHERE id=?1) WHEN 'running' THEN 'started'
+             WHEN 'completed' THEN 'settled' ELSE 'undetermined' END END,updated_at=?4
+             WHERE status='answering' AND instance_id=?5 AND update_id IN
+             (SELECT update_id FROM question_answers WHERE turn_id=?1 AND request_id=?2)",
+            params![
+                turn_id,
+                serde_json::to_string(request_id)?,
+                submitted,
+                now_string(),
+                self.instance_id
+            ],
+        )?;
         Ok(())
     }
 
@@ -468,7 +518,7 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.query_row(
             "SELECT id, chat_id, thread_id, session_title, codex_thread_id, force_fresh_thread, cwd, model, reasoning_effort, session_prompt, sandbox_mode, approval_policy,
-                    search_mode, add_dirs_json, creator_user_id, busy, last_assistant_text, updated_at, service_tier
+                    search_mode, add_dirs_json, creator_user_id, busy, last_assistant_text, updated_at, service_tier, collaboration_mode
              FROM sessions
              WHERE chat_id = ?1 AND thread_id = ?2",
             params![key.chat_id, key.thread_id],
@@ -482,7 +532,7 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT id, chat_id, thread_id, session_title, codex_thread_id, force_fresh_thread, cwd, model, reasoning_effort, session_prompt, sandbox_mode, approval_policy,
-                    search_mode, add_dirs_json, creator_user_id, busy, last_assistant_text, updated_at, service_tier
+                    search_mode, add_dirs_json, creator_user_id, busy, last_assistant_text, updated_at, service_tier, collaboration_mode
              FROM sessions
              WHERE chat_id = ?1
              ORDER BY updated_at DESC, id DESC",
@@ -542,7 +592,8 @@ impl Store {
                  search_mode = ?12,
                  add_dirs_json = ?13,
                  service_tier = ?14,
-                 updated_at = ?15
+                 collaboration_mode = ?15,
+                 updated_at = ?16
              WHERE chat_id = ?1 AND thread_id = ?2",
             params![
                 key.chat_id,
@@ -559,6 +610,7 @@ impl Store {
                 template.search_mode.as_codex_value(),
                 add_dirs,
                 template.service_tier.as_deref(),
+                template.collaboration_mode.map(CollaborationMode::as_str),
                 now_string(),
             ],
         )
@@ -617,6 +669,41 @@ impl Store {
             "UPDATE sessions SET service_tier = ?3, updated_at = ?4 WHERE chat_id = ?1 AND thread_id = ?2",
             params![key.chat_id, key.thread_id, service_tier, now_string()],
         )
+    }
+
+    pub fn set_session_collaboration_mode(
+        &self,
+        key: SessionKey,
+        mode: CollaborationMode,
+    ) -> Result<()> {
+        self.update_session_field(
+            key,
+            "UPDATE sessions SET collaboration_mode = ?3, updated_at = ?4 WHERE chat_id = ?1 AND thread_id = ?2",
+            params![key.chat_id, key.thread_id, mode.as_str(), now_string()],
+        )
+    }
+
+    pub fn record_question_message(
+        &self,
+        key: SessionKey,
+        message_id: i64,
+        turn_id: i64,
+        correlation: &serde_json::Value,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute(
+            "INSERT INTO question_messages(chat_id, thread_id, message_id, turn_id, correlation_json) VALUES (?1,?2,?3,?4,?5)",
+            params![key.chat_id, key.thread_id, message_id, turn_id, correlation.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn is_question_message(&self, key: SessionKey, message_id: i64) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Ok(conn.query_row(
+            "SELECT 1 FROM question_messages WHERE chat_id=?1 AND thread_id=?2 AND message_id=?3",
+            params![key.chat_id, key.thread_id, message_id], |_| Ok(true),
+        ).optional()?.unwrap_or(false))
     }
 
     pub fn set_session_prompt(&self, key: SessionKey, session_prompt: Option<&str>) -> Result<()> {
@@ -696,6 +783,10 @@ impl Store {
         )?;
         // An acknowledged steer shares this turn's outcome. Unacknowledged attempts
         // remain uncertain even if the original turn completes successfully.
+        tx.execute(
+            "UPDATE incoming_updates SET status='undetermined',updated_at=?2 WHERE turn_id=?1 AND status='answering' AND instance_id=?3",
+            params![turn_id,now,self.instance_id],
+        )?;
         tx.execute(
             "UPDATE incoming_updates SET status=?2,updated_at=?3
              WHERE turn_id=?1 AND status='started' AND instance_id=?4",
@@ -817,6 +908,7 @@ impl Store {
                 model TEXT,
                 reasoning_effort TEXT,
                 service_tier TEXT,
+                collaboration_mode TEXT,
                 session_prompt TEXT,
                 sandbox_mode TEXT NOT NULL,
                 approval_policy TEXT NOT NULL,
@@ -848,6 +940,16 @@ impl Store {
                 value TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS question_messages(
+                chat_id INTEGER NOT NULL,
+                thread_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                turn_id INTEGER NOT NULL,
+                correlation_json TEXT NOT NULL,
+                PRIMARY KEY(chat_id, message_id),
+                FOREIGN KEY(turn_id) REFERENCES turns(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS incoming_updates(
                 update_id INTEGER PRIMARY KEY,
                 payload_json TEXT NOT NULL,
@@ -855,6 +957,14 @@ impl Store {
                 instance_id TEXT NOT NULL,
                 turn_id INTEGER,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS question_answers(
+                update_id INTEGER PRIMARY KEY,
+                turn_id INTEGER NOT NULL,
+                request_id TEXT NOT NULL,
+                FOREIGN KEY(update_id) REFERENCES incoming_updates(update_id) ON DELETE CASCADE,
+                FOREIGN KEY(turn_id) REFERENCES turns(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS audit_log(
@@ -876,6 +986,7 @@ impl Store {
         add_column_if_missing(&conn, "sessions", "session_title", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "reasoning_effort", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "service_tier", "TEXT")?;
+        add_column_if_missing(&conn, "sessions", "collaboration_mode", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "session_prompt", "TEXT")?;
         add_column_if_missing(
             &conn,
@@ -956,6 +1067,13 @@ fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> {
         model: row.get(7)?,
         reasoning_effort: row.get(8)?,
         service_tier: row.get(18)?,
+        collaboration_mode: row
+            .get::<_, Option<String>>(19)?
+            .map(|mode| {
+                CollaborationMode::try_from(mode.as_str())
+                    .map_err(|_| rusqlite::Error::InvalidQuery)
+            })
+            .transpose()?,
         session_prompt: row.get(9)?,
         sandbox_mode: row.get(10)?,
         approval_policy: row.get(11)?,

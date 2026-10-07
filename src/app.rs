@@ -22,6 +22,7 @@ mod auth;
 mod forum;
 mod io;
 mod presentation;
+mod questions;
 mod support;
 mod turns;
 
@@ -56,6 +57,9 @@ use crate::{
         normalize_command, preferred_image_file_id,
     },
     transcribe::{detect_handy_parakeet_model_dir, transcribe_audio_file},
+    user_input::{
+        NativeRequestId, QuestionAnswer, UserInputDecision, UserInputRequest, UserInputResponse,
+    },
 };
 
 use self::{auth::*, presentation::*, support::*, turns::*};
@@ -79,6 +83,7 @@ struct AppShared {
     limits_cache: Mutex<Option<CachedLimitsSnapshot>>,
     history_page_cache: Mutex<HistoryPageCache>,
     pending_approvals: Mutex<HashMap<String, PendingApproval>>,
+    pending_questions: Mutex<HashMap<String, questions::PendingDialogue>>,
     pending_codex_login: Mutex<Option<PendingCodexLogin>>,
     codex_login_backoff_until: Mutex<Option<Instant>>,
     shutdown: CancellationToken,
@@ -235,6 +240,7 @@ impl App {
                 limits_cache: Mutex::new(None),
                 history_page_cache: Mutex::new(HistoryPageCache::default()),
                 pending_approvals: Mutex::new(HashMap::new()),
+                pending_questions: Mutex::new(HashMap::new()),
                 pending_codex_login: Mutex::new(None),
                 codex_login_backoff_until: Mutex::new(None),
                 shutdown: CancellationToken::new(),
@@ -388,6 +394,9 @@ impl App {
         if is_foreign_bot_command(text, self.shared.bot_username.as_deref()) {
             return Ok(());
         }
+        if questions::handle_text_answer(self.shared.clone(), &message, from.id, text).await? {
+            return Ok(());
+        }
         if self.dispatch_command_text(&user, &message, text).await? {
             return Ok(());
         }
@@ -465,6 +474,11 @@ impl App {
         let Some(data) = callback.data else {
             return Ok(());
         };
+        if questions::handle_callback(self.shared.clone(), &message, callback.from.id, &data)
+            .await?
+        {
+            return Ok(());
+        }
         if let Some((token, decision)) = parse_approval_callback_data(&data) {
             let pending = {
                 let mut approvals = self.shared.pending_approvals.lock().await;
@@ -668,6 +682,37 @@ impl App {
                 self.enqueue_turn(request, &message.chat.kind).await?;
             }
             ParsedInput::Bridge(command) => match command {
+                BridgeCommand::Questions => {
+                    questions::show_pending(self.shared.clone(), message, user.tg_user_id).await?;
+                }
+                BridgeCommand::Collaboration { mode, prompt } => {
+                    let session = self.ensure_resolved_session(session_key, user.tg_user_id)?;
+                    self.shared
+                        .store
+                        .set_session_collaboration_mode(session_key, mode)?;
+                    self.send_status(message.chat.id, message.message_thread_id,
+                        &format!("Native {} mode selected for the next turn. An active turn keeps its current mode.", mode.as_str())).await?;
+                    if let Some(prompt) = prompt {
+                        if self
+                            .ensure_codex_authenticated(message.chat.id, message.message_thread_id)
+                            .await?
+                        {
+                            self.enqueue_turn(
+                                TurnRequest {
+                                    session_key: session.key,
+                                    from_user_id: user.tg_user_id,
+                                    prompt,
+                                    runtime_instructions: None,
+                                    attachments: vec![],
+                                    review_mode: None,
+                                    override_search_mode: None,
+                                },
+                                &message.chat.kind,
+                            )
+                            .await?;
+                        }
+                    }
+                }
                 BridgeCommand::Login => {
                     self.handle_login_command(message).await?;
                 }

@@ -658,6 +658,7 @@ pub struct Message {
     pub from: Option<User>,
     pub chat: Chat,
     pub text: Option<String>,
+    pub reply_to_message: Option<ReplyMessage>,
     pub caption: Option<String>,
     #[serde(default)]
     pub photo: Vec<PhotoSize>,
@@ -665,6 +666,11 @@ pub struct Message {
     pub audio: Option<Audio>,
     pub voice: Option<Voice>,
     pub video: Option<Video>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplyMessage {
+    pub message_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
