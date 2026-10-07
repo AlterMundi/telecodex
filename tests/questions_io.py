@@ -386,7 +386,9 @@ def scenario(binary, mode):
             assert prompts and prompts[-1][0]['message_thread_id'] == 7, prompts
             prompt = prompts[-1]
             assert prompt[1]['reply_markup']['input_field_placeholder'] == 'Your answer'
-            assert j.row('SELECT message_id FROM question_messages WHERE message_id=?',(prompt[0]['message_id'],))
+            # HTTP fixture receipt precedes the client's response handling and SQLite commit.
+            j.wait(lambda: j.row('SELECT message_id FROM question_messages WHERE message_id=?',
+                                 (prompt[0]['message_id'],)))
             # Expired explicit quotes must not consume the armed free-text answer.
             stale_id = j.admit('old question reply', reply=first[0]['message_id'])
             j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?',(stale_id,)) == [('handled',)])
