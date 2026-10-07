@@ -338,6 +338,23 @@ impl CodexRunner {
         }
         Ok(models)
     }
+    pub async fn set_thread_name(&self, thread_id: &str, name: &str) -> Result<()> {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
+            process.initialize().await?;
+            let id = process
+                .send_request(
+                    "thread/name/set",
+                    json!({"threadId": thread_id, "name": name}),
+                )
+                .await?;
+            process.await_response(id).await?;
+            process.shutdown().await?;
+            Ok(())
+        })
+        .await
+        .context("native rename acknowledgment timed out; its effect is unconfirmed")?
+    }
     pub async fn run_turn<F, Fut>(
         &self,
         session: &SessionRecord,

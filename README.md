@@ -149,6 +149,7 @@ High-level flow:
 | `/sessions` | Show topic sessions in dashboard root, or Codex sessions for the current `cwd` inside a work topic |
 | `/history` | Browse final assistant messages from the selected Codex session with an interactive pager |
 | `/status` | Show the current Telegram session, selected Codex session, and runtime settings |
+| `/rename <new name>` | Rename the current Codex session and Telegram topic together |
 | `/stop` | Stop the active turn |
 | `/retry <turn_id>` | Retry a failed or cancelled turn without attachments |
 | `/model [model\|default\|-]` | Set or show the current model |

@@ -1883,3 +1883,303 @@ fn keeps_truly_archived_session_unbound_when_no_active_replacement_exists() {
 
     assert_eq!(rebound.codex_thread_id.as_deref(), Some("archived-thread"));
 }
+
+#[cfg(unix)]
+fn rename_native_fixture(root: &std::path::Path, reject: bool) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let binary = root.join("native-fixture");
+    let log = root.join("native-requests.jsonl");
+    let script = r#"#!/usr/bin/env python3
+import json, sys
+log = LOG_PATH
+reject = REJECT
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get('method')
+    with open(log, 'a') as f:
+        f.write(json.dumps(request) + '\n')
+    if method == 'initialized':
+        continue
+    assert method in ('initialize', 'thread/name/set'), method
+    response = {'id': request['id'], 'result': {}}
+    if method == 'thread/name/set' and reject:
+        response = {'id': request['id'], 'error': {'code': -32602, 'message': 'fixture rejects rename'}}
+    print(json.dumps(response), flush=True)
+"#;
+    std::fs::write(
+        &binary,
+        script
+            .replace("LOG_PATH", &serde_json::to_string(&log).unwrap())
+            .replace("REJECT", if reject { "True" } else { "False" }),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    (binary, log)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rename_command_preserves_busy_binding_and_persists_owner_name() {
+    let root = tempfile::tempdir().unwrap();
+    let (binary, log) = rename_native_fixture(root.path(), false);
+    let reply = serde_json::json!({"ok":true,"result":{"message_id":20,"chat":{"id":100,"type":"private"}}});
+    let (api, server) = crate::telegram::tests::serve_api(vec![
+        (200, serde_json::json!({"ok":true,"result":true})),
+        (200, reply),
+    ]);
+    let (mut app, db) = sample_app();
+    let shared = Arc::get_mut(&mut app.shared).unwrap();
+    shared.telegram = TelegramClient::new("synthetic".into(), api);
+    shared.codex = CodexRunner::new(binary);
+    let key = SessionKey::new(100, Some(12));
+    shared
+        .store
+        .ensure_session(key, 100, &shared.session_defaults)
+        .unwrap();
+    shared
+        .store
+        .set_session_codex_thread(key, "bound-thread")
+        .unwrap();
+    shared.store.set_session_busy(key, true).unwrap();
+    let other = SessionKey::new(100, Some(13));
+    shared
+        .store
+        .ensure_session(other, 100, &shared.session_defaults)
+        .unwrap();
+    shared
+        .store
+        .set_session_codex_thread(other, "other-thread")
+        .unwrap();
+    let update = serde_json::from_value(serde_json::json!({"update_id":501,"message":{
+        "message_id":3,"message_thread_id":12,"chat":{"id":100,"type":"private"},
+        "from":{"id":100,"is_bot":false,"first_name":"Human"},"text":"/rename Memoria y evolución"}})).unwrap();
+    app.process_update(update).await.unwrap();
+    let calls = server.join().unwrap();
+    assert!(calls[0].0.contains("editForumTopic"));
+    assert_eq!(calls[0].1["name"], "Memoria y evolución");
+    assert_eq!(calls[0].1["message_thread_id"], 12);
+    let requests: Vec<serde_json::Value> = std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r["method"] == "thread/name/set")
+            .count(),
+        1
+    );
+    let rename = requests
+        .iter()
+        .find(|r| r["method"] == "thread/name/set")
+        .unwrap();
+    assert_eq!(
+        rename["params"],
+        serde_json::json!({"threadId":"bound-thread","name":"Memoria y evolución"})
+    );
+    let session = app.shared.store.get_session(key).unwrap().unwrap();
+    assert!(session.busy);
+    assert_eq!(session.codex_thread_id.as_deref(), Some("bound-thread"));
+    assert_eq!(
+        app.shared
+            .store
+            .get_session(other)
+            .unwrap()
+            .unwrap()
+            .codex_thread_id
+            .as_deref(),
+        Some("other-thread")
+    );
+    app.shared.store.set_session_busy(key, false).unwrap();
+    drop(app);
+    let store = Store::open(db.path(), &[100], &sample_defaults()).unwrap();
+    assert_eq!(
+        store.explicit_session_title(key).unwrap().as_deref(),
+        Some("Memoria y evolución")
+    );
+    assert_eq!(
+        store
+            .get_session(key)
+            .unwrap()
+            .unwrap()
+            .session_title
+            .as_deref(),
+        Some("Memoria y evolución")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn manual_topic_rename_and_partial_failure_are_visible_without_rename_loop() {
+    let root = tempfile::tempdir().unwrap();
+    let (binary, log) = rename_native_fixture(root.path(), true);
+    let (api, server) = crate::telegram::tests::serve_api(vec![(
+        200,
+        serde_json::json!({"ok":true,"result":{"message_id":20,"chat":{"id":100,"type":"private"}}}),
+    )]);
+    let (mut app, _db) = sample_app();
+    let shared = Arc::get_mut(&mut app.shared).unwrap();
+    shared.telegram = TelegramClient::new("synthetic".into(), api);
+    shared.codex = CodexRunner::new(binary);
+    let key = SessionKey::new(100, Some(12));
+    shared
+        .store
+        .ensure_session(key, 100, &shared.session_defaults)
+        .unwrap();
+    shared
+        .store
+        .set_session_codex_thread(key, "bound-thread")
+        .unwrap();
+    let update: crate::telegram::Update = serde_json::from_value(serde_json::json!({"update_id":502,"message":{
+        "message_id":3,"message_thread_id":12,"chat":{"id":100,"type":"private"},
+        "from":{"id":100,"is_bot":false,"first_name":"Human"},"forum_topic_edited":{"name":"Chosen topic"}}})).unwrap();
+    app.process_update(update.clone()).await.unwrap();
+    let calls = server.join().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].0.contains("sendMessage"));
+    assert!(
+        calls[0].1["text"]
+            .as_str()
+            .unwrap()
+            .contains("not confirmed")
+    );
+    assert_eq!(
+        app.shared
+            .store
+            .explicit_session_title(key)
+            .unwrap()
+            .as_deref(),
+        Some("Chosen topic")
+    );
+    let before = std::fs::read_to_string(&log).unwrap();
+    let mut bot_echo = update.clone();
+    bot_echo
+        .message
+        .as_mut()
+        .unwrap()
+        .from
+        .as_mut()
+        .unwrap()
+        .is_bot = true;
+    app.process_update(bot_echo).await.unwrap();
+    let mut icon_only = update.clone();
+    icon_only
+        .message
+        .as_mut()
+        .unwrap()
+        .forum_topic_edited
+        .as_mut()
+        .unwrap()
+        .name = None;
+    app.process_update(icon_only).await.unwrap();
+    let mut unauthorized = update;
+    unauthorized
+        .message
+        .as_mut()
+        .unwrap()
+        .from
+        .as_mut()
+        .unwrap()
+        .id = 999;
+    app.process_update(unauthorized).await.unwrap();
+    assert_eq!(std::fs::read_to_string(log).unwrap(), before);
+}
+
+#[tokio::test]
+async fn owner_title_on_unbound_topic_survives_environment_sync_without_native_work() {
+    let (app, _db) = sample_app();
+    let key = SessionKey::new(100, Some(12));
+    app.shared
+        .store
+        .ensure_session(key, 100, &app.shared.session_defaults)
+        .unwrap();
+    app.shared
+        .store
+        .set_explicit_session_title(key, "Chosen topic")
+        .unwrap();
+    assert!(
+        !super::rename::sync_native_title(&app.shared, key)
+            .await
+            .unwrap()
+    );
+    let session = app.shared.store.get_session(key).unwrap().unwrap();
+    let environment = CodexEnvironmentSummary {
+        cwd: session.cwd.clone(),
+        name: "Automatic environment".into(),
+        latest_thread_id: Some("unrelated-history".into()),
+        updated_at: "2026-10-07".into(),
+    };
+    assert!(
+        app.sync_environment_topic_metadata(100, &environment, &session)
+            .await
+            .unwrap()
+    );
+    let after = app.shared.store.get_session(key).unwrap().unwrap();
+    assert_eq!(after.session_title.as_deref(), Some("Chosen topic"));
+    assert!(after.codex_thread_id.is_none());
+    app.shared.store.delete_session(key).unwrap();
+    assert!(
+        app.shared
+            .store
+            .explicit_session_title(key)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unbound_rename_reports_topic_failure_and_applies_latest_name_after_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let (binary, log) = rename_native_fixture(root.path(), false);
+    let reply = serde_json::json!({"ok":true,"result":{"message_id":20,"chat":{"id":100,"type":"private"}}});
+    let (api, server) = crate::telegram::tests::serve_api(vec![
+        (200, serde_json::json!({"ok":true,"result":false})),
+        (200, reply),
+    ]);
+    let (mut app, _db) = sample_app();
+    let shared = Arc::get_mut(&mut app.shared).unwrap();
+    shared.telegram = TelegramClient::new("synthetic".into(), api);
+    shared.codex = CodexRunner::new(binary);
+    let key = SessionKey::new(100, Some(12));
+    let update = serde_json::from_value(serde_json::json!({"update_id":503,"message":{
+        "message_id":3,"message_thread_id":12,"chat":{"id":100,"type":"private"},
+        "from":{"id":100,"is_bot":false,"first_name":"Human"},"text":"/rename First name"}}))
+    .unwrap();
+    app.process_update(update).await.unwrap();
+    assert!(
+        !log.exists(),
+        "an unbound rename must not start native work"
+    );
+    let calls = server.join().unwrap();
+    let feedback = calls[1].1["text"].as_str().unwrap();
+    assert!(feedback.contains("first started"));
+    assert!(feedback.contains("Telegram topic rename was not confirmed"));
+    app.shared
+        .store
+        .set_explicit_session_title(key, "Latest name")
+        .unwrap();
+    app.shared
+        .store
+        .set_session_codex_thread(key, "first-bound-thread")
+        .unwrap();
+    assert!(
+        super::rename::sync_native_title(&app.shared, key)
+            .await
+            .unwrap()
+    );
+    let requests: Vec<serde_json::Value> = std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let native = requests
+        .iter()
+        .find(|r| r["method"] == "thread/name/set")
+        .unwrap();
+    assert_eq!(
+        native["params"],
+        serde_json::json!({"threadId":"first-bound-thread","name":"Latest name"})
+    );
+}
