@@ -8,7 +8,11 @@ remains the only Telegram update consumer.
 
 The message appears after eight seconds, updates at most every thirty seconds,
 and summarizes elapsed time, outstanding native tool calls, active child agents
-and native approval/input waits. Short answers remain clean. The line also shows
+and native approval/input waits. Ordinary `Working`/typing does not create an
+automatic indicator. Explicit `/status` still reports ordinary work as well as
+pending work and idle state. This selection uses native pending-work metadata;
+the Telegram Bot API does not expose the current typing indicator for this
+observer to query. Short answers remain clean. The line also shows
 the available weekly allowance from
 native `account/rateLimits/read`, cached for sixty seconds. The weekly window is
 identified by its seven-day duration; the Codex bucket is preferred when multiple
@@ -18,6 +22,8 @@ The same weekly window's native `resetsAt` supplies a compact countdown, such as
 `weekly 78% available · reset in 2d 3h`, in both the indicator and `/status`.
 The countdown is recalculated from the cached reset timestamp whenever displayed;
 it needs no additional quota requests. Missing reset metadata shows `reset n/a`.
+Pending work must persist across eight seconds of observation before an
+automatic message is created; transient tool calls remain quiet.
 
 There is no redundant `updated` clock in the message. A new human intervention
 replaces the previous indicator with a silent message near that intervention,

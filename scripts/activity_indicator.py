@@ -179,6 +179,8 @@ class Rollout:
         self.last_signal = None
         self.work_running = None
         self.request_id = None
+        self.pending_signature = None
+        self.pending_since = None
         self.skipping = False
 
     def consume(self, value):
@@ -362,7 +364,7 @@ def weekly_label(available, resets_at=None, now=None):
     return label + f' · reset in {duration}'
 
 
-def status_line(status, rollout, children, now):
+def status_line(status, rollout, children, now, *, automatic=False):
     active_children = sum(value.get('type') == 'active' for value in children)
     kind = status.get('type', 'unknown')
     flags = status.get('activeFlags', [])
@@ -372,7 +374,18 @@ def status_line(status, rollout, children, now):
     active = active_children > 0 or (kind == 'active' and (
         rollout.work_running is not False or rollout.calls or waiting))
     if not active:
+        if automatic:
+            rollout.pending_signature = rollout.pending_since = None
         return None
+    if automatic and not (rollout.calls or active_children or waiting):
+        rollout.pending_signature = rollout.pending_since = None
+        return None  # Ordinary working/typing needs no second automatic indicator.
+    if automatic:
+        signature = (tuple(sorted(rollout.calls)), active_children, tuple(sorted(flags)))
+        if signature != rollout.pending_signature:
+            rollout.pending_signature, rollout.pending_since = signature, now
+        if now - rollout.pending_since < 8:
+            return None  # Brief tool calls should not create chat clutter either.
     if 'waitingOnApproval' in flags:
         summary = 'Waiting for approval'
     elif 'waitingOnUserInput' in flags:
@@ -631,8 +644,9 @@ def run(args):
                     children = [native.status(child) for child in sorted(reader.agents)[:32]
                                 if linked_child(native_db, child, tid)]
                     now = time.time()
-                    text = status_line(status, reader, children, now)
-                    reports[key] = text or ('◻️ Idle' if status.get('type') in ('active', 'idle') else
+                    report = status_line(status, reader, children, now)
+                    text = status_line(status, reader, children, now, automatic=True)
+                    reports[key] = report or ('◻️ Idle' if status.get('type') in ('active', 'idle') else
                                             '⚠️ Native activity unavailable')
                     if status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.entries:
                         text = '⚠️ Native activity unavailable · state unconfirmed'

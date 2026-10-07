@@ -302,6 +302,23 @@ class ActivityIO(unittest.TestCase):
             response['rateLimitsByLimitId']['codex']['primary']['resetsAt'] = invalid
             self.assertEqual(activity.weekly_snapshot(response), (75, None))
 
+    def test_automatic_indicator_only_shows_pending_work_and_explicit_status_keeps_working(self):
+        reader = activity.Rollout(self.root / 'unused', 'parent')
+        reader.work_running = True
+        now = time.time()
+        self.assertIn('Working', activity.status_line({'type': 'active'}, reader, [], now))
+        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now, automatic=True))
+        reader.calls['pending'] = 'tools'
+        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [], now, automatic=True))
+        self.assertIn('tool call', activity.status_line({'type': 'active'}, reader, [], now + 8, automatic=True))
+        reader.calls.clear()
+        self.assertIsNone(activity.status_line({'type': 'active'}, reader, [{'type': 'active'}], now + 9, automatic=True))
+        self.assertIn('agent(s) active', activity.status_line({'type': 'active'}, reader, [{'type': 'active'}], now + 17, automatic=True))
+        for flag in ['waitingOnApproval', 'waitingOnUserInput']:
+            self.assertIsNone(activity.status_line({'type': 'active', 'activeFlags': [flag]}, reader, [], now + 18, automatic=True))
+            self.assertIn('Waiting', activity.status_line({'type': 'active', 'activeFlags': [flag]}, reader, [], now + 26, automatic=True))
+        self.assertIsNone(activity.status_line({'type': 'idle'}, reader, [], now, automatic=True))
+
 
 if __name__ == '__main__':
     unittest.main()
