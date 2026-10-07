@@ -26,7 +26,9 @@ another embodiment.
 The runtime contribution is submitted as
 [Headcrab/telecodex #15](https://github.com/Headcrab/telecodex/pull/15);
 submission and downstream acceptance do not establish upstream approval,
-merge or adoption. The activity observer is a separate contribution candidate.
+merge or adoption. The activity observer is submitted separately as
+[Headcrab/telecodex #16](https://github.com/Headcrab/telecodex/pull/16),
+a draft with an explicit dependency on the native transport proposal.
 
 Remaining work:
 
