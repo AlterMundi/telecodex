@@ -11,6 +11,7 @@ import html
 import http.server
 import json
 import pathlib
+import re
 import signal
 import socketserver
 import sqlite3
@@ -82,6 +83,8 @@ def scenario(mode):
     stream_ended = mode.endswith('_eof')
     final_before_completion = mode.endswith('_continuation')
     commentary_only = mode.endswith('_only')
+    empty_messages = '_empty' in mode
+    markup_prefix = '_markup' in mode
     commentary = ['First completed progress.', 'Second progress: ' + 'x' * 3800]
     final_answer = 'Final answer.'
     acknowledge_steer = mode == 'accepted_steer'
@@ -159,10 +162,23 @@ def scenario(mode):
                         send({'id': request_id, 'result': {'turn': {'id': 'synthetic-native-turn'}}})
                         started.set()
                         if retain_commentary:
+                            if empty_messages:
+                                send({'method':'item/completed','params':{'item':{'type':'agentMessage','id':'empty-first','phase':'commentary','text':''}}})
+                                send({'method':'item/completed','params':{'item':{'type':'agentMessage','id':'space-first','phase':'final_answer','text':' \n\t'}}})
+                                send({'method':'thread/status/changed','params':{'status':{'type':'idle'}}})
                             for index, text in enumerate(commentary if commentary_only else [*commentary, final_answer]):
                                 item_id = f'agent-{index}'
                                 send({'method': 'item/started', 'params': {'item': {
                                     'type': 'agentMessage', 'id': item_id}}})
+                                if markup_prefix and index == 1:
+                                    deadline = time.monotonic() + 8
+                                    while time.monotonic() < deadline:
+                                        with lock:
+                                            published = commentary[0] in permanent.values()
+                                        if published: break
+                                        time.sleep(.02)
+                                    time.sleep(1.2)
+                                    send({'method':'item/agentMessage/delta','params':{'itemId':item_id,'delta':'**'}})
                                 midpoint = len(text) // 2
                                 for delta in (text[:midpoint], text[midpoint:]):
                                     send({'method': 'item/agentMessage/delta', 'params': {
@@ -184,6 +200,8 @@ def scenario(mode):
                                     ]:
                                         send(notification)
                                     time.sleep(.2)
+                                if empty_messages:
+                                    send({'method':'item/completed','params':{'item':{'type':'agentMessage','id':f'empty-{index}','phase':'final_answer','text':''}}})
                                 if index < 2:
                                     send({'method': 'item/completed', 'params': {'item': {
                                         'type': 'commandExecution', 'command': 'synthetic command',
@@ -247,7 +265,7 @@ while True:
 ''')
         fake.chmod(0o700)
         polls, message_id = 0, 30
-        permanent, outbound, methods = {}, [], []
+        permanent, outbound, methods, empty_rejected = {}, [], [], []
         lock = threading.Lock()
 
         def update(number, text):
@@ -284,6 +302,10 @@ while True:
                         time.sleep(.15)
                         result = []
                 elif method in ('sendMessage', 'editMessageText'):
+                    if not html.unescape(re.sub(r'<[^>]*>', '', payload['text'])).strip():
+                        empty_rejected.append(method)
+                        data=json.dumps({'ok':False,'error_code':400,'description':'Bad Request: text must be non-empty'}).encode()
+                        self.send_response(400);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
                     with lock:
                         if method == 'sendMessage':
                             message_id += 1
@@ -376,7 +398,8 @@ import_desktop_history=false
                 print(json.dumps({'scenario': mode, 'success_not_fabricated': True, 'input_preserved': True, 'exit': process.returncode}), flush=True)
                 return
             if retain_commentary:
-                assert rows == [(1, 'settled', 1)], (mode, rows, err)
+                assert rows == [(1, 'settled', 1)], (mode, rows, {'empty_rejected':empty_rejected,'failures':[text for text in permanent.values() if text.startswith('Turn failed:')]}, err)
+                assert not empty_rejected, (mode,empty_rejected)
                 with lock:
                     messages = [text for text in permanent.values()
                                 if not text.startswith("Current Codex session:")]
@@ -448,5 +471,6 @@ if __name__ == '__main__':
                      'retained_commentary_drafts', 'retained_commentary_preview',
                      'retained_commentary_only', 'retained_commentary_hidden',
                      'retained_commentary_hidden_drafts', 'retained_commentary_hidden_only',
+                     'retained_commentary_empty_drafts', 'retained_commentary_empty_hidden', 'retained_commentary_markup_preview',
                      'retained_commentary_foreign_events', 'retained_commentary_continuation', 'retained_commentary_eof']:
             scenario(mode)

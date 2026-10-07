@@ -879,6 +879,10 @@ where
                             .and_then(Value::as_str)
                             .unwrap_or_default()
                             .to_string();
+                        if text.trim().is_empty() {
+                            // A blank item cannot qualify assistant output or idle completion.
+                            return Ok(());
+                        }
                         *assistant_message_completed = true;
                         summary.assistant_text = text.clone();
                         let event = match item.get("phase").and_then(Value::as_str) {

@@ -635,6 +635,15 @@ impl LiveTurnSink {
 
     async fn handle_event(&mut self, event: CodexEvent) -> Result<()> {
         match event {
+            CodexEvent::AssistantText(ref text)
+            | CodexEvent::CommentaryCompleted(ref text)
+            | CodexEvent::FinalAnswerCompleted(ref text)
+                if text.trim().is_empty() =>
+            {
+                // Empty native items are lifecycle events, not Telegram messages.
+                // Do not erase a draft or mutate an already published answer.
+                return Ok(());
+            }
             CodexEvent::Progress(text) => {
                 if self.shared.config.telegram.show_unfinished_messages && !self.has_assistant_text
                 {
