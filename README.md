@@ -149,6 +149,7 @@ High-level flow:
 | `/sessions` | Show topic sessions in dashboard root, or Codex sessions for the current `cwd` inside a work topic |
 | `/history` | Browse final assistant messages from the selected Codex session with an interactive pager |
 | `/status` | Show the current Telegram session, selected Codex session, and runtime settings |
+| `/rename <new name>` | Rename the current Codex session and Telegram topic together |
 | `/stop` | Stop the active turn |
 | `/retry <turn_id>` | Retry a failed or cancelled turn without attachments |
 | `/model [model\|default\|-]` | Set or show the current model |
@@ -240,7 +241,7 @@ default_model = "gpt-5.4"
 default_reasoning_effort = "medium"
 default_sandbox = "workspace-write"
 default_approval = "never"
-default_search_mode = "disabled"
+default_search_mode = "live"
 import_desktop_history = true
 import_cli_history = true
 seed_workspaces = ["/absolute/path/to/workspace-a"]
@@ -283,7 +284,7 @@ Telecodex will start `codex login --device-auth`, send a clickable `auth.openai.
 - `codex.seed_workspaces` adds explicit workspace directories to `/environments` and forum sync, even before they have local Codex history.
 - `codex.default_add_dirs` entries must also be absolute existing directories.
 - `codex.import_desktop_history` and `codex.import_cli_history` control session import sources.
-- `codex.default_search_mode` supports `disabled`, `live`, and `cached`.
+- `codex.default_search_mode` defaults to `live`; explicit `disabled` and `cached` choices remain supported. Existing topics retain their saved mode until changed with `/search live`.
 
 ### Environment variables
 

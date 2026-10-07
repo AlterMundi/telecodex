@@ -543,11 +543,20 @@ impl Store {
     }
 
     pub fn delete_session(&self, key: SessionKey) -> Result<()> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute(
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        tx.execute(
             "DELETE FROM sessions WHERE chat_id = ?1 AND thread_id = ?2",
             params![key.chat_id, key.thread_id],
         )?;
+        tx.execute(
+            "DELETE FROM bot_state WHERE key=?1",
+            params![format!(
+                "session_title_owner:{}:{}",
+                key.chat_id, key.thread_id
+            )],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -573,6 +582,35 @@ impl Store {
             "UPDATE sessions SET session_title = ?3, updated_at = ?4 WHERE chat_id = ?1 AND thread_id = ?2",
             params![key.chat_id, key.thread_id, session_title, now_string()],
         )
+    }
+
+    pub fn explicit_session_title(&self, key: SessionKey) -> Result<Option<String>> {
+        self.bot_state_value(&format!(
+            "session_title_owner:{}:{}",
+            key.chat_id, key.thread_id
+        ))
+    }
+
+    pub fn set_explicit_session_title(&self, key: SessionKey, title: &str) -> Result<()> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
+            "UPDATE sessions SET session_title=?3, updated_at=?4 WHERE chat_id=?1 AND thread_id=?2",
+            params![key.chat_id, key.thread_id, title, now_string()],
+        )?;
+        if changed != 1 {
+            return Err(anyhow!("session not found"));
+        }
+        tx.execute(
+            "INSERT INTO bot_state(key,value) VALUES (?1,?2)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![
+                format!("session_title_owner:{}:{}", key.chat_id, key.thread_id),
+                title
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn apply_session_template(&self, key: SessionKey, template: &SessionRecord) -> Result<()> {

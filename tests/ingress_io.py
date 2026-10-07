@@ -78,6 +78,9 @@ def scenario(mode):
     retain_commentary = mode.startswith('retained_commentary')
     drafts = mode.endswith('_drafts')
     show_unfinished = '_hidden' not in mode
+    foreign_events = mode.endswith('_foreign_events')
+    stream_ended = mode.endswith('_eof')
+    final_before_completion = mode.endswith('_continuation')
     commentary_only = mode.endswith('_only')
     commentary = ['First completed progress.', 'Second progress: ' + 'x' * 3800]
     final_answer = 'Final answer.'
@@ -89,6 +92,7 @@ def scenario(mode):
         steered = threading.Event()
         rpc = []
         rpc_lock = threading.Lock()
+        continuation_state = {}
 
         class Native(socketserver.BaseRequestHandler):
             def handle(self):
@@ -111,6 +115,11 @@ def scenario(mode):
                     b'Connection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + b'\r\n\r\n')
 
                 def send(value):
+                    if 'method' in value and value['method'].startswith(('turn/', 'item/', 'thread/status')):
+                        params = value.setdefault('params', {})
+                        params.setdefault('threadId', 'synthetic-native-thread')
+                        if value['method'].startswith('item/'):
+                            params.setdefault('turnId', 'synthetic-native-turn')
                     data = json.dumps(value).encode()
                     header = b'\x81' + (bytes([len(data)]) if len(data) < 126 else
                                          b'\x7e' + struct.pack('!H', len(data)))
@@ -161,11 +170,42 @@ def scenario(mode):
                                 send({'method': 'item/completed', 'params': {'item': {
                                     'type': 'agentMessage', 'id': item_id, 'text': text,
                                     'phase': 'commentary' if index < 2 else 'final_answer'}}})
+                                if stream_ended and index == 0:
+                                    return
+                                if foreign_events and index == 0:
+                                    for notification in [
+                                        {'method': 'thread/started', 'params': {'thread': {'id': 'foreign-thread'}}},
+                                        {'method': 'turn/started', 'params': {'threadId': 'foreign-thread', 'turn': {'id': 'foreign-turn'}}},
+                                        {'method': 'item/completed', 'params': {'threadId': 'foreign-thread', 'turnId': 'foreign-turn', 'item': {'type': 'agentMessage', 'phase': 'final_answer', 'text': 'FOREIGN OUTPUT'}}},
+                                        {'method': 'turn/completed', 'params': {'threadId': 'foreign-thread', 'turn': {'id': 'foreign-turn', 'status': 'completed'}}},
+                                        {'method': 'turn/completed', 'params': {'threadId': 'synthetic-native-thread', 'turn': {'id': 'stale-turn', 'status': 'completed'}}},
+                                        {'method': 'thread/status/changed', 'params': {'threadId': 'foreign-thread', 'status': {'type': 'idle'}}},
+                                        {'id': 987, 'method': 'item/commandExecution/requestApproval', 'params': {'threadId': 'foreign-thread', 'turnId': 'foreign-turn', 'command': 'synthetic foreign command'}},
+                                    ]:
+                                        send(notification)
+                                    time.sleep(.2)
                                 if index < 2:
                                     send({'method': 'item/completed', 'params': {'item': {
                                         'type': 'commandExecution', 'command': 'synthetic command',
                                         'status': 'completed', 'aggregatedOutput': 'synthetic tool progress'}}})
-                        if commentary_only:
+                        if final_before_completion:
+                            publication_deadline = time.monotonic() + 8
+                            while time.monotonic() < publication_deadline:
+                                with lock:
+                                    published = final_answer in permanent.values()
+                                if published:
+                                    break
+                                time.sleep(.02)
+                            with sqlite3.connect(root / 'state.sqlite') as db:
+                                continuation_state['turns'] = db.execute('SELECT status FROM turns').fetchall()
+                                continuation_state['busy'] = db.execute('SELECT busy FROM sessions').fetchall()
+                            with lock:
+                                continuation_state['answer_published'] = final_answer in permanent.values()
+                            send({'method': 'item/completed', 'params': {'item': {'type': 'collabToolCall', 'id': 'child-result', 'status': 'completed'}}})
+                            send({'method': 'item/started', 'params': {'item': {'type': 'agentMessage', 'id': 'continued-answer'}}})
+                            send({'method': 'item/agentMessage/delta', 'params': {'delta': 'Continued final answer.'}})
+                            send({'method': 'item/completed', 'params': {'item': {'type': 'agentMessage', 'id': 'continued-answer', 'phase': 'final_answer', 'text': 'Continued final answer.'}}})
+                        if retain_commentary:
                             send({'method': 'turn/completed', 'params': {'turn': {
                                 'id': 'synthetic-native-turn', 'status': 'completed'}}})
                         if steered.is_set():
@@ -302,6 +342,11 @@ import_desktop_history=false
                     with sqlite3.connect(root / 'state.sqlite') as db:
                         rows = db.execute('SELECT update_id,status,turn_id FROM incoming_updates ORDER BY update_id').fetchall()
                         sessions = db.execute('SELECT codex_thread_id FROM sessions').fetchall()
+                    if stream_ended and rows and rows[0][1] == 'undetermined':
+                        with lock:
+                            failure_published = any('Turn failed:' in text for text in permanent.values())
+                        if failure_published:
+                            break
                     if retain_commentary and rows == [(1, 'settled', 1)]:
                         break
                     if len(rows) == 2:
@@ -318,6 +363,18 @@ import_desktop_history=false
                 starts = [p['input'][0]['text'] for m, p in rpc if m == 'turn/start']
                 steers = [p['input'][0]['text'] for m, p in rpc if m == 'turn/steer']
                 threads = [m for m, p in rpc if m in ('thread/start', 'thread/resume')]
+            if stream_ended:
+                with sqlite3.connect(root / 'state.sqlite') as db:
+                    assert db.execute('SELECT status FROM turns').fetchall() == [('failed',)]
+                    assert db.execute('SELECT busy FROM sessions').fetchall() == [(0,)]
+                assert sessions == [('synthetic-native-thread',)], sessions
+                assert len(starts) == 1 and not steers
+                assert len(rows) == 1 and rows[0][1] == 'undetermined', rows
+                with lock:
+                    assert commentary[0] in permanent.values()
+                    assert any('Turn failed:' in text for text in permanent.values())
+                print(json.dumps({'scenario': mode, 'success_not_fabricated': True, 'input_preserved': True, 'exit': process.returncode}), flush=True)
+                return
             if retain_commentary:
                 assert rows == [(1, 'settled', 1)], (mode, rows, err)
                 with lock:
@@ -328,7 +385,7 @@ import_desktop_history=false
                 if not show_unfinished:
                     assert 'sendMessageDraft' not in sent_methods, (mode, sent_methods)
                     assert 'editMessageText' not in sent_methods, (mode, edits)
-                assert len(messages) == (3 if commentary_only else 4), (mode, messages)
+                assert len(messages) == (3 if commentary_only else 5 if final_before_completion else 4), (mode, messages)
                 assert messages[0] == commentary[0], (mode, messages[0])
                 assert sum(text.count('x') for text in messages[1:3]) == 3800
                 assert messages[1].startswith('Second progress: ')
@@ -342,7 +399,14 @@ import_desktop_history=false
                 assert all(target != first_id for _, target, _ in edits[first_commit + 1:])
                 with sqlite3.connect(root / 'state.sqlite') as db:
                     assert db.execute('select status,assistant_text from turns').fetchall() == [
-                        ('completed', commentary[-1] if commentary_only else final_answer)]
+                        ('completed', commentary[-1] if commentary_only else 'Continued final answer.' if final_before_completion else final_answer)]
+                if foreign_events:
+                    assert sessions == [('synthetic-native-thread',)], sessions
+                    assert all(method is not None for method, _ in rpc), 'answered a foreign server request'
+                if final_before_completion:
+                    assert continuation_state == {'turns': [('running',)], 'busy': [(1,)], 'answer_published': True}, continuation_state
+                    assert messages[-1] == 'Continued final answer.', messages
+                    assert len(starts) == 1 and not steers, (starts, steers)
                 print(json.dumps({'scenario': mode, 'permanent_message_count': len(messages),
                                   'first_commentary_preserved': True,
                                   'long_commentary_characters': 3800,
@@ -374,13 +438,15 @@ import_desktop_history=false
             native.server_close()
 
 
-token_probe()
-scenario('accepted_steer')
-scenario('unacknowledged_steer')
-scenario('missing_saved_binding')
-scenario('retained_commentary_drafts')
-scenario('retained_commentary_preview')
-scenario('retained_commentary_only')
-scenario('retained_commentary_hidden')
-scenario('retained_commentary_hidden_drafts')
-scenario('retained_commentary_hidden_only')
+if __name__ == '__main__':
+    if len(sys.argv) > 2:
+        for mode in sys.argv[2:]:
+            scenario(mode)
+    else:
+        token_probe()
+        for mode in ['accepted_steer', 'unacknowledged_steer', 'missing_saved_binding',
+                     'retained_commentary_drafts', 'retained_commentary_preview',
+                     'retained_commentary_only', 'retained_commentary_hidden',
+                     'retained_commentary_hidden_drafts', 'retained_commentary_hidden_only',
+                     'retained_commentary_foreign_events', 'retained_commentary_continuation', 'retained_commentary_eof']:
+            scenario(mode)

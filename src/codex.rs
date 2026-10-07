@@ -52,6 +52,7 @@ pub enum CodexEvent {
     Progress(String),
     AssistantText(String),
     CommentaryCompleted(String),
+    FinalAnswerCompleted(String),
     ThreadStarted(String),
     ApprovalRequest(CodexApprovalRequest),
     UserInputRequest {
@@ -347,6 +348,23 @@ impl CodexRunner {
         }
         Ok(models)
     }
+    pub async fn set_thread_name(&self, thread_id: &str, name: &str) -> Result<()> {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
+            process.initialize().await?;
+            let id = process
+                .send_request(
+                    "thread/name/set",
+                    json!({"threadId": thread_id, "name": name}),
+                )
+                .await?;
+            process.await_response(id).await?;
+            process.shutdown().await?;
+            Ok(())
+        })
+        .await
+        .context("native rename acknowledgment timed out; its effect is unconfirmed")?
+    }
     pub async fn run_turn<F, Fut>(
         &self,
         session: &SessionRecord,
@@ -585,7 +603,7 @@ where
                 }
               }
               RpcMessage::Notification{method,params}=>{
-                if params.get("threadId").and_then(Value::as_str).is_some_and(|id| id != thread_id) { continue; }
+                if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
                 if method == "serverRequest/resolved" {
                     if let Some(id) = params.get("requestId") {
                         let id: NativeRequestId = serde_json::from_value(id.clone())?;
@@ -600,6 +618,7 @@ where
                 } else {handle_notification(&method,&params,&mut summary,&mut active_turn_id,&mut turn_error,&mut turn_completed,&mut assistant_message_completed,on_event).await?;}
               }
               RpcMessage::ServerRequest{id,method,params}=>{
+                if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
                 if method == "item/tool/requestUserInput" {
                     let input: UserInputRequest = serde_json::from_value(params)
                         .context("unsupported native user-input schema")?;
@@ -629,6 +648,10 @@ where
           }
         }
     }
+    if !turn_completed && !cancelled && turn_error.is_none() {
+        turn_error =
+            Some("native event stream ended before the selected turn completed".to_string());
+    }
     reject_outstanding_steers(queued_steers, pending_steers);
     for closed in open_inputs.into_values() {
         closed.cancel();
@@ -641,6 +664,39 @@ where
         bail!("codex turn cancelled");
     }
     Ok(summary)
+}
+
+/// Route only the selected thread and its current turn on a shared native transport.
+/// Legacy private stdio transports may omit scopes, but explicit mismatches are rejected.
+fn event_matches_run(
+    thread_id: &str,
+    active_turn_id: Option<&str>,
+    method: &str,
+    params: &Value,
+    require_scope: bool,
+) -> bool {
+    let event_thread = params.get("threadId").and_then(Value::as_str).or_else(|| {
+        params
+            .get("thread")
+            .and_then(|thread| thread.get("id"))
+            .and_then(Value::as_str)
+    });
+    match event_thread {
+        Some(id) if id != thread_id => return false,
+        None if require_scope => return false,
+        _ => {}
+    }
+    let event_turn = params.get("turnId").and_then(Value::as_str).or_else(|| {
+        params
+            .get("turn")
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+    });
+    match (event_turn, active_turn_id) {
+        (Some(id), Some(active)) => id == active,
+        (Some(_), None) => method == "turn/started",
+        (None, _) => !require_scope || !method.starts_with("turn/") && !method.starts_with("item/"),
+    }
 }
 
 /// Sends one queued steering request and tracks its app-server response by request id.
@@ -825,17 +881,14 @@ where
                             .to_string();
                         *assistant_message_completed = true;
                         summary.assistant_text = text.clone();
-                        let event =
-                            if item.get("phase").and_then(Value::as_str) == Some("commentary") {
-                                CodexEvent::CommentaryCompleted(text)
-                            } else {
-                                CodexEvent::AssistantText(text)
-                            };
+                        let event = match item.get("phase").and_then(Value::as_str) {
+                            Some("commentary") => CodexEvent::CommentaryCompleted(text),
+                            Some("final_answer") => CodexEvent::FinalAnswerCompleted(text),
+                            _ => CodexEvent::AssistantText(text),
+                        };
                         let _ = on_event(event).await?;
-                        if item.get("phase").and_then(Value::as_str) == Some("final_answer") {
-                            *active_turn_id = None;
-                            *turn_completed = true;
-                        }
+                        // An answer can precede more work, steering or lifecycle hooks.
+                        // Keep listening until the owning native turn really ends.
                     }
                     Some("commandExecution") => {
                         let status = item
@@ -953,7 +1006,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -2285,7 +2338,7 @@ while True:
     }
 
     #[tokio::test]
-    async fn completes_turn_on_final_answer_item_completed() {
+    async fn final_answer_is_published_without_closing_the_native_turn() {
         let mut summary = RunSummary {
             codex_thread_id: None,
             assistant_text: String::new(),
@@ -2318,8 +2371,8 @@ while True:
 
         assert_eq!(summary.assistant_text, "На связи.");
         assert!(assistant_message_completed);
-        assert!(turn_completed);
-        assert!(active_turn_id.is_none());
+        assert!(!turn_completed);
+        assert_eq!(active_turn_id.as_deref(), Some("turn-1"));
         assert!(turn_error.is_none());
     }
 
@@ -2374,8 +2427,11 @@ while True:
         assert!(matches!(&events[1], CodexEvent::CommentaryCompleted(text) if text == "Progress."));
         assert!(matches!(&events[2], CodexEvent::AssistantText(text) if text == "Final "));
         assert!(matches!(&events[3], CodexEvent::AssistantText(text) if text == "Final answer."));
+        assert!(
+            matches!(&events[4], CodexEvent::FinalAnswerCompleted(text) if text == "Final answer.")
+        );
         assert_eq!(summary.assistant_text, "Final answer.");
-        assert!(turn_completed);
+        assert!(!turn_completed);
     }
 
     #[tokio::test]

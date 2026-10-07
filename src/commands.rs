@@ -41,6 +41,9 @@ pub enum BridgeCommand {
     History,
     Status,
     Questions,
+    Rename {
+        title: String,
+    },
     Stop,
     RetryTurn {
         turn_id: i64,
@@ -156,6 +159,9 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/history" => BridgeCommand::History,
         "/status" => BridgeCommand::Status,
         "/questions" => BridgeCommand::Questions,
+        "/rename" => BridgeCommand::Rename {
+            title: required_arg(args, "/rename <new name>")?.to_string(),
+        },
         "/stop" => BridgeCommand::Stop,
         "/retry" | "/retry_turn" | "/retry-turn" => BridgeCommand::RetryTurn {
             turn_id: parse_i64_arg(args, "/retry <turn_id>")?,
@@ -295,6 +301,9 @@ pub fn command_help(command: &str, args: &str) -> Option<CommandHelp> {
         "/history" => Some(text_help(
             "Usage: /history\n\nShows an interactive pager for messages from the selected Codex session.",
         )),
+        "/rename" => Some(text_help(
+            "Usage: /rename <new name>\n\nRenames this Codex session and its Telegram topic without starting a model turn.",
+        )),
         "/retry" | "/retry_turn" | "/retry-turn" => Some(text_help(
             "Usage: /retry <turn_id>\n\nRetries a failed or cancelled turn without attachments.",
         )),
@@ -313,6 +322,7 @@ pub fn default_bot_commands() -> Vec<BotCommand> {
         bot_command("help", "Show Codex help"),
         bot_command("status", "Show status for this session"),
         bot_command("questions", "Open pending questions in this topic"),
+        bot_command("rename", "Rename this session and Telegram topic"),
         bot_command("login", "Log in to Codex with device code"),
         bot_command("logout", "Remove stored Codex credentials"),
         bot_command("new", "Start a fresh Codex session in this topic"),
@@ -618,6 +628,7 @@ mod tests {
             ("/environments", ParsedInputKind::Bridge),
             ("/sessions", ParsedInputKind::Bridge),
             ("/history", ParsedInputKind::Bridge),
+            ("/rename Shared name", ParsedInputKind::Bridge),
             ("/copy", ParsedInputKind::Bridge),
             ("/clear", ParsedInputKind::Bridge),
             ("/stop", ParsedInputKind::Bridge),

@@ -666,6 +666,12 @@ pub struct Message {
     pub audio: Option<Audio>,
     pub voice: Option<Voice>,
     pub video: Option<Video>,
+    pub forum_topic_edited: Option<ForumTopicEdited>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForumTopicEdited {
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

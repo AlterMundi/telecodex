@@ -141,6 +141,15 @@ pub(super) async fn process_turn(
                                     shared
                                         .store
                                         .set_session_codex_thread(session_key, &thread_id)?;
+                                    if super::rename::sync_native_title(&shared, session_key).await.is_err() {
+                                        let _ = send_markdown_message(
+                                            &shared.telegram,
+                                            session_key.chat_id,
+                                            Some(session_key.thread_id).filter(|id| *id > 0),
+                                            "The saved name could not be confirmed in Codex. Retry /rename with the intended name.",
+                                            None,
+                                        ).await;
+                                    }
                                 }
                                 sink.lock()
                                     .await
@@ -637,14 +646,14 @@ impl LiveTurnSink {
                 self.pending_text = text;
                 self.has_assistant_text = true;
             }
-            CodexEvent::CommentaryCompleted(text) => {
+            CodexEvent::CommentaryCompleted(text) | CodexEvent::FinalAnswerCompleted(text) => {
                 self.begin_next_message();
                 self.pending_text = text;
                 self.has_assistant_text = true;
                 self.flush(true).await?;
                 // Only an acknowledged permanent publication may freeze this message.
                 if self.last_flushed_text != self.pending_text {
-                    anyhow::bail!("completed commentary publication was deferred by Telegram");
+                    anyhow::bail!("completed assistant publication was deferred by Telegram");
                 }
                 self.message_committed = true;
                 return Ok(());
