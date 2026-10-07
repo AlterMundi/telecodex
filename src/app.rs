@@ -1009,10 +1009,13 @@ impl App {
                         .await?;
                     } else {
                         let session = self.ensure_resolved_session(session_key, user.tg_user_id)?;
-                        let uncertain = self.shared.store.uncertain_update_ids(user.tg_user_id)?;
+                        let uncertain = self
+                            .shared
+                            .store
+                            .uncertain_update_ids(user.tg_user_id, session_key)?;
                         let mut text = format_session_status(&session, &message.chat);
                         if !uncertain.is_empty() {
-                            text.push_str(&format!("\n\nInterrupted input updates: `{uncertain:?}`. Their effects are undetermined; inspect this topic's history before explicitly retrying."));
+                            text.push_str(&format!("\n\nUnconfirmed inputs in this topic: `{uncertain:?}`. Codex may have received them; review the conversation before retrying. They will not be resent automatically."));
                         }
                         self.send_status(message.chat.id, message.message_thread_id, &text)
                             .await?;

@@ -189,7 +189,7 @@ import_desktop_history=false
 
     def controls(self, index, topic=7):
         with self.lock:
-            rows = [m for m in self.messages if html.unescape(m[1]['text']).startswith(f'Codex question {index}/') and m[0]['message_thread_id'] == topic and 'reply_markup' in m[1]]
+            rows = [m for m in self.messages if html.unescape(m[1]['text']).startswith(f'Codex question {index}/') and m[0]['message_thread_id'] == topic and 'inline_keyboard' in m[1].get('reply_markup', {})]
             return rows[-1] if rows else None
 
     @staticmethod
@@ -314,7 +314,7 @@ def scenario(binary, mode):
             print(json.dumps({'scenario':mode,'unbound_controls_rejected':True}),flush=True); return
         j.wait(lambda: j.controls(1))
         first = j.controls(1)
-        assert len([m for m in j.messages if html.unescape(m[1]['text']).startswith('Codex question 1/') and 'reply_markup' in m[1]]) == 1
+        assert len([m for m in j.messages if html.unescape(m[1]['text']).startswith('Codex question 1/') and 'inline_keyboard' in m[1].get('reply_markup', {})]) == 1
         assert all(len(html.unescape(m[1]['text']).encode('utf-16-le'))//2 <= 4096 for m in j.messages)
         if mode in ('restart', 'restart_gap'):
             if mode == 'restart':
@@ -381,7 +381,18 @@ def scenario(binary, mode):
         if mode != 'numeric':
             text_control = j.admit(callback=j.button(second, ':text'))
             j.wait(lambda: any('Send your answer as text' in m[1]['text'] for m in j.messages))
-        answer_id = j.admit('Exact free text',reply=second[0]['message_id'] if mode == 'numeric' else None)
+        if mode in ('implicit_reply', 'force_reply'):
+            prompts = [m for m in j.messages if m[1].get('reply_markup', {}).get('force_reply') is True]
+            assert prompts and prompts[-1][0]['message_thread_id'] == 7, prompts
+            prompt = prompts[-1]
+            assert prompt[1]['reply_markup']['input_field_placeholder'] == 'Your answer'
+            assert j.row('SELECT message_id FROM question_messages WHERE message_id=?',(prompt[0]['message_id'],))
+            # Expired explicit quotes must not consume the armed free-text answer.
+            stale_id = j.admit('old question reply', reply=first[0]['message_id'])
+            j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?',(stale_id,)) == [('handled',)])
+            assert not j.answers
+        reply = second[0]['message_id'] if mode == 'numeric' else 77 if mode == 'implicit_reply' else prompt[0]['message_id'] if mode == 'force_reply' else None
+        answer_id = j.admit('Exact free text', reply=reply)
         j.wait(lambda: len(j.answers)==(2 if mode == 'two_topics' else 1))
         expected = {'id':question_id,'result':{'answers':{'scope':{'answers':['Small']},
                     'notes':{'answers':['Exact free text']}}}}
@@ -417,5 +428,5 @@ def scenario(binary, mode):
 
 if __name__ == '__main__':
     binary = str(pathlib.Path(sys.argv[1]).resolve())
-    for mode in sys.argv[2:] or ['roundtrip','async','numeric','long','two_topics','default','cancel','stop','secret','restart','restart_gap','disconnect','unsupported','wrong_receipt']:
+    for mode in sys.argv[2:] or ['implicit_reply','force_reply','roundtrip','async','numeric','long','two_topics','default','cancel','stop','secret','restart','restart_gap','disconnect','unsupported','wrong_receipt']:
         scenario(binary, mode)

@@ -262,17 +262,48 @@ pub(super) async fn handle_callback(
         {
             pending.awaiting_text = false;
         }
-        guard
-            .get_mut(token)
-            .expect("checked pending question")
-            .awaiting_text = true;
+        let mut pending = guard.remove(token).expect("checked pending question");
+        pending.awaiting_text = true;
         drop(guard);
-        notice(
-            &shared,
-            message,
-            "Send your answer as text, or reply directly to the question. /stop cancels the turn.",
-        )
-        .await?;
+        let question = &pending.request.questions[pending.index];
+        let prompt = format!(
+            "Codex question {}/{}: {}\n\nSend your answer as text, or reply directly to the question. /stop cancels the turn.",
+            pending.index + 1,
+            pending.request.questions.len(),
+            question.header
+        );
+        let sent = shared
+            .telegram
+            .send_force_reply(SendMessage::html(
+                key.chat_id,
+                Some(key.thread_id).filter(|id| *id != 0),
+                html_escape::encode_safe(&prompt).to_string(),
+            ))
+            .await;
+        let result = match sent {
+            Ok(sent)
+                if sent.chat.id == key.chat_id
+                    && sent.message_thread_id.unwrap_or(0) == key.thread_id =>
+            {
+                let recorded = shared.store.record_question_message(key, sent.message_id, pending.local_turn_id,
+                    &serde_json::json!({"requestId":pending.request_id,"threadId":pending.request.thread_id,
+                        "turnId":pending.request.turn_id,"itemId":pending.request.item_id,"questionId":question.id}));
+                pending.message_ids.push(sent.message_id);
+                recorded
+            }
+            Ok(_) => Err(anyhow!(
+                "free-text prompt delivery did not confirm its Telegram topic"
+            )),
+            Err(error) => Err(error),
+        };
+        if !pending.closed.is_cancelled() && !pending.responder.is_closed() {
+            shared
+                .pending_questions
+                .lock()
+                .await
+                .insert(token.to_string(), pending);
+        }
+        result?;
     } else if action == "cancel" {
         let pending = guard.remove(token).expect("checked pending question");
         drop(guard);
@@ -328,8 +359,7 @@ pub(super) async fn handle_text_answer(
                 && p.requester == user
                 && !p.responder.is_closed()
                 && !p.closed.is_cancelled()
-                && (reply.is_some_and(|id| p.message_ids.contains(&id))
-                    || (reply.is_none() && p.awaiting_text))
+                && reply.is_some_and(|id| p.message_ids.contains(&id))
         })
         .map(|(token, _)| token.clone());
     if let Some(token) = token {
@@ -356,6 +386,26 @@ pub(super) async fn handle_text_answer(
             notice(&shared,message,"This question is no longer waiting for your answer. No new turn was started; inspect /status before continuing.").await?;
             return Ok(true);
         }
+    }
+    // Arming explicitly selects the next text. Telegram topic clients can
+    // attach a root-message reply even when the human did not quote a question.
+    // Recognized expired questions above must never consume this capture.
+    let mut guard = shared.pending_questions.lock().await;
+    let token = guard
+        .iter()
+        .find(|(_, p)| {
+            p.session == key
+                && p.requester == user
+                && p.awaiting_text
+                && !p.closed.is_cancelled()
+                && !p.responder.is_closed()
+        })
+        .map(|(token, _)| token.clone());
+    if let Some(token) = token {
+        let pending = guard.remove(&token).expect("armed question");
+        drop(guard);
+        answer(shared, token, pending, text.to_string()).await?;
+        return Ok(true);
     }
     Ok(false)
 }

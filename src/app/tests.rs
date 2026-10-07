@@ -185,7 +185,10 @@ async fn failed_queue_admission_is_visible_without_redispatch() {
         .await;
     assert!(result.is_err());
     assert_eq!(
-        app.shared.store.uncertain_update_ids(100).unwrap(),
+        app.shared
+            .store
+            .uncertain_update_ids(100, SessionKey::new(1, None))
+            .unwrap(),
         vec![71]
     );
     assert!(!app.shared.store.admit_update(&update).unwrap());

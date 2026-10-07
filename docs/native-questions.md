@@ -18,8 +18,11 @@ Adding the word “plan” to a normal prompt is not a substitute for this contr
 Native `item/tool/requestUserInput` requests appear as Telegram questions with
 suggested choices, their complete descriptions and a free-text control. Tap a
 choice, reply directly to the question, or tap **Write answer** / **Other answer**
-before sending text. Ordinary unquoted text otherwise continues to steer the
-active turn. Commands and attachments retain their ordinary handling. `/stop`
+before sending text. The free-text button opens Telegram's ForceReply composer
+and records that prompt as another current answer target. Once armed, the next
+text also answers when a topic client attaches an unrelated root-message reply.
+Explicit replies to expired questions remain rejected. Ordinary text otherwise
+continues to steer the active turn. Commands and attachments retain their ordinary handling. `/stop`
 and **Cancel turn** interrupt the native turn; they do not fabricate an answer.
 
 `/questions` lists the requesting human's pending questions in the current topic,
@@ -45,7 +48,8 @@ Question-message receipts and answer admission are durable SQLite records.
 Native request resolution is a closure receipt, not proof of how a choice
 influenced the model. Completion settles admitted input; disconnects or missing
 resolution leave its outcome undetermined. Restart does not replay an answer or
-reconstruct an expired response channel. Quoted replies to old questions are
+reconstruct an expired response channel. `/status` lists uncertain input only
+for its requesting human, chat and topic; it does not mix other conversations. Quoted replies to old questions are
 rejected without creating turns, including the gap where Telegram displayed a
 question but its receipt had not yet reached the database. `/questions` explains
 when there are no live questions, and `/status` preserves uncertain inputs.

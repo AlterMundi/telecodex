@@ -402,16 +402,22 @@ impl Store {
         Ok(())
     }
 
-    pub fn uncertain_update_ids(&self, user_id: i64) -> Result<Vec<i64>> {
+    pub fn uncertain_update_ids(&self, user_id: i64, key: SessionKey) -> Result<Vec<i64>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let mut query = conn.prepare(
             "SELECT update_id FROM incoming_updates WHERE status='undetermined'
              AND COALESCE(json_extract(payload_json,'$.message.from.id'),
                           json_extract(payload_json,'$.callback_query.from.id'))=?1
+             AND COALESCE(json_extract(payload_json,'$.message.chat.id'),
+                          json_extract(payload_json,'$.callback_query.message.chat.id'))=?2
+             AND COALESCE(json_extract(payload_json,'$.message.message_thread_id'),
+                          json_extract(payload_json,'$.callback_query.message.message_thread_id'),0)=?3
              ORDER BY update_id DESC LIMIT 20",
         )?;
         Ok(query
-            .query_map(params![user_id], |row| row.get(0))?
+            .query_map(params![user_id, key.chat_id, key.thread_id], |row| {
+                row.get(0)
+            })?
             .collect::<rusqlite::Result<Vec<i64>>>()?)
     }
 
@@ -1216,6 +1222,59 @@ mod tests {
     }
 
     #[test]
+    fn uncertain_inputs_are_scoped_to_human_chat_and_topic() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        let mut inputs = vec![
+            input(1, 100, "this topic"),
+            input(2, 100, "other topic"),
+            input(3, 100, "other chat"),
+            input(4, 200, "other human"),
+        ];
+        inputs[1].message.as_mut().unwrap().message_thread_id = Some(8);
+        inputs[2].message.as_mut().unwrap().chat.id = 200;
+        inputs[3].message.as_mut().unwrap().chat.id = 100;
+        for update in inputs {
+            store.admit_update(&update).unwrap();
+            store.begin_update(update.update_id).unwrap();
+            store
+                .finish_update_dispatch(update.update_id, false)
+                .unwrap();
+        }
+        let callback = serde_json::from_value(serde_json::json!({
+            "update_id":5,"callback_query":{"id":"cb","from":{"id":100,"is_bot":false,"first_name":"Test"},
+                "data":"q:expired:0:0","message":{"message_id":50,"message_thread_id":7,"chat":{"id":100,"type":"private"}}}
+        })).unwrap();
+        store.admit_update(&callback).unwrap();
+        store.begin_update(5).unwrap();
+        store.finish_update_dispatch(5, false).unwrap();
+        assert_eq!(
+            store
+                .uncertain_update_ids(100, SessionKey::new(100, Some(7)))
+                .unwrap(),
+            vec![5, 1]
+        );
+        assert_eq!(
+            store
+                .uncertain_update_ids(100, SessionKey::new(100, Some(8)))
+                .unwrap(),
+            vec![2]
+        );
+        assert_eq!(
+            store
+                .uncertain_update_ids(100, SessionKey::new(200, Some(7)))
+                .unwrap(),
+            vec![3]
+        );
+        assert_eq!(
+            store
+                .uncertain_update_ids(200, SessionKey::new(100, Some(7)))
+                .unwrap(),
+            vec![4]
+        );
+    }
+
+    #[test]
     fn input_admission_is_atomic_idempotent_and_does_not_rewind_offset() {
         let tmp = NamedTempFile::new().unwrap();
         let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
@@ -1269,8 +1328,18 @@ mod tests {
         }
         let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
         assert_eq!(store.last_update_id().unwrap(), Some(4));
-        assert_eq!(store.uncertain_update_ids(100).unwrap(), vec![2, 1]);
-        assert_eq!(store.uncertain_update_ids(200).unwrap(), vec![3]);
+        assert_eq!(
+            store
+                .uncertain_update_ids(100, SessionKey::new(100, Some(7)))
+                .unwrap(),
+            vec![2, 1]
+        );
+        assert_eq!(
+            store
+                .uncertain_update_ids(200, SessionKey::new(200, Some(7)))
+                .unwrap(),
+            vec![3]
+        );
         assert!(!store.admit_update(&input(2, 100, "queued")).unwrap());
         assert!(store.begin_update(2).is_err());
         let conn = store.conn.lock().unwrap();
@@ -1314,7 +1383,12 @@ mod tests {
             assert_eq!(row, ("started".to_string(), 42));
         }
         store.finish_update_turn(1, false).unwrap();
-        assert_eq!(store.uncertain_update_ids(100).unwrap(), vec![1]);
+        assert_eq!(
+            store
+                .uncertain_update_ids(100, SessionKey::new(100, Some(7)))
+                .unwrap(),
+            vec![1]
+        );
     }
 
     #[test]
@@ -1387,7 +1461,12 @@ mod tests {
             store.begin_update_steer(1, 42).unwrap();
         }
         let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
-        assert_eq!(store.uncertain_update_ids(100).unwrap(), vec![1]);
+        assert_eq!(
+            store
+                .uncertain_update_ids(100, SessionKey::new(100, Some(7)))
+                .unwrap(),
+            vec![1]
+        );
         let conn = store.conn.lock().unwrap();
         let turn: i64 = conn
             .query_row(
