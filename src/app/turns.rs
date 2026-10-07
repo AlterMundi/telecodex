@@ -598,14 +598,14 @@ impl LiveTurnSink {
                 self.pending_text = text;
                 self.has_assistant_text = true;
             }
-            CodexEvent::CommentaryCompleted(text) => {
+            CodexEvent::CommentaryCompleted(text) | CodexEvent::FinalAnswerCompleted(text) => {
                 self.begin_next_message();
                 self.pending_text = text;
                 self.has_assistant_text = true;
                 self.flush(true).await?;
                 // Only an acknowledged permanent publication may freeze this message.
                 if self.last_flushed_text != self.pending_text {
-                    anyhow::bail!("completed commentary publication was deferred by Telegram");
+                    anyhow::bail!("completed assistant publication was deferred by Telegram");
                 }
                 self.message_committed = true;
                 return Ok(());
