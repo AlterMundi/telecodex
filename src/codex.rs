@@ -24,7 +24,12 @@ use tokio::{
     task::JoinHandle,
     time::{Duration, Instant, sleep_until},
 };
-use tokio_tungstenite::{WebSocketStream, client_async, tungstenite::Message as WsMessage};
+use tokio_tungstenite::{
+    WebSocketStream, client_async_with_config,
+    tungstenite::{
+        Error as WsError, Message as WsMessage, error::CapacityError, protocol::WebSocketConfig,
+    },
+};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
@@ -1490,6 +1495,14 @@ fn push_common_config_args(
         args.push(model.clone());
     }
 }
+// Resume responses may contain a long thread history in one frame. Keep the
+// existing 64 MiB message bound, and permit one frame up to that same bound.
+fn native_proxy_websocket_config() -> WebSocketConfig {
+    WebSocketConfig::default()
+        .max_message_size(Some(64 * 1024 * 1024))
+        .max_frame_size(Some(64 * 1024 * 1024))
+}
+
 impl AppServerProcess {
     async fn spawn(binary: &Path, shared: bool) -> Result<Self> {
         let mut spec = build_app_server_command(binary);
@@ -1533,7 +1546,11 @@ impl AppServerProcess {
         let transport = if shared {
             let handshake = tokio::time::timeout(
                 Duration::from_secs(10),
-                client_async("ws://localhost/", ProxyIo { stdin, stdout }),
+                client_async_with_config(
+                    "ws://localhost/",
+                    ProxyIo { stdin, stdout },
+                    Some(native_proxy_websocket_config()),
+                ),
             )
             .await;
             match handshake {
@@ -1645,6 +1662,20 @@ impl AppServerProcess {
                     Some(Ok(WsMessage::Ping(_) | WsMessage::Pong(_))) => continue,
                     Some(Ok(WsMessage::Close(_))) | None => return Ok(None),
                     Some(Ok(_)) => bail!("native Codex proxy returned an unsupported frame"),
+                    Some(Err(WsError::Capacity(CapacityError::MessageTooLong {
+                        size,
+                        max_size,
+                    }))) => {
+                        bail!(
+                            "native Codex proxy WebSocket receive limit exceeded: {size} bytes > {max_size} bytes"
+                        );
+                    }
+                    Some(Err(WsError::Io(error))) => {
+                        bail!(
+                            "native Codex proxy WebSocket read failed (I/O: {:?})",
+                            error.kind()
+                        );
+                    }
                     Some(Err(_)) => bail!("native Codex proxy WebSocket read failed"),
                 }
             },
@@ -1970,6 +2001,72 @@ while True:
         );
         process.shutdown().await.unwrap();
         server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_proxy_receives_history_above_default_frame_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let binary = proxy_fixture(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let request: Value =
+                serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(request["method"], "thread/read");
+            socket
+                .send(WsMessage::Text(
+                    json!({
+                        "id": request["id"],
+                        "result": {"history": "x".repeat(17 * 1024 * 1024)}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+        });
+        let mut process = AppServerProcess::spawn(&binary, true).await.unwrap();
+        let id = process
+            .send_request(
+                "thread/read",
+                json!({"threadId":"fixture-thread","includeTurns":true}),
+            )
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(15), process.await_response(id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["history"].as_str().unwrap().len(), 17 * 1024 * 1024);
+        process.shutdown().await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_proxy_rejects_frame_above_bounded_receive_limit() {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+        let (client, mut server) = tokio::io::duplex(1024);
+        let mut socket = WebSocketStream::from_raw_socket(
+            client,
+            Role::Client,
+            Some(native_proxy_websocket_config()),
+        )
+        .await;
+        let size = 64 * 1024 * 1024 + 1;
+        let mut header = vec![0x81, 127];
+        header.extend_from_slice(&(size as u64).to_be_bytes());
+        server.write_all(&header).await.unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(error, WsError::Capacity(CapacityError::MessageTooLong { size: actual, max_size }) if actual == size && max_size == 64 * 1024 * 1024)
+        );
     }
 
     #[cfg(unix)]
