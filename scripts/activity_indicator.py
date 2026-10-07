@@ -418,7 +418,7 @@ class Publisher:
             absent = result and result.get('error_code') == 400 and 'message to delete not found' in result.get('description', '').lower()
             if (not result or not result.get('ok')) and not absent:
                 # Keep failed cleanup tracked across restart; never leave "Working".
-                payload.update(text='◻️ No active work · activity monitoring ended', parse_mode='HTML')
+                payload.update(text='◻️ Activity monitoring ended', parse_mode='HTML')
                 result = self.telegram.call('editMessageText', payload)
                 if not result or not result.get('ok'):
                     return
@@ -466,6 +466,8 @@ def run(args):
                     if not path.is_relative_to((native_home / 'sessions').resolve()):
                         raise ValueError('rollout outside native session directory')
                     reader = readers.setdefault(path, Rollout(path, tid))
+                    if reader.thread_id != tid:
+                        raise ValueError('cached rollout binding mismatch')
                     try:
                         reader.refresh()
                     except (OSError, ValueError):

@@ -99,7 +99,7 @@ class ActivityIO(unittest.TestCase):
         self.answers = [{'ok': False, 'error_code': 400, 'description': "message can't be deleted"}, {'ok': True, 'result': {}}]
         self.publisher.update('100:7', 100, 7, 'turn-a', None, 140)
         self.assertEqual(self.calls[-1][0], 'editMessageText')
-        self.assertIn('No active work', self.calls[-1][1]['text'])
+        self.assertIn('Activity monitoring ended', self.calls[-1][1]['text'])
         self.assertEqual(self.calls[-1][1]['message_id'], 101)
         self.assertEqual(self.publisher.entries, {})
 

@@ -44,7 +44,8 @@ human listener; installing a skill alone must not activate it.
 
 `health.json` reports connection health and aggregate topic/publication counts.
 `messages.json` privately tracks only the observer's message receipts, correlation
-and retry timing. A restart reuses these message IDs instead of sending duplicates.
+and retry timing. After an abrupt restart, these message IDs are reused instead
+of sending duplicates. A graceful stop cleans up the observer's own messages.
 An ambiguous initial send is never automatically repeated for the same native
 turn. Explicit rate-limit rejection permits a delayed retry. Disconnects replace
 existing live claims with an unconfirmed-connection warning; the timestamp on
