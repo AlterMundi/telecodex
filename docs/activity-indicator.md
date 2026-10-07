@@ -35,8 +35,13 @@ when steering keeps the outer native task open. Pending tools, child agents and
 native approval/input waits still keep the indicator active.
 
 With explicit `--status-requests` opt-in, plain `/status` receives a compact
-activity/quota reply in addition to the bridge's existing session details. This
-also works while idle. A stored native thread reported as `notLoaded` is idle,
+activity/quota response in addition to the bridge's existing session details.
+While work is active it creates or immediately edits the same live indicator;
+repeated commands do not leave separate frozen `Working` replies. An explicitly
+requested indicator continues updating every thirty seconds, including during
+recent exchanges, and is removed when its work ends. This opt-in lasts only for
+the current native request. Idle and unavailable results remain ordinary
+snapshots. A stored native thread reported as `notLoaded` is idle,
 not a connection failure; linked active children still take precedence. A separate command reader checks the existing journal
 every 250 ms and replies from the most recent activity/quota snapshot, without
 waiting for the eight-second native observation sweep or making a new native
@@ -118,7 +123,9 @@ tests also cover final-answer cleanup while an outer task remains active, new
 request positioning, authorized `/status` routing and no replay after restart.
 The tests include quiet ordinary work, changing tool identities, source-binding
 replacement, unloaded idle sessions, stale snapshots and a fast command reply while native observation
-is not running. The native probe establishes live attachment without inference. These are separate
+is not running. Real HTTP regressions also exercise shared manual/automatic
+message reuse, concurrent publication, requested-card cleanup and retry deadlines.
+The native probe establishes live attachment without inference. These are separate
 from a real Telegram receipt and the human's observation of the interface.
 
 Source comparison and owning task: [Telecodex #11](https://github.com/AlterMundi/telecodex/issues/11),

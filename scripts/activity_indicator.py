@@ -466,11 +466,24 @@ class Publisher:
     def __init__(self, telegram, path):
         self.telegram, self.path = telegram, path
         self.entries = json.loads(path.read_text()) if path.exists() else {}
+        self.lock = threading.RLock()
+
+    def snapshot(self):
+        with self.lock:
+            return {key: dict(entry) for key, entry in self.entries.items()}
 
     def save(self):
         atomic_json(self.path, self.entries)
 
-    def update(self, key, chat, topic, turn, text, now):
+    def update(self, key, chat, topic, turn, text, now, *, requested=False,
+               reply_to=None, active_text=None):
+        with self.lock:
+            self._update(key, chat, topic, turn, text, now, requested=requested,
+                         reply_to=reply_to, active_text=active_text)
+            return self.entries.get(key, {}).get('message_id')
+
+    def _update(self, key, chat, topic, turn, text, now, *, requested,
+                reply_to, active_text):
         entry = self.entries.get(key)
         if entry and entry.get('turn') != turn and entry.get('message_id'):
             # Repost once for a new human request, rather than editing above it.
@@ -480,6 +493,9 @@ class Publisher:
                 return  # Cleanup must finish before another message is sent.
         if entry and entry.get('turn') != turn and not entry.get('message_id'):
             entry = None  # A new native turn does not replay the old status send.
+        if entry and entry.get('requested') and active_text:
+            # Explicit status stays live during the automatic silence grace.
+            text = active_text
         if text is None:
             if entry:
                 self.retire(key, entry)
@@ -487,11 +503,16 @@ class Publisher:
         if entry is None:
             entry = {'chat_id': chat, 'topic': topic, 'turn': turn, 'attempted': False}
             self.entries[key] = entry
+        if requested:
+            entry['requested'] = True
+            self.save()
         warning = text.startswith('⚠️')
         if entry.get('unconfirmed', False) != warning:
             entry['next_update'] = 0
         entry['unconfirmed'] = warning
-        if now < entry.get('next_update', 0):
+        if now < entry.get('retry_after_until', 0):
+            return
+        if not requested and now < entry.get('next_update', 0):
             return
         entry['next_update'] = now + 30
         payload = {'chat_id': chat, 'text': html.escape(text), 'parse_mode': 'HTML'}
@@ -504,6 +525,8 @@ class Publisher:
             entry['attempted'] = True
             self.save()  # Persist before crossing the Telegram boundary.
             payload['disable_notification'] = True
+            if reply_to is not None:
+                payload['reply_parameters'] = {'message_id': reply_to}
             if topic:
                 payload['message_thread_id'] = topic
             result = self.telegram.call('sendMessage', payload)
@@ -520,6 +543,7 @@ class Publisher:
             code = result.get('error_code')
             if code == 429:
                 entry['next_update'] = now + max(30, result.get('parameters', {}).get('retry_after', 30))
+                entry['retry_after_until'] = entry['next_update']
                 if not message_id:
                     entry['attempted'] = False  # Explicitly rejected, not ambiguous.
             elif message_id and code == 400 and 'message to edit not found' in result.get('description', '').lower():
@@ -528,6 +552,12 @@ class Publisher:
         self.save()
 
     def retire(self, key, entry):
+        with self.lock:
+            current = self.entries.get(key)
+            if current and current.get('turn') == entry.get('turn'):
+                self._retire(key, current)
+
+    def _retire(self, key, entry):
         if time.time() < entry.get('cleanup_retry', 0):
             return
         entry['cleanup_retry'] = time.time() + 30
@@ -564,7 +594,7 @@ class StatusRequests:
             'attempted': {}}
         atomic_json(self.path, self.state)
 
-    def respond(self, reports, weekly, bindings=None):
+    def respond(self, reports, weekly, bindings=None, contexts=None, publisher=None):
         recent = self.database.execute("SELECT MIN(update_id) FROM incoming_updates WHERE datetime(updated_at)>=datetime('now','-120 seconds')").fetchone()[0]
         if recent is not None:
             self.state['floor'] = max(self.state['floor'], recent - 1)
@@ -600,6 +630,15 @@ class StatusRequests:
                 del self.state['attempted'][oldest]
             atomic_json(self.path, self.state)  # Never replay an ambiguous delivery.
             text = reports[key] + ' · ' + weekly()
+            context = (contexts or {}).get(key, {})
+            if publisher is not None and context.get('active'):
+                message_id = publisher.update(key, row['chat'], row['topic'],
+                    context['turn'], text, time.time(), requested=True,
+                    reply_to=row['message'])
+                if message_id is not None:
+                    self.state['attempted'][identity]['message_id'] = message_id
+                    atomic_json(self.path, self.state)
+                continue
             payload = {'chat_id': row['chat'], 'text': html.escape(text),
                        'parse_mode': 'HTML', 'disable_notification': True,
                        'reply_parameters': {'message_id': row['message']}}
@@ -618,21 +657,27 @@ class StatusCache:
     def __init__(self):
         self.value = None
 
-    def update(self, reports, bindings, weekly):
-        self.value = (dict(reports), dict(bindings), weekly.available, weekly.resets_at, time.time())
+    def update(self, reports, bindings, weekly, contexts=None):
+        value = (dict(reports), dict(bindings), weekly.available, weekly.resets_at, time.time())
+        if contexts is not None:
+            value += ({key: dict(context) for key, context in contexts.items()},)
+        self.value = value
 
-    def respond(self, requests):
+    def respond(self, requests, publisher=None):
         value = self.value
         if value is None:
             return
-        reports, bindings, available, resets_at, observed = value
+        reports, bindings, available, resets_at, observed = value[:5]
+        contexts = value[5] if len(value) > 5 else None
         if time.time() - observed > 20:
             reports = {key: '⚠️ Native activity unavailable · state unconfirmed' for key in reports}
             available = resets_at = None
-        requests.respond(reports, lambda: weekly_label(available, resets_at), bindings)
+            contexts = None
+        requests.respond(reports, lambda: weekly_label(available, resets_at), bindings,
+                         contexts, publisher)
 
 
-def watch_status_requests(config, state, cache, stopped, telegram):
+def watch_status_requests(config, state, cache, stopped, telegram, publisher=None):
     database = readonly(config['db_path'])
     try:
         requests = StatusRequests(database, telegram, state / 'status-requests.json')
@@ -642,7 +687,7 @@ def watch_status_requests(config, state, cache, stopped, telegram):
                 current = database.execute('PRAGMA data_version').fetchone()[0]
                 value = cache.value
                 if current != version or value is not snapshot:
-                    cache.respond(requests)
+                    cache.respond(requests, publisher)
                     version, snapshot = current, value
             except (OSError, ValueError, sqlite3.Error):
                 pass  # Leave persisted attempts intact and retry observation, never delivery.
@@ -672,13 +717,14 @@ def run(args):
     status_worker = None
     if publisher and args.status_requests:
         status_worker = threading.Thread(target=watch_status_requests,
-            args=(config, state, cache, stopped, publisher.telegram), daemon=True)
+            args=(config, state, cache, stopped, publisher.telegram, publisher), daemon=True)
         status_worker.start()
     try:
         while not stopped.is_set():
             observations = []
             reports = {}
             bindings = {}
+            contexts = {}
             publications = []
             try:
                 if native is None:
@@ -695,8 +741,9 @@ def run(args):
                     known.add(key)
                     row = native_db.execute('SELECT rollout_path FROM threads WHERE id=? AND archived=0', (tid,)).fetchone()
                     if not row:
-                        if publisher and key in publisher.entries:
-                            publisher.retire(key, publisher.entries[key])
+                        entry = publisher.snapshot().get(key) if publisher else None
+                        if entry:
+                            publisher.retire(key, entry)
                         continue
                     path = pathlib.Path(row['rollout_path']).resolve()
                     if not path.is_relative_to((native_home / 'sessions').resolve()):
@@ -707,7 +754,7 @@ def run(args):
                     try:
                         reader.refresh()
                     except (OSError, ValueError):
-                        if publisher and key in publisher.entries:
+                        if publisher and key in publisher.snapshot():
                             publisher.update(key, topic['chat_id'], topic['thread_id'], reader.turn_id,
                                 '⚠️ Native activity unavailable · rollout unconfirmed', time.time())
                         continue
@@ -716,10 +763,13 @@ def run(args):
                                 if linked_child(native_db, child, tid)]
                     now = time.time()
                     report = status_report(status, reader, children, now)
+                    active_text = status_line(status, reader, children, now)
                     text = status_line(status, reader, children, now, automatic=True)
                     reports[key] = report
                     bindings[key] = tid
-                    if status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.entries:
+                    contexts[key] = {'turn': reader.request_id or reader.turn_id,
+                                     'active': bool(active_text)}
+                    if status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.snapshot():
                         text = '⚠️ Native activity unavailable · state unconfirmed'
                     if text is None and status.get('type') == 'idle' and topic['turn_status'] == 'running':
                         text = '⏳ Finishing delivery · native work ended'
@@ -729,24 +779,27 @@ def run(args):
                         text = None
                     if text:
                         text += ' · ' + weekly.label(native, time.monotonic())
+                    if active_text:
+                        active_text += ' · ' + weekly.label(native, time.monotonic())
                     observations.append({'status': status.get('type'), 'visible': bool(text)})
                     if publisher:
                         publications.append((key, topic['chat_id'], topic['thread_id'],
-                                             reader.request_id or reader.turn_id, text, now))
+                                             reader.request_id or reader.turn_id, text, now,
+                                             active_text))
                 # Publish the native snapshot before automatic Telegram delivery can wait.
-                cache.update(reports, bindings, weekly)
+                cache.update(reports, bindings, weekly, contexts)
                 if publisher:
                     for publication in publications:
-                        publisher.update(*publication)
-                    for key in list(publisher.entries):
+                        publisher.update(*publication[:6], active_text=publication[6])
+                    for key, entry in publisher.snapshot().items():
                         if key not in known:
-                            publisher.retire(key, publisher.entries[key])
+                            publisher.retire(key, entry)
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
                             'topics': len(observations), 'active': sum(x['visible'] for x in observations),
                             'weekly_available': weekly.available,
                             'weekly_resets_at': weekly.resets_at,
                             'status_requests_alive': status_worker.is_alive() if status_worker else False,
-                            'published': sum(bool(x.get('message_id')) for x in publisher.entries.values()) if publisher else 0})
+                            'published': sum(bool(x.get('message_id')) for x in publisher.snapshot().values()) if publisher else 0})
                 if args.probe:
                     print(json.dumps({'connected': True, 'topics': observations, 'weekly_available': weekly.available}))
                     return
@@ -762,7 +815,7 @@ def run(args):
                     weekly.available = weekly.resets_at = None
                     cache.update(unavailable, previous_bindings, weekly)
                 if publisher:
-                    for key, entry in list(publisher.entries.items()):
+                    for key, entry in publisher.snapshot().items():
                         publisher.update(key, entry['chat_id'], entry['topic'], entry['turn'],
                                          '⚠️ Native connection unavailable · activity unconfirmed', time.time())
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': False})
@@ -776,7 +829,7 @@ def run(args):
         if native:
             native.close()
         if publisher:
-            for key, entry in list(publisher.entries.items()):
+            for key, entry in publisher.snapshot().items():
                 publisher.retire(key, entry)
         bridge.close()
         native_db.close()

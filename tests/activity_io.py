@@ -351,22 +351,24 @@ class ActivityIO(unittest.TestCase):
         cache = activity.StatusCache()
         quota = activity.WeeklyLimit()
         quota.available, quota.resets_at = 75, time.time()+3600
-        cache.update({'100:7':'Working'}, {'100:7':'original'}, quota)
+        contexts = {'100:7': {'turn': 'request-a', 'active': True}}
+        cache.update({'100:7':'Working'}, {'100:7':'original'}, quota, contexts)
         def add(identifier):
             db.execute("INSERT INTO incoming_updates VALUES(?,?,?,datetime('now'))", (identifier,
                 json.dumps({'message':{'chat':{'id':100}, 'message_thread_id':7, 'from':{'id':1},
                 'message_id':identifier+1000,'text':'/status'}}), 'handled'))
         add(1)
         db.execute("UPDATE sessions SET codex_thread_id='replacement'")
-        cache.respond(requests)
+        cache.respond(requests, self.publisher)
         self.assertEqual(self.calls, [])
-        cache.update({'100:7':'Working'}, {'100:7':'replacement'}, quota)
-        reports, bindings, available, reset, observed = cache.value
-        cache.value = (reports, bindings, available, reset, observed-30)
-        cache.respond(requests)
+        cache.update({'100:7':'Working'}, {'100:7':'replacement'}, quota, contexts)
+        reports, bindings, available, reset, observed, contexts = cache.value
+        cache.value = (reports, bindings, available, reset, observed-30, contexts)
+        cache.respond(requests, self.publisher)
         self.assertIn('unconfirmed', self.calls[0][1]['text'])
         self.assertIn('weekly n/a', self.calls[0][1]['text'])
-        cache.respond(requests)
+        self.assertEqual(self.publisher.snapshot(), {})
+        cache.respond(requests, self.publisher)
         self.assertEqual(len(self.calls),1)
         db.close()
 
@@ -409,6 +411,76 @@ class ActivityIO(unittest.TestCase):
             worker.join(timeout=2)
             db.close()
         self.assertFalse(worker.is_alive())
+
+    def test_active_status_commands_share_the_automatic_message_and_finish_cleanup(self):
+        db = sqlite3.connect(':memory:')
+        db.row_factory = sqlite3.Row
+        db.executescript('''CREATE TABLE incoming_updates(update_id INTEGER PRIMARY KEY,
+            payload_json TEXT,status TEXT,updated_at TEXT);
+            CREATE TABLE users(tg_user_id INTEGER PRIMARY KEY,allowed INTEGER);
+            CREATE TABLE sessions(chat_id INTEGER,thread_id INTEGER,codex_thread_id TEXT,creator_user_id INTEGER);
+            INSERT INTO users VALUES(1,1);
+            INSERT INTO sessions VALUES(100,7,'bound',1);''')
+        requests = activity.StatusRequests(db, self.telegram, self.root / 'requests.json')
+        cache, quota = activity.StatusCache(), activity.WeeklyLimit()
+        quota.available, quota.resets_at = 78, time.time() + 86400
+        cache.update({'100:7': 'Working'}, {'100:7': 'bound'}, quota,
+                     {'100:7': {'turn': 'request-a', 'active': True}})
+        now = time.time()
+        self.publisher.update('100:7', 100, 7, 'request-a', 'Working', now)
+        original = self.publisher.snapshot()['100:7']['message_id']
+        for update in (1, 2):
+            db.execute("INSERT INTO incoming_updates VALUES(?,?,'handled',datetime('now'))", (update,
+                json.dumps({'message': {'chat': {'id': 100}, 'message_thread_id': 7,
+                    'from': {'id': 1}, 'message_id': 1000 + update, 'text': '/status'}})))
+            cache.respond(requests, self.publisher)
+        self.assertEqual([method for method, _ in self.calls],
+                         ['sendMessage', 'editMessageText', 'editMessageText'])
+        self.assertEqual([receipt['message_id'] for receipt in requests.state['attempted'].values()],
+                         [original, original])
+        restarted = activity.Publisher(self.telegram, self.path)
+        # A new commentary exchange would suppress automatic creation, but the
+        # explicitly requested card must keep updating for this same request.
+        restarted.update('100:7', 100, 7, 'request-a', None, now + 40,
+                         active_text='Waiting for 1 agent · weekly 78% available')
+        self.assertEqual(self.calls[-1][0], 'editMessageText')
+        self.assertEqual(self.calls[-1][1]['message_id'], original)
+        self.assertIn('Waiting for 1 agent', self.calls[-1][1]['text'])
+        restarted.update('100:7', 100, 7, 'request-a', None, now + 48)
+        self.assertEqual(self.calls[-1][0], 'deleteMessage')
+        self.assertEqual(restarted.snapshot(), {})
+        # The explicit request does not bypass silence grace for a later turn.
+        restarted.update('100:7', 100, 7, 'request-b', None, now + 50, active_text='Working')
+        self.assertEqual(restarted.snapshot(), {})
+        db.close()
+
+    def test_concurrent_manual_and_automatic_status_create_only_one_card(self):
+        barrier = threading.Barrier(2)
+        def publish(requested):
+            barrier.wait(timeout=2)
+            self.publisher.update('100:7', 100, 7, 'request-a', 'Working', time.time(),
+                                  requested=requested, reply_to=1001 if requested else None)
+        threads = [threading.Thread(target=publish, args=(requested,)) for requested in (True, False)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(sum(method == 'sendMessage' for method, _ in self.calls), 1)
+        entry = self.publisher.snapshot()['100:7']
+        self.assertTrue(entry['requested'])
+        self.assertEqual(entry['message_id'], 101)
+
+    def test_manual_request_respects_retry_deadline_and_does_not_replay_ambiguous_send(self):
+        self.answers = [{'ok': False, 'error_code': 429, 'parameters': {'retry_after': 60}}]
+        self.publisher.update('100:7', 100, 7, 'request-a', 'Working', 100, requested=True)
+        self.publisher.update('100:7', 100, 7, 'request-a', 'Working', 140, requested=True)
+        self.assertEqual(len(self.calls), 1)
+        self.answers = [None]
+        self.publisher.update('100:7', 100, 7, 'request-a', 'Working', 161, requested=True)
+        restarted = activity.Publisher(self.telegram, self.path)
+        restarted.update('100:7', 100, 7, 'request-a', 'Working', 200, requested=True)
+        self.assertEqual(len(self.calls), 2)
 
 
 
