@@ -1097,8 +1097,10 @@ fn build_thread_request(session: &SessionRecord, request: &TurnRequest) -> (&'st
         session.session_prompt.as_deref(),
         request.runtime_instructions.as_deref(),
     );
-    let params = json!({"threadId":session.codex_thread_id,"model":session.model,"cwd":sanitize_arg_path(&session.cwd),"approvalPolicy":session.approval_policy,"sandbox":session.sandbox_mode,"config":build_config_overrides(session.search_mode),"serviceName":"telecodex","developerInstructions":developer_instructions});
+    let mut params = json!({"threadId":session.codex_thread_id,"model":session.model,"cwd":sanitize_arg_path(&session.cwd),"approvalPolicy":session.approval_policy,"sandbox":session.sandbox_mode,"config":build_config_overrides(session.search_mode),"serviceName":"telecodex","developerInstructions":developer_instructions});
     if session.codex_thread_id.is_some() {
+        // The bridge needs metadata and live events, not a copy of persisted turns.
+        params["excludeTurns"] = Value::Bool(true);
         ("thread/resume", params)
     } else {
         ("thread/start", params)
