@@ -1,5 +1,19 @@
 # Native planning and pending questions in Telegram
 
+Current delivery (2026-10-08): qualified runtime
+`ee5f8837ab51da99034fcd4285b0c7916c96651f` is merged and active, and the shared
+`telegram-codex` package is 1.1.5. Qualification includes 159 locked text tests
+and 16 question I/O journeys. Bound threads use metadata-only native resume;
+questions and final delivery continue on the same native binding.
+
+Human Telegram acceptance on the earlier `5af79bd` question baseline verified
+native Plan mode, question reopening and free-text Other answer through ForceReply.
+Nicolás subsequently confirmed continued use of the same HMK session without
+the previous error or observed side effects; this is human receiving acceptance
+of the long-history repair, separate from the native proxy and fixture checks. Historical synthetic-native proof below is not a
+substitute for a human exchange. Improving recovery guidance for an expired
+quoted question remains open in [#24](https://github.com/AlterMundi/telecodex/issues/24).
+
 `/plan [prompt]` selects native Plan mode for the topic's next turn. `/default
 [prompt]` selects native Default mode. The optional prompt queues a new turn;
 it does not change a running turn's mode. Without a prompt these commands only
