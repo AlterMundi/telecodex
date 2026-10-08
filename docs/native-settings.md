@@ -21,7 +21,7 @@ identity, memory and topic histories. Installing a shared template starts no bot
 CLI slash commands are interface operations, not ordinary model prompts. The
 bridge implements a subset and forwards some command-looking text to the model;
 that forwarding does not establish native CLI-command parity. Native Plan mode
-and pending questions remain tracked in [#10](https://github.com/AlterMundi/telecodex/issues/10).
+and pending questions are delivered through [#10](https://github.com/AlterMundi/telecodex/issues/10).
 UI affordances, comment streaming and topic history selection differ from the
 TUI; those differences do not imply shell, search or reasoning tools are absent.
 
