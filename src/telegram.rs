@@ -307,6 +307,35 @@ impl TelegramClient {
         .await
     }
 
+    pub async fn get_forum_topic_icon_stickers(&self) -> Result<Vec<TopicIconSticker>> {
+        self.post::<(), Vec<TopicIconSticker>>("getForumTopicIconStickers", None)
+            .await
+    }
+
+    pub async fn edit_forum_topic_icon(
+        &self,
+        chat_id: i64,
+        message_thread_id: i64,
+        icon_custom_emoji_id: &str,
+    ) -> Result<bool> {
+        #[derive(Serialize)]
+        struct Payload<'a> {
+            chat_id: i64,
+            message_thread_id: i64,
+            icon_custom_emoji_id: &'a str,
+        }
+        self.post_outbound(
+            chat_id,
+            "editForumTopic",
+            Some(&Payload {
+                chat_id,
+                message_thread_id,
+                icon_custom_emoji_id,
+            }),
+        )
+        .await
+    }
+
     pub async fn send_message_draft(&self, request: SendMessageDraft) -> Result<bool> {
         let chat_id = request.chat_id;
         self.post_outbound(chat_id, "sendMessageDraft", Some(&request))
@@ -783,6 +812,12 @@ pub struct File {
 pub struct ForumTopic {
     pub message_thread_id: i64,
     pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TopicIconSticker {
+    pub emoji: Option<String>,
+    pub custom_emoji_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
