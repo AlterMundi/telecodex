@@ -41,6 +41,7 @@ pub enum BridgeCommand {
     History,
     Status,
     Questions,
+    Icon,
     Rename {
         title: String,
     },
@@ -159,6 +160,7 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/history" => BridgeCommand::History,
         "/status" => BridgeCommand::Status,
         "/questions" => BridgeCommand::Questions,
+        "/icon" => BridgeCommand::Icon,
         "/rename" => BridgeCommand::Rename {
             title: required_arg(args, "/rename <new name>")?.to_string(),
         },
@@ -322,6 +324,7 @@ pub fn default_bot_commands() -> Vec<BotCommand> {
         bot_command("help", "Show Codex help"),
         bot_command("status", "Show status for this session"),
         bot_command("questions", "Open pending questions in this topic"),
+        bot_command("icon", "Choose an icon for this Telegram topic"),
         bot_command("rename", "Rename this session and Telegram topic"),
         bot_command("login", "Log in to Codex with device code"),
         bot_command("logout", "Remove stored Codex credentials"),
@@ -616,6 +619,7 @@ mod tests {
             ("/plan clarify the requirements", ParsedInputKind::Bridge),
             ("/default", ParsedInputKind::Bridge),
             ("/questions", ParsedInputKind::Bridge),
+            ("/icon", ParsedInputKind::Bridge),
             ("/fast on", ParsedInputKind::Bridge),
             ("/prompt be concise", ParsedInputKind::Bridge),
             ("/approval never", ParsedInputKind::Bridge),

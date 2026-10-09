@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 mod auth;
 mod forum;
+mod icons;
 mod io;
 mod presentation;
 mod questions;
@@ -86,6 +87,7 @@ struct AppShared {
     history_page_cache: Mutex<HistoryPageCache>,
     pending_approvals: Mutex<HashMap<String, PendingApproval>>,
     pending_questions: Mutex<HashMap<String, questions::PendingDialogue>>,
+    pending_icon_pickers: Mutex<HashMap<String, icons::PendingIconPicker>>,
     pending_codex_login: Mutex<Option<PendingCodexLogin>>,
     codex_login_backoff_until: Mutex<Option<Instant>>,
     shutdown: CancellationToken,
@@ -244,6 +246,7 @@ impl App {
                 history_page_cache: Mutex::new(HistoryPageCache::default()),
                 pending_approvals: Mutex::new(HashMap::new()),
                 pending_questions: Mutex::new(HashMap::new()),
+                pending_icon_pickers: Mutex::new(HashMap::new()),
                 pending_codex_login: Mutex::new(None),
                 codex_login_backoff_until: Mutex::new(None),
                 shutdown: CancellationToken::new(),
@@ -509,6 +512,12 @@ impl App {
         let Some(data) = callback.data else {
             return Ok(());
         };
+        if self
+            .handle_icon_callback(&message, callback.from.id, &data)
+            .await?
+        {
+            return Ok(());
+        }
         if questions::handle_callback(self.shared.clone(), &message, callback.from.id, &data)
             .await?
         {
@@ -719,6 +728,10 @@ impl App {
             ParsedInput::Bridge(command) => match command {
                 BridgeCommand::Questions => {
                     questions::show_pending(self.shared.clone(), message, user.tg_user_id).await?;
+                }
+                BridgeCommand::Icon => {
+                    self.show_topic_icon_picker(message, user.tg_user_id)
+                        .await?;
                 }
                 BridgeCommand::Collaboration { mode, prompt } => {
                     let session = self.ensure_resolved_session(session_key, user.tg_user_id)?;
