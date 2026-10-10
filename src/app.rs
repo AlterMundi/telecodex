@@ -1622,7 +1622,7 @@ impl App {
         {
             self.shared
                 .store
-                .set_session_title(session_key, Some(title))?;
+                .set_explicit_session_title(session_key, title)?;
         }
         self.send_status(
             message.chat.id,
@@ -1647,9 +1647,17 @@ impl App {
             anyhow::bail!("Destination already active; existing conversation preserved");
         }
         self.shared.store.apply_session_template(key, template)?;
-        self.shared
-            .store
-            .set_session_title(key, template.session_title.as_deref())?;
+        if let Some(title) = template
+            .session_title
+            .as_deref()
+            .filter(|title| !title.trim().is_empty())
+        {
+            // Topic names are chosen by this creation operation, not inferred
+            // from the first native input (which may start with handoff context).
+            self.shared.store.set_explicit_session_title(key, title)?;
+        } else {
+            self.shared.store.set_session_title(key, None)?;
+        }
         Ok(())
     }
 
