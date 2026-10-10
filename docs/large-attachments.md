@@ -31,8 +31,15 @@ Store application credentials in owner-private files (0600) in an owner-private
 directory (0700). The official server supports TELEGRAM_API_ID and
 TELEGRAM_API_HASH environment variables; a private launcher can read the files
 without placing values in command arguments or logs. Never paste these values
-into chat or shared records. Keep server state private and bind HTTP to loopback.
+into chat or shared records. Keep server state private and bind HTTP to loopback. Set separate `--dir`,
+`--files-dir` and `--temp-dir` directories; trust only `--files-dir` in the bridge,
+never the server database or credential directories.
 
 Before moving an established bot, qualify a test server, stop the one existing polling consumer while idle, follow Telegram's logOut migration procedure, update only the authorized bot's api_base, and start exactly one consumer. Preserve and verify a SQLite backup, native bindings, queued/uncertain inputs and polling offset. Capture the exact server/binary versions and rollback configuration locally. Do not reset offsets or automatically retry older failed submissions. Credentials and Bot API server availability are prerequisites, not something a Rust patch invents.
 
 Qualification must include getMe, private-topic support on the chosen server version, a real large recording received intact, and the native model receiving its path. Loopback HTTP tests establish streaming/error behavior, not live bot migration. A deployment rollback restores software/configuration, not an old input database.
+After cloud logOut, Telegram prevents cloud login for ten minutes. Do not promise
+an immediate cloud rollback or run simultaneous cloud/local consumers. If local
+qualification fails after migration, stop polling, preserve all journals and
+local server state, and follow the official close/logOut timing before restoring
+the cloud endpoint; never restore an older offset/database.
