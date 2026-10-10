@@ -77,7 +77,9 @@ import_desktop_history=false
 
 def scenario(mode):
     attachment = 'attachment_' in mode
-    attachment_failure = mode.endswith('attachment_oversize')
+    attachment_oversize = mode.endswith('attachment_oversize')
+    attachment_interrupted = mode.endswith('attachment_interrupted')
+    attachment_failure = attachment_oversize or attachment_interrupted
     stalled_steer = mode == 'stalled_steer'
     retain_commentary = mode.startswith('retained_commentary')
     drafts = mode.endswith('_drafts')
@@ -299,6 +301,15 @@ while True:
                     'chat': {'id': 100, 'type': 'private'}, 'text': text}}
 
         class Telegram(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                assert attachment_interrupted
+                self.send_response(200)
+                self.send_header('Content-Length','100')
+                self.send_header('Connection','close')
+                self.end_headers()
+                self.wfile.write(b'partial')
+                self.close_connection = True
+
             def do_POST(self):
                 nonlocal polls, message_id
                 payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
@@ -352,10 +363,10 @@ while True:
                         time.sleep(.15)
                         result = []
                 elif method == 'getFile':
-                    if attachment_failure:
+                    if attachment_oversize:
                         data=json.dumps({'ok':False,'error_code':400,'description':'Bad Request: file is too big'}).encode()
                         self.send_response(400); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data); return
-                    result = {'file_path':str(source), 'file_size':source.stat().st_size}
+                    result = {'file_path':'audio/long.ogg' if attachment_interrupted else str(source), 'file_size':100 if attachment_interrupted else source.stat().st_size}
                 elif method in ('sendMessage', 'editMessageText'):
                     if attachment and ('could not download' in payload['text'] or 'cloud Bot API cannot download' in payload['text']):
                         assert payload['message_thread_id'] == 7
@@ -439,7 +450,7 @@ import_desktop_history=false
                             break
                     if attachment_failure:
                         with lock:
-                            notified = any('cloud Bot API cannot download' in text for text in permanent.values())
+                            notified = any('cloud Bot API cannot download' in text or 'could not download' in text for text in permanent.values())
                         if notified and len(rows) == 2 and rows[-1][1] == 'undetermined':
                             break
                     if retain_commentary and rows == [(1, 'settled', 1)]:
@@ -462,7 +473,7 @@ import_desktop_history=false
                 assert not starts and not steers, (starts,steers)
                 assert len(rows) == 2 and rows[-1][1] == 'undetermined', rows
                 assert sessions == [('existing-attachment-thread',)], sessions
-                assert not list((root / '.telecodex/inbox').rglob('*.ogg'))
+                assert not any(path.is_file() for path in (root / '.telecodex/inbox').rglob('*'))
                 assert notified
                 print(json.dumps({'scenario':mode,'originating_topic_notified':True,'native_turns':0,'input_journal_preserved':True}),flush=True)
                 return
@@ -562,7 +573,7 @@ if __name__ == '__main__':
             scenario(mode)
     else:
         token_probe()
-        for mode in ['retained_commentary_attachment_local', 'retained_commentary_attachment_oversize', 'stalled_steer', 'accepted_steer', 'unacknowledged_steer', 'missing_saved_binding',
+        for mode in ['retained_commentary_attachment_local', 'retained_commentary_attachment_oversize', 'retained_commentary_attachment_interrupted', 'stalled_steer', 'accepted_steer', 'unacknowledged_steer', 'missing_saved_binding',
                      'retained_commentary_drafts', 'retained_commentary_preview',
                      'retained_commentary_only', 'retained_commentary_hidden',
                      'retained_commentary_hidden_drafts', 'retained_commentary_hidden_only',
