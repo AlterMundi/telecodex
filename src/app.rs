@@ -217,7 +217,8 @@ impl App {
 
     pub async fn bootstrap(config: Config) -> Result<Self> {
         let token = config.telegram.resolve_token()?;
-        let telegram = TelegramClient::new(token, config.telegram.api_base.clone());
+        let telegram = TelegramClient::new(token, config.telegram.api_base.clone())
+            .with_local_file_root(config.telegram.local_file_root.clone())?;
         let me = telegram.get_me().await.context("telegram getMe failed")?;
         let handy_model_dir = detect_handy_parakeet_model_dir();
         let session_defaults = SessionDefaults::from(&config.codex);

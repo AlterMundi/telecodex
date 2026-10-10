@@ -19,11 +19,75 @@ pub struct TelegramClient {
     token: String,
     api_base: String,
     outbound: Arc<OutboundRateLimiter>,
+    local_file_root: Option<std::path::PathBuf>,
+}
+
+#[cfg(unix)]
+fn open_local_file(
+    root: &std::path::Path,
+    path: &std::path::Path,
+    directory: bool,
+) -> Result<std::fs::File> {
+    use std::os::unix::{
+        ffi::OsStrExt,
+        io::{AsRawFd, FromRawFd},
+    };
+    use std::path::Component;
+    if !root.is_absolute()
+        || root == std::path::Path::new("/")
+        || !path.is_absolute()
+        || !path.starts_with(root)
+        || root
+            .components()
+            .chain(path.components())
+            .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
+        || path
+            .as_os_str()
+            .as_bytes()
+            .split(|byte| *byte == b'/')
+            .skip(1)
+            .any(|part| part.is_empty() || part == b"." || part == b"..")
+    {
+        bail!("unsupported Telegram file path outside trusted storage");
+    }
+    let parts: Vec<_> = path
+        .components()
+        .filter_map(|part| match part {
+            Component::Normal(value) => Some(value),
+            _ => None,
+        })
+        .collect();
+    let mut current = std::fs::File::open("/")?;
+    for (index, part) in parts.iter().enumerate() {
+        let name =
+            std::ffi::CString::new(part.as_bytes()).context("invalid local file component")?;
+        let is_directory = index + 1 < parts.len() || directory;
+        let flags = libc::O_RDONLY
+            | libc::O_CLOEXEC
+            | libc::O_NOFOLLOW
+            | libc::O_NONBLOCK
+            | if is_directory { libc::O_DIRECTORY } else { 0 };
+        // Each open is anchored to the preceding directory descriptor, not a mutable pathname.
+        let fd = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            bail!("local Telegram storage path could not be opened safely");
+        }
+        current = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+    if !directory && !current.metadata()?.is_file() {
+        bail!("local Telegram attachment is not a regular file");
+    }
+    Ok(current)
+}
+
+#[cfg(not(unix))]
+fn open_local_file(_: &std::path::Path, _: &std::path::Path, _: bool) -> Result<std::fs::File> {
+    bail!("trusted local Telegram storage requires a Unix host")
 }
 
 const TELEGRAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const TELEGRAM_GET_UPDATES_GRACE: Duration = Duration::from_secs(15);
-const TELEGRAM_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+const TELEGRAM_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 const TELEGRAM_UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 pub const TELEGRAM_GROUP_OUTBOUND_INTERVAL_MS: u64 = 3_500;
 pub const TELEGRAM_PRIVATE_OUTBOUND_INTERVAL_MS: u64 = 1_000;
@@ -36,7 +100,24 @@ impl TelegramClient {
             token,
             api_base: api_base.trim_end_matches('/').to_string(),
             outbound: Arc::new(OutboundRateLimiter::default()),
+            local_file_root: None,
         }
+    }
+
+    pub fn with_local_file_root(mut self, root: Option<std::path::PathBuf>) -> Result<Self> {
+        if let Some(root) = &root {
+            let endpoint = reqwest::Url::parse(&self.api_base)?;
+            if !matches!(
+                endpoint.host_str(),
+                Some("127.0.0.1" | "[::1]" | "::1" | "localhost")
+            ) {
+                bail!("local file storage requires a loopback Bot API endpoint");
+            }
+            // Validate the configured boundary without following any symlink.
+            open_local_file(root, root, true)?;
+        }
+        self.local_file_root = root;
+        Ok(self)
     }
 
     pub async fn get_me(&self) -> Result<User> {
@@ -348,15 +429,85 @@ impl TelegramClient {
             file_id: &'a str,
         }
 
-        self.post("getFile", Some(&Payload { file_id })).await
+        self.post_with_timeout(
+            "getFile",
+            Some(&Payload { file_id }),
+            TELEGRAM_DOWNLOAD_TIMEOUT,
+        )
+        .await
     }
 
-    pub async fn download_file(&self, file_path: &str) -> Result<Vec<u8>> {
-        let url = format!("{}/file/bot{}/{}", self.api_base, self.token, file_path);
-        let response = self
+    /// Stream into a private temporary file; publish only a complete download.
+    pub async fn download_file(
+        &self,
+        file_path: &str,
+        destination: &std::path::Path,
+        expected_size: Option<u64>,
+    ) -> Result<()> {
+        self.download_file_with_timeout(
+            file_path,
+            destination,
+            expected_size,
+            TELEGRAM_DOWNLOAD_TIMEOUT,
+        )
+        .await
+    }
+
+    async fn download_file_with_timeout(
+        &self,
+        file_path: &str,
+        destination: &std::path::Path,
+        expected_size: Option<u64>,
+        timeout: Duration,
+    ) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+
+        if file_path.starts_with('/') {
+            let root = self.local_file_root.as_deref().context(
+                "unsupported Telegram file path: trusted local storage is not configured",
+            )?;
+            let source = open_local_file(root, std::path::Path::new(file_path), false)?;
+            let directory = destination
+                .parent()
+                .context("attachment destination has no parent")?;
+            let temporary = tempfile::NamedTempFile::new_in(directory)?;
+            let mut output = tokio::fs::File::from_std(temporary.reopen()?);
+            let mut source = tokio::fs::File::from_std(source);
+            let expected = source.metadata().await?.len();
+            if expected_size.is_some_and(|size| size != expected) {
+                bail!("local Telegram attachment size differs from getFile");
+            }
+            let received = tokio::time::timeout(timeout, tokio::io::copy(&mut source, &mut output))
+                .await
+                .context("local attachment copy timed out")??;
+            if received != expected || source.metadata().await?.len() != expected {
+                bail!("incomplete local Telegram file copy");
+            }
+            output.sync_all().await?;
+            drop(output);
+            temporary
+                .persist_noclobber(destination)
+                .map_err(|error| error.error)?;
+            return Ok(());
+        }
+        if file_path.contains('\\')
+            || file_path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+        {
+            bail!("unsupported Telegram file path");
+        }
+        let mut url = reqwest::Url::parse(&self.api_base)?;
+        url.path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("invalid Telegram API base"))?
+            .pop_if_empty()
+            .push("file")
+            .push(&format!("bot{}", self.token))
+            .extend(file_path.split('/'));
+        let mut response = self
             .http
             .get(url)
-            .timeout(TELEGRAM_DOWNLOAD_TIMEOUT)
+            .timeout(timeout)
             .send()
             .await
             .map_err(reqwest::Error::without_url)
@@ -365,11 +516,33 @@ impl TelegramClient {
         if !status.is_success() {
             bail!("telegram file download failed with status {status}");
         }
-        Ok(response
-            .bytes()
+        let directory = destination
+            .parent()
+            .context("attachment destination has no parent")?;
+        let temporary = tempfile::NamedTempFile::new_in(directory)?;
+        let mut output = tokio::fs::File::from_std(temporary.reopen()?);
+        let expected = response.content_length();
+        let mut received = 0u64;
+        while let Some(chunk) = response
+            .chunk()
             .await
             .map_err(reqwest::Error::without_url)?
-            .to_vec())
+        {
+            output.write_all(&chunk).await?;
+            received += chunk.len() as u64;
+        }
+        if expected.is_some_and(|length| length != received)
+            || expected_size.is_some_and(|length| length != received)
+        {
+            bail!("incomplete Telegram file download");
+        }
+        output.flush().await?;
+        output.sync_all().await?;
+        drop(output);
+        temporary
+            .persist_noclobber(destination)
+            .map_err(|error| error.error)?;
+        Ok(())
     }
 
     async fn post<T, R>(&self, method: &str, payload: Option<&T>) -> Result<R>
@@ -806,6 +979,7 @@ pub struct Video {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct File {
     pub file_path: Option<String>,
+    pub file_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1161,6 +1335,193 @@ pub(crate) mod tests {
             requests
         });
         (address, worker)
+    }
+
+    #[tokio::test]
+    async fn attachment_download_is_atomic_and_preserves_existing_files() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let responses = [
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial",
+                "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nnew",
+            ];
+            for response in responses {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut headers = Vec::new();
+                loop {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    headers.push(byte[0]);
+                    if headers.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                assert!(
+                    String::from_utf8(headers)
+                        .unwrap()
+                        .starts_with("GET /file/botsynthetic-token/audio/clip.m4a ")
+                );
+                socket.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("clip.m4a");
+        let client = TelegramClient::new("synthetic-token".to_string(), base);
+        client
+            .download_file("audio/clip.m4a", &destination, None)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"abcdef");
+        let failed = dir.path().join("failed.m4a");
+        let error = client
+            .download_file("audio/clip.m4a", &failed, None)
+            .await
+            .unwrap_err();
+        assert!(!format!("{error:?}").contains("synthetic-token"));
+        assert!(!failed.exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert!(
+            client
+                .download_file("audio/clip.m4a", &destination, None)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"abcdef");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        server.join().unwrap();
+        let error = client
+            .download_file("audio/clip.m4a", &failed, None)
+            .await
+            .unwrap_err();
+        assert!(!format!("{error:?}").contains("synthetic-token"));
+    }
+
+    #[tokio::test]
+    async fn timed_out_download_never_publishes_partial_file() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut data = [0; 4096];
+            let _ = socket.read(&mut data);
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial",
+                )
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("audio");
+        let client = TelegramClient::new("synthetic-token".into(), base);
+        let error = client
+            .download_file_with_timeout("audio/clip", &target, None, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(!format!("{error:?}").contains("synthetic-token"));
+        assert!(!target.exists());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        server.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn trusted_local_storage_copies_large_files_and_rejects_escapes() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let storage = root.join("storage");
+        std::fs::create_dir(&storage).unwrap();
+        let source = storage.join("large.ogg");
+        let bytes = vec![0x5au8; 21 * 1024 * 1024];
+        std::fs::write(&source, &bytes).unwrap();
+        let target = root.join("received.ogg");
+        let client = TelegramClient::new("synthetic-token".into(), "http://127.0.0.1:1".into())
+            .with_local_file_root(Some(storage.clone()))
+            .unwrap();
+        client
+            .download_file(source.to_str().unwrap(), &target, Some(bytes.len() as u64))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), bytes);
+        assert!(
+            client
+                .download_file(source.to_str().unwrap(), &target, None)
+                .await
+                .is_err()
+        );
+        let failed = root.join("failed");
+        assert!(
+            client
+                .download_file(source.to_str().unwrap(), &failed, Some(1))
+                .await
+                .is_err()
+        );
+        let outside = root.join("secret");
+        std::fs::write(&outside, b"secret").unwrap();
+        symlink(&outside, storage.join("link")).unwrap();
+        symlink(&root, storage.join("directory-link")).unwrap();
+        std::fs::create_dir(storage.join("sub")).unwrap();
+        for path in [
+            outside,
+            storage.join("link"),
+            storage.join("directory-link/secret"),
+            storage.join("sub/../../secret"),
+            storage.join("sub/../large.ogg"),
+        ] {
+            assert!(
+                client
+                    .download_file(path.to_str().unwrap(), &failed, None)
+                    .await
+                    .is_err()
+            );
+            assert!(!failed.exists());
+        }
+        let alias = root.join("alias");
+        symlink(&storage, &alias).unwrap();
+        assert!(
+            TelegramClient::new("token".into(), "http://127.0.0.1:1".into())
+                .with_local_file_root(Some(alias))
+                .is_err()
+        );
+        assert!(
+            TelegramClient::new("token".into(), "https://api.telegram.org".into())
+                .with_local_file_root(Some(storage))
+                .is_err()
+        );
+        assert!(
+            TelegramClient::new("token".into(), "http://127.0.0.1:1".into())
+                .with_local_file_root(Some(std::path::PathBuf::from("/")))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_paths_never_authorize_local_reads_or_traversal() {
+        let client = TelegramClient::new(
+            "synthetic-token".to_string(),
+            "http://127.0.0.1:1".to_string(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("output");
+        for path in [
+            "/etc/passwd",
+            "../secret",
+            "audio/../secret",
+            "audio//clip",
+            "audio\\clip",
+        ] {
+            let error = client.download_file(path, &target, None).await.unwrap_err();
+            assert!(error.to_string().contains("unsupported Telegram file path"));
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]
