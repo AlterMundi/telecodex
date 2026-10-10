@@ -343,9 +343,17 @@ while True:
                         result[0]['message']['audio'] = {'file_id':'synthetic-file','file_name':'long.ogg','mime_type':'audio/ogg'}
                     elif poll == 2 and not retain_commentary:
                         if missing_binding:
-                            with sqlite3.connect(root / 'state.sqlite') as db:
-                                changed = db.execute("UPDATE sessions SET codex_thread_id='missing-native-context',force_fresh_thread=0 WHERE chat_id=100 AND thread_id=7").rowcount
-                                assert changed == 1
+                            # Polling and command dispatch are independent. Wait for
+                            # the first /status to create its session before rebinding.
+                            deadline = time.monotonic() + 8
+                            changed = 0
+                            while time.monotonic() < deadline:
+                                with sqlite3.connect(root / 'state.sqlite') as db:
+                                    changed = db.execute("UPDATE sessions SET codex_thread_id='missing-native-context',force_fresh_thread=0 WHERE chat_id=100 AND thread_id=7").rowcount
+                                if changed:
+                                    break
+                                time.sleep(.02)
+                            assert changed == 1
                         else:
                             started.wait(12)
                         if stalled_steer:
