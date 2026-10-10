@@ -199,6 +199,7 @@ import_desktop_history=false
             wait(lambda:db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone() is None)
             assert db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone()==source_before
             assert db.execute('SELECT codex_thread_id,session_prompt FROM sessions WHERE thread_id=9').fetchone()==(None,'Keep this preference')
+            assert db.execute("SELECT value FROM bot_state WHERE key='session_title_owner:100:9'").fetchone()[0]=='Shared Resources Focused'
             notice=db.execute("SELECT value FROM bot_state WHERE key='handoff_notice:100:9'").fetchone()[0]
             assert 'Focused shared resources decision' in notice and 'SHARED RESOURCES' in notice and 'LATER SOURCE' not in notice
             rpc=[json.loads(line) for line in (root/'rpc.jsonl').read_text().splitlines()]
@@ -208,6 +209,9 @@ import_desktop_history=false
             rpc=[json.loads(line) for line in (root/'rpc.jsonl').read_text().splitlines()]
             inputs=[r['params']['input'][0]['text'] for r in rpc if r.get('method')=='turn/start' and r['params']['threadId']=='handoff-thread']
             assert len(inputs)==1 and 'Focused shared resources decision' in inputs[0]
+            naming=[i for i,r in enumerate(rpc) if r.get('method')=='thread/name/set' and r['params']=={'threadId':'handoff-thread','name':'Shared Resources Focused'}]
+            first_input=next(i for i,r in enumerate(rpc) if r.get('method')=='turn/start' and r['params']['threadId']=='handoff-thread')
+            assert naming and naming[0]<first_input,'first native handoff input must use the chosen topic name'
             assert db.execute("SELECT value FROM bot_state WHERE key='handoff_notice:100:9'").fetchone() is None
             count=len(topics)
             send('/fork Unknown quote',reply=999999)
