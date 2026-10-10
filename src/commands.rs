@@ -25,6 +25,9 @@ pub enum BridgeCommand {
     New {
         title: Option<String>,
     },
+    Fork {
+        title: String,
+    },
     Topic {
         title: Option<String>,
     },
@@ -146,6 +149,9 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         },
         "/topic" | "/new-topic" | "/new_topic" => BridgeCommand::Topic {
             title: non_empty(args).map(ToOwned::to_owned),
+        },
+        "/fork" => BridgeCommand::Fork {
+            title: required_arg(args, "/fork <topic name>")?.to_string(),
         },
         "/use" => BridgeCommand::Use {
             thread_id_prefix: required_arg(args, "/use <thread_id_prefix|latest>")?.to_string(),
@@ -329,6 +335,7 @@ pub fn default_bot_commands() -> Vec<BotCommand> {
         bot_command("login", "Log in to Codex with device code"),
         bot_command("logout", "Remove stored Codex credentials"),
         bot_command("new", "Start a fresh Codex session in this topic"),
+        bot_command("fork", "Fork this conversation into a named topic"),
         bot_command("topic", "Create a new Telegram topic from this session"),
         bot_command("cd", "Set session working directory"),
         bot_command("pwd", "Show current working directory"),
@@ -476,6 +483,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fork_requires_a_named_topic() {
+        assert!(parse_command("/fork", "", "/fork").is_err());
+        match parse_command("/fork", "Shared Resources", "/fork Shared Resources").unwrap() {
+            ParsedInput::Bridge(BridgeCommand::Fork { title }) => {
+                assert_eq!(title, "Shared Resources")
+            }
+            _ => panic!("expected native fork command"),
+        }
+    }
+
+    #[test]
     fn parses_role_command() {
         let parsed = parse_command("/role", "42 admin", "/role 42 admin").unwrap();
         match parsed {
@@ -612,6 +630,7 @@ mod tests {
             ("/logout", ParsedInputKind::Bridge),
             ("/new test", ParsedInputKind::Bridge),
             ("/topic test", ParsedInputKind::Bridge),
+            ("/fork Shared Resources", ParsedInputKind::Bridge),
             ("/cd /workspace/project", ParsedInputKind::Bridge),
             ("/pwd", ParsedInputKind::Bridge),
             ("/model gpt-5.4", ParsedInputKind::Bridge),

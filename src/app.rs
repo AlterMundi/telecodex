@@ -771,6 +771,16 @@ impl App {
                 BridgeCommand::New { title } => {
                     self.handle_new_session(user, message, title).await?;
                 }
+                BridgeCommand::Fork { title } => {
+                    if let Err(error) = self.handle_fork_topic(user, message, title).await {
+                        tracing::warn!("fork operation incomplete: {error:#}");
+                        self.shared.telegram.send_message(crate::telegram::SendMessage {
+                            chat_id: message.chat.id, message_thread_id: message.message_thread_id,
+                            text: "Fork did not finish. Some creation steps may already have succeeded; inspect the private fork audit before retrying. Existing conversations were preserved.".to_string(),
+                            parse_mode: "HTML".to_string(), link_preview_options: None, reply_markup: None,
+                        }).await?;
+                    }
+                }
                 BridgeCommand::Topic { title } => {
                     self.handle_new_topic(user, message, title).await?;
                 }
@@ -1576,6 +1586,147 @@ impl App {
         Ok(())
     }
 
+    fn initialize_topic_session(
+        &self,
+        key: SessionKey,
+        user_id: i64,
+        template: &crate::models::SessionRecord,
+    ) -> Result<()> {
+        let destination = self.ensure_session(key, user_id)?;
+        if destination.busy || destination.codex_thread_id.is_some() {
+            anyhow::bail!("Destination already active; existing conversation preserved");
+        }
+        self.shared.store.apply_session_template(key, template)?;
+        self.shared
+            .store
+            .set_session_title(key, template.session_title.as_deref())?;
+        Ok(())
+    }
+
+    async fn handle_fork_topic(
+        &self,
+        user: &crate::models::UserRecord,
+        message: &Message,
+        title: String,
+    ) -> Result<()> {
+        let source = self.ensure_resolved_session(
+            SessionKey::new(message.chat.id, message.message_thread_id),
+            user.tg_user_id,
+        )?;
+        if self.shared.store.session_creator(source.key)? != user.tg_user_id {
+            self.send_status(
+                message.chat.id,
+                message.message_thread_id,
+                "Only the source session creator can fork its history.",
+            )
+            .await?;
+            return Ok(());
+        }
+        if source.busy {
+            self.send_status(
+                message.chat.id,
+                message.message_thread_id,
+                "Finish or stop the current turn before /fork; running processes are not copied.",
+            )
+            .await?;
+            return Ok(());
+        }
+        let Some(parent) = source.codex_thread_id.clone() else {
+            self.send_status(
+                message.chat.id,
+                message.message_thread_id,
+                "This topic has no native conversation to fork yet.",
+            )
+            .await?;
+            return Ok(());
+        };
+        if title.trim().is_empty() || title.chars().count() > 128 {
+            anyhow::bail!("Use /fork with a topic name of 1–128 characters");
+        }
+        let target = self
+            .shared
+            .config
+            .telegram
+            .primary_forum_chat_id
+            .unwrap_or(message.chat.id);
+        if self.shared.config.telegram.primary_forum_chat_id.is_none()
+            && !message.chat.is_forum.unwrap_or(false)
+            && !(message.chat.kind == "private" && self.shared.bot_has_topics)
+        {
+            anyhow::bail!("Enable Telegram topics before using /fork");
+        }
+        let operation = uuid::Uuid::now_v7().to_string();
+        self.shared.store.audit(Some(user.tg_user_id), "fork_requested",
+            serde_json::json!({"operation":operation,"parent":parent,"source_chat":message.chat.id,"source_topic":message.message_thread_id,"title":title}))?;
+        // Never retry a mutating native/Telegram RPC after uncertain delivery.
+        let (child, boundary) =
+            self.shared.codex.fork_thread(&parent).await.context(
+                "Native fork failed or is unconfirmed; inspect fork audit before retrying",
+            )?;
+        self.shared.store.audit(
+            Some(user.tg_user_id),
+            "fork_native_created",
+            serde_json::json!({"operation":operation,"parent":parent,"child":child,"boundary":boundary}),
+        )?;
+        let topic = self.shared.telegram.create_forum_topic(target, &title).await
+            .context("Fork created natively; Telegram topic creation failed or is unconfirmed. Inspect fork audit before retrying")?;
+        self.shared.store.audit(Some(user.tg_user_id), "fork_topic_created",
+            serde_json::json!({"operation":operation,"child":child,"chat":target,"topic":topic.message_thread_id}))?;
+        let key = SessionKey::new(target, Some(topic.message_thread_id));
+        let mut template = source;
+        template.codex_thread_id = Some(child.clone());
+        template.force_fresh_thread = false;
+        template.session_title = Some(topic.name.clone());
+        let notice = format!(
+            "Conversation fork: the human just created this independent conversation from native thread {parent}, selecting the topic '{}', to give a side discussion its own theme. Prior history is shared through the fork point; future work diverges. Do not assume source tools, pending questions or tasks were transferred. Continue the human's chosen topic.",
+            topic.name
+        );
+        self.shared
+            .store
+            .save_bot_state(&format!("fork_notice:{child}"), &notice)?;
+        self.initialize_topic_session(key, user.tg_user_id, &template)?;
+        self.shared.store.audit(Some(user.tg_user_id), "fork_bound",
+            serde_json::json!({"operation":operation,"parent":parent,"child":child,"boundary":boundary,"chat":target,"topic":topic.message_thread_id}))?;
+        self.shared
+            .codex
+            .set_thread_name(&child, &topic.name)
+            .await
+            .context("Fork is bound; native title update failed. Use /rename in the child topic")?;
+        // Direct sends preserve bindings on a missing/deleted topic.
+        for (chat_id, message_thread_id, text) in [
+            (
+                target,
+                Some(topic.message_thread_id),
+                format!(
+                    "Fork ready: {}\nThe human forked the source conversation to give a side discussion its own topic. Shared native history ends at this fork; future messages diverge. Source topic: {}. Workspace files remain shared.",
+                    topic.name,
+                    message.message_thread_id.unwrap_or(0)
+                ),
+            ),
+            (
+                message.chat.id,
+                message.message_thread_id,
+                format!(
+                    "Fork created: {} (topic {}). Open it to continue independently.",
+                    topic.name, topic.message_thread_id
+                ),
+            ),
+        ] {
+            self.shared
+                .telegram
+                .send_message(crate::telegram::SendMessage {
+                    chat_id,
+                    message_thread_id,
+                    text: html_escape::encode_text(&text).into_owned(),
+                    parse_mode: "HTML".to_string(),
+                    link_preview_options: None,
+                    reply_markup: None,
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn handle_new_topic(
         &self,
         user: &crate::models::UserRecord,
@@ -1625,14 +1776,11 @@ impl App {
             .await
             .context("createForumTopic failed")?;
         let session_key = SessionKey::new(target_chat_id, Some(topic.message_thread_id));
-        self.ensure_session(session_key, user.tg_user_id)?;
         let mut template = current;
         template.session_title = Some(topic.name.clone());
         template.codex_thread_id = None;
         template.force_fresh_thread = true;
-        self.shared
-            .store
-            .apply_session_template(session_key, &template)?;
+        self.initialize_topic_session(session_key, user.tg_user_id, &template)?;
         self.send_status(
             target_chat_id,
             Some(topic.message_thread_id),

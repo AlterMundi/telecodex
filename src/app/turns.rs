@@ -106,6 +106,23 @@ pub(super) async fn process_turn(
         .await?
     };
     let mut runtime_request = queued.request.clone();
+    if let Some(thread_id) = session.codex_thread_id.as_deref() {
+        if let Some(notice) = shared
+            .store
+            .bot_state_value(&format!("fork_notice:{thread_id}"))?
+        {
+            shared.store.audit(
+                Some(queued.request.from_user_id),
+                "fork_notice_prepared",
+                serde_json::json!({"thread":thread_id,"turn":turn_id}),
+            )?;
+            runtime_request.prompt = format!(
+                "[Conversation origin]\n{notice}\n\n{}",
+                runtime_request.prompt
+            );
+        }
+    }
+
     enrich_audio_transcripts(&shared, &mut runtime_request, &turn_workspace, &sink).await;
     let runtime_request = prepare_runtime_request(&session, &runtime_request, &turn_workspace);
     let runtime_request = enrich_runtime_request_with_codex_history(&session, runtime_request);
@@ -233,6 +250,9 @@ pub(super) async fn process_turn(
     let final_result = async {
         match run_result {
             Ok(summary) => {
+                if let Some(thread_id) = session.codex_thread_id.as_deref() {
+                    shared.store.take_bot_state(&format!("fork_notice:{thread_id}"))?;
+                }
                 shared.store.set_session_busy(session.key, false)?;
                 let sink_for_success = sink.clone();
                 let sink_for_failure = sink.clone();

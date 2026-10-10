@@ -353,6 +353,47 @@ impl CodexRunner {
         }
         Ok(models)
     }
+    pub async fn fork_thread(&self, thread_id: &str) -> Result<(String, String)> {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            // Metadata only: history remains native, without large resume frames.
+            let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
+            process.initialize().await?;
+            let boundary_id = process
+                .send_request("thread/turns/list", json!({"threadId":thread_id,"limit":1}))
+                .await?;
+            let boundary_response = process.await_response(boundary_id).await?;
+            let last = boundary_response
+                .pointer("/data/0")
+                .ok_or_else(|| anyhow!("source has no persisted turn to fork"))?;
+            if last.get("status").and_then(Value::as_str) == Some("inProgress") {
+                bail!("source native turn is still active; finish it before forking");
+            }
+            let boundary = last
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("source turn has no fork boundary ID"))?
+                .to_string();
+            let id = process
+                .send_request(
+                    "thread/fork",
+                    json!({"threadId": thread_id, "excludeTurns": true, "lastTurnId": boundary}),
+                )
+                .await?;
+            let response = process.await_response(id).await?;
+            let child = response
+                .pointer("/thread/id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && *id != thread_id)
+                .ok_or_else(|| {
+                    anyhow!("native fork returned no distinct thread ID; effect unconfirmed")
+                })?
+                .to_string();
+            process.shutdown().await?;
+            Ok((child, boundary))
+        })
+        .await
+        .context("native fork timed out; effect unconfirmed, inspect audit before retrying")?
+    }
     pub async fn set_thread_name(&self, thread_id: &str, name: &str) -> Result<()> {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;

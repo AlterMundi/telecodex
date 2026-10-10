@@ -392,3 +392,21 @@ Built for people who want Codex local, but reachable from Telegram.
 </div>
 
 Native planning, question controls and recovery are documented in [native questions](docs/native-questions.md). The [Telegram convergence pilot](docs/telegram-convergence.md) records source provenance and reuse decisions.
+
+### Fork a conversation
+
+Use `/fork Shared Resources` in an idle, bound work topic to create a named
+Telegram topic backed by Codex's native `thread/fork`. The creator's conversation
+history is shared through the fork; future messages diverge. Compacted history
+retains its native representation. Workspace files remain shared. No model turn
+is started by the command. Running tools and pending questions are not copied.
+
+The child retains session settings and gets an origin notice in Telegram and
+once in its first native input. Native and Telegram titles are coordinated.
+Fork stages are recorded in the private audit log (`fork_requested`,
+`fork_native_created`, `fork_topic_created`, `fork_bound`) with a common operation
+identifier. If a mutating RPC times out, inspect that record and reconcile the
+existing child/topic before retrying; uncertain effects are never retried
+automatically. A title-only failure can be repaired with `/rename` in the child.
+Requires a Codex App Server supporting `thread/fork` with `excludeTurns` and
+Telegram topic support. This command creates no worktree or Matrix attention.
