@@ -196,7 +196,7 @@ import_desktop_history=false
             observer_db.close()
             (root/'hold-summary').unlink()
             wait(lambda:any(m=='sendMessage' and 'Focused fork created:' in d['text'] for m,d in calls))
-            assert db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone() is None
+            wait(lambda:db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone() is None)
             assert db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone()==source_before
             assert db.execute('SELECT codex_thread_id,session_prompt FROM sessions WHERE thread_id=9').fetchone()==(None,'Keep this preference')
             notice=db.execute("SELECT value FROM bot_state WHERE key='handoff_notice:100:9'").fetchone()[0]
@@ -226,7 +226,7 @@ import_desktop_history=false
             send('/fork Ambiguous legacy',reply=666666,reply_text='Repeated legacy')
             wait(lambda:any(m=='sendMessage' and 'occurs more than once' in d['text'] for m,d in calls))
             assert len(topics)==count
-            assert db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone() is None
+            wait(lambda:db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone() is None)
             rpc=[json.loads(line) for line in (root/'rpc.jsonl').read_text().splitlines()]
             assert len([r for r in rpc if r.get('method')=='turn/start' and r['params']['threadId']=='summary-thread'])==inferences
             print('fork HTTP/RPC/SQLite journey passed: binding, parent preservation, notice/restart, first-only native input, title, owner; fork creation starts no inference')
