@@ -422,6 +422,38 @@ def status_report(status, rollout, children, now):
     return '⚠️ Native activity unavailable'
 
 
+COMMAND_PHASES = {
+    'locating_quote': 'Locating quoted message',
+    'synthesizing_handoff': 'Synthesizing focused handoff',
+    'forking_native_history': 'Forking native history',
+    'creating_topic': 'Creating Telegram topic',
+    'binding_conversation': 'Preparing new conversation',
+    'delivering_links': 'Delivering fork links',
+}
+
+
+def command_activity(database, chat, topic, now):
+    """Read an actual bridge operation owned by its current live instance."""
+    try:
+        row = database.execute("SELECT b.value,l.instance_id,l.heartbeat_at FROM bot_state b JOIN app_instance_lock l ON l.key='main' WHERE b.key=?",
+                               (f'command_activity:{chat}:{topic}',)).fetchone()
+        if not row:
+            return None
+        data = json.loads(row['value'])
+        heartbeat = timestamp(row['heartbeat_at'])
+        if data.get('instance_id') != row['instance_id'] or heartbeat is None or not 0 <= now - heartbeat <= 60:
+            return None
+        started = float(data['started_at'])
+        label = COMMAND_PHASES.get(data.get('phase'))
+        if label is None or started > now or not isinstance(data.get('operation'), str):
+            return None
+        seconds = int(now-started)
+        duration = f'{seconds // 60}m' if seconds >= 60 else f'{seconds}s'
+        return {'line': f'⏳ {label} · {duration}', 'operation': data['operation'], 'started': started}
+    except (ValueError, KeyError, TypeError, sqlite3.Error):
+        return None
+
+
 def pending_update_line(path, key, now):
     """Project an explicitly configured local updater receipt, never infer tasks."""
     if not path:
@@ -655,13 +687,13 @@ class StatusRequests:
         if recent is not None:
             self.state['floor'] = max(self.state['floor'], recent - 1)
         # Project only command routing metadata. No prompt or other input is read.
-        rows = self.database.execute('''SELECT i.update_id,
+        rows = self.database.execute('''SELECT i.update_id,i.status,
             json_extract(i.payload_json,'$.message.chat.id') AS chat,
             COALESCE(json_extract(i.payload_json,'$.message.message_thread_id'),0) AS topic,
             json_extract(i.payload_json,'$.message.message_id') AS message
             FROM incoming_updates i JOIN users u
               ON u.tg_user_id=json_extract(i.payload_json,'$.message.from.id')
-            WHERE i.update_id>? AND i.status='handled' AND u.allowed=1
+            WHERE i.update_id>? AND i.status IN ('handled','received','processing') AND u.allowed=1
               AND datetime(i.updated_at)>=datetime('now','-120 seconds')
               AND trim(json_extract(i.payload_json,'$.message.text'))='/status'
             ORDER BY i.update_id LIMIT 256''', (self.state['floor'],)).fetchall()
@@ -670,6 +702,14 @@ class StatusRequests:
             if identity in self.state['attempted']:
                 continue
             key = f"{row['chat']}:{row['topic']}"
+            # A long bridge command queues normal per-topic dispatch. The observer
+            # may answer an admitted /status early only while that exact operation
+            # is still live; it neither consumes nor marks the input handled.
+            if row['status'] != 'handled':
+                context = (contexts or {}).get(key, {})
+                command = command_activity(self.database, row['chat'], row['topic'], time.time())
+                if not command or context.get('command') != command['operation']:
+                    continue
             if key not in reports:
                 continue  # Requires an authorized, current native topic binding.
             if bindings is not None:
@@ -811,20 +851,22 @@ def run(args):
                     tid = topic['codex_thread_id']
                     key = f"{topic['chat_id']}:{topic['thread_id']}"
                     known.add(key)
+                    command = command_activity(bridge, topic['chat_id'], topic['thread_id'], time.time())
                     row = native_db.execute('SELECT rollout_path FROM threads WHERE id=? AND archived=0', (tid,)).fetchone()
-                    if not row:
+                    if not row and not command:
                         entry = publisher.snapshot().get(key) if publisher else None
                         if entry:
                             publisher.retire(key, entry)
                         continue
-                    path = pathlib.Path(row['rollout_path']).resolve()
+                    path = pathlib.Path(row['rollout_path']).resolve() if row else native_home / 'sessions' / '.no-rollout'
                     if not path.is_relative_to((native_home / 'sessions').resolve()):
                         raise ValueError('rollout outside native session directory')
-                    reader = readers.setdefault(path, Rollout(path, tid))
+                    reader = readers.setdefault(path, Rollout(path, tid)) if row else Rollout(path, tid)
                     if reader.thread_id != tid:
                         raise ValueError('cached rollout binding mismatch')
                     try:
-                        reader.refresh()
+                        if row:
+                            reader.refresh()
                     except (OSError, ValueError):
                         if publisher and key in publisher.snapshot():
                             publisher.update(key, topic['chat_id'], topic['thread_id'], reader.turn_id,
@@ -837,6 +879,9 @@ def run(args):
                     report = status_report(status, reader, children, now)
                     active_text = status_line(status, reader, children, now)
                     text = status_line(status, reader, children, now, automatic=True)
+                    if command:
+                        report = active_text = command['line']
+                        text = command['line'] if now-command['started'] >= 30 else None
                     update = pending_update_line(args.pending_update_record, key, now)
                     report, active_text, text = combine_update_status(report, active_text, text, update)
                     exchange = timestamp(reader.last_exchange)
@@ -847,26 +892,27 @@ def run(args):
                                 'input_id': latest['message_id'] if latest else None}
                     reports[key] = report
                     bindings[key] = tid
-                    contexts[key] = {'turn': reader.request_id or reader.turn_id,
+                    contexts[key] = {'turn': command['operation'] if command else reader.request_id or reader.turn_id,
+                                     'command': command['operation'] if command else None,
                                      'active': bool(active_text), 'position': position}
-                    if status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.snapshot():
+                    if not command and status.get('type') in ('unknown', 'systemError') and publisher and key in publisher.snapshot():
                         text = '⚠️ Native activity unavailable · state unconfirmed'
-                    if text is None and status.get('type') == 'idle' and topic['turn_status'] == 'running':
+                    if not command and text is None and status.get('type') == 'idle' and topic['turn_status'] == 'running':
                         text = '⏳ Finishing delivery · native work ended'
                     if latest and latest['at'] is not None and now - latest['at'] < 30:
                         text = None
                     # Fast turns stay clean; existing active turns qualify immediately.
                     started = timestamp(reader.started)
-                    if text and started is not None and now - started < 30:
+                    if text and not command and started is not None and now - started < 30:
                         text = None
                     if text:
                         text += ' · ' + weekly.label(native, time.monotonic())
                     if active_text:
                         active_text += ' · ' + weekly.label(native, time.monotonic())
-                    observations.append({'status': status.get('type'), 'visible': bool(text)})
+                    observations.append({'status': status.get('type'), 'visible': bool(text), 'command': bool(command)})
                     if publisher:
                         publications.append((key, topic['chat_id'], topic['thread_id'],
-                                             reader.request_id or reader.turn_id, text, now,
+                                             command['operation'] if command else reader.request_id or reader.turn_id, text, now,
                                              active_text, position))
                 # Publish the native snapshot before automatic Telegram delivery can wait.
                 cache.update(reports, bindings, weekly, contexts)
@@ -878,7 +924,7 @@ def run(args):
                         if key not in known:
                             publisher.retire(key, entry)
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
-                            'topics': len(observations), 'active': sum(x['visible'] for x in observations),
+                            'topics': len(observations), 'active': sum(x['visible'] or x.get('command', False) for x in observations),
                             'weekly_available': weekly.available,
                             'weekly_resets_at': weekly.resets_at,
                             'status_requests_alive': status_worker.is_alive() if status_worker else False,

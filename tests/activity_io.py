@@ -107,6 +107,43 @@ class ActivityIO(unittest.TestCase):
         self.assertEqual(receipt['outcome'], 'deleted')
         self.assertEqual(receipt['message_id'], message)
 
+    def test_command_activity_is_live_scoped_and_received_status_does_not_dispatch(self):
+        database = sqlite3.connect(':memory:')
+        database.row_factory = sqlite3.Row
+        database.executescript("""CREATE TABLE bot_state(key TEXT PRIMARY KEY,value TEXT);
+            CREATE TABLE app_instance_lock(key TEXT,instance_id TEXT,heartbeat_at TEXT);
+            CREATE TABLE incoming_updates(update_id INTEGER PRIMARY KEY,payload_json TEXT,status TEXT,updated_at TEXT);
+            CREATE TABLE users(tg_user_id INTEGER PRIMARY KEY,allowed INTEGER);
+            CREATE TABLE sessions(chat_id INTEGER,thread_id INTEGER,codex_thread_id TEXT,creator_user_id INTEGER);
+            INSERT INTO users VALUES(1,1);
+            INSERT INTO sessions VALUES(100,7,'parent',1);""")
+        now=time.time()
+        stamp=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now))
+        database.execute("INSERT INTO app_instance_lock VALUES('main','instance',?)", (stamp,))
+        data={'instance_id':'instance','operation':'operation','phase':'synthesizing_handoff','started_at':now-40}
+        database.execute("INSERT INTO bot_state VALUES('command_activity:100:7',?)", (json.dumps(data),))
+        command=activity.command_activity(database,100,7,now)
+        self.assertIn('Synthesizing focused handoff',command['line'])
+        self.assertIsNone(activity.command_activity(database,100,8,now))
+        self.assertIsNone(activity.command_activity(database,100,7,now+70))
+        requests=activity.StatusRequests(database,self.telegram,self.root/'command-requests.json')
+        payload={'message':{'chat':{'id':100},'message_thread_id':7,'from':{'id':1},'message_id':1001,'text':'/status'}}
+        database.execute("INSERT INTO incoming_updates VALUES(1,?,'received',datetime('now'))",(json.dumps(payload),))
+        contexts={'100:7':{'command':'operation','active':True,'turn':'operation'}}
+        requests.respond({'100:7':command['line']},lambda:'weekly 75% available',{'100:7':'parent'},contexts)
+        self.assertIn('Synthesizing focused handoff',self.calls[-1][1]['text'])
+        self.assertEqual(database.execute('SELECT status FROM incoming_updates').fetchone()[0],'received')
+        requests.respond({'100:7':command['line']},lambda:'weekly',{'100:7':'parent'},contexts)
+        self.assertEqual(len(self.calls),1)
+        database.execute("UPDATE app_instance_lock SET instance_id='new-instance'")
+        self.assertIsNone(activity.command_activity(database,100,7,now))
+        # Completion removes the lease; automatic cards use existing cleanup.
+        self.publisher.update('100:7',100,7,'operation',command['line'],now)
+        database.execute('DELETE FROM bot_state')
+        self.publisher.update('100:7',100,7,'operation',None,now+1)
+        self.assertEqual(self.calls[-1][0],'deleteMessage')
+        database.close()
+
     def test_ambiguous_send_is_not_repeated_after_restart(self):
         self.answers = [None]
         self.publisher.update('100:7', 100, 7, 'turn-a', 'Working', 100)
