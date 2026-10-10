@@ -56,8 +56,17 @@ for line in sys.stdin:
  m=r['method']
  if m=='initialize':result={'userAgent':'fixture'}
  elif m=='thread/turns/list':
-  assert r['params']=={'threadId':'parent-thread','limit':1,'sortDirection':'desc'}
-  result={'data':[{'id':'parent-turn','status':'completed'}]}
+  if r['params'].get('itemsView')=='full':
+   assert r['params']['threadId']=='parent-thread' and r['params']['sortDirection']=='desc'
+   def turn(id,text,kind='userMessage'):
+    item={'type':kind,'content':[{'type':'text','text':text}]} if kind=='userMessage' else {'type':kind,'text':text}
+    return {'id':id,'status':'completed','items':[item]}
+   if r['params'].get('cursor')=='older':
+    result={'data':[turn('repeat-2','Repeated legacy'),turn('repeat-1','Repeated legacy'),turn('legacy','Legacy **resource decision**. Followup in same turn.','agentMessage'),turn('oldest','Original source intent')]}
+   else:result={'data':[turn('newer','LATER NATIVE')],'nextCursor':'older'}
+  else:
+   assert r['params']=={'threadId':'parent-thread','limit':1,'sortDirection':'desc'}
+   result={'data':[{'id':'parent-turn','status':'completed'}]}
  elif m=='thread/fork':
   assert r['params']=={'threadId':'parent-thread','excludeTurns':True,'lastTurnId':'parent-turn'}
   result={'thread':{'id':'child-thread'}}
@@ -105,11 +114,11 @@ import_desktop_history=false
                 env=dict(os.environ,HOME=str(root),CODEX_HOME=str(root/'codex-home'),RUST_LOG='warn'))
         process=start()
         seq=0
-        def send(text, user=100, topic=7, reply=None):
+        def send(text, user=100, topic=7, reply=None, reply_text='Quoted text'):
             nonlocal seq
             seq+=1
             updates.append(dict(update_id=seq,message=dict(message_id=seq,message_thread_id=topic,chat=dict(id=100,type='private'),text=text,**{'from':dict(id=user,is_bot=False,first_name='Fixture')})))
-            if reply is not None:updates[-1]['message']['reply_to_message']={'message_id':reply,'text':'Quoted text'}
+            if reply is not None:updates[-1]['message']['reply_to_message']={'message_id':reply,'text':reply_text}
             return seq
         def wait(predicate):
             deadline=time.monotonic()+15
@@ -125,7 +134,7 @@ import_desktop_history=false
             db=sqlite3.connect(root/'state.sqlite')
             db.execute("UPDATE sessions SET codex_thread_id='parent-thread',force_fresh_thread=0,session_prompt='Keep this preference' WHERE thread_id=7");db.commit()
             before=db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone()
-            send('/fork Shared Resources')
+            send('/fork Shared Resources', reply=77, reply_text=None)
             wait(lambda:any(m=='sendMessage' and 'Fork created:' in d['text'] for m,d in calls))
             child=db.execute('SELECT codex_thread_id,force_fresh_thread,session_prompt,busy FROM sessions WHERE thread_id=8').fetchone()
             assert child==('child-thread',0,'Keep this preference',0),child
@@ -178,8 +187,23 @@ import_desktop_history=false
             assert db.execute("SELECT value FROM bot_state WHERE key='handoff_notice:100:9'").fetchone() is None
             count=len(topics)
             send('/fork Unknown quote',reply=999999)
-            wait(lambda:any(m=='sendMessage' and 'Cannot locate this quote safely' in d['text'] for m,d in calls))
+            wait(lambda:any(m=='sendMessage' and 'quoted text was not found' in d['text'] for m,d in calls))
             assert len(topics)==count
+            send('/fork Legacy resources',reply=555555,reply_text='Legacy resource decision.')
+            wait(lambda:len(topics)==count+1)
+            wait(lambda:any(m=='sendMessage' and 'Focused fork created: Legacy resources' in d['text'] for m,d in calls))
+            notice=db.execute("SELECT value FROM bot_state WHERE key='handoff_notice:100:10'").fetchone()[0]
+            assert 'inclusive completed native turn, resolved by unique text' in notice
+            assert 'LATER NATIVE' not in notice
+            rpc=[json.loads(line) for line in (root/'rpc.jsonl').read_text().splitlines()]
+            summaries=[r['params']['input'][0]['text'] for r in rpc if r.get('method')=='turn/start' and r['params']['threadId']=='summary-thread']
+            assert 'Followup in same turn.' in summaries[-1] and 'LATER NATIVE' not in summaries[-1]
+            count=len(topics);inferences=len(summaries)
+            send('/fork Ambiguous legacy',reply=666666,reply_text='Repeated legacy')
+            wait(lambda:any(m=='sendMessage' and 'occurs more than once' in d['text'] for m,d in calls))
+            assert len(topics)==count
+            rpc=[json.loads(line) for line in (root/'rpc.jsonl').read_text().splitlines()]
+            assert len([r for r in rpc if r.get('method')=='turn/start' and r['params']['threadId']=='summary-thread'])==inferences
             print('fork HTTP/RPC/SQLite journey passed: binding, parent preservation, notice/restart, first-only native input, title, owner; fork creation starts no inference')
         finally:
             if process.poll() is None:process.send_signal(signal.SIGINT)
