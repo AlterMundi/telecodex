@@ -818,6 +818,97 @@ impl Store {
         Ok(session.add_dirs)
     }
 
+    pub fn record_turn_native_thread(&self, turn_id: i64, thread: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed=conn.execute("UPDATE turns SET native_thread_id=?2 WHERE id=?1 AND (native_thread_id IS NULL OR native_thread_id=?2)",params![turn_id,thread])?;
+        if changed != 1 {
+            anyhow::bail!("turn native history binding conflict");
+        }
+        Ok(())
+    }
+
+    /// Durable outgoing correlation. Store only confirmed, completed message text.
+    pub fn record_handoff_message(
+        &self,
+        key: SessionKey,
+        turn_id: i64,
+        message_id: i64,
+        text: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute("INSERT INTO handoff_messages(chat_id,thread_id,message_id,turn_id,text) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(chat_id,thread_id,message_id) DO UPDATE SET text=excluded.text WHERE turn_id=excluded.turn_id", params![key.chat_id,key.thread_id,message_id,turn_id,text])?;
+        Ok(())
+    }
+
+    /// A quoted message is a verified local boundary, never a text-similarity guess.
+    pub fn reply_handoff_context(&self, key: SessionKey, message_id: i64) -> Result<Vec<String>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let session_id: i64 = conn.query_row(
+            "SELECT id FROM sessions WHERE chat_id=?1 AND thread_id=?2",
+            params![key.chat_id, key.thread_id],
+            |r| r.get(0),
+        )?;
+        let outgoing: Option<(i64,String)> = conn.query_row("SELECT turn_id,text FROM handoff_messages WHERE chat_id=?1 AND thread_id=?2 AND message_id=?3", params![key.chat_id,key.thread_id,message_id], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        let (boundary, quote, assistant_quote) = if let Some((turn, text)) = outgoing {
+            (turn, text, true)
+        } else {
+            let incoming: Option<(i64,String)> = conn.query_row("SELECT u.turn_id,COALESCE(json_extract(u.payload_json,'$.message.text'),json_extract(u.payload_json,'$.message.caption')) FROM incoming_updates u JOIN turns t ON t.id=u.turn_id WHERE t.session_id=?1 AND json_extract(u.payload_json,'$.message.chat.id')=?2 AND COALESCE(json_extract(u.payload_json,'$.message.message_thread_id'),0)=?3 AND json_extract(u.payload_json,'$.message.message_id')=?4 AND u.status IN ('settled') AND t.status='completed' ORDER BY u.update_id DESC LIMIT 1", params![session_id,key.chat_id,key.thread_id,message_id], |r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let (turn,text) = incoming.ok_or_else(|| anyhow!("Quoted message has no verified completed source boundary. Reply to a completed human message, or a new completed bot message; old bot messages cannot be mapped safely."))?;
+            (turn, text, false)
+        };
+        let native: String=conn.query_row("SELECT native_thread_id FROM turns WHERE id=?1 AND session_id=?2 AND status='completed'",params![boundary,session_id],|r|r.get(0)).context("quoted turn has no verified native history binding")?;
+        let mut statement = conn.prepare("SELECT id,prompt,assistant_text FROM turns WHERE session_id=?1 AND id<?2 AND native_thread_id=?3 AND status='completed' ORDER BY id DESC LIMIT 120")?;
+        let rows = statement.query_map(params![session_id, boundary, native], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let mut history = Vec::new();
+        let mut budget = 96_000usize;
+        for row in rows {
+            let (id, human, assistant) = row?;
+            let entry = format!(
+                "[Source turn {id}]\nHuman: {}\nAssistant: {}",
+                human.chars().take(4000).collect::<String>(),
+                assistant
+                    .unwrap_or_default()
+                    .chars()
+                    .take(4000)
+                    .collect::<String>()
+            );
+            if entry.len() > budget {
+                break;
+            }
+            budget -= entry.len();
+            history.push(entry);
+        }
+        history.reverse();
+        // Boundary turn output is deliberately excluded: it may postdate the quote.
+        if assistant_quote {
+            let prompt: String = conn.query_row(
+                "SELECT prompt FROM turns WHERE id=?1 AND session_id=?2 AND status='completed'",
+                params![boundary, session_id],
+                |r| r.get(0),
+            )?;
+            history.push(format!(
+                "[Boundary turn {boundary}]\nHuman: {}",
+                prompt.chars().take(4000).collect::<String>()
+            ));
+        }
+        history.push(format!(
+            "[Quoted message {message_id}; source turn {boundary}]\n{}: {}",
+            if assistant_quote {
+                "Assistant"
+            } else {
+                "Human"
+            },
+            quote.chars().take(12_000).collect::<String>()
+        ));
+        Ok(history)
+    }
+
     pub fn record_turn_started(&self, session_id: i64, request: &TurnRequest) -> Result<i64> {
         let review_json = serde_json::to_string(&request.review_mode)?;
         let now = now_string();
@@ -999,6 +1090,13 @@ impl Store {
                 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS handoff_messages(
+                chat_id INTEGER NOT NULL, thread_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL, turn_id INTEGER NOT NULL, text TEXT NOT NULL,
+                PRIMARY KEY(chat_id,thread_id,message_id),
+                FOREIGN KEY(turn_id) REFERENCES turns(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS bot_state(
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -1047,6 +1145,7 @@ impl Store {
             );
             ",
         )?;
+        add_column_if_missing(&conn, "turns", "native_thread_id", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "session_title", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "reasoning_effort", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "service_tier", "TEXT")?;
@@ -1239,6 +1338,75 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn reply_handoff_preserves_cutoff_native_scope_and_restart() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        let key = SessionKey::new(100, Some(7));
+        let session = store.ensure_session(key, 100, &defaults()).unwrap();
+        for (index, native, text) in [
+            (1, "old-thread", "UNRELATED OLD CONVERSATION"),
+            (2, "current-thread", "Earlier decision"),
+            (3, "current-thread", "Selected quote"),
+            (4, "current-thread", "AFTER CUTOFF"),
+        ] {
+            let update = input(index, 100, text);
+            store.admit_update(&update).unwrap();
+            store.begin_update(index).unwrap();
+            store.mark_update_queued(index).unwrap();
+            let request = TurnRequest {
+                session_key: key,
+                from_user_id: 100,
+                prompt: text.to_string(),
+                runtime_instructions: None,
+                attachments: vec![],
+                review_mode: None,
+                override_search_mode: None,
+            };
+            let turn = store.record_turn_started(session.id, &request).unwrap();
+            store.link_update_turn(index, turn).unwrap();
+            store.record_turn_native_thread(turn, native).unwrap();
+            store
+                .record_handoff_message(key, turn, index + 100, &format!("Assistant {index}"))
+                .unwrap();
+            store
+                .record_turn_finished(
+                    turn,
+                    "completed",
+                    Some(&format!("Assistant {index} AFTER HUMAN")),
+                )
+                .unwrap();
+        }
+        let text = store.reply_handoff_context(key, 3).unwrap().join("\n");
+        assert!(text.contains("Earlier decision") && text.contains("Selected quote"));
+        assert!(
+            !text.contains("UNRELATED")
+                && !text.contains("AFTER CUTOFF")
+                && !text.contains("Assistant 3")
+        );
+        let text = store.reply_handoff_context(key, 103).unwrap().join("\n");
+        assert!(
+            text.contains("Assistant 3")
+                && !text.contains("Assistant 3 AFTER HUMAN")
+                && !text.contains("AFTER CUTOFF")
+        );
+        assert!(
+            store
+                .reply_handoff_context(SessionKey::new(100, Some(8)), 103)
+                .is_err()
+        );
+        assert!(store.reply_handoff_context(key, 999).is_err());
+        drop(store);
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        assert!(
+            store
+                .reply_handoff_context(key, 103)
+                .unwrap()
+                .join("\n")
+                .contains("Selected quote")
+        );
     }
 
     #[test]

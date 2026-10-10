@@ -399,7 +399,7 @@ Use `/fork Shared Resources` in an idle, bound work topic to create a named
 Telegram topic backed by Codex's native `thread/fork`. The creator's conversation
 history is shared through the fork; future messages diverge. Compacted history
 retains its native representation. Workspace files remain shared. No model turn
-is started by the command. Running tools and pending questions are not copied.
+is started by an unquoted command. Running tools and pending questions are not copied.
 
 The child retains session settings and gets an origin notice in Telegram and
 once in its first native input. Native and Telegram titles are coordinated.
@@ -410,3 +410,24 @@ existing child/topic before retrying; uncertain effects are never retried
 automatically. A title-only failure can be repaired with `/rename` in the child.
 Requires a Codex App Server supporting `thread/fork` with `excludeTurns` and
 Telegram topic support. This command creates no worktree or Matrix attention.
+
+When `/fork Name` is sent as a reply, it creates a **fresh context handoff** rather
+than cloning native history. One bounded summarization turn selects relevant
+original text excerpts and synthesizes older available context through the quote.
+The handoff is loaded on the child's first successful native turn; source history
+and its saved instructions remain unchanged. Source entries are restricted to the
+quoted turn's native conversation, at most 120 earlier completed turns and a
+96 KB earlier-text budget; individual texts are excerpted when long. Up to six
+selected entries, including the quote, accompany the summary. Model output must
+identify actual source entries; generated replacements are not treated as quotes.
+
+Exact Telegram boundaries require the durable ingress journal and native turn
+binding, or the new outgoing message correlation. Historical messages without
+that binding, unknown quotes and unfinished answers are rejected with an
+explanation; the bridge never guesses a boundary or silently falls back to a full
+fork. Summary failure creates no destination. Later creation/delivery failures
+retain audit stages for reconciliation without automatic replay. Summarization
+uses an ephemeral thread, empty workspace, read-only sandbox, disabled search,
+shell and configured MCP servers, and no source task continuation. This mode
+requires `config/read`, ephemeral `thread/start` and structured `turn/start`
+output support; no modified Codex distribution is required.
