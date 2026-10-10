@@ -86,6 +86,7 @@ fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
             bot_token_file: None,
             lifecycle_notifications: false,
             api_base: "https://api.telegram.org".to_string(),
+            local_file_root: None,
             use_message_drafts: false,
             show_unfinished_messages: true,
             primary_forum_chat_id: None,

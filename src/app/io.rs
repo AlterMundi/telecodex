@@ -11,6 +11,45 @@ impl App {
         message: &Message,
         session: &crate::models::SessionRecord,
     ) -> Result<Vec<LocalAttachment>> {
+        match self.download_attachments_inner(message, session).await {
+            Ok(attachments) => Ok(attachments),
+            Err(error) => {
+                let notice = attachment_failure_notice(&error);
+                // A failure notice must never reroute to another topic or delete
+                // the existing native binding through generic status fallbacks.
+                let request = SendMessage::html(
+                    message.chat.id,
+                    message.message_thread_id,
+                    html_escape::encode_safe(notice).into_owned(),
+                );
+                let mut delivered = self.shared.telegram.send_message(request.clone()).await;
+                if delivered.as_ref().err().is_some_and(|error| {
+                    error
+                        .downcast_ref::<crate::telegram::TelegramError>()
+                        .is_some_and(|error| {
+                            error.status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                                && error.retry_after.is_some_and(|seconds| seconds <= 30)
+                        })
+                }) {
+                    // Only an explicit rejection is safe to retry. Unknown transport
+                    // failures may already have delivered the notice.
+                    delivered = self.shared.telegram.send_message(request).await;
+                }
+                if delivered.is_err() {
+                    tracing::warn!(
+                        "attachment failure notification delivery is unconfirmed in the originating topic"
+                    );
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn download_attachments_inner(
+        &self,
+        message: &Message,
+        session: &crate::models::SessionRecord,
+    ) -> Result<Vec<LocalAttachment>> {
         let inbox_dir = self.session_inbox_dir(session)?;
         let mut attachments = Vec::new();
 
@@ -118,7 +157,6 @@ impl App {
         let file_path = file
             .file_path
             .ok_or_else(|| anyhow!("telegram file_path missing for {file_id}"))?;
-        let bytes = self.shared.telegram.download_file(&file_path).await?;
         let extension = Path::new(&file_path)
             .extension()
             .and_then(|value| value.to_str())
@@ -135,8 +173,11 @@ impl App {
             extension,
         );
         let path = target_dir.join(format!("{}_{}", Uuid::now_v7(), file_name));
-        fs::write(&path, bytes)
-            .with_context(|| format!("failed to write attachment {}", path.display()))?;
+        self.shared
+            .telegram
+            .download_file(&file_path, &path, file.file_size)
+            .await
+            .context("failed to save Telegram attachment")?;
         Ok(LocalAttachment {
             path,
             file_name,
@@ -419,5 +460,44 @@ impl App {
             });
         }
         Ok(snapshot)
+    }
+}
+
+fn attachment_failure_notice(error: &anyhow::Error) -> &'static str {
+    if error.chain().any(|cause| {
+        cause
+            .downcast_ref::<crate::telegram::TelegramError>()
+            .is_some_and(|error| {
+                error
+                    .description
+                    .to_ascii_lowercase()
+                    .contains("file is too big")
+            })
+    }) {
+        "The attachment reached Telegram, but its cloud Bot API cannot download files larger than 20 MB. The file has not reached Codex. This bridge needs a local Bot API server for large recordings; alternatively send ordered parts below 20 MB. The input is journaled and will not be replayed automatically."
+    } else {
+        "The attachment reached Telegram, but Telecodex could not download it. No analysis turn was started for this message. Please resend the attachment after the download problem is resolved. The input is journaled and will not be replayed automatically."
+    }
+}
+
+#[cfg(test)]
+mod attachment_failure_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_error_has_actionable_notice_without_reflecting_api_payload() {
+        let error = anyhow::Error::new(crate::telegram::TelegramError {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            description: "Bad Request: file is too big synthetic-secret".to_string(),
+            retry_after: None,
+        })
+        .context("telegram getFile failed");
+        let notice = attachment_failure_notice(&error);
+        assert!(notice.contains("20 MB"));
+        assert!(notice.contains("has not reached Codex"));
+        assert!(!notice.contains("synthetic-secret"));
+        assert!(
+            attachment_failure_notice(&anyhow!("network timeout")).contains("No analysis turn")
+        );
     }
 }

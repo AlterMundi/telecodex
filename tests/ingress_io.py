@@ -27,7 +27,7 @@ BINARY = str(pathlib.Path(sys.argv[1]).resolve())
 
 def token_probe():
     with tempfile.TemporaryDirectory(prefix='telecodex-review-token-') as name:
-        root = pathlib.Path(name)
+        root = pathlib.Path(name).resolve()
         token = 'synthetic-secret-token'
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -76,6 +76,10 @@ import_desktop_history=false
 
 
 def scenario(mode):
+    attachment = 'attachment_' in mode
+    attachment_oversize = mode.endswith('attachment_oversize')
+    attachment_interrupted = mode.endswith('attachment_interrupted')
+    attachment_failure = attachment_oversize or attachment_interrupted
     stalled_steer = mode == 'stalled_steer'
     retain_commentary = mode.startswith('retained_commentary')
     drafts = mode.endswith('_drafts')
@@ -91,12 +95,18 @@ def scenario(mode):
     acknowledge_steer = mode == 'accepted_steer'
     missing_binding = mode == 'missing_saved_binding'
     with tempfile.TemporaryDirectory(prefix='telecodex-review-steer-') as name:
-        root = pathlib.Path(name)
+        root = pathlib.Path(name).resolve()
+        storage = root / 'bot-storage'
+        storage.mkdir()
+        source = storage / 'long.ogg'
+        if attachment:
+            source.write_bytes(b'large-attachment-check' * (1024 * 1024))
         started = threading.Event()
         steered = threading.Event()
         rpc = []
         rpc_lock = threading.Lock()
         continuation_state = {}
+        attachment_receipt = {}
 
         class Native(socketserver.BaseRequestHandler):
             def handle(self):
@@ -166,6 +176,13 @@ def scenario(mode):
                             send({'id': request_id, 'result': {'thread': {'id': 'synthetic-native-thread'}}})
                             send({'method': 'thread/started', 'params': {'thread': {'id': 'synthetic-native-thread'}}})
                     elif method == 'turn/start':
+                        if attachment:
+                            files = list((root / '.telecodex/inbox').rglob('*.ogg'))
+                            assert len(files) == 1, files
+                            actual = files[0]
+                            assert str(actual) in value['params']['input'][0]['text']
+                            assert hashlib.sha256(actual.read_bytes()).digest() == hashlib.sha256(source.read_bytes()).digest()
+                            attachment_receipt.update(size=actual.stat().st_size, path=str(actual), checksum_verified=True)
                         send({'id': request_id, 'result': {'turn': {'id': 'synthetic-native-turn'}}})
                         started.set()
                         if retain_commentary:
@@ -284,6 +301,15 @@ while True:
                     'chat': {'id': 100, 'type': 'private'}, 'text': text}}
 
         class Telegram(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                assert attachment_interrupted
+                self.send_response(200)
+                self.send_header('Content-Length','100')
+                self.send_header('Connection','close')
+                self.end_headers()
+                self.wfile.write(b'partial')
+                self.close_connection = True
+
             def do_POST(self):
                 nonlocal polls, message_id
                 payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
@@ -299,8 +325,22 @@ while True:
                         poll = polls
                     if poll == 1:
                         result = [update(1, '/status' if missing_binding else 'first human input')]
+                        if attachment_failure:
+                            result = [update(1, '/status')]
+                        elif attachment:
+                            result[0]['message']['audio'] = {'file_id':'synthetic-file','file_name':'long.ogg','mime_type':'audio/ogg'}
                         if stalled_steer:
                             result = [dict(update(n, 'first human input'), message=dict(update(n, 'first human input')['message'], message_thread_id=6+n, chat={'id':99+n,'type':'private'})) for n in range(1,6)]
+                    elif poll == 2 and attachment_failure:
+                        deadline = time.monotonic() + 8
+                        while time.monotonic() < deadline:
+                            with sqlite3.connect(root / 'state.sqlite') as db:
+                                changed = db.execute("UPDATE sessions SET codex_thread_id='existing-attachment-thread',force_fresh_thread=0 WHERE chat_id=100 AND thread_id=7").rowcount
+                            if changed: break
+                            time.sleep(.02)
+                        assert changed == 1
+                        result = [update(2, 'first human input')]
+                        result[0]['message']['audio'] = {'file_id':'synthetic-file','file_name':'long.ogg','mime_type':'audio/ogg'}
                     elif poll == 2 and not retain_commentary:
                         if missing_binding:
                             with sqlite3.connect(root / 'state.sqlite') as db:
@@ -322,7 +362,15 @@ while True:
                     else:
                         time.sleep(.15)
                         result = []
+                elif method == 'getFile':
+                    if attachment_oversize:
+                        data=json.dumps({'ok':False,'error_code':400,'description':'Bad Request: file is too big'}).encode()
+                        self.send_response(400); self.send_header('Content-Length',str(len(data))); self.end_headers(); self.wfile.write(data); return
+                    result = {'file_path':'audio/long.ogg' if attachment_interrupted else str(source), 'file_size':100 if attachment_interrupted else source.stat().st_size}
                 elif method in ('sendMessage', 'editMessageText'):
+                    if attachment and ('could not download' in payload['text'] or 'cloud Bot API cannot download' in payload['text']):
+                        assert payload['message_thread_id'] == 7
+                        assert payload['chat_id'] == 100
                     if not html.unescape(re.sub(r'<[^>]*>', '', payload['text'])).strip():
                         empty_rejected.append(method)
                         data=json.dumps({'ok':False,'error_code':400,'description':'Bad Request: text must be non-empty'}).encode()
@@ -363,6 +411,7 @@ edit_debounce_ms=100
 [telegram]
 bot_token_file="{token}"
 api_base="http://127.0.0.1:{telegram.server_port}"
+local_file_root="{storage}"
 use_message_drafts={str(drafts).lower()}
 show_unfinished_messages={str(show_unfinished).lower()}
 [codex]
@@ -399,6 +448,11 @@ import_desktop_history=false
                             failure_published = any('Turn failed:' in text for text in permanent.values())
                         if failure_published:
                             break
+                    if attachment_failure:
+                        with lock:
+                            notified = any('cloud Bot API cannot download' in text or 'could not download' in text for text in permanent.values())
+                        if notified and len(rows) == 2 and rows[-1][1] == 'undetermined':
+                            break
                     if retain_commentary and rows == [(1, 'settled', 1)]:
                         break
                     if len(rows) == 2:
@@ -415,6 +469,19 @@ import_desktop_history=false
                 starts = [p['input'][0]['text'] for m, p in rpc if m == 'turn/start']
                 steers = [p['input'][0]['text'] for m, p in rpc if m == 'turn/steer']
                 threads = [m for m, p in rpc if m in ('thread/start', 'thread/resume')]
+            if attachment_failure:
+                assert not starts and not steers, (starts,steers)
+                assert len(rows) == 2 and rows[-1][1] == 'undetermined', rows
+                assert sessions == [('existing-attachment-thread',)], sessions
+                assert not any(path.is_file() for path in (root / '.telecodex/inbox').rglob('*'))
+                assert notified
+                print(json.dumps({'scenario':mode,'originating_topic_notified':True,'native_turns':0,'input_journal_preserved':True}),flush=True)
+                return
+            if attachment:
+                assert len(starts) == 1, starts
+                assert attachment_receipt['size'] > 20 * 1024 * 1024
+                assert attachment_receipt['path'] in starts[0]
+                print(json.dumps({'scenario':mode,'complete_bytes':attachment_receipt['size'],'checksum_verified':True,'native_input_received_path':True}),flush=True)
             if stalled_steer:
                 assert polling_while_steering, (rows, polls, out[-1800:], err)
                 assert other_topic_while_steering, (rows, out[-1800:], err)
@@ -506,7 +573,7 @@ if __name__ == '__main__':
             scenario(mode)
     else:
         token_probe()
-        for mode in ['stalled_steer', 'accepted_steer', 'unacknowledged_steer', 'missing_saved_binding',
+        for mode in ['retained_commentary_attachment_local', 'retained_commentary_attachment_oversize', 'retained_commentary_attachment_interrupted', 'stalled_steer', 'accepted_steer', 'unacknowledged_steer', 'missing_saved_binding',
                      'retained_commentary_drafts', 'retained_commentary_preview',
                      'retained_commentary_only', 'retained_commentary_hidden',
                      'retained_commentary_hidden_drafts', 'retained_commentary_hidden_only',

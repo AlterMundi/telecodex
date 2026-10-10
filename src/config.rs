@@ -34,6 +34,8 @@ pub struct TelegramConfig {
     pub lifecycle_notifications: bool,
     #[serde(default = "default_telegram_api_base")]
     pub api_base: String,
+    /// Explicit trusted local Bot API storage; never inferred from API responses.
+    pub local_file_root: Option<PathBuf>,
     #[serde(default = "default_true")]
     pub use_message_drafts: bool,
     #[serde(default = "default_true")]
