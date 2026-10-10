@@ -19,6 +19,7 @@ def main(binary):
     with tempfile.TemporaryDirectory(prefix='telecodex-fork-') as directory:
         root = pathlib.Path(directory)
         updates, calls = collections.deque(), []
+        topics = []
         class Telegram(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 data = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
@@ -30,7 +31,8 @@ def main(binary):
                     result = [updates.popleft()] if updates else []
                     if not result: time.sleep(.02)
                 elif method == 'createForumTopic':
-                    result = dict(message_thread_id=8, name=data['name'], icon_color=0)
+                    topics.append(data['name'])
+                    result = dict(message_thread_id=7+len(topics), name=data['name'], icon_color=0)
                 elif method == 'sendMessage':
                     result = dict(message_id=len(calls), chat=dict(id=data['chat_id'], type='private'), text=data['text'], message_thread_id=data.get('message_thread_id'))
                 else: result = True
@@ -60,11 +62,24 @@ for line in sys.stdin:
   assert r['params']=={'threadId':'parent-thread','excludeTurns':True,'lastTurnId':'parent-turn'}
   result={'thread':{'id':'child-thread'}}
  elif m=='thread/name/set':result={}
- elif m=='thread/resume':result={'thread':{'id':'child-thread'}}
+ elif m=='config/read':result={'config':{'mcp_servers':{'fixture':{'enabled':True}}}}
+ elif m=='thread/start':
+  if r['params'].get('ephemeral'):
+   assert r['params']['config']['features.shell_tool'] is False
+   assert r['params']['config']['mcp_servers.fixture.enabled'] is False
+   assert r['params']['sandbox']=='read-only'
+   result={'thread':{'id':'summary-thread'}}
+  else:result={'thread':{'id':'handoff-thread'}}
+ elif m=='thread/resume':result={'thread':{'id':r['params']['threadId']}}
  elif m=='turn/start':
+  thread=r['params']['threadId'];answer='Child reply'
+  if thread=='summary-thread':
+   context=json.loads(r['params']['input'][0]['text'])['source_entries']
+   assert 'LATER SOURCE' not in str(context)
+   answer=json.dumps({'summary':'Focused shared resources decision','recent_indices':[len(context)-1]})
   print(json.dumps({'id':r['id'],'result':{'turn':{'id':'child-turn'}}}),flush=True)
-  print(json.dumps({'method':'item/completed','params':{'threadId':'child-thread','turnId':'child-turn','item':{'type':'agentMessage','id':'reply','phase':'final_answer','text':'Child reply'}}}),flush=True)
-  print(json.dumps({'method':'turn/completed','params':{'threadId':'child-thread','turn':{'id':'child-turn','status':'completed'}}}),flush=True)
+  print(json.dumps({'method':'item/completed','params':{'threadId':thread,'turnId':'child-turn','item':{'type':'agentMessage','id':'reply','phase':'final_answer','text':answer}}}),flush=True)
+  print(json.dumps({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':'child-turn','status':'completed'}}}),flush=True)
   continue
  elif m=='account/rateLimits/read':result={'rateLimits':{}}
  else:raise RuntimeError('unexpected native RPC '+m)
@@ -90,10 +105,12 @@ import_desktop_history=false
                 env=dict(os.environ,HOME=str(root),CODEX_HOME=str(root/'codex-home'),RUST_LOG='warn'))
         process=start()
         seq=0
-        def send(text, user=100, topic=7):
+        def send(text, user=100, topic=7, reply=None):
             nonlocal seq
             seq+=1
             updates.append(dict(update_id=seq,message=dict(message_id=seq,message_thread_id=topic,chat=dict(id=100,type='private'),text=text,**{'from':dict(id=user,is_bot=False,first_name='Fixture')})))
+            if reply is not None:updates[-1]['message']['reply_to_message']={'message_id':reply,'text':'Quoted text'}
+            return seq
         def wait(predicate):
             deadline=time.monotonic()+15
             while time.monotonic()<deadline:
@@ -140,6 +157,29 @@ import_desktop_history=false
             inputs=[r['params']['input'][0]['text'] for r in rpc if r.get('method')=='turn/start']
             assert len(inputs)==2 and '[Conversation origin]' in inputs[0] and 'Shared Resources' in inputs[0]
             assert '[Conversation origin]' not in inputs[1], inputs[1]
+            quote=send('SHARED RESOURCES source decision')
+            wait(lambda:db.execute("SELECT COUNT(*) FROM turns WHERE prompt='SHARED RESOURCES source decision' AND status='completed'").fetchone()[0]==1)
+            send('LATER SOURCE')
+            wait(lambda:db.execute("SELECT COUNT(*) FROM turns WHERE prompt='LATER SOURCE' AND status='completed'").fetchone()[0]==1)
+            source_before=db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone()
+            send('/fork Shared Resources Focused',reply=quote)
+            wait(lambda:any(m=='sendMessage' and 'Focused fork created:' in d['text'] for m,d in calls))
+            assert db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone()==source_before
+            assert db.execute('SELECT codex_thread_id,session_prompt FROM sessions WHERE thread_id=9').fetchone()==(None,'Keep this preference')
+            notice=db.execute("SELECT value FROM bot_state WHERE key='handoff_notice:100:9'").fetchone()[0]
+            assert 'Focused shared resources decision' in notice and 'SHARED RESOURCES' in notice and 'LATER SOURCE' not in notice
+            rpc=[json.loads(line) for line in (root/'rpc.jsonl').read_text().splitlines()]
+            assert len([r for r in rpc if r.get('method')=='thread/fork'])==1
+            send('Continue focused',topic=9)
+            wait(lambda:db.execute("SELECT COUNT(*) FROM turns WHERE prompt='Continue focused' AND status='completed'").fetchone()[0]==1)
+            rpc=[json.loads(line) for line in (root/'rpc.jsonl').read_text().splitlines()]
+            inputs=[r['params']['input'][0]['text'] for r in rpc if r.get('method')=='turn/start' and r['params']['threadId']=='handoff-thread']
+            assert len(inputs)==1 and 'Focused shared resources decision' in inputs[0]
+            assert db.execute("SELECT value FROM bot_state WHERE key='handoff_notice:100:9'").fetchone() is None
+            count=len(topics)
+            send('/fork Unknown quote',reply=999999)
+            wait(lambda:any(m=='sendMessage' and 'Cannot locate this quote safely' in d['text'] for m,d in calls))
+            assert len(topics)==count
             print('fork HTTP/RPC/SQLite journey passed: binding, parent preservation, notice/restart, first-only native input, title, owner; fork creation starts no inference')
         finally:
             if process.poll() is None:process.send_signal(signal.SIGINT)

@@ -105,16 +105,26 @@ pub(super) async fn process_turn(
         )
         .await?
     };
+    sink.lock().await.turn_id = Some(turn_id);
     let mut runtime_request = queued.request.clone();
-    if let Some(thread_id) = session.codex_thread_id.as_deref() {
-        if let Some(notice) = shared
-            .store
-            .bot_state_value(&format!("fork_notice:{thread_id}"))?
-        {
+    let handoff_key = format!(
+        "handoff_notice:{}:{}",
+        session.key.chat_id, session.key.thread_id
+    );
+    let notice_key = if shared.store.bot_state_value(&handoff_key)?.is_some() {
+        Some(handoff_key)
+    } else {
+        session
+            .codex_thread_id
+            .as_deref()
+            .map(|thread| format!("fork_notice:{thread}"))
+    };
+    if let Some(key) = notice_key.as_deref() {
+        if let Some(notice) = shared.store.bot_state_value(key)? {
             shared.store.audit(
                 Some(queued.request.from_user_id),
                 "fork_notice_prepared",
-                serde_json::json!({"thread":thread_id,"turn":turn_id}),
+                serde_json::json!({"session":session.id,"turn":turn_id}),
             )?;
             runtime_request.prompt = format!(
                 "[Conversation origin]\n{notice}\n\n{}",
@@ -154,6 +164,7 @@ pub(super) async fn process_turn(
                     async move {
                         match event {
                             CodexEvent::ThreadStarted(thread_id) => {
+                                shared.store.record_turn_native_thread(turn_id, &thread_id)?;
                                 if preserve_thread_binding {
                                     shared
                                         .store
@@ -250,9 +261,7 @@ pub(super) async fn process_turn(
     let final_result = async {
         match run_result {
             Ok(summary) => {
-                if let Some(thread_id) = session.codex_thread_id.as_deref() {
-                    shared.store.take_bot_state(&format!("fork_notice:{thread_id}"))?;
-                }
+                if let Some(key)=notice_key.as_deref() { shared.store.take_bot_state(key)?; }
                 shared.store.set_session_busy(session.key, false)?;
                 let sink_for_success = sink.clone();
                 let sink_for_failure = sink.clone();
@@ -592,6 +601,7 @@ pub(super) fn saved_thread_is_unavailable(error: &anyhow::Error) -> bool {
 }
 
 struct LiveTurnSink {
+    turn_id: Option<i64>,
     shared: Arc<AppShared>,
     session_key: SessionKey,
     messages: Vec<TelegramMessageRef>,
@@ -620,6 +630,7 @@ impl LiveTurnSink {
         Self {
             shared,
             session_key: session.key,
+            turn_id: None,
             messages: placeholder.into_iter().collect(),
             draft_id: None,
             limits_inline,
@@ -641,6 +652,7 @@ impl LiveTurnSink {
         Self {
             shared,
             session_key: session.key,
+            turn_id: None,
             messages: Vec::new(),
             draft_id: Some(draft_id),
             limits_inline,
@@ -819,6 +831,18 @@ impl LiveTurnSink {
             }
         }
 
+        if force {
+            if let Some(turn_id) = self.turn_id {
+                for (reference, chunk) in self.messages.iter().zip(chunks.iter()) {
+                    self.shared.store.record_handoff_message(
+                        self.session_key,
+                        turn_id,
+                        reference.message_id,
+                        chunk,
+                    )?;
+                }
+            }
+        }
         self.last_flushed_text = visible_text;
         self.last_flush_at = Instant::now();
         Ok(())
