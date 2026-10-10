@@ -54,6 +54,7 @@ pub(super) fn command_uses_session_context(parsed: &ParsedInput) -> bool {
         ParsedInput::Bridge(command) => matches!(
             command,
             BridgeCommand::Topic { .. }
+                | BridgeCommand::Fork { .. }
                 | BridgeCommand::Review(_)
                 | BridgeCommand::Cd { .. }
                 | BridgeCommand::Pwd

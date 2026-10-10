@@ -432,6 +432,17 @@ impl Store {
         .map_err(Into::into)
     }
 
+    pub fn take_bot_state(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.query_row(
+            "DELETE FROM bot_state WHERE key=?1 RETURNING value",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
     pub fn save_bot_state(&self, key: &str, value: &str) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute(
@@ -617,6 +628,15 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn session_creator(&self, key: SessionKey) -> Result<i64> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Ok(conn.query_row(
+            "SELECT creator_user_id FROM sessions WHERE chat_id=?1 AND thread_id=?2",
+            params![key.chat_id, key.thread_id],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn apply_session_template(&self, key: SessionKey, template: &SessionRecord) -> Result<()> {
@@ -1219,6 +1239,35 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn pending_fork_notice_is_consumed_once_without_changing_binding() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        let key = SessionKey::new(100, Some(8));
+        store.ensure_session(key, 100, &defaults()).unwrap();
+        store.set_session_codex_thread(key, "child").unwrap();
+        store
+            .save_bot_state("fork_notice:child", "Human selected a side topic")
+            .unwrap();
+        assert_eq!(
+            store
+                .take_bot_state("fork_notice:child")
+                .unwrap()
+                .as_deref(),
+            Some("Human selected a side topic")
+        );
+        assert!(store.take_bot_state("fork_notice:child").unwrap().is_none());
+        assert_eq!(
+            store
+                .get_session(key)
+                .unwrap()
+                .unwrap()
+                .codex_thread_id
+                .as_deref(),
+            Some("child")
+        );
     }
 
     #[test]
