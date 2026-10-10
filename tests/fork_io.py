@@ -2,6 +2,7 @@
 """Native fork/topic binding journey using synthetic HTTP, stdio RPC and SQLite."""
 import collections
 import http.server
+import importlib.util
 import html
 import json
 import os
@@ -14,6 +15,10 @@ import tempfile
 import threading
 import time
 
+
+spec = importlib.util.spec_from_file_location('activity',pathlib.Path(__file__).resolve().parents[1]/'scripts/activity_indicator.py')
+activity=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(activity)
 
 def main(binary):
     with tempfile.TemporaryDirectory(prefix='telecodex-fork-') as directory:
@@ -45,7 +50,7 @@ def main(binary):
         threading.Thread(target=server.serve_forever,daemon=True).start()
         native = root/'codex'
         native.write_text('''#!/usr/bin/python3
-import json,sys,pathlib
+import json,sys,pathlib,time
 if sys.argv[1:]==['login','status']:
  print('Logged in using ChatGPT');sys.exit(0)
 log=pathlib.Path(__file__).with_name('rpc.jsonl')
@@ -83,6 +88,9 @@ for line in sys.stdin:
  elif m=='turn/start':
   thread=r['params']['threadId'];answer='Child reply'
   if thread=='summary-thread':
+   gate=log.with_name('hold-summary')
+   deadline=time.monotonic()+15
+   while gate.exists() and time.monotonic()<deadline:time.sleep(.02)
    context=json.loads(r['params']['input'][0]['text'])['source_entries']
    assert 'LATER SOURCE' not in str(context)
    answer=json.dumps({'summary':'Focused shared resources decision','recent_indices':[len(context)-1]})
@@ -171,8 +179,24 @@ import_desktop_history=false
             send('LATER SOURCE')
             wait(lambda:db.execute("SELECT COUNT(*) FROM turns WHERE prompt='LATER SOURCE' AND status='completed'").fetchone()[0]==1)
             source_before=db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone()
+            (root/'hold-summary').touch()
             send('/fork Shared Resources Focused',reply=quote)
+            wait(lambda:db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone() is not None and json.loads(db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone()[0])['phase']=='synthesizing_handoff')
+            observer_db=activity.readonly(root/'state.sqlite')
+            command=activity.command_activity(observer_db,100,7,time.time())
+            assert command and 'Synthesizing focused handoff' in command['line']
+            telegram=activity.Telegram({'bot_token_file':str(token),'api_base':f'http://127.0.0.1:{server.server_port}'})
+            requests=activity.StatusRequests(observer_db,telegram,root/'status-requests.json')
+            status_id=send('/status')
+            wait(lambda:observer_db.execute('SELECT status FROM incoming_updates WHERE update_id=?',(status_id,)).fetchone() is not None)
+            requests.respond({'100:7':command['line']},lambda:'weekly unavailable',{'100:7':'parent-thread'},
+                             {'100:7':{'command':command['operation'],'active':True,'turn':command['operation']}})
+            assert any(m=='sendMessage' and 'Synthesizing focused handoff' in d['text'] for m,d in calls)
+            assert observer_db.execute('SELECT status FROM incoming_updates WHERE update_id=?',(status_id,)).fetchone()[0]=='received'
+            observer_db.close()
+            (root/'hold-summary').unlink()
             wait(lambda:any(m=='sendMessage' and 'Focused fork created:' in d['text'] for m,d in calls))
+            assert db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone() is None
             assert db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone()==source_before
             assert db.execute('SELECT codex_thread_id,session_prompt FROM sessions WHERE thread_id=9').fetchone()==(None,'Keep this preference')
             notice=db.execute("SELECT value FROM bot_state WHERE key='handoff_notice:100:9'").fetchone()[0]
@@ -202,6 +226,7 @@ import_desktop_history=false
             send('/fork Ambiguous legacy',reply=666666,reply_text='Repeated legacy')
             wait(lambda:any(m=='sendMessage' and 'occurs more than once' in d['text'] for m,d in calls))
             assert len(topics)==count
+            assert db.execute("SELECT value FROM bot_state WHERE key='command_activity:100:7'").fetchone() is None
             rpc=[json.loads(line) for line in (root/'rpc.jsonl').read_text().splitlines()]
             assert len([r for r in rpc if r.get('method')=='turn/start' and r['params']['threadId']=='summary-thread'])==inferences
             print('fork HTTP/RPC/SQLite journey passed: binding, parent preservation, notice/restart, first-only native input, title, owner; fork creation starts no inference')

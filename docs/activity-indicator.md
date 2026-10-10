@@ -147,3 +147,19 @@ workers show uncertainty, never fabricated progress. This deadline is a maximum
 wait, not a scheduled wakeup. Native activity and external update work are shown
 as separate lines. No receipt means no inferred external task. Existing quiet
 grace, card relocation and completion cleanup still apply.
+
+## Bridge command activity
+
+Fork operations publish topic-scoped phases separately from native conversation
+turns: locating a quote, synthesizing a focused handoff, cloning native history,
+creating a topic, preparing its binding, and delivering links. `/status` can
+report an admitted request while the long command still occupies normal topic
+dispatch; observation never consumes, completes or replays that input. Automatic
+cards use the existing 30-second quiet threshold and weekly limit/reset display.
+
+Live claims require the current bridge instance and a fresh instance heartbeat.
+The command scope retires its own operation on completion, error or cancellation;
+a restart discards command activity while retaining pending handoff context.
+The companion does not infer progress from elapsed time or from a preparing
+message. This reusable tracking currently covers native forks and focused reply
+handoffs.

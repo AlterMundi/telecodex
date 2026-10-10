@@ -65,6 +65,11 @@ impl Store {
         store.init_schema()?;
         let stale_cutoff = stale_instance_cutoff();
         store.claim_instance_lock(&stale_cutoff)?;
+        // A restarted process cannot continue a previous command's activity lease.
+        store.conn.lock().expect("store mutex poisoned").execute(
+            "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",
+            [],
+        )?;
         // A restart does not authorize replaying a partially dispatched turn.
         // Keep its input available and surface uncertainty for a human retry.
         {
@@ -450,6 +455,24 @@ impl Store {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
         )?;
+        Ok(())
+    }
+
+    pub fn save_command_activity(
+        &self,
+        key: SessionKey,
+        operation: &str,
+        phase: &str,
+        started: i64,
+    ) -> Result<()> {
+        self.save_bot_state(&format!("command_activity:{}:{}",key.chat_id,key.thread_id),
+            &serde_json::json!({"instance_id":self.instance_id,"operation":operation,"phase":phase,"started_at":started}).to_string())
+    }
+
+    pub fn clear_command_activity(&self, key: SessionKey, operation: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute("DELETE FROM bot_state WHERE key=?1 AND json_extract(value,'$.operation')=?2 AND json_extract(value,'$.instance_id')=?3",
+            params![format!("command_activity:{}:{}",key.chat_id,key.thread_id),operation,self.instance_id])?;
         Ok(())
     }
 
@@ -1406,6 +1429,51 @@ mod tests {
                 .unwrap()
                 .join("\n")
                 .contains("Selected quote")
+        );
+    }
+
+    #[test]
+    fn command_activity_cleanup_preserves_other_operations_and_restart_drops_live_claims() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        let key = SessionKey::new(100, Some(7));
+        store
+            .save_command_activity(key, "operation", "synthesizing_handoff", 1)
+            .unwrap();
+        store.clear_command_activity(key, "other").unwrap();
+        assert!(
+            store
+                .bot_state_value("command_activity:100:7")
+                .unwrap()
+                .is_some()
+        );
+        store.clear_command_activity(key, "operation").unwrap();
+        assert!(
+            store
+                .bot_state_value("command_activity:100:7")
+                .unwrap()
+                .is_none()
+        );
+        store
+            .save_command_activity(key, "operation", "creating_topic", 1)
+            .unwrap();
+        store
+            .save_bot_state("handoff_notice:100:8", "Keep context")
+            .unwrap();
+        drop(store);
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        assert!(
+            store
+                .bot_state_value("command_activity:100:7")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .bot_state_value("handoff_notice:100:8")
+                .unwrap()
+                .as_deref(),
+            Some("Keep context")
         );
     }
 
