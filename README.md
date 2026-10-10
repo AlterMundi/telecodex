@@ -411,7 +411,7 @@ automatically. A title-only failure can be repaired with `/rename` in the child.
 Requires a Codex App Server supporting `thread/fork` with `excludeTurns` and
 Telegram topic support. This command creates no worktree or Matrix attention.
 
-When `/fork Name` is sent as a reply, it creates a **fresh context handoff** rather
+When `/fork Name` is sent as a reply containing text or a caption, it creates a **fresh context handoff** rather
 than cloning native history. One bounded summarization turn selects relevant
 original text excerpts and synthesizes older available context through the quote.
 The handoff is loaded on the child's first successful native turn; source history
@@ -422,10 +422,15 @@ selected entries, including the quote, accompany the summary. Model output must
 identify actual source entries; generated replacements are not treated as quotes.
 
 Exact Telegram boundaries require the durable ingress journal and native turn
-binding, or the new outgoing message correlation. Historical messages without
-that binding, unknown quotes and unfinished answers are rejected with an
-explanation; the bridge never guesses a boundary or silently falls back to a full
-fork. Summary failure creates no destination. Later creation/delivery failures
+binding, or the new outgoing message correlation. Without that mapping, the bridge
+searches only the currently bound native conversation for one literal occurrence
+of the quoted text, normalizing whitespace and projecting bot Markdown to visible
+text. A unique occurrence selects the **entire completed native turn**, including
+its assistant response; both notices and context declare this coarser boundary.
+Later turns are excluded. Ambiguous, missing or unfinished matches, incomplete
+pagination, and searches exceeding 5,000 turns or 128 MiB are rejected before
+summarization or topic creation. Empty reply references use the ordinary native
+fork. The bridge never guesses a boundary or silently substitutes a full fork. Summary failure creates no destination. Later creation/delivery failures
 retain audit stages for reconciliation without automatic replay. Summarization
 uses an ephemeral thread, empty workspace, read-only sandbox, disabled search,
 shell and configured MCP servers, and no source task continuation. This mode

@@ -911,6 +911,19 @@ pub struct ReplyMessage {
     pub message_id: i64,
     pub from: Option<User>,
     pub text: Option<String>,
+    pub caption: Option<String>,
+}
+impl ReplyMessage {
+    pub fn quoted_text(&self) -> Option<&str> {
+        self.text
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .or_else(|| {
+                self.caption
+                    .as_deref()
+                    .filter(|text| !text.trim().is_empty())
+            })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
