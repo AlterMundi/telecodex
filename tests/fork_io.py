@@ -53,7 +53,9 @@ for line in sys.stdin:
  if 'id' not in r:continue
  m=r['method']
  if m=='initialize':result={'userAgent':'fixture'}
- elif m=='thread/turns/list':result={'data':[{'id':'parent-turn','status':'completed'}]}
+ elif m=='thread/turns/list':
+  assert r['params']=={'threadId':'parent-thread','limit':1,'sortDirection':'desc'}
+  result={'data':[{'id':'parent-turn','status':'completed'}]}
  elif m=='thread/fork':
   assert r['params']=={'threadId':'parent-thread','excludeTurns':True,'lastTurnId':'parent-turn'}
   result={'thread':{'id':'child-thread'}}
@@ -138,7 +140,7 @@ import_desktop_history=false
             inputs=[r['params']['input'][0]['text'] for r in rpc if r.get('method')=='turn/start']
             assert len(inputs)==2 and '[Conversation origin]' in inputs[0] and 'Shared Resources' in inputs[0]
             assert '[Conversation origin]' not in inputs[1], inputs[1]
-            print('fork HTTP/RPC/SQLite journey passed: binding, parent preservation, notice/restart, title, owner, no inference')
+            print('fork HTTP/RPC/SQLite journey passed: binding, parent preservation, notice/restart, first-only native input, title, owner; fork creation starts no inference')
         finally:
             if process.poll() is None:process.send_signal(signal.SIGINT)
             _,err=process.communicate(timeout=10)

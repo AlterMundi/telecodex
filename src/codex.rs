@@ -359,7 +359,10 @@ impl CodexRunner {
             let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
             process.initialize().await?;
             let boundary_id = process
-                .send_request("thread/turns/list", json!({"threadId":thread_id,"limit":1}))
+                .send_request(
+                    "thread/turns/list",
+                    json!({"threadId":thread_id,"limit":1,"sortDirection":"desc"}),
+                )
                 .await?;
             let boundary_response = process.await_response(boundary_id).await?;
             let last = boundary_response
