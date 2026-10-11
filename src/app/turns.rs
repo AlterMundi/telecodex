@@ -1284,6 +1284,11 @@ pub(super) fn prepare_runtime_request(
         workspace.out_dir.display()
     ));
 
+    instruction_sections.push(
+        "Keep Telegram conversation natural and direct. Use ordinary chat for discussion, simple confirmations, status questions and spontaneous feedback. Use native question widgets only when the human explicitly asks for one or a consequential choice genuinely needs structured human input; otherwise continue with reasonable judgment or ask briefly in chat. Declare a durable /pending task only for a concrete important external action that must remain discoverable after this turn, such as a needed device test or credential handoff. Do not turn ordinary questions, optional suggestions or routine follow-up into pending tasks. Do not duplicate a request that is already pending."
+            .to_string(),
+    );
+
     instruction_sections.push(format!(
         "If a human action must remain recoverable after this turn (for example a phone test), explicitly declare it in {}. This optional regular JSON file is outside out and is not uploaded. Schema: {{\"schema\":\"telecodex.human-requests/v1\",\"requests\":[{{\"id\":\"phone-test\",\"title\":\"Test playback\",\"action\":\"Open the app and report playback.\",\"links\":[]}}]}}. Use at most 10 requests, unique IDs (64 ASCII letters/digits/dash/underscore), titles <=120 characters, actions <=8000 characters and at most 5 public http(s) links {{\"label\":\"App\",\"url\":\"https://example.org\"}}. Never put secrets or private endpoints into previews or links. Telecodex admits the declaration only after successful native completion and scopes it to this turn's human, topic and native thread. /pending (also /questions) reopens it. Do not declare a request already answered; ordinary prose creates no durable request.",
         workspace.root.join(interactions::MANIFEST).display()
