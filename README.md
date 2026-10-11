@@ -531,3 +531,10 @@ goal. Files remain available to native sessions after completion or clearing;
 clearing goal metadata does not erase its referenced work. Unsupported native
 APIs report a command error instead of forwarding `/goal` as model text. Goal
 commands remain disabled in the dedicated bounded Tribu attention topic.
+
+## Daimon Field coordination
+
+Cross-repository decisions and repository-specific implications are indexed in
+[the Daimon Field projection](docs/daimon-field.md). The existing private
+[AlterMundi Project 13](https://github.com/orgs/AlterMundi/projects/13) is the canonical decision and roadmap surface;
+repository access and Project access are separate.
