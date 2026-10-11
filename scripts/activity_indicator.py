@@ -529,6 +529,54 @@ def combine_update_status(report, active_text, automatic_text, update):
     return report, active_text, automatic_text
 
 
+def pending_requests(database, chat, topic, user):
+    """Read only metadata scoped to the requesting human and current binding.
+
+    Old bridge schemas have no ledger. A native record is live only while its
+    owning bridge still holds a fresh lock; restarting never recreates an RPC.
+    """
+    exists = database.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='human_interactions'").fetchone()
+    if not exists:
+        return None
+    rows = database.execute("""SELECT h.kind,h.state,h.instance_id,h.native_thread,s.codex_thread_id,
+        l.instance_id AS owner,l.heartbeat_at FROM human_interactions h
+        JOIN sessions s ON s.id=h.session_id JOIN users u ON u.tg_user_id=h.requester
+        LEFT JOIN app_instance_lock l ON l.key='main'
+        WHERE s.chat_id=? AND s.thread_id=? AND h.requester=? AND u.allowed=1
+          AND h.state IN ('pending','answering','unknown')""", (chat,topic,user)).fetchall()
+    pending = unknown = changed = 0
+    for row in rows:
+        if row['native_thread'] != row['codex_thread_id']:
+            changed += 1
+        elif row['kind'] == 'task' and row['state'] == 'pending':
+            pending += 1
+        elif row['kind'] == 'native':
+            heartbeat = timestamp(row['heartbeat_at'])
+            live = row['instance_id'] == row['owner'] and heartbeat is not None and 0 <= time.time()-heartbeat < 120
+            if row['state'] == 'pending' and live:
+                pending += 1
+            elif row['state'] in ('answering','unknown'):
+                unknown += 1
+    parts = []
+    if pending:
+        parts.append(f'{pending} pending')
+    if unknown:
+        parts.append(f'{unknown} answer outcome unconfirmed')
+    if changed:
+        parts.append(f'{changed} source session changed')
+    return {'pending':pending, 'line':'📋 Human requests · ' + ' · '.join(parts) + ' · /pending'} if parts else None
+
+
+def pending_markup(pending):
+    return {'inline_keyboard':[[{'text':'Open human requests','callback_data':'qpending'}]]} if pending else None
+
+
+def with_pending(text, pending):
+    if not pending:
+        return text
+    return (text + '\n' if text else '') + pending['line']
+
+
 class Telegram:
     def __init__(self, config):
         token_path = pathlib.Path(config['bot_token_file'])
@@ -583,14 +631,14 @@ class Publisher:
         atomic_json(self.path, self.entries)
 
     def update(self, key, chat, topic, turn, text, now, *, requested=False,
-               reply_to=None, active_text=None, position=None):
+               reply_to=None, active_text=None, position=None, markup=None):
         with self.lock:
             self._update(key, chat, topic, turn, text, now, requested=requested,
-                         reply_to=reply_to, active_text=active_text, position=position)
+                         reply_to=reply_to, active_text=active_text, position=position, markup=markup)
             return self.entries.get(key, {}).get('message_id')
 
     def _update(self, key, chat, topic, turn, text, now, *, requested,
-                reply_to, active_text, position):
+                reply_to, active_text, position, markup):
         entry = self.entries.get(key)
         if entry and entry.get('turn') != turn and entry.get('message_id'):
             # Repost once for a new human request, rather than editing above it.
@@ -631,7 +679,8 @@ class Publisher:
         if not requested and now < entry.get('next_update', 0):
             return
         entry['next_update'] = now + 30
-        payload = {'chat_id': chat, 'text': html.escape(text), 'parse_mode': 'HTML'}
+        payload = {'chat_id': chat, 'text': html.escape(text), 'parse_mode': 'HTML',
+                   'reply_markup': markup or {'inline_keyboard':[]}}
         message_id = entry.get('message_id')
         if message_id:
             entry['turn'] = turn
@@ -718,7 +767,8 @@ class StatusRequests:
         rows = self.database.execute('''SELECT i.update_id,i.status,
             json_extract(i.payload_json,'$.message.chat.id') AS chat,
             COALESCE(json_extract(i.payload_json,'$.message.message_thread_id'),0) AS topic,
-            json_extract(i.payload_json,'$.message.message_id') AS message
+            json_extract(i.payload_json,'$.message.message_id') AS message,
+            json_extract(i.payload_json,'$.message.from.id') AS requester
             FROM incoming_updates i JOIN users u
               ON u.tg_user_id=json_extract(i.payload_json,'$.message.from.id')
             WHERE i.update_id>? AND i.status IN ('handled','received','processing') AND u.allowed=1
@@ -753,9 +803,10 @@ class StatusRequests:
                 self.state['floor'] = max(self.state['floor'], int(oldest))
                 del self.state['attempted'][oldest]
             atomic_json(self.path, self.state)  # Never replay an ambiguous delivery.
-            text = reports[key] + ' · ' + weekly()
+            pending = pending_requests(self.database,row['chat'],row['topic'],row['requester'])
+            text = with_pending(reports[key] + ' · ' + weekly(),pending)
             context = (contexts or {}).get(key, {})
-            if publisher is not None and context.get('active'):
+            if publisher is not None and context.get('active') and not pending:
                 position = dict(context.get('position', {}))
                 latest = latest_input(self.database, row['chat'], row['topic'])
                 position['input_id'] = latest['message_id'] if latest else row['message']
@@ -771,6 +822,8 @@ class StatusRequests:
                        'reply_parameters': {'message_id': row['message']}}
             if row['topic']:
                 payload['message_thread_id'] = row['topic']
+            if pending:
+                payload['reply_markup'] = pending_markup(pending)
             result = self.telegram.call('sendMessage', payload)
             if result and result.get('ok'):
                 message = result.get('result', {})
@@ -870,7 +923,7 @@ def run(args):
                 if native is None:
                     native = Native(str(config['codex'].get('binary', 'codex')))
                 weekly.read(native, time.monotonic())
-                topics = bridge.execute('''SELECT s.chat_id,s.thread_id,s.codex_thread_id,
+                topics = bridge.execute('''SELECT s.chat_id,s.thread_id,s.codex_thread_id,s.creator_user_id,
                     (SELECT status FROM turns WHERE session_id=s.id ORDER BY id DESC LIMIT 1) AS turn_status
                     FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
                     WHERE s.codex_thread_id IS NOT NULL AND u.allowed=1''').fetchall()
@@ -911,10 +964,15 @@ def run(args):
                     if command:
                         report = active_text = command['line']
                         text = command['line'] if now-command['started'] >= 30 else None
+                    work_active = bool(active_text)
                     update = pending_update_line(args.pending_update_record, key, now)
                     report, active_text, text = combine_update_status(report, active_text, text, update)
+                    pending = pending_requests(bridge,topic['chat_id'],topic['thread_id'],topic['creator_user_id'])
+                    if pending and pending['pending']:
+                        active_text = with_pending(active_text,pending)
+                        text = with_pending(text,pending)
                     exchange = timestamp(reader.last_exchange)
-                    if update and exchange is not None and now - exchange < 30:
+                    if (update or pending) and exchange is not None and now - exchange < 30:
                         text = None
                     latest = latest_input(bridge, topic['chat_id'], topic['thread_id'])
                     position = {'exchange': reader.last_exchange,
@@ -940,22 +998,22 @@ def run(args):
                         active_text += ' · ' + weekly.label(native, time.monotonic())
                     text = with_goal(text, goal)
                     active_text = with_goal(active_text, goal)
-                    observations.append({'status': status.get('type'), 'visible': bool(text), 'command': bool(command)})
+                    observations.append({'status': status.get('type'), 'visible': bool(text), 'working': work_active, 'command': bool(command)})
                     if publisher:
                         publications.append((key, topic['chat_id'], topic['thread_id'],
                                              command['operation'] if command else reader.request_id or reader.turn_id, text, now,
-                                             active_text, position))
+                                             active_text, position, pending_markup(pending)))
                 # Publish the native snapshot before automatic Telegram delivery can wait.
                 cache.update(reports, bindings, weekly, contexts)
                 if publisher:
                     for publication in publications:
                         publisher.update(*publication[:6], active_text=publication[6],
-                                         position=publication[7])
+                                         position=publication[7], markup=publication[8])
                     for key, entry in publisher.snapshot().items():
                         if key not in known:
                             publisher.retire(key, entry)
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
-                            'topics': len(observations), 'active': sum(x['visible'] or x.get('command', False) for x in observations),
+                            'topics': len(observations), 'active': sum(x['working'] for x in observations),
                             'weekly_available': weekly.available,
                             'weekly_resets_at': weekly.resets_at,
                             'status_requests_alive': status_worker.is_alive() if status_worker else False,

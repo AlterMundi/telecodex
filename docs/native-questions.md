@@ -27,6 +27,11 @@ advertised, it reports the failure without submitting a turn. It sends the real
 `developer_instructions: null` for the native mode's built-in instructions.
 Adding the word “plan” to a normal prompt is not a substitute for this contract.
 
+Outstanding native questions and durable human tasks are now described in
+[Visible and recoverable human requests](human-requests.md). `/pending` aliases
+`/questions`; saved records remain discoverable after native completion/restart.
+The delivery paragraph above is historical baseline evidence.
+
 ## Answering and reopening questions
 
 Native `item/tool/requestUserInput` requests appear as Telegram questions with

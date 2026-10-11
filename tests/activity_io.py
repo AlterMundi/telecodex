@@ -61,6 +61,64 @@ class ActivityIO(unittest.TestCase):
         self.server.server_close()
         self.temporary.cleanup()
 
+    def pending_database(self):
+        database=sqlite3.connect(self.root/'pending.sqlite');database.row_factory=sqlite3.Row
+        database.executescript("""CREATE TABLE users(tg_user_id INTEGER,allowed INTEGER);
+            INSERT INTO users VALUES(100,1),(101,1),(102,0);
+            CREATE TABLE sessions(id INTEGER,chat_id INTEGER,thread_id INTEGER,codex_thread_id TEXT,creator_user_id INTEGER);
+            INSERT INTO sessions VALUES(1,100,7,'origin',100),(2,100,8,'other',100);
+            CREATE TABLE app_instance_lock(key TEXT,instance_id TEXT,heartbeat_at TEXT);
+            CREATE TABLE human_interactions(session_id INTEGER,requester INTEGER,native_thread TEXT,kind TEXT,state TEXT,instance_id TEXT);
+            CREATE TABLE incoming_updates(update_id INTEGER,status TEXT,payload_json TEXT,updated_at TEXT);
+            INSERT INTO human_interactions VALUES(1,100,'origin','native','pending','bridge'),
+                (1,100,'origin','task','pending','old'),(1,101,'origin','task','pending','old'),
+                (1,102,'origin','task','pending','old'),(2,100,'other','task','pending','old');""")
+        database.execute("INSERT INTO app_instance_lock VALUES('main','bridge',datetime('now'))")
+        database.commit();return database
+
+    def test_pending_metadata_is_scoped_and_native_channels_require_a_fresh_owner(self):
+        database=self.pending_database()
+        try:
+            pending=activity.pending_requests(database,100,7,100)
+            self.assertEqual(pending['pending'],2)
+            self.assertEqual(activity.pending_requests(database,100,7,101)['pending'],1)
+            self.assertIsNone(activity.pending_requests(database,100,7,102))
+            self.assertEqual(activity.pending_requests(database,100,8,100)['pending'],1)
+            self.assertIsNone(activity.pending_requests(database,101,7,100))
+            database.execute("UPDATE app_instance_lock SET heartbeat_at=datetime('now','-300 seconds')")
+            self.assertEqual(activity.pending_requests(database,100,7,100)['pending'],1)
+            database.execute("UPDATE human_interactions SET state='unknown' WHERE kind='native'")
+            self.assertIn('answer outcome unconfirmed',activity.pending_requests(database,100,7,100)['line'])
+            database.execute("UPDATE sessions SET codex_thread_id='replacement' WHERE id=1")
+            self.assertEqual(activity.pending_requests(database,100,7,100)['pending'],0)
+            self.assertIn('source session changed',activity.pending_requests(database,100,7,100)['line'])
+        finally:database.close()
+
+    def test_pending_card_reopens_and_removes_its_button_without_claiming_work(self):
+        pending={'pending':1,'line':'📋 Human requests · 1 pending · /pending'}
+        text=activity.with_pending(None,pending)
+        self.assertNotIn('Working',text)
+        self.publisher.update('100:7',100,7,'turn-a',text,100,markup=activity.pending_markup(pending))
+        self.assertEqual(self.calls[-1][1]['reply_markup']['inline_keyboard'][0][0]['callback_data'],'qpending')
+        self.publisher.update('100:7',100,7,'turn-a','Working',140)
+        self.assertEqual(self.calls[-1][1]['reply_markup'],{'inline_keyboard':[]})
+        self.publisher.update('100:7',100,7,'turn-a',None,180)
+        self.assertEqual(self.calls[-1][0],'deleteMessage')
+
+    def test_status_reads_requesting_humans_pending_metadata_and_supports_old_schemas(self):
+        database=self.pending_database()
+        try:
+            requests=activity.StatusRequests(database,self.telegram,self.root/'status-pending.json')
+            update={'message':{'chat':{'id':100},'message_thread_id':7,'message_id':20,'from':{'id':101},'text':'/status'}}
+            database.execute("INSERT INTO incoming_updates VALUES(1,'handled',?,datetime('now'))",(json.dumps(update),));database.commit()
+            requests.respond({'100:7':'◻️ Idle'},lambda:'weekly 78%',{'100:7':'origin'})
+            self.assertIn('1 pending',self.calls[-1][1]['text'])
+            self.assertNotIn('2 pending',self.calls[-1][1]['text'])
+            self.assertEqual(self.calls[-1][1]['reply_markup']['inline_keyboard'][0][0]['callback_data'],'qpending')
+            database.execute('DROP TABLE human_interactions')
+            self.assertIsNone(activity.pending_requests(database,100,7,100))
+        finally:database.close()
+
     def test_explicit_update_receipt_explains_wait_deadline_and_liveness(self):
         path = self.root / 'update.json'
         record = {'activation':'waiting_for_idle', 'topic_key':'100:7',

@@ -212,7 +212,7 @@ import_desktop_history=false
         accept = base64.b64encode(hashlib.sha1(headers[b'sec-websocket-key'] +
             b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
         sock.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+b'\r\n\r\n')
-        thread = None; turn = None; question_id = None
+        thread = None; turn = None; question_id = None; manifest = None; answered_ids = set()
         def send(value):
             data = json.dumps(value).encode(); size = len(data)
             head = bytes([129, size]) if size < 126 else b'\x81\x7e'+struct.pack('!H',size)
@@ -236,9 +236,13 @@ import_desktop_history=false
                 'threadId': 'foreign-thread', 'requestId': question_id}})
             send({'id': question_id, 'method': 'item/tool/requestUserInput', 'params': params})
             send({'id': question_id, 'method': 'item/tool/requestUserInput', 'params': params})
-            if self.mode == 'async':
+            if self.mode in ('async','multi'):
                 event('item/completed', {'item': {'type': 'agentMessage', 'id': 'continuing',
                     'phase': 'commentary', 'text': 'Native work continued while awaiting the answer.'}})
+            if self.mode == 'multi':
+                send({'id':'parallel-'+thread,'method':'item/tool/requestUserInput','params':{
+                    **params,'isBlocking':False,'itemId':'parallel-item','questions':[
+                    {'id':'parallel','header':'Parallel','question':'Second independent question','options':None}]}})
         while True:
             first = stream.read(2)
             if len(first) < 2: return
@@ -251,12 +255,24 @@ import_desktop_history=false
             message = json.loads(bytes(v ^ mask[i%4] for i,v in enumerate(data)))
             method, request_id, params = message.get('method'), message.get('id'), message.get('params', {})
             with self.lock: self.rpc.append(message)
-            if method is None and request_id == question_id and question_id is not None:
+            if method is None and question_id is not None and request_id in (question_id,'parallel-'+thread):
                 self.answers.append(message)
+                answered_ids.add(request_id)
                 if self.mode == 'disconnect':
                     self.finished.set(); return
                 event('serverRequest/resolved', {'requestId': request_id})
-                event('item/completed', {'item': {'type': 'agentMessage', 'id': 'answer',
+                if self.mode == 'multi' and len(answered_ids)<2:
+                    event('item/completed',{'item':{'type':'agentMessage','id':'continue','phase':'commentary','text':'One answer received; other question remains open.'}})
+                    continue
+                if self.mode in ('durable','invalid_tasks','symlink_tasks'):
+                    declaration={'schema':'telecodex.human-requests/v1','requests':[
+                        {'id':'phone-test','title':'Phone playback','action':'Open the app and report playback.','links':[]},
+                        {'id':'approve-copy','title':'Check wording','action':'Check the copy on your phone.','links':[]}]}
+                    if self.mode=='invalid_tasks': declaration['requests'][1]['id']='phone-test'
+                    if self.mode=='symlink_tasks':
+                        target=self.root/'private-control';target.write_text(json.dumps(declaration));manifest.symlink_to(target)
+                    else: manifest.write_text(json.dumps(declaration))
+                event('item/completed' , {'item': {'type': 'agentMessage', 'id': 'answer',
                     'phase': 'final_answer', 'text': 'Plan completed with the exact native answers.'}})
                 finish()
             elif method == 'initialize': send({'id': request_id, 'result': {}})
@@ -277,10 +293,19 @@ import_desktop_history=false
                 send({'id': request_id, 'result': {'thread': {'id': thread, 'turns': []}, 'model': 'fixture-model'}})
             elif method == 'thread/name/set': send({'id': request_id, 'result': {}})
             elif method == 'turn/start':
+                import re
+                match=re.search(r'explicitly declare it in ([^\s]+human-requests.json)',params.get('additionalContext',{}).get('telecodex.runtime',{}).get('value',''))
+                assert match,params
+                manifest=pathlib.Path(match[1])
                 assert params['collaborationMode']=={'mode': ('default' if params['input'][0]['text']=='implement after planning' else 'plan'),'settings':{
                     'model':'fixture-model','reasoning_effort':None,'developer_instructions':None}}, params
                 send({'id': request_id, 'result': {'turn': {'id': turn}}})
                 event('turn/started', {'turn': {'id': turn}})
+                if self.mode=='durable' and params['input'][0]['text'].startswith('[Feedback for human request:'):
+                    assert thread=='native-topic-7'
+                    assert params['input'][0]['text']=='[Feedback for human request: Check wording]\nThe copy is clear.'
+                    event('item/completed',{'item':{'type':'agentMessage','id':'feedback-final','phase':'final_answer','text':'Task feedback received on the existing native thread.'}})
+                    finish();continue
                 if params['collaborationMode']['mode']=='default':
                     event('item/completed', {'item': {'type':'agentMessage','id':'default-answer',
                         'phase':'final_answer','text':'Default mode continued the same native thread.'}})
@@ -325,7 +350,7 @@ def scenario(binary, mode):
             j.admit('late reply',reply=first[0]['message_id'])
             j.admit(callback=j.button(first, ':0'))
             j.admit('/questions')
-            j.wait(lambda: any('No pending questions' in m[1]['text'] for m in j.messages))
+            j.wait(lambda: any(('0 pending for you' in m[1]['text'] or 'No pending questions' in m[1]['text']) for m in j.messages))
             assert not j.answers
             assert sum(m.get('method') == 'turn/start' for m in j.rpc)==1
             assert j.row('SELECT collaboration_mode FROM sessions') == [('plan',)]
@@ -351,9 +376,9 @@ def scenario(binary, mode):
             j.admit(callback=j.button(first, ':0'),topic=8)
             j.admit(callback=(first[0],j.button(first, ':0')[1].replace(':0:0',':9:0')))
             j.admit('/questions')
-            j.wait(lambda: any('Pending Codex questions.' in m[1]['text'] for m in j.messages))
+            j.wait(lambda: any('Human requests · 1 pending for you' in m[1]['text'] for m in j.messages))
             assert not j.answers
-            picker = next(m for m in reversed(j.messages) if 'Pending Codex questions.' in m[1]['text'])
+            picker = next(m for m in reversed(j.messages) if 'Human requests · 1 pending for you' in m[1]['text'])
             reopen = picker[1]['reply_markup']['inline_keyboard'][0][0]['callback_data']
             j.admit(callback=(picker[0], reopen))
             j.wait(lambda: j.controls(1)[0]['message_id'] != first[0]['message_id'])
@@ -372,6 +397,19 @@ def scenario(binary, mode):
             assert j.answers[0] == {'id':'question-native-topic-8','result':{'answers':{
                 'scope':{'answers':['Other scope']},'notes':{'answers':['Other notes']}}}}
             j.wait(lambda: j.row('SELECT status FROM turns ORDER BY id') == [('running',),('completed',)])
+        if mode == 'multi':
+            j.wait(lambda:any('Second independent question' in m[1]['text'] for m in j.messages))
+            j.wait(lambda: j.row("SELECT COUNT(*) FROM human_interactions WHERE state='pending'")==[(2,)])
+            j.admit('/pending');j.wait(lambda:any('Human requests · 2 pending for you' in m[1]['text'] for m in j.messages))
+            picker=next(m for m in reversed(j.messages) if 'Human requests · 2 pending for you' in m[1]['text'])
+            control=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if b['text'].startswith('Parallel'))
+            previous=next(m for m in reversed(j.messages) if 'Second independent question' in m[1]['text'])
+            j.admit(callback=(picker[0],control));j.wait(lambda:any('Second independent question' in m[1]['text'] and m[0]['message_id']!=previous[0]['message_id'] for m in j.messages))
+            second=next(m for m in reversed(j.messages) if 'Second independent question' in m[1]['text'])
+            j.admit('parallel answer',reply=second[0]['message_id']);j.wait(lambda:len(j.answers)==1)
+            j.wait(lambda:j.row("SELECT state FROM human_interactions WHERE json_extract(payload_json,'$.title')='Parallel'")==[('answered',)])
+            assert j.row("SELECT state FROM human_interactions WHERE json_extract(payload_json,'$.title')='Scope'")==[('pending',)]
+            j.admit('/pending');j.wait(lambda:any('Human requests · 1 pending for you' in m[1]['text'] for m in j.messages))
         option_id = j.admit(callback=j.button(first, ':0'))
         j.wait(lambda: j.controls(2))
         second = j.controls(2)
@@ -397,17 +435,55 @@ def scenario(binary, mode):
             assert not j.answers
         reply = second[0]['message_id'] if mode == 'numeric' else 77 if mode == 'implicit_reply' else prompt[0]['message_id'] if mode == 'force_reply' else None
         answer_id = j.admit('Exact free text', reply=reply)
-        j.wait(lambda: len(j.answers)==(2 if mode == 'two_topics' else 1))
+        j.wait(lambda: len(j.answers)==(2 if mode in ('two_topics','multi') else 1))
         expected = {'id':question_id,'result':{'answers':{'scope':{'answers':['Small']},
                     'notes':{'answers':['Exact free text']}}}}
-        assert j.answers[-1] == expected and len(j.answers) == (2 if mode == 'two_topics' else 1), j.answers
+        assert j.answers[-1] == expected and len(j.answers) == (2 if mode in ('two_topics','multi') else 1), j.answers
         assert sum(m.get('method') == 'turn/start' for m in j.rpc)==(2 if mode == 'two_topics' else 1)
         j.wait(lambda: all(r==(0,) for r in j.row('SELECT busy FROM sessions')))
+        if mode in ('invalid_tasks','symlink_tasks'):
+            j.wait(lambda:j.row('SELECT status FROM turns')==[('failed',)])
+            assert j.row("SELECT COUNT(*) FROM human_interactions WHERE kind='task'")==[(0,)]
+            assert list((j.root/'.telecodex/turns').glob('*/human-requests.json'))
+            print(json.dumps({'scenario':mode,'invalid_declaration_retained_without_partial_admission':True}),flush=True);return
+        if mode == 'durable':
+            j.wait(lambda:j.row('SELECT status FROM turns')==[('completed',)])
+            j.stop();j.start();j.admit('/pending')
+            j.wait(lambda:any('Human requests · 2 pending for you' in m[1]['text'] for m in j.messages))
+            picker=next(m for m in reversed(j.messages) if 'Human requests · 2 pending for you' in m[1]['text'])
+            opener=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if b['text'].startswith('Phone playback'))
+            j.admit(callback=(picker[0],opener),user=101);j.admit(callback=(picker[0],opener),topic=8)
+            j.wait(lambda:len([m for m in j.messages if 'not available for you' in m[1]['text']])>=2)
+            j.admit(callback=(picker[0],opener));j.wait(lambda:any(m[1]['text'].startswith('Human request: Phone playback') for m in j.messages))
+            task=next(m for m in reversed(j.messages) if m[1]['text'].startswith('Human request: Phone playback'))
+            j.admit(callback=j.button(task,':reply'));j.wait(lambda:any(m[1].get('reply_markup',{}).get('force_reply') and m[1]['text'].startswith('Human request: ') for m in j.messages))
+            prompt=next(m for m in reversed(j.messages) if m[1].get('reply_markup',{}).get('force_reply') and m[1]['text'].startswith('Human request: '))
+            j.wait(lambda:j.row('SELECT message_id FROM human_interaction_messages WHERE message_id=?',(prompt[0]['message_id'],)))
+            j.admit(callback=j.button(task,':done'));j.wait(lambda:j.row("SELECT state FROM human_interactions WHERE json_extract(payload_json,'$.title')='Phone playback'")==[('completed',)])
+            j.admit('late task reply',reply=prompt[0]['message_id']);j.admit(callback=j.button(task,':done'))
+            j.wait(lambda:any('no current answer target' in m[1]['text'] for m in j.messages))
+            assert sum(m.get('method')=='turn/start' for m in j.rpc)==1
+            assert j.row("SELECT state FROM human_interactions WHERE json_extract(payload_json,'$.title')='Check wording'")==[('pending',)]
+            j.admit('/pending');j.wait(lambda:any('Human requests · 1 pending for you' in m[1]['text'] for m in j.messages))
+            picker=next(m for m in reversed(j.messages) if 'Human requests · 1 pending for you' in m[1]['text'])
+            opener=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if b['text'].startswith('Check wording'))
+            j.admit(callback=(picker[0],opener));j.wait(lambda:any(m[1]['text'].startswith('Human request: Check wording') for m in j.messages))
+            task=next(m for m in reversed(j.messages) if m[1]['text'].startswith('Human request: Check wording'))
+            j.wait(lambda:j.row('SELECT message_id FROM human_interaction_messages WHERE message_id=?',(task[0]['message_id'],)))
+            feedback=j.admit('The copy is clear.',reply=task[0]['message_id'])
+            j.wait(lambda:j.row('SELECT status FROM turns ORDER BY id')==[('completed',),('completed',)])
+            j.wait(lambda:j.row('SELECT status FROM incoming_updates WHERE update_id=?',(feedback,))==[('settled',)])
+            assert j.row("SELECT state FROM human_interactions WHERE json_extract(payload_json,'$.title')='Check wording'")==[('answered',)]
+            starts=[m for m in j.rpc if m.get('method')=='turn/start']
+            assert len(starts)==2 and starts[0]['params']['threadId']==starts[1]['params']['threadId']
+            j.admit('duplicate feedback',reply=task[0]['message_id']);j.wait(lambda:len([m for m in j.messages if 'no current answer target' in m[1]['text']])>=2)
+            assert len([m for m in j.rpc if m.get('method')=='turn/start'])==2
+            print(json.dumps({'scenario':mode,'two_tasks_survive_native_completion_and_restart':True,'scoped_force_reply_and_stale_controls':True}),flush=True);return
         if mode == 'disconnect':
             for update_id in (option_id, answer_id):
                 assert j.row('SELECT status FROM incoming_updates WHERE update_id=?',(update_id,))==[('undetermined',)]
             j.stop(); j.start(); j.admit('late answer',reply=second[0]['message_id']); j.admit('/questions')
-            j.wait(lambda: any('No pending questions' in m[1]['text'] for m in j.messages))
+            j.wait(lambda: any(('0 pending for you' in m[1]['text'] or 'No pending questions' in m[1]['text']) for m in j.messages))
             assert j.answers == [expected]
             assert sum(m.get('method') == 'turn/start' for m in j.rpc)==1
         else:
@@ -433,5 +509,5 @@ def scenario(binary, mode):
 
 if __name__ == '__main__':
     binary = str(pathlib.Path(sys.argv[1]).resolve())
-    for mode in sys.argv[2:] or ['implicit_reply','force_reply','roundtrip','async','numeric','long','two_topics','default','cancel','stop','secret','restart','restart_gap','disconnect','unsupported','wrong_receipt']:
+    for mode in sys.argv[2:] or ['implicit_reply','force_reply','roundtrip','async','numeric','long','two_topics','default','cancel','stop','secret','restart','restart_gap','disconnect','unsupported','wrong_receipt','multi','durable','invalid_tasks','symlink_tasks']:
         scenario(binary, mode)

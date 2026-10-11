@@ -9,7 +9,9 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+mod interactions;
 mod tribu;
+pub use interactions::HumanInteraction;
 pub use tribu::TribuAdmission;
 
 use crate::{
@@ -69,6 +71,7 @@ impl Store {
         let stale_cutoff = stale_instance_cutoff();
         store.claim_instance_lock(&stale_cutoff)?;
         store.init_tribu()?;
+        store.init_interactions()?;
         // A restarted process cannot continue a previous command's activity lease.
         store.conn.lock().expect("store mutex poisoned").execute(
             "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",
@@ -1981,5 +1984,248 @@ mod tests {
         assert_eq!(retry.from_user_id, 200);
         assert_eq!(retry.prompt, "hello");
         assert!(retry.review_mode.is_none());
+    }
+    #[test]
+    fn human_interactions_recover_tasks_without_resurrecting_native_channels() {
+        use crate::{store::HumanInteraction, user_input::NativeRequestId};
+        let tmp = NamedTempFile::new().unwrap();
+        let key = SessionKey::new(100, Some(7));
+        let mut item = HumanInteraction {
+            id: "blocking".into(),
+            kind: "native".into(),
+            state: "pending".into(),
+            requester: 100,
+            native_thread: "native-origin".into(),
+            local_turn: 0,
+            title: "Question".into(),
+            action: "Choose".into(),
+            blocking: true,
+            source: serde_json::json!({"requestId":serde_json::to_string(&NativeRequestId::Number(17)).unwrap()}),
+        };
+        {
+            let store = Store::open(tmp.path(), &[100, 101], &defaults()).unwrap();
+            let session = store.ensure_session(key, 100, &defaults()).unwrap();
+            store
+                .set_session_codex_thread(key, "native-origin")
+                .unwrap();
+            let turn = store
+                .record_turn_started(
+                    session.id,
+                    &TurnRequest {
+                        session_key: key,
+                        from_user_id: 100,
+                        prompt: "test".into(),
+                        runtime_instructions: None,
+                        attachments: vec![],
+                        review_mode: None,
+                        override_search_mode: None,
+                    },
+                )
+                .unwrap();
+            item.local_turn = turn;
+            store.save_interaction(key, &item, None).unwrap();
+            item.id = "nonblocking".into();
+            item.source["requestId"] = serde_json::json!(
+                serde_json::to_string(&NativeRequestId::String("17".into())).unwrap()
+            );
+            item.blocking = false;
+            store.save_interaction(key, &item, None).unwrap();
+            assert!(
+                store
+                    .transition_interaction(key, 100, "blocking", "pending", "answering")
+                    .unwrap()
+            );
+            store
+                .finish_native_interactions(turn, Some(&NativeRequestId::Number(17)), true)
+                .unwrap();
+            assert_eq!(
+                store
+                    .interaction(key, 100, "blocking")
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "answered"
+            );
+            assert_eq!(
+                store
+                    .interaction(key, 100, "nonblocking")
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "pending"
+            );
+            item.id = "lost-answer".into();
+            store.save_interaction(key, &item, None).unwrap();
+            store
+                .transition_interaction(key, 100, &item.id, "pending", "answering")
+                .unwrap();
+            item.id = "open-question".into();
+            store.save_interaction(key, &item, None).unwrap();
+            item.kind = "task".into();
+            item.id = "phone".into();
+            store
+                .save_human_tasks(key, &[("phone".into(), item.clone())])
+                .unwrap();
+            item.id = "transaction-first".into();
+            let first = item.clone();
+            item.id = "transaction-second".into();
+            item.requester = 101;
+            assert!(
+                store
+                    .save_human_tasks(
+                        key,
+                        &[("first".into(), first), ("second".into(), item.clone())]
+                    )
+                    .is_err()
+            );
+            assert!(
+                store
+                    .interaction(key, 100, "transaction-first")
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(store.interactions(key, 101).unwrap().is_empty());
+            assert!(
+                store
+                    .interaction(SessionKey::new(100, Some(8)), 100, "phone")
+                    .unwrap()
+                    .is_none()
+            );
+            store.record_interaction_message(key, 600, "phone").unwrap();
+            store
+                .record_turn_finished(turn, "completed", Some("done"))
+                .unwrap();
+        }
+        let store = Store::open(tmp.path(), &[100, 101], &defaults()).unwrap();
+        assert_eq!(
+            store
+                .interaction(key, 100, "lost-answer")
+                .unwrap()
+                .unwrap()
+                .state,
+            "unknown"
+        );
+        assert_eq!(
+            store
+                .interaction(key, 100, "open-question")
+                .unwrap()
+                .unwrap()
+                .state,
+            "expired"
+        );
+        assert_eq!(
+            store.interaction(key, 100, "phone").unwrap().unwrap().state,
+            "pending"
+        );
+        assert_eq!(
+            store.interaction_message(key, 600).unwrap().as_deref(),
+            Some("phone")
+        );
+        assert!(
+            !store
+                .transition_interaction(key, 101, "phone", "pending", "completed")
+                .unwrap()
+        );
+        store.set_session_codex_thread(key, "replacement").unwrap();
+        assert_eq!(
+            store.interaction(key, 100, "phone").unwrap().unwrap().state,
+            "source_changed"
+        );
+        assert!(!store.answer_human_task(key, 100, "phone", 700).unwrap());
+        store
+            .set_session_codex_thread(key, "native-origin")
+            .unwrap();
+        assert!(store.answer_human_task(key, 100, "phone", 700).unwrap());
+        assert!(!store.answer_human_task(key, 100, "phone", 700).unwrap());
+        assert_eq!(
+            store
+                .interaction(key, 100, "phone")
+                .unwrap()
+                .unwrap()
+                .source["delivery"],
+            "unknown"
+        );
+    }
+    #[test]
+    fn forgetting_a_topic_cascades_only_its_human_requests_and_message_receipts() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        for topic in [7, 8] {
+            let key = SessionKey::new(100, Some(topic));
+            let session = store.ensure_session(key, 100, &defaults()).unwrap();
+            store.set_session_codex_thread(key, "origin").unwrap();
+            let turn = store
+                .record_turn_started(
+                    session.id,
+                    &TurnRequest {
+                        session_key: key,
+                        from_user_id: 100,
+                        prompt: "test".into(),
+                        runtime_instructions: None,
+                        attachments: vec![],
+                        review_mode: None,
+                        override_search_mode: None,
+                    },
+                )
+                .unwrap();
+            let item = HumanInteraction {
+                id: format!("task-{topic}"),
+                kind: "task".into(),
+                state: "pending".into(),
+                requester: 100,
+                native_thread: "origin".into(),
+                local_turn: turn,
+                title: "Phone".into(),
+                action: "Test".into(),
+                blocking: false,
+                source: serde_json::json!({}),
+            };
+            store
+                .save_human_tasks(key, &[("phone".into(), item.clone())])
+                .unwrap();
+            store
+                .record_interaction_message(key, 600, &item.id)
+                .unwrap();
+            store
+                .record_turn_finished(turn, "completed", Some("done"))
+                .unwrap();
+        }
+        store.delete_session(SessionKey::new(100, Some(7))).unwrap();
+        assert!(
+            store
+                .interactions(SessionKey::new(100, Some(7)), 100)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store
+                .interaction_message(SessionKey::new(100, Some(7)), 600)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .interactions(SessionKey::new(100, Some(8)), 100)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .interaction_message(SessionKey::new(100, Some(8)), 600)
+                .unwrap()
+                .as_deref(),
+            Some("task-8")
+        );
+        assert_eq!(
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .query_row("PRAGMA foreign_key_check", [], |_| Ok(()))
+                .optional()
+                .unwrap(),
+            None
+        );
     }
 }

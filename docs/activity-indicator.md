@@ -70,6 +70,11 @@ cards include its literal state and the beginning of its objective, capped at
 Goal metadata alone never creates a working card: paused or blocked goals in
 otherwise idle topics remain visible through `/status` without implying activity.
 
+Pending human requests add a scoped count and an **Open human requests** button.
+A durable human task may keep a silent attention card after native completion;
+it is labelled Human requests and does not count as active work for idle upgrades.
+See [human request lifecycle and declarations](human-requests.md).
+
 The observer uses only `initialize`, metadata-only `thread/read`, `thread/goal/get` and
 `account/rateLimits/read` on the existing Codex App Server proxy. It reads the
 bridge SQLite database and native index in

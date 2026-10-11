@@ -13,8 +13,8 @@ pub(super) struct PendingDialogue {
     message_ids: Vec<i64>,
     awaiting_text: bool,
     answers: UserInputResponse,
-    closed: CancellationToken,
-    responder: oneshot::Sender<UserInputDecision>,
+    pub(super) closed: CancellationToken,
+    pub(super) responder: oneshot::Sender<UserInputDecision>,
 }
 
 async fn show_question(
@@ -23,6 +23,9 @@ async fn show_question(
     pending: &mut PendingDialogue,
 ) -> Result<()> {
     let question = &pending.request.questions[pending.index];
+    shared
+        .store
+        .update_native_interaction(token, &question.header, &question.question)?;
     let mut text = format!(
         "Codex question {}/{}: {}\n\n{}",
         pending.index + 1,
@@ -128,6 +131,14 @@ pub(super) async fn begin_dialogue(
         responder,
         closed,
     };
+    let first = &pending.request.questions[0];
+    shared.store.save_interaction(session, &crate::store::HumanInteraction {
+        id: token.clone(), kind: "native".into(), state: "pending".into(), requester,
+        native_thread: pending.request.thread_id.clone(), local_turn: local_turn_id,
+        title: first.header.clone(), action: first.question.clone(), blocking: pending.request.is_blocking,
+        source: serde_json::json!({"requestId":serde_json::to_string(&pending.request_id)?,
+            "threadId":pending.request.thread_id,"turnId":pending.request.turn_id,"itemId":pending.request.item_id}),
+    }, None)?;
     show_question(&shared, &token, &mut pending).await?;
     if !pending.closed.is_cancelled() && !pending.responder.is_closed() {
         shared.pending_questions.lock().await.insert(token, pending);
@@ -135,7 +146,7 @@ pub(super) async fn begin_dialogue(
     Ok(receiver)
 }
 
-async fn notice(shared: &AppShared, message: &Message, text: &str) -> Result<()> {
+pub(super) async fn notice(shared: &AppShared, message: &Message, text: &str) -> Result<()> {
     shared
         .telegram
         .send_message(SendMessage::html(
@@ -180,6 +191,13 @@ async fn answer(
     pending.index += 1;
     pending.awaiting_text = false;
     if pending.index == pending.request.questions.len() {
+        shared.store.transition_interaction(
+            pending.session,
+            pending.requester,
+            &token,
+            "pending",
+            "answering",
+        )?;
         // Send once. A closed native connection must never cause a new turn/replay.
         let _ = pending
             .responder
@@ -199,6 +217,18 @@ pub(super) async fn handle_callback(
     user: i64,
     data: &str,
 ) -> Result<bool> {
+    if data == "qpending" {
+        show_pending(shared, message, user).await?;
+        return Ok(true);
+    }
+    if let Some(offset) = data.strip_prefix("qpage:") {
+        if let Ok(offset) = offset.parse::<usize>() {
+            if offset <= 1_000_000 && offset % 50 == 0 {
+                show_pending_page(shared, message, user, offset).await?;
+            }
+        }
+        return Ok(true);
+    }
     if let Some(token) = data.strip_prefix("qopen:") {
         let key = SessionKey::new(message.chat.id, message.message_thread_id);
         let mut guard = shared.pending_questions.lock().await;
@@ -210,12 +240,12 @@ pub(super) async fn handle_callback(
         });
         if !valid {
             drop(guard);
-            notice(
-                &shared,
-                message,
-                "This question is no longer pending for you in this topic.",
-            )
-            .await?;
+            let opening = shared
+                .store
+                .interaction(key, user, token)?
+                .is_some_and(|i| i.kind == "native" && i.state == "pending");
+            notice(&shared,message,if opening {"Question controls are still opening. Use /pending again when delivery completes."}
+                else {"This question is no longer pending for you in this topic."}).await?;
         } else {
             let mut pending = guard.remove(token).expect("checked pending question");
             drop(guard);
@@ -307,6 +337,9 @@ pub(super) async fn handle_callback(
     } else if action == "cancel" {
         let pending = guard.remove(token).expect("checked pending question");
         drop(guard);
+        shared
+            .store
+            .transition_interaction(key, user, token, "pending", "cancelled")?;
         let _ = pending.responder.send(UserInputDecision::Cancel);
     } else {
         let value = guard.get(token).and_then(|p| {
@@ -415,9 +448,18 @@ pub(super) async fn show_pending(
     message: &Message,
     user: i64,
 ) -> Result<()> {
+    show_pending_page(shared, message, user, 0).await
+}
+
+async fn show_pending_page(
+    shared: Arc<AppShared>,
+    message: &Message,
+    user: i64,
+    offset: usize,
+) -> Result<()> {
     let key = SessionKey::new(message.chat.id, message.message_thread_id);
     let guard = shared.pending_questions.lock().await;
-    let mut rows = guard
+    let live = guard
         .iter()
         .filter(|(_, p)| {
             p.session == key
@@ -425,35 +467,92 @@ pub(super) async fn show_pending(
                 && !p.closed.is_cancelled()
                 && !p.responder.is_closed()
         })
-        .map(|(token, p)| {
+        .map(|(id, p)| {
             (
-                p.local_turn_id,
-                p.request.item_id.clone(),
-                vec![InlineKeyboardButton {
-                    text: format!(
-                        "{} ({}/{})",
-                        p.request.questions[p.index].header,
-                        p.index + 1,
-                        p.request.questions.len()
-                    ),
-                    callback_data: Some(format!("qopen:{token}")),
-                    url: None,
-                }],
+                id.clone(),
+                format!(
+                    "{} ({}/{})",
+                    p.request.questions[p.index].header,
+                    p.index + 1,
+                    p.request.questions.len()
+                ),
             )
         })
-        .collect::<Vec<_>>();
-    rows.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        .collect::<HashMap<_, _>>();
     drop(guard);
-    let text = if rows.is_empty() {
-        "No pending questions for you in this topic. Questions interrupted by a restart are not replayed."
+    let items = shared.store.interactions_page(key, user, offset)?;
+    let mut rows = Vec::new();
+    let mut pending = 0;
+    for item in items.iter().take(50) {
+        let (label, callback) = if let Some(title) = live.get(&item.id) {
+            pending += 1;
+            (
+                format!(
+                    "{} · {}",
+                    title,
+                    if item.blocking {
+                        "blocking"
+                    } else {
+                        "nonblocking"
+                    }
+                ),
+                format!("qopen:{}", item.id),
+            )
+        } else if item.kind == "native" && item.state == "pending" {
+            pending += 1;
+            (
+                format!("{} · opening controls", item.title),
+                format!("qopen:{}", item.id),
+            )
+        } else {
+            if item.kind == "task" && item.state == "pending" {
+                pending += 1;
+            }
+            let state = if item.kind == "native" && item.state == "pending" {
+                "expired"
+            } else {
+                &item.state
+            };
+            (
+                format!("{} · {}", item.title, state),
+                format!("hp:{}:open", item.id),
+            )
+        };
+        rows.push(vec![InlineKeyboardButton {
+            text: label.chars().take(80).collect(),
+            callback_data: Some(callback),
+            url: None,
+        }]);
+    }
+    let mut navigation = Vec::new();
+    for (label, next) in [
+        ("Previous", offset.checked_sub(50)),
+        ("Next", (items.len() > 50).then_some(offset + 50)),
+    ] {
+        if let Some(next) = next {
+            navigation.push(InlineKeyboardButton {
+                text: label.into(),
+                callback_data: Some(format!("qpage:{next}")),
+                url: None,
+            });
+        }
+    }
+    if !navigation.is_empty() {
+        rows.push(navigation);
+    }
+    let text = if items.is_empty() {
+        "No pending questions or human tasks for you in this topic. Questions interrupted by a restart are not replayed.".into()
     } else {
-        "Pending Codex questions. Choose which one to open:"
+        format!(
+            "Human requests · {pending} pending for you\n\nChoose a request to reopen. Expired native questions are read-only; human tasks survive the turn. Recent resolved requests are included. Counts refer to this page (up to 50 requests)."
+        )
     };
-    let mut outgoing =
-        SendMessage::html(message.chat.id, message.message_thread_id, text.to_string());
-    outgoing.reply_markup = Some(InlineKeyboardMarkup {
-        inline_keyboard: rows.into_iter().map(|r| r.2).collect(),
-    });
+    let mut outgoing = SendMessage::html(message.chat.id, message.message_thread_id, text);
+    if !rows.is_empty() {
+        outgoing.reply_markup = Some(InlineKeyboardMarkup {
+            inline_keyboard: rows,
+        });
+    }
     shared.telegram.send_message(outgoing).await?;
     Ok(())
 }
