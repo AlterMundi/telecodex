@@ -88,7 +88,20 @@ No webhook infrastructure. No browser dependency. No cloud relay between Telegra
 <session cwd>/.telecodex/turns/.../out
 ```
 
-- Sends resulting files back to Telegram automatically.
+- Sends resulting files back to the originating topic automatically (at most ten top-level regular files per turn).
+- Supplies the current output contract through native `turn/start.additionalContext`
+  with `kind: application`, instead of relying on overrides to a loaded thread.
+  This requires a Codex App Server supporting that experimental surface (qualified
+  with Codex 0.160.0). Session preferences and built-in collaboration modes remain
+  separate. No modified Codex distribution is required.
+- Checks explicit references to old output directories or missing current files;
+  it never scans or uploads historical directories. Claims without a file reference
+  cannot prove that a file was created or delivered.
+- Records each upload attempt and matching Telegram acceptance in the private
+  audit log. Acceptance is distinct from human receipt. On failure or an uncertain
+  response, it reports the failure, retains nonempty turn output for explicit recovery,
+  and does not automatically retry or replay the native input. Successful turn
+  workspaces are cleaned up as before.
 
 ### Audio transcription
 
@@ -436,3 +449,8 @@ uses an ephemeral thread, empty workspace, read-only sandbox, disabled search,
 shell and configured MCP servers, and no source task continuation. This mode
 requires `config/read`, ephemeral `thread/start` and structured `turn/start`
 output support; no modified Codex distribution is required.
+
+The optional activity companion also reads `thread/goal/get` for `/status`, showing
+native goal state and a literal, length-bounded objective, including paused and
+blocked goals. This is a metadata read without model inference. Goals do not
+create a Working card while idle; unavailable goal APIs omit the goal line.

@@ -1702,7 +1702,7 @@ fn detects_commands_that_require_codex_auth() {
 }
 
 #[tokio::test]
-async fn upload_failure_marks_turn_failed_and_cleanup_still_runs() {
+async fn upload_failure_marks_turn_failed_and_retains_output_for_explicit_recovery() {
     let tmp = NamedTempFile::new().unwrap();
     let store = Store::open(tmp.path(), &[100], &sample_defaults()).unwrap();
     let session = store
@@ -1716,7 +1716,8 @@ async fn upload_failure_marks_turn_failed_and_cleanup_still_runs() {
     let attachment_path = attachment_dir.path().join("input.txt");
     std::fs::write(&attachment_path, "payload").unwrap();
     let turn_root = attachment_dir.path().join("turn-root");
-    std::fs::create_dir_all(&turn_root).unwrap();
+    std::fs::create_dir_all(turn_root.join("out")).unwrap();
+    std::fs::write(turn_root.join("out/undelivered.txt"), "recover this output").unwrap();
 
     let attachment = LocalAttachment {
         path: attachment_path.clone(),
@@ -1760,7 +1761,10 @@ async fn upload_failure_marks_turn_failed_and_cleanup_still_runs() {
         Some("failed")
     );
     assert!(!attachment_path.exists());
-    assert!(!turn_root.exists());
+    assert_eq!(
+        std::fs::read_to_string(turn_root.join("out/undelivered.txt")).unwrap(),
+        "recover this output"
+    );
     assert!(
         failure_messages
             .lock()

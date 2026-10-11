@@ -1324,11 +1324,10 @@ fn native_handoff_text(item: &Value) -> Option<(&'static str, String)> {
     }
 }
 
-fn build_thread_request(session: &SessionRecord, request: &TurnRequest) -> (&'static str, Value) {
-    let developer_instructions = merge_instruction_sections(
-        session.session_prompt.as_deref(),
-        request.runtime_instructions.as_deref(),
-    );
+fn build_thread_request(session: &SessionRecord) -> (&'static str, Value) {
+    // Runtime context changes every turn. A warm thread/resume can ignore overrides.
+    // Keep only the durable session preference here; send runtime context with turn/start.
+    let developer_instructions = session.session_prompt.as_deref();
     let mut params = json!({"threadId":session.codex_thread_id,"model":session.model,"cwd":sanitize_arg_path(&session.cwd),"approvalPolicy":session.approval_policy,"sandbox":session.sandbox_mode,"config":build_config_overrides(session.search_mode),"serviceName":"telecodex","developerInstructions":developer_instructions});
     if session.codex_thread_id.is_some() {
         // The bridge needs metadata and live events, not a copy of persisted turns.
@@ -1358,7 +1357,12 @@ fn build_turn_start_params(
     let collaboration = session.collaboration_mode.map(|mode| json!({
         "mode":mode.as_str(), "settings":{"model":session.model,"reasoning_effort":session.reasoning_effort,"developer_instructions":Value::Null}
     }));
-    json!({"threadId":thread_id,"input":input,"cwd":sanitize_arg_path(&session.cwd),"approvalPolicy":session.approval_policy,"sandboxPolicy":build_sandbox_policy(session),"model":session.model,"effort":session.reasoning_effort,"summary":Value::Null,"serviceTier":service_tier,"outputSchema":Value::Null,"personality":Value::Null,"collaborationMode":collaboration,"config":build_config_overrides(effective_search_mode)})
+    let additional_context = request.runtime_instructions.as_deref().map(|instructions| {
+        json!({
+            "telecodex.runtime": {"kind":"application", "value":instructions}
+        })
+    });
+    json!({"threadId":thread_id,"input":input,"additionalContext":additional_context,"cwd":sanitize_arg_path(&session.cwd),"approvalPolicy":session.approval_policy,"sandboxPolicy":build_sandbox_policy(session),"model":session.model,"effort":session.reasoning_effort,"summary":Value::Null,"serviceTier":service_tier,"outputSchema":Value::Null,"personality":Value::Null,"collaborationMode":collaboration,"config":build_config_overrides(effective_search_mode)})
 }
 
 fn build_sandbox_policy(session: &SessionRecord) -> Value {
@@ -1824,9 +1828,9 @@ impl AppServerProcess {
     async fn start_or_resume_thread(
         &mut self,
         session: &SessionRecord,
-        request: &TurnRequest,
+        _request: &TurnRequest,
     ) -> Result<(String, Option<String>)> {
-        let (method, params) = build_thread_request(session, request);
+        let (method, params) = build_thread_request(session);
         let request_id = self.send_request(method, params).await?;
         let response = self.await_response(request_id).await?;
         let thread_id = response

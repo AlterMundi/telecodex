@@ -130,7 +130,7 @@ class Native:
         self.frame(json.dumps(value).encode())
 
     def rpc(self, method, params):
-        if method not in ('initialize', 'thread/read', 'account/rateLimits/read'):
+        if method not in ('initialize', 'thread/read', 'thread/goal/get', 'account/rateLimits/read'):
             raise ValueError('observer method forbidden')
         self.sequence += 1
         self.send({'id': self.sequence, 'method': method, 'params': params})
@@ -151,6 +151,15 @@ class Native:
         if thread.get('id') != thread_id:
             raise ValueError('native thread mismatch')
         return thread.get('status', {'type': 'unknown'})
+
+    def goal(self, thread_id):
+        response = self.rpc('thread/goal/get', {'threadId': thread_id})
+        if response is None:
+            return None  # Older servers may not support this read-only surface.
+        goal = response.get('goal')
+        if goal is not None and goal.get('threadId') != thread_id:
+            raise ValueError('native goal thread mismatch')
+        return goal
 
     def close(self):
         self.closed.set()
@@ -420,6 +429,20 @@ def status_report(status, rollout, children, now):
     if status.get('type') in ('active', 'idle', 'notLoaded'):
         return '◻️ Idle'
     return '⚠️ Native activity unavailable'
+
+
+def goal_line(goal):
+    """Literal native metadata, never inferred work or model-generated summaries."""
+    if not goal:
+        return None
+    states = {'active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'}
+    state = goal.get('status')
+    if state not in states or not isinstance(goal.get('objective'), str):
+        return None
+    objective = ' '.join(goal['objective'].split())
+    if len(objective) > 180:
+        objective = objective[:177] + '…'
+    return f'🎯 Goal · {state} · {objective}'
 
 
 COMMAND_PHASES = {
@@ -877,6 +900,7 @@ def run(args):
                                 if linked_child(native_db, child, tid)]
                     now = time.time()
                     report = status_report(status, reader, children, now)
+                    goal = goal_line(native.goal(tid))
                     active_text = status_line(status, reader, children, now)
                     text = status_line(status, reader, children, now, automatic=True)
                     if command:
@@ -890,7 +914,7 @@ def run(args):
                     latest = latest_input(bridge, topic['chat_id'], topic['thread_id'])
                     position = {'exchange': reader.last_exchange,
                                 'input_id': latest['message_id'] if latest else None}
-                    reports[key] = report
+                    reports[key] = report + ('\n' + goal if goal else '')
                     bindings[key] = tid
                     contexts[key] = {'turn': command['operation'] if command else reader.request_id or reader.turn_id,
                                      'command': command['operation'] if command else None,

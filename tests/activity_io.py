@@ -299,12 +299,37 @@ class ActivityIO(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_native_goal_read_is_scoped_and_never_changes_idle_to_working(self):
+        native = object.__new__(activity.Native)
+        calls = []
+        goal = {'threadId': 'native-a', 'status': 'paused', 'objective': '  Shared resources\n projection  '}
+        def rpc(method, params):
+            calls.append((method, params))
+            return {'goal': goal}
+        native.rpc = rpc
+        self.assertIn('paused · Shared resources projection', activity.goal_line(native.goal('native-a')))
+        self.assertEqual(calls, [('thread/goal/get', {'threadId': 'native-a'})])
+        with self.assertRaises(ValueError):
+            native.goal('native-b')
+        goal['status'] = 'blocked'
+        self.assertIn('blocked', activity.goal_line(goal))
+        for status in ('active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'):
+            goal['status'] = status
+            self.assertIn(status, activity.goal_line(goal))
+        goal['objective'] = 'x' * 1000
+        self.assertLess(len(activity.goal_line(goal)), 220)
+        self.assertIsNone(activity.goal_line(None))
+        goal['status'] = 'invented'
+        self.assertIsNone(activity.goal_line(goal))
+        reader = activity.Rollout(self.root / 'unused', 'native-a')
+        self.assertIsNone(activity.status_line({'type': 'idle'}, reader, [], 100, automatic=True))
+
     def test_observer_methods_cannot_consume_updates_or_start_turns(self):
         for method in ('getUpdates', 'getMe', 'sendDocument'):
             with self.assertRaises(ValueError):
                 self.telegram.call(method, {})
         native = object.__new__(activity.Native)
-        for method in ('turn/start', 'turn/steer', 'thread/resume'):
+        for method in ('turn/start', 'turn/steer', 'thread/resume', 'thread/goal/set', 'thread/goal/clear'):
             with self.assertRaises(ValueError):
                 native.rpc(method, {})
         self.assertEqual(self.calls, [])
@@ -439,6 +464,31 @@ class ActivityIO(unittest.TestCase):
         cache.respond(requests, self.publisher)
         self.assertEqual(len(self.calls),1)
         db.close()
+
+    def test_goal_status_is_literal_escaped_and_topic_scoped_over_http(self):
+        db = sqlite3.connect(':memory:')
+        db.row_factory = sqlite3.Row
+        db.executescript("CREATE TABLE incoming_updates(update_id INTEGER PRIMARY KEY,\n            payload_json TEXT,status TEXT,updated_at TEXT);\n            CREATE TABLE users(tg_user_id INTEGER PRIMARY KEY,allowed INTEGER);\n            CREATE TABLE sessions(chat_id INTEGER,thread_id INTEGER,codex_thread_id TEXT,creator_user_id INTEGER);\n            INSERT INTO users VALUES(1,1);\n            INSERT INTO sessions VALUES(100,7,'native-a',1);\n            INSERT INTO sessions VALUES(100,8,'native-b',1);")
+        try:
+            requests = activity.StatusRequests(db, self.telegram, self.root / 'goal-requests.json')
+            cache, quota = activity.StatusCache(), activity.WeeklyLimit()
+            for number, topic in ((1, 7), (2, 8)):
+                payload = {'message': {'chat': {'id': 100}, 'message_thread_id': topic,
+                    'from': {'id': 1}, 'message_id': number, 'text': '/status'}}
+                db.execute("INSERT INTO incoming_updates VALUES(?,?,'handled',datetime('now'))",
+                           (number, json.dumps(payload)))
+            cache.update({'100:7': '◻️ Idle\n' + activity.goal_line({'status': 'paused', 'objective': 'Project <A>'}),
+                          '100:8': '◻️ Idle\n' + activity.goal_line({'status': 'blocked', 'objective': 'Project B'})},
+                         {'100:7': 'native-a', '100:8': 'native-b'}, quota)
+            cache.respond(requests, self.publisher)
+            self.assertEqual(len(self.calls), 2)
+            self.assertIn('paused · Project &lt;A&gt;', self.calls[0][1]['text'])
+            self.assertNotIn('Project B', self.calls[0][1]['text'])
+            self.assertIn('blocked · Project B', self.calls[1][1]['text'])
+            self.assertNotIn('Project &lt;A&gt;', self.calls[1][1]['text'])
+            self.assertFalse(self.publisher.entries, 'paused/blocked goals published a Working card')
+        finally:
+            db.close()
 
     def test_status_command_is_answered_while_native_observation_is_not_running(self):
         path = self.root / 'bridge.sqlite3'
