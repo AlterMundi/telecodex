@@ -292,6 +292,7 @@ pub(super) async fn process_turn(
                             }
                             CodexEvent::UserInputClosed(id) => {
                                 shared.store.resolve_question_answers(turn_id, &id, false)?;
+                                shared.store.finish_native_interactions(turn_id, Some(&id), false)?;
                                 shared.pending_questions.lock().await.retain(|_, p| {
                                     p.local_turn_id != turn_id || p.request_id != id
                                 });
@@ -299,6 +300,7 @@ pub(super) async fn process_turn(
                             }
                             CodexEvent::UserInputAnswered(id) => {
                                 shared.store.resolve_question_answers(turn_id, &id, true)?;
+                                shared.store.finish_native_interactions(turn_id, Some(&id), true)?;
                                 Ok(CodexEventOutcome::None)
                             }
                             other => {
@@ -342,6 +344,9 @@ pub(super) async fn process_turn(
         .await
         .retain(|_, p| p.local_turn_id != turn_id);
 
+    shared
+        .store
+        .finish_native_interactions(turn_id, None, false)?;
     *steer_slot.lock().expect("steer mutex poisoned") = None;
     *cancel_slot.lock().expect("cancel mutex poisoned") = None;
     cancel.cancel();
@@ -364,6 +369,11 @@ pub(super) async fn process_turn(
                         summary: &summary,
                     },
                     || async {
+                        if fs::symlink_metadata(turn_workspace.root.join(interactions::MANIFEST)).is_ok() {
+                        let current=shared.store.get_session(session.key)?.context("human task source session disappeared")?;
+                        let native=current.codex_thread_id.as_deref().context("human task source native thread missing")?;
+                        interactions::register_tasks(&shared,session.key,queued.request.from_user_id,turn_id,native,&turn_workspace.root)?;
+                        }
                         send_generated_artifacts(&shared, &session, turn_id, &turn_workspace.out_dir, &summary.assistant_text).await
                     },
                     || async move { sink_for_success.lock().await.finish(None).await },
@@ -488,7 +498,12 @@ pub(super) fn finish_turn_cleanup<T>(
         Ok(mut entries) => entries.next().is_some(),
         Err(error) => error.kind() != std::io::ErrorKind::NotFound,
     };
-    cleanup_paths(attachments, turn_root, result.is_ok() || !output_exists);
+    let declaration_exists = fs::symlink_metadata(turn_root.join(interactions::MANIFEST)).is_ok();
+    cleanup_paths(
+        attachments,
+        turn_root,
+        result.is_ok() || !(output_exists || declaration_exists),
+    );
     result
 }
 
@@ -1267,6 +1282,11 @@ pub(super) fn prepare_runtime_request(
     instruction_sections.push(format!(
         "This is the current turn's output contract. It supersedes output directories in earlier conversation context. If you generate final deliverable images or files for the user, save only the final files in this directory:\n{}\nTelecodex automatically uploads files from that directory back to Telegram after your turn completes. Do not use /tmp paths, local Markdown image links, base64 blobs, or invented upload methods to deliver files. view_image is only for local inspection. Keep intermediate scratch files outside this directory.",
         workspace.out_dir.display()
+    ));
+
+    instruction_sections.push(format!(
+        "If a human action must remain recoverable after this turn (for example a phone test), explicitly declare it in {}. This optional regular JSON file is outside out and is not uploaded. Schema: {{\"schema\":\"telecodex.human-requests/v1\",\"requests\":[{{\"id\":\"phone-test\",\"title\":\"Test playback\",\"action\":\"Open the app and report playback.\",\"links\":[]}}]}}. Use at most 10 requests, unique IDs (64 ASCII letters/digits/dash/underscore), titles <=120 characters, actions <=8000 characters and at most 5 public http(s) links {{\"label\":\"App\",\"url\":\"https://example.org\"}}. Never put secrets or private endpoints into previews or links. Telecodex admits the declaration only after successful native completion and scopes it to this turn's human, topic and native thread. /pending (also /questions) reopens it. Do not declare a request already answered; ordinary prose creates no durable request.",
+        workspace.root.join(interactions::MANIFEST).display()
     ));
 
     let mut runtime_request = request.clone();

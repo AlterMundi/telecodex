@@ -21,6 +21,7 @@ use uuid::Uuid;
 mod auth;
 mod forum;
 mod icons;
+mod interactions;
 mod io;
 mod presentation;
 mod questions;
@@ -481,9 +482,21 @@ impl App {
         if is_foreign_bot_command(text, self.shared.bot_username.as_deref()) {
             return Ok(());
         }
-        if questions::handle_text_answer(self.shared.clone(), &message, from.id, text).await? {
+        let task_feedback =
+            interactions::handle_text(&self.shared, &message, from.id, text).await?;
+        if matches!(task_feedback, interactions::TextAnswer::Handled) {
             return Ok(());
         }
+        if matches!(task_feedback, interactions::TextAnswer::None)
+            && questions::handle_text_answer(self.shared.clone(), &message, from.id, text).await?
+        {
+            return Ok(());
+        }
+        let feedback = match task_feedback {
+            interactions::TextAnswer::Forward(text) => Some(text),
+            _ => None,
+        };
+        let text = feedback.as_deref().unwrap_or(text);
         if self.dispatch_command_text(&user, &message, text).await? {
             return Ok(());
         }
@@ -571,6 +584,9 @@ impl App {
             .handle_icon_callback(&message, callback.from.id, &data)
             .await?
         {
+            return Ok(());
+        }
+        if interactions::handle_callback(&self.shared, &message, callback.from.id, &data).await? {
             return Ok(());
         }
         if questions::handle_callback(self.shared.clone(), &message, callback.from.id, &data)
