@@ -36,6 +36,10 @@ An optional [compact activity indicator](docs/activity-indicator.md) shows tools
 agent waits and native activity even for turns already running, without restarting
 the bridge or enabling unfinished answer previews.
 
+An opt-in [reaction capture experiment](docs/reaction-capture.md) preserves
+Telegram reaction events in the private input journal without invoking Codex.
+Native delivery in private bot topics still requires a real controlled exchange.
+
 ## ✨ What it is
 
 **Telecodex** is a Rust bridge that connects a local `codex` CLI instance to Telegram.

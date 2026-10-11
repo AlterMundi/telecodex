@@ -82,6 +82,7 @@ fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
     Config {
         tribu: None,
         telegram: crate::config::TelegramConfig {
+            capture_message_reactions: false,
             bot_token: Some("test-token".to_string()),
             bot_token_env: None,
             bot_token_file: None,

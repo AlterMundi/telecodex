@@ -65,6 +65,9 @@ pub struct TelegramConfig {
     pub bot_token_file: Option<PathBuf>,
     #[serde(default)]
     pub lifecycle_notifications: bool,
+    /// Experimental receipt-only capture; never starts or steers a native turn.
+    #[serde(default)]
+    pub capture_message_reactions: bool,
     #[serde(default = "default_telegram_api_base")]
     pub api_base: String,
     /// Explicit trusted local Bot API storage; never inferred from API responses.
@@ -514,6 +517,7 @@ mod tests {
                 .unwrap();
         assert!(!config.background_maintenance);
         assert!(!config.telegram.lifecycle_notifications);
+        assert!(!config.telegram.capture_message_reactions);
         assert!(!config.codex.auto_attach_latest_history);
         assert!(!config.codex.shared_app_server);
         assert_eq!(config.codex.default_search_mode, SearchMode::Live);

@@ -20,6 +20,7 @@ pub struct TelegramClient {
     api_base: String,
     outbound: Arc<OutboundRateLimiter>,
     local_file_root: Option<std::path::PathBuf>,
+    capture_message_reactions: bool,
 }
 
 #[cfg(unix)]
@@ -101,7 +102,13 @@ impl TelegramClient {
             api_base: api_base.trim_end_matches('/').to_string(),
             outbound: Arc::new(OutboundRateLimiter::default()),
             local_file_root: None,
+            capture_message_reactions: false,
         }
+    }
+
+    pub fn with_reaction_capture(mut self, enabled: bool) -> Self {
+        self.capture_message_reactions = enabled;
+        self
     }
 
     pub fn with_local_file_root(mut self, root: Option<std::path::PathBuf>) -> Result<Self> {
@@ -132,12 +139,16 @@ impl TelegramClient {
             allowed_updates: Vec<&'static str>,
         }
 
+        let mut allowed_updates = vec!["message", "callback_query"];
+        if self.capture_message_reactions {
+            allowed_updates.push("message_reaction");
+        }
         self.post_with_timeout(
             "getUpdates",
             Some(&Payload {
                 offset,
                 timeout,
-                allowed_updates: vec!["message", "callback_query"],
+                allowed_updates,
             }),
             Duration::from_secs(timeout as u64).saturating_add(TELEGRAM_GET_UPDATES_GRACE),
         )
@@ -881,6 +892,10 @@ pub struct Update {
     pub update_id: i64,
     pub message: Option<Message>,
     pub callback_query: Option<CallbackQuery>,
+    /// Preserve the complete event in the existing private ingress journal.
+    /// Raw JSON keeps actor and future reaction types without narrowing receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_reaction: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
