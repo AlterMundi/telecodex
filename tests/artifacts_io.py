@@ -65,6 +65,7 @@ for line in sys.stdin:
  m=r['method'];p=r.get('params',{})
  if m=='initialize':result={}
  elif m=='account/rateLimits/read':result={}
+ elif m=='thread/goal/get':result={'goal':None}
  elif m in ('thread/start','thread/resume'):
   # This fixture deliberately ignores resume overrides for the loaded thread.
   result={'thread':{'id':'native-artifact-thread'}}

@@ -217,6 +217,24 @@ def delayed_snapshot(binary):
         print('PASS delayed goal snapshot after first completion retains native continuation')
     finally:j.close()
 
+def long_summary(binary):
+    j=Goals(binary)
+    try:
+        j.start();j.admit('Seed saved native history')
+        j.wait(lambda:j.has('Initial goal turn delivered.'));j.idle()
+        prefix='Literal *objective*: '
+        objective=prefix+('x'*(4000-len(prefix)))
+        assert len(objective)==4000
+        j.goals['native-topic-7']={'threadId':'native-topic-7','objective':objective,'status':'paused','tokenBudget':None,'tokensUsed':0,'timeUsedSeconds':0,'createdAt':int(time.time()),'updatedAt':int(time.time())}
+        previous=len(j.messages);j.admit('/goal')
+        j.wait(lambda:any('/goal edit' in m['text'] for m,_ in j.messages[previous:]))
+        chunks=[m['text'] for m,_ in j.messages[previous:]]
+        assert len(chunks)>=2 and all(len(c)<=4096 for c in chunks),chunks
+        assert objective.replace(' ','') in ''.join(chunks).replace(' ','').replace('\n','')
+        assert sum(x.get('method')=='turn/start' for x in j.rpc)==1
+        print('PASS full-length literal goal summary is chunked without a model turn')
+    finally:j.close()
+
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
-    lifecycle(binary);live_controls(binary);unsupported(binary);staged_controls(binary,'pause');staged_controls(binary,'clear');adopt_live_turn(binary);delayed_snapshot(binary)
+    lifecycle(binary);live_controls(binary);unsupported(binary);staged_controls(binary,'pause');staged_controls(binary,'clear');adopt_live_turn(binary);delayed_snapshot(binary);long_summary(binary)

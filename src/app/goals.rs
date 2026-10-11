@@ -67,7 +67,7 @@ pub(super) async fn handle_command(
     args: &str,
 ) -> Result<()> {
     if let Err(error) = command(app, message, requester, args).await {
-        app.send_status(message.chat.id,message.message_thread_id,
+        app.send_plain_status(message.chat.id,message.message_thread_id,
             &format!("Goal command failed: {error:#}\nInspect /goal before retrying an unconfirmed change.")).await?;
     }
     Ok(())
@@ -75,7 +75,7 @@ pub(super) async fn handle_command(
 async fn command(app: &App, message: &Message, requester: i64, args: &str) -> Result<()> {
     if is_primary_forum_dashboard(&app.shared.config, &message.chat, message.message_thread_id) {
         return app
-            .send_status(
+            .send_plain_status(
                 message.chat.id,
                 message.message_thread_id,
                 "Open a work topic to use /goal.",
@@ -90,7 +90,7 @@ async fn command(app: &App, message: &Message, requester: i64, args: &str) -> Re
     };
     match args {
         "" => {
-            app.send_status(
+            app.send_plain_status(
                 key.chat_id,
                 message.message_thread_id,
                 &current
@@ -109,7 +109,7 @@ async fn command(app: &App, message: &Message, requester: i64, args: &str) -> Re
                     .await
                     .retain(|_, p| p.key != key);
                 return app
-                    .send_status(message.chat.id, message.message_thread_id, "Goal cleared.")
+                    .send_plain_status(message.chat.id, message.message_thread_id, "Goal cleared.")
                     .await;
             }
             let cleared = if let Some(thread) = session.codex_thread_id.as_deref() {
@@ -122,7 +122,7 @@ async fn command(app: &App, message: &Message, requester: i64, args: &str) -> Re
                 .lock()
                 .await
                 .retain(|_, p| p.key != key);
-            app.send_status(
+            app.send_plain_status(
                 key.chat_id,
                 message.message_thread_id,
                 if cleared {
@@ -148,7 +148,7 @@ async fn command(app: &App, message: &Message, requester: i64, args: &str) -> Re
                     .await?
                     .context("No goal currently set")?;
                 return app
-                    .send_status(message.chat.id, message.message_thread_id, &summary(&goal))
+                    .send_plain_status(message.chat.id, message.message_thread_id, &summary(&goal))
                     .await;
             }
             let thread = session
@@ -160,7 +160,7 @@ async fn command(app: &App, message: &Message, requester: i64, args: &str) -> Re
                 .codex
                 .set_goal(thread, json!({"status":"paused"}))
                 .await?;
-            app.send_status(key.chat_id, message.message_thread_id, &summary(&goal))
+            app.send_plain_status(key.chat_id, message.message_thread_id, &summary(&goal))
                 .await
         }
         "resume" => {
@@ -346,7 +346,7 @@ async fn edit(
         .await
     } else {
         let goal=app.shared.codex.set_goal(&expected.thread_id,json!({"objective":objective,"status":expected.edited_status(),"tokenBudget":expected.token_budget})).await?;
-        app.send_status(message.chat.id, message.message_thread_id, &summary(&goal))
+        app.send_plain_status(message.chat.id, message.message_thread_id, &summary(&goal))
             .await
     }
 }
@@ -399,7 +399,7 @@ async fn activate(
                     .context("native goal binding missing")?,
             )
             .await?;
-        app.send_status(
+        app.send_plain_status(
             message.chat.id,
             message.message_thread_id,
             &goal
@@ -441,7 +441,7 @@ async fn activate(
             Some(activation),
         )
         .await?;
-        app.send_status(message.chat.id,message.message_thread_id,"Starting native goal work. /goal shows its state; /goal pause stops continuation and /goal clear removes it. Neither interrupts a turn already running.").await
+        app.send_plain_status(message.chat.id,message.message_thread_id,"Starting native goal work. /goal shows its state; /goal pause stops continuation and /goal clear removes it. Neither interrupts a turn already running.").await
     }
 }
 fn materialize(app: &App, objective: &str) -> Result<String> {
@@ -513,7 +513,7 @@ pub(super) async fn handle_edit_reply(
             .as_deref()
             .is_some_and(|s| s.starts_with(EDIT_TITLE))
         {
-            app.send_status(message.chat.id,message.message_thread_id,"This goal editor expired or belongs to another user/topic. Open /goal edit again. No turn was started.").await?;
+            app.send_plain_status(message.chat.id,message.message_thread_id,"This goal editor expired or belongs to another user/topic. Open /goal edit again. No turn was started.").await?;
             return Ok(true);
         }
         return Ok(false);
@@ -537,7 +537,7 @@ pub(super) async fn handle_edit_reply(
         app.shared.pending_goal_controls.lock().await.remove(&token);
     }
     if let Err(e) = result {
-        app.send_status(
+        app.send_plain_status(
             message.chat.id,
             message.message_thread_id,
             &format!("Goal edit failed: {e:#}"),
@@ -566,7 +566,7 @@ pub(super) async fn handle_callback(
     let Some(p) = control.filter(|p| {
         p.matches(message, requester) && p.message_id == message.message_id && p.objective.is_some()
     }) else {
-        app.send_status(
+        app.send_plain_status(
             message.chat.id,
             message.message_thread_id,
             "This goal control expired or belongs to another user/topic. Open /goal again.",
@@ -581,7 +581,7 @@ pub(super) async fn handle_callback(
     let result = async {
         if action == "cancel" {
             return app
-                .send_status(
+                .send_plain_status(
                     message.chat.id,
                     message.message_thread_id,
                     "Goal replacement cancelled.",
@@ -602,7 +602,7 @@ pub(super) async fn handle_callback(
     }
     .await;
     if let Err(e) = result {
-        app.send_status(
+        app.send_plain_status(
             message.chat.id,
             message.message_thread_id,
             &format!("Goal replacement failed: {e:#}"),

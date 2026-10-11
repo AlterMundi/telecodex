@@ -99,6 +99,7 @@ for line in sys.stdin:
   print(json.dumps({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':'child-turn','status':'completed'}}}),flush=True)
   continue
  elif m=='account/rateLimits/read':result={'rateLimits':{}}
+ elif m=='thread/goal/get':result={'goal':None}
  else:raise RuntimeError('unexpected native RPC '+m)
  print(json.dumps({'id':r['id'],'result':result}),flush=True)
 ''');native.chmod(0o700)

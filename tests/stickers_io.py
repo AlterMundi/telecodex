@@ -140,6 +140,7 @@ for line in sys.stdin:
     if 'id' not in request:continue
     method=request['method'];params=request.get('params',{})
     if method in ('initialize','account/rateLimits/read'):result={}
+    elif method=='thread/goal/get':result={'goal':None}
     elif method=='thread/start':
         result={'thread':{'id':'sticker-thread-'+str(uuid.uuid4())}}
     elif method in ('thread/resume','thread/read'):
