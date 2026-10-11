@@ -30,7 +30,7 @@ class Goals(Journey):
         self.broadcast(thread,'turn/completed',{'turn':{'id':turn,'status':'completed'}})
         if self.goals.get(thread,{}).get('status')=='active' and not continuation:
             def follow():
-                time.sleep(.1)
+                time.sleep(.6 if self.mode=='delayed_snapshot' else .1)
                 if self.goals.get(thread,{}).get('status')!='active': return
                 next_turn=turn+'-continued'; self.native_turns+=1
                 self.broadcast(thread,'turn/started',{'turn':{'id':next_turn,'status':'inProgress'}})
@@ -73,6 +73,11 @@ class Goals(Journey):
                     send({'id':ident,'result':{'data':[{'id':existing,'status':'inProgress'}] if existing else []}})
                 elif method=='thread/goal/get':
                     if self.mode=='unsupported':send({'id':ident,'error':{'code':-32601,'message':'goals unavailable'}});continue
+                    if self.mode=='delayed_snapshot':
+                        snapshot=copy.deepcopy(self.goals.get(p['threadId']))
+                        def late_snapshot(request=ident,goal=snapshot):
+                            time.sleep(.3);send({'id':request,'result':{'goal':goal}})
+                        threading.Thread(target=late_snapshot,daemon=True).start();continue
                     send({'id':ident,'result':{'goal':copy.deepcopy(self.goals.get(p['threadId']))}})
                 elif method=='thread/goal/clear':
                     goal=self.goals.pop(p['threadId'],None);send({'id':ident,'result':{'cleared':goal is not None}})
@@ -200,5 +205,16 @@ def staged_controls(binary,action):
         print('PASS '+action+' during staged activation is not overwritten; kickoff finishes without continuation')
     finally:j.release_start.set();j.close()
 
+def delayed_snapshot(binary):
+    j=Goals(binary,'delayed_snapshot')
+    try:
+        j.goals['native-topic-7']={'threadId':'native-topic-7','objective':'Existing active goal','status':'active','tokenBudget':None,'tokensUsed':0,'timeUsedSeconds':0,'createdAt':int(time.time()),'updatedAt':int(time.time())}
+        j.start();j.admit('Continue ordinary work with an existing goal')
+        j.wait(lambda:j.has('Initial goal turn delivered.'))
+        j.wait(lambda:j.has('Continuation delivered.'));j.idle()
+        assert j.native_turns==2 and sum(x.get('method')=='turn/start' for x in j.rpc)==1
+        print('PASS delayed goal snapshot after first completion retains native continuation')
+    finally:j.close()
+
 if __name__=='__main__':
-    lifecycle(sys.argv[1]);live_controls(sys.argv[1]);unsupported(sys.argv[1]);staged_controls(sys.argv[1],'pause');staged_controls(sys.argv[1],'clear');adopt_live_turn(sys.argv[1])
+    lifecycle(sys.argv[1]);live_controls(sys.argv[1]);unsupported(sys.argv[1]);staged_controls(sys.argv[1],'pause');staged_controls(sys.argv[1],'clear');adopt_live_turn(sys.argv[1]);delayed_snapshot(sys.argv[1])

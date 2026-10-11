@@ -797,6 +797,7 @@ where
     let mut adopted_turn = None;
     let mut goal_active = false;
     let mut staged_goal = false;
+    let mut goal_snapshot_request_id = None;
     if let Some(activation) = goal_activation {
         if activation.native_thread != session.codex_thread_id {
             bail!("goal source binding changed; inspect /goal before continuing");
@@ -864,16 +865,13 @@ where
             staged_goal = true;
         }
     } else if bounded.is_none() {
-        let id = process
-            .send_request("thread/goal/get", json!({"threadId":thread_id}))
-            .await?;
-        // Older native versions may not advertise goals. Ordinary turns still work.
-        if let Ok(response) = process.await_response(id).await {
-            goal_active = goals::parse_goal(&response, &thread_id)
-                .ok()
-                .flatten()
-                .is_some_and(|g| g.status == "active");
-        }
+        goal_snapshot_request_id = Some(
+            process
+                .send_request("thread/goal/get", json!({"threadId":thread_id}))
+                .await?,
+        );
+        // This optional snapshot must not delay normal turn admission. Unsupported
+        // or unresponsive goal APIs leave ordinary conversations usable.
     }
     let mut params = build_turn_start_params(&thread_id, &effective_session, request);
     if let Some(bound) = bounded {
@@ -903,6 +901,7 @@ where
     let mut goal_activation_id = None;
     let mut goal_activation_pending = false;
     let mut goal_gap: Option<Instant> = None;
+    let mut goal_snapshot_deadline: Option<Instant> = None;
     if let Some(id) = adopted_turn.as_ref() {
         let _ = on_event(CodexEvent::NativeTurnStarted(id.clone())).await?;
     }
@@ -930,12 +929,21 @@ where
     let mut open_inputs = HashMap::<NativeRequestId, CancellationToken>::new();
     let mut submitted_inputs = HashSet::new();
     loop {
+        if turn_completed && goal_snapshot_request_id.is_some() {
+            goal_snapshot_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
+        }
         if turn_completed
-            && ((!goal_active && !goal_activation_pending) || turn_error.is_some() || cancelled)
+            && ((!goal_active && !goal_activation_pending && goal_snapshot_request_id.is_none())
+                || turn_error.is_some()
+                || cancelled)
         {
             break;
         }
         tokio::select! {
+          _=async{if let Some(deadline)=goal_snapshot_deadline{sleep_until(deadline).await;}}, if goal_snapshot_deadline.is_some() && goal_snapshot_request_id.is_some() => {
+              goal_snapshot_request_id=None;
+              goal_snapshot_deadline=None;
+          }
           _=async{if let Some(deadline)=goal_gap{sleep_until(deadline).await;}}, if goal_gap.is_some() => {
               turn_error=Some("Native goal is active but no continuation arrived within 30 seconds. Inspect /goal before resuming; no input was replayed.".to_string());
               break;
@@ -973,7 +981,7 @@ where
                         if matches!(control,GoalControl::Pause|GoalControl::Clear) { staged_goal=false; }
                         let result=tokio::time::timeout(Duration::from_secs(10),goals::mutate_control(&mut process,&thread_id,control)).await;
                         match result {
-                            Ok(Ok(goal))=> { goal_active=goal.is_some_and(|g|g.status=="active"); let _=steer.response.send(Ok(())); }
+                            Ok(Ok(goal))=> { goal_snapshot_request_id=None; goal_active=goal.is_some_and(|g|g.status=="active"); let _=steer.response.send(Ok(())); }
                             Ok(Err(error))=> { let _=steer.response.send(Err(CodexSteerError::Undetermined(error.to_string()))); }
                             Err(_)=> {let _=steer.response.send(Err(CodexSteerError::Undetermined("Goal acknowledgment timed out; inspect /goal".into())));}
                         }
@@ -992,7 +1000,12 @@ where
             let Some(message)=next_message? else {break;};
             match message{
               RpcMessage::Response{id,result,error}=>{
-                if Some(id)==turn_request_id{
+                if goal_snapshot_request_id==Some(id) {
+                    goal_snapshot_request_id=None;
+                    if error.is_none() {
+                        goal_active=result.as_ref().and_then(|v|goals::parse_goal(v,&thread_id).ok()).flatten().is_some_and(|g|g.status=="active");
+                    }
+                } else if Some(id)==turn_request_id{
                     if let Some(error)=error{
                         turn_error=Some(format_rpc_error(&error));
                         break;
@@ -1019,8 +1032,9 @@ where
               RpcMessage::Notification{method,params}=>{
                 if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
                 if method == "thread/goal/updated" {
+                    goal_snapshot_request_id=None;
                     if let Some(goal)=goals::parse_goal(&params,&thread_id)? { goal_active=goal.status=="active"; }
-                } else if method == "thread/goal/cleared" { goal_active=false;
+                } else if method == "thread/goal/cleared" { goal_snapshot_request_id=None; goal_active=false;
                 } else if method == "serverRequest/resolved" {
                     if let Some(id) = params.get("requestId") {
                         let id: NativeRequestId = serde_json::from_value(id.clone())?;
