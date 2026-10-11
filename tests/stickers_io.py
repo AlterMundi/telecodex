@@ -130,11 +130,10 @@ def main(binary):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         native = root / 'codex'
         native.write_text('''#!/usr/bin/python3
-import hashlib,json,pathlib,sys,time
+import hashlib,json,pathlib,sys,time,uuid
 root=pathlib.Path(__file__).parent
 if sys.argv[1:]==['login','status']:
     print('Logged in using synthetic local auth');sys.exit(0)
-counter=0
 for line in sys.stdin:
     request=json.loads(line)
     with (root/'rpc.jsonl').open('a') as stream:stream.write(json.dumps(request)+'\\n')
@@ -142,7 +141,7 @@ for line in sys.stdin:
     method=request['method'];params=request.get('params',{})
     if method in ('initialize','account/rateLimits/read'):result={}
     elif method=='thread/start':
-        counter+=1;result={'thread':{'id':'sticker-thread-'+str(counter)}}
+        result={'thread':{'id':'sticker-thread-'+str(uuid.uuid4())}}
     elif method in ('thread/resume','thread/read'):
         result={'thread':{'id':params['threadId'],'turns':[]}}
     elif method=='turn/start':
