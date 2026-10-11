@@ -175,6 +175,7 @@ async fn answer(
     if pending.closed.is_cancelled() || pending.responder.is_closed() {
         return Ok(());
     }
+    interactions::disarm_text(&shared, pending.session, pending.requester).await;
     if let Ok(update_id) = HUMAN_UPDATE_ID.try_with(|id| *id) {
         shared.store.begin_question_answer(
             update_id,
@@ -295,6 +296,7 @@ pub(super) async fn handle_callback(
         let mut pending = guard.remove(token).expect("checked pending question");
         pending.awaiting_text = true;
         drop(guard);
+        interactions::disarm_text(&shared, key, user).await;
         let question = &pending.request.questions[pending.index];
         let prompt = format!(
             "Codex question {}/{}: {}\n\nSend your answer as text, or reply directly to the question. /stop cancels the turn.",
@@ -364,6 +366,18 @@ pub(super) async fn handle_callback(
         }
     }
     Ok(true)
+}
+
+pub(super) async fn disarm_text(shared: &AppShared, key: SessionKey, user: i64) {
+    for pending in shared
+        .pending_questions
+        .lock()
+        .await
+        .values_mut()
+        .filter(|p| p.session == key && p.requester == user)
+    {
+        pending.awaiting_text = false;
+    }
 }
 
 pub(super) async fn handle_text_answer(

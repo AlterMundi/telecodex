@@ -264,7 +264,7 @@ import_desktop_history=false
                 if self.mode == 'multi' and len(answered_ids)<2:
                     event('item/completed',{'item':{'type':'agentMessage','id':'continue','phase':'commentary','text':'One answer received; other question remains open.'}})
                     continue
-                if self.mode in ('durable','invalid_tasks','symlink_tasks'):
+                if self.mode.startswith('durable') or self.mode in ('invalid_tasks','symlink_tasks'):
                     declaration={'schema':'telecodex.human-requests/v1','requests':[
                         {'id':'phone-test','title':'Phone playback','action':'Open the app and report playback.','links':[]},
                         {'id':'approve-copy','title':'Check wording','action':'Check the copy on your phone.','links':[]}]}
@@ -301,7 +301,7 @@ import_desktop_history=false
                     'model':'fixture-model','reasoning_effort':None,'developer_instructions':None}}, params
                 send({'id': request_id, 'result': {'turn': {'id': turn}}})
                 event('turn/started', {'turn': {'id': turn}})
-                if self.mode=='durable' and params['input'][0]['text'].startswith('[Feedback for human request:'):
+                if self.mode.startswith('durable') and params['input'][0]['text'].startswith('[Feedback for human request:'):
                     assert thread=='native-topic-7'
                     assert params['input'][0]['text']=='[Feedback for human request: Check wording]\nThe copy is clear.'
                     event('item/completed',{'item':{'type':'agentMessage','id':'feedback-final','phase':'final_answer','text':'Task feedback received on the existing native thread.'}})
@@ -446,7 +446,7 @@ def scenario(binary, mode):
             assert j.row("SELECT COUNT(*) FROM human_interactions WHERE kind='task'")==[(0,)]
             assert list((j.root/'.telecodex/turns').glob('*/human-requests.json'))
             print(json.dumps({'scenario':mode,'invalid_declaration_retained_without_partial_admission':True}),flush=True);return
-        if mode == 'durable':
+        if mode.startswith('durable'):
             j.wait(lambda:j.row('SELECT status FROM turns')==[('completed',)])
             j.stop();j.start();j.admit('/pending')
             j.wait(lambda:any('Human requests · 2 pending for you' in m[1]['text'] for m in j.messages))
@@ -470,7 +470,31 @@ def scenario(binary, mode):
             j.admit(callback=(picker[0],opener));j.wait(lambda:any(m[1]['text'].startswith('Human request: Check wording') for m in j.messages))
             task=next(m for m in reversed(j.messages) if m[1]['text'].startswith('Human request: Check wording'))
             j.wait(lambda:j.row('SELECT message_id FROM human_interaction_messages WHERE message_id=?',(task[0]['message_id'],)))
-            feedback=j.admit('The copy is clear.',reply=task[0]['message_id'])
+            if mode != 'durable':
+                before=len(j.messages)
+                j.admit(callback=j.button(task,':reply'))
+                j.wait(lambda:any(m[1].get('reply_markup',{}).get('force_reply') and m[1]['text'].startswith('Human request: Check wording') for m in j.messages[before:]))
+                armed=next(m for m in reversed(j.messages) if m[1].get('reply_markup',{}).get('force_reply') and m[1]['text'].startswith('Human request: Check wording'))
+                j.wait(lambda:j.row('SELECT message_id FROM human_interaction_messages WHERE message_id=?',(armed[0]['message_id'],)))
+                # Commands and expired explicit task/native quotes must not consume capture.
+                ids=[j.admit('/pending'),j.admit('old native answer',reply=first[0]['message_id']),j.admit('old completed task',reply=prompt[0]['message_id'])]
+                for update in ids:
+                    j.wait(lambda u=update:j.row('SELECT status FROM incoming_updates WHERE update_id=?',(u,))==[('handled',)])
+                assert j.row("SELECT state FROM human_interactions WHERE json_extract(payload_json,'$.title')='Check wording'")==[('pending',)]
+                if mode in ('durable_restart_capture','durable_stop_capture'):
+                    if mode=='durable_restart_capture':
+                        j.stop();j.start()
+                    else:
+                        stopped=j.admit('/stop');j.wait(lambda:j.row('SELECT status FROM incoming_updates WHERE update_id=?',(stopped,))==[('handled',)])
+                    previous=len(j.rpc)
+                    ordinary=j.admit('ordinary text after clearing selection',reply=77)
+                    j.wait(lambda:any(m.get('method')=='turn/start' for m in j.rpc[previous:]))
+                    start=next(m for m in j.rpc[previous:] if m.get('method')=='turn/start')
+                    assert start['params']['input'][0]['text']=='ordinary text after clearing selection'
+                    assert j.row("SELECT state FROM human_interactions WHERE kind='task' AND json_extract(payload_json,'$.title')='Check wording'")==[('pending',)]
+                    j.admit('/stop');j.wait(lambda:all(r==(0,) for r in j.row('SELECT busy FROM sessions')))
+                    print(json.dumps({'scenario':mode,'cleared_capture_does_not_relabel_ordinary_input':True}),flush=True);return
+            feedback=j.admit('The copy is clear.',reply=77 if mode=='durable_implicit' else None if mode=='durable_noquote' else task[0]['message_id'])
             j.wait(lambda:j.row('SELECT status FROM turns ORDER BY id')==[('completed',),('completed',)])
             j.wait(lambda:j.row('SELECT status FROM incoming_updates WHERE update_id=?',(feedback,))==[('settled',)])
             assert j.row("SELECT state FROM human_interactions WHERE json_extract(payload_json,'$.title')='Check wording'")==[('answered',)]
@@ -509,5 +533,5 @@ def scenario(binary, mode):
 
 if __name__ == '__main__':
     binary = str(pathlib.Path(sys.argv[1]).resolve())
-    for mode in sys.argv[2:] or ['implicit_reply','force_reply','roundtrip','async','numeric','long','two_topics','default','cancel','stop','secret','restart','restart_gap','disconnect','unsupported','wrong_receipt','multi','durable','invalid_tasks','symlink_tasks']:
+    for mode in sys.argv[2:] or ['implicit_reply','force_reply','roundtrip','async','numeric','long','two_topics','default','cancel','stop','secret','restart','restart_gap','disconnect','unsupported','wrong_receipt','multi','durable','durable_implicit','durable_noquote','durable_restart_capture','durable_stop_capture','invalid_tasks','symlink_tasks']:
         scenario(binary, mode)
