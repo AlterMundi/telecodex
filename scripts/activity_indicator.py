@@ -445,6 +445,11 @@ def goal_line(goal):
     return f'🎯 Goal · {state} · {objective}'
 
 
+def with_goal(text, goal):
+    """Add metadata to an existing status without creating activity for a goal."""
+    return text + ('\n' + goal if goal else '') if text else None
+
+
 COMMAND_PHASES = {
     'locating_quote': 'Locating quoted message',
     'synthesizing_handoff': 'Synthesizing focused handoff',
@@ -914,7 +919,7 @@ def run(args):
                     latest = latest_input(bridge, topic['chat_id'], topic['thread_id'])
                     position = {'exchange': reader.last_exchange,
                                 'input_id': latest['message_id'] if latest else None}
-                    reports[key] = report + ('\n' + goal if goal else '')
+                    reports[key] = with_goal(report, goal)
                     bindings[key] = tid
                     contexts[key] = {'turn': command['operation'] if command else reader.request_id or reader.turn_id,
                                      'command': command['operation'] if command else None,
@@ -933,6 +938,8 @@ def run(args):
                         text += ' · ' + weekly.label(native, time.monotonic())
                     if active_text:
                         active_text += ' · ' + weekly.label(native, time.monotonic())
+                    text = with_goal(text, goal)
+                    active_text = with_goal(active_text, goal)
                     observations.append({'status': status.get('type'), 'visible': bool(text), 'command': bool(command)})
                     if publisher:
                         publications.append((key, topic['chat_id'], topic['thread_id'],

@@ -477,8 +477,8 @@ class ActivityIO(unittest.TestCase):
                     'from': {'id': 1}, 'message_id': number, 'text': '/status'}}
                 db.execute("INSERT INTO incoming_updates VALUES(?,?,'handled',datetime('now'))",
                            (number, json.dumps(payload)))
-            cache.update({'100:7': '◻️ Idle\n' + activity.goal_line({'status': 'paused', 'objective': 'Project <A>'}),
-                          '100:8': '◻️ Idle\n' + activity.goal_line({'status': 'blocked', 'objective': 'Project B'})},
+            cache.update({'100:7': activity.with_goal('◻️ Idle', activity.goal_line({'status': 'paused', 'objective': 'Project <A>'})),
+                          '100:8': activity.with_goal('◻️ Idle', activity.goal_line({'status': 'blocked', 'objective': 'Project B'}))},
                          {'100:7': 'native-a', '100:8': 'native-b'}, quota)
             cache.respond(requests, self.publisher)
             self.assertEqual(len(self.calls), 2)
@@ -489,6 +489,26 @@ class ActivityIO(unittest.TestCase):
             self.assertFalse(self.publisher.entries, 'paused/blocked goals published a Working card')
         finally:
             db.close()
+
+    def test_automatic_work_card_keeps_goal_metadata_and_retires_at_idle(self):
+        now = time.time()
+        reader = activity.Rollout(self.root / 'goal-card.jsonl', 'parent')
+        reader.started = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now - 90))
+        goal = activity.goal_line({'status': 'active', 'objective': 'Check <goal> ' + 'x' * 250})
+        text = activity.with_goal(activity.status_line({'type': 'active'}, reader, [], now,
+                                                       automatic=True), goal)
+        self.publisher.update('100:7', 100, 7, 'request-a', text, now)
+        self.assertIn('Working', self.calls[0][1]['text'])
+        self.assertIn('Goal · active · Check &lt;goal&gt;', self.calls[0][1]['text'])
+        self.assertIn('…', self.calls[0][1]['text'])
+        self.assertEqual(self.calls[0][1]['message_thread_id'], 7)
+        blocked = activity.goal_line({'status': 'blocked', 'objective': 'Waiting for a person'})
+        idle = activity.with_goal(activity.status_line({'type': 'idle'}, reader, [], now + 35,
+                                                      automatic=True), blocked)
+        self.assertIsNone(idle, 'goal metadata created automatic work while idle')
+        self.publisher.update('100:7', 100, 7, 'request-a', idle, now + 35)
+        self.assertEqual(self.publisher.snapshot(), {})
+        self.assertEqual(self.calls[-1][0], 'deleteMessage')
 
     def test_status_command_is_answered_while_native_observation_is_not_running(self):
         path = self.root / 'bridge.sqlite3'
