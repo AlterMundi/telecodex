@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 mod auth;
 mod forum;
+mod goals;
 mod icons;
 mod interactions;
 mod io;
@@ -90,6 +91,7 @@ struct AppShared {
     pending_approvals: Mutex<HashMap<String, PendingApproval>>,
     pending_questions: Mutex<HashMap<String, questions::PendingDialogue>>,
     pending_task_text: Mutex<HashMap<(SessionKey, i64), String>>,
+    pending_goal_controls: Mutex<HashMap<String, goals::PendingGoalControl>>,
     pending_icon_pickers: Mutex<HashMap<String, icons::PendingIconPicker>>,
     pending_codex_login: Mutex<Option<PendingCodexLogin>>,
     codex_login_backoff_until: Mutex<Option<Instant>>,
@@ -157,6 +159,7 @@ struct QueuedTurn {
     chat_kind: String,
     update_id: Option<i64>,
     tribu_admission: Option<String>,
+    goal: Option<crate::codex::GoalActivation>,
 }
 
 tokio::task_local! {
@@ -294,6 +297,7 @@ impl App {
                 pending_approvals: Mutex::new(HashMap::new()),
                 pending_questions: Mutex::new(HashMap::new()),
                 pending_task_text: Mutex::new(HashMap::new()),
+                pending_goal_controls: Mutex::new(HashMap::new()),
                 pending_icon_pickers: Mutex::new(HashMap::new()),
                 pending_codex_login: Mutex::new(None),
                 codex_login_backoff_until: Mutex::new(None),
@@ -484,6 +488,9 @@ impl App {
         if is_foreign_bot_command(text, self.shared.bot_username.as_deref()) {
             return Ok(());
         }
+        if goals::handle_edit_reply(self, &message, from.id, text).await? {
+            return Ok(());
+        }
         let task_feedback =
             interactions::handle_text(&self.shared, &message, from.id, text).await?;
         if matches!(task_feedback, interactions::TextAnswer::Handled) {
@@ -585,6 +592,9 @@ impl App {
             return Ok(());
         }
         if interactions::handle_callback(&self.shared, &message, callback.from.id, &data).await? {
+            return Ok(());
+        }
+        if goals::handle_callback(self, &message, callback.from.id, &data).await? {
             return Ok(());
         }
         if questions::handle_callback(self.shared.clone(), &message, callback.from.id, &data)
@@ -795,6 +805,9 @@ impl App {
                 self.enqueue_turn(request, &message.chat.kind).await?;
             }
             ParsedInput::Bridge(command) => match command {
+                BridgeCommand::Goal { args } => {
+                    goals::handle_command(self, message, user.tg_user_id, &args).await?;
+                }
                 BridgeCommand::Questions => {
                     questions::show_pending(self.shared.clone(), message, user.tg_user_id).await?;
                 }
@@ -1135,6 +1148,15 @@ impl App {
                     }
                 }
                 BridgeCommand::RetryTurn { turn_id } => {
+                    if self
+                        .shared
+                        .store
+                        .bot_state_value(&format!("goal_turn:{turn_id}"))?
+                        .is_some()
+                    {
+                        self.send_status(message.chat.id, message.message_thread_id, "This was a native goal operation. Inspect /goal and explicitly edit or resume it; /retry will not replay it.").await?;
+                        return Ok(());
+                    }
                     let Some(mut request) = self.shared.store.retry_request_for_turn(
                         turn_id,
                         session_key,
@@ -2147,6 +2169,15 @@ impl App {
     }
 
     async fn enqueue_turn(&self, request: TurnRequest, chat_kind: &str) -> Result<()> {
+        self.enqueue_goal_turn(request, chat_kind, None).await
+    }
+
+    async fn enqueue_goal_turn(
+        &self,
+        request: TurnRequest,
+        chat_kind: &str,
+        goal: Option<crate::codex::GoalActivation>,
+    ) -> Result<()> {
         self.ensure_session(request.session_key, request.from_user_id)?;
         let handle = self.worker_for(request.session_key).await?;
         let update_id = HUMAN_UPDATE_ID.try_with(|id| *id).ok();
@@ -2166,6 +2197,7 @@ impl App {
                 chat_kind: chat_kind.to_string(),
                 update_id,
                 tribu_admission: admission.map(|a| a.id),
+                goal,
             })
             .map_err(|_| anyhow!("session worker dropped"));
         if queued.is_err() {
@@ -2205,6 +2237,7 @@ impl App {
             .sender
             .send(CodexSteerRequest {
                 text: text.to_string(),
+                goal: None,
                 response: response_tx,
             })
             .is_err()

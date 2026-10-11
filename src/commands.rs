@@ -43,6 +43,9 @@ pub enum BridgeCommand {
     Sessions,
     History,
     Status,
+    Goal {
+        args: String,
+    },
     Questions,
     Icon,
     Rename {
@@ -165,6 +168,9 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/sessions" => BridgeCommand::Sessions,
         "/history" => BridgeCommand::History,
         "/status" => BridgeCommand::Status,
+        "/goal" => BridgeCommand::Goal {
+            args: args.trim().to_string(),
+        },
         "/questions" | "/pending" => BridgeCommand::Questions,
         "/icon" => BridgeCommand::Icon,
         "/rename" => BridgeCommand::Rename {
@@ -328,6 +334,7 @@ pub fn command_help(command: &str, args: &str) -> Option<CommandHelp> {
 pub fn default_bot_commands() -> Vec<BotCommand> {
     vec![
         bot_command("help", "Show Codex help"),
+        bot_command("goal", "Manage the native session goal"),
         bot_command("status", "Show status for this session"),
         bot_command("questions", "Open pending questions in this topic"),
         bot_command("pending", "Open human requests and their current states"),
@@ -627,6 +634,7 @@ mod tests {
         let cases = [
             ("/help", ParsedInputKind::Forward),
             ("/status", ParsedInputKind::Bridge),
+            ("/goal", ParsedInputKind::Bridge),
             ("/login", ParsedInputKind::Bridge),
             ("/logout", ParsedInputKind::Bridge),
             ("/new test", ParsedInputKind::Bridge),

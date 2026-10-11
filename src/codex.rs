@@ -32,11 +32,15 @@ use tokio_tungstenite::{
 };
 use tokio_util::sync::CancellationToken;
 
+mod goals;
+pub use goals::{GoalActivation, GoalControl, NativeGoal};
+
 #[derive(Clone)]
 pub struct CodexRunner {
     binary: PathBuf,
     shared_app_server: bool,
     bounded_turn: Option<BoundedTurn>,
+    goal_activation: Option<GoalActivation>,
 }
 
 #[derive(Clone)]
@@ -135,6 +139,7 @@ pub type CodexSteerResponse = std::result::Result<(), CodexSteerError>;
 pub struct CodexSteerRequest {
     /// User text to append to the in-flight turn.
     pub text: String,
+    pub goal: Option<GoalControl>,
     /// Completion channel reports acceptance, definite rejection or uncertainty.
     pub response: oneshot::Sender<CodexSteerResponse>,
 }
@@ -156,6 +161,7 @@ struct AppServerProcess {
     stderr_buffer: Arc<Mutex<String>>,
     stderr_task: JoinHandle<()>,
     next_id: u64,
+    buffered: VecDeque<RpcMessage>,
 }
 
 struct ProxyIo {
@@ -306,6 +312,7 @@ impl CodexRunner {
             binary,
             shared_app_server: false,
             bounded_turn: None,
+            goal_activation: None,
         }
     }
     pub fn with_shared_app_server(mut self, shared: bool) -> Self {
@@ -617,6 +624,11 @@ impl CodexRunner {
         .await
         .context("native rename acknowledgment timed out; its effect is unconfirmed")?
     }
+    pub fn with_goal_activation(&self, goal: GoalActivation) -> Self {
+        let mut runner = self.clone();
+        runner.goal_activation = Some(goal);
+        runner
+    }
     pub async fn run_turn<F, Fut>(
         &self,
         session: &SessionRecord,
@@ -639,6 +651,7 @@ impl CodexRunner {
             &self.binary,
             self.shared_app_server,
             self.bounded_turn.as_ref(),
+            self.goal_activation.as_ref(),
             session,
             request,
             cancel,
@@ -729,6 +742,7 @@ async fn run_app_server_turn<F, Fut>(
     binary: &Path,
     shared_app_server: bool,
     bounded: Option<&BoundedTurn>,
+    goal_activation: Option<&GoalActivation>,
     session: &SessionRecord,
     request: &TurnRequest,
     cancel: CancellationToken,
@@ -780,6 +794,87 @@ where
     if cancel.is_cancelled() {
         bail!("cancelled before native submission");
     }
+    let mut adopted_turn = None;
+    let mut goal_active = false;
+    let mut staged_goal = false;
+    if let Some(activation) = goal_activation {
+        if activation.native_thread != session.codex_thread_id {
+            bail!("goal source binding changed; inspect /goal before continuing");
+        }
+        let id = process
+            .send_request("thread/goal/get", json!({"threadId":thread_id}))
+            .await?;
+        let current = goals::parse_goal(&process.await_response(id).await?, &thread_id)?;
+        if !goal_definitions_match(current.as_ref(), activation.expected.as_ref()) {
+            bail!(
+                "goal changed since this operation was requested; inspect /goal before continuing"
+            );
+        }
+        if activation.objective.is_none()
+            && current
+                .as_ref()
+                .is_some_and(|g| matches!(g.status.as_str(), "complete" | "budgetLimited"))
+        {
+            bail!(
+                "This goal is terminal. Edit its objective or create a new goal instead of resuming it."
+            );
+        }
+        if session.codex_thread_id.is_some() {
+            let id = process
+                .send_request(
+                    "thread/turns/list",
+                    json!({"threadId":thread_id,"limit":1,"sortDirection":"desc"}),
+                )
+                .await?;
+            let turns = process.await_response(id).await?;
+            adopted_turn = turns
+                .pointer("/data/0")
+                .filter(|t| t.get("status").and_then(Value::as_str) == Some("inProgress"))
+                .and_then(|t| t.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+        if adopted_turn.is_some() {
+            let goal = goals::mutate_live_goal(&mut process, &thread_id, activation).await?;
+            goal_active = goal.status == "active";
+        } else {
+            if activation.replace {
+                let id = process
+                    .send_request(
+                        "thread/goal/clear",
+                        json!({"threadId":thread_id,"origin":"user"}),
+                    )
+                    .await?;
+                let response = process.await_response(id).await?;
+                if !response
+                    .get("cleared")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    bail!("goal replacement clear was not confirmed");
+                }
+            }
+            let mut update = json!({"threadId":thread_id,"status":"paused"});
+            if let Some(objective) = &activation.objective {
+                update["objective"] = json!(objective);
+            }
+            let id = process.send_request("thread/goal/set", update).await?;
+            goals::parse_goal(&process.await_response(id).await?, &thread_id)?
+                .context("native goal was not staged")?;
+            staged_goal = true;
+        }
+    } else if bounded.is_none() {
+        let id = process
+            .send_request("thread/goal/get", json!({"threadId":thread_id}))
+            .await?;
+        // Older native versions may not advertise goals. Ordinary turns still work.
+        if let Ok(response) = process.await_response(id).await {
+            goal_active = goals::parse_goal(&response, &thread_id)
+                .ok()
+                .flatten()
+                .is_some_and(|g| g.status == "active");
+        }
+    }
     let mut params = build_turn_start_params(&thread_id, &effective_session, request);
     if let Some(bound) = bounded {
         if Instant::now() >= bound.deadline {
@@ -800,8 +895,18 @@ where
     if cancel.is_cancelled() {
         bail!("cancelled before native submission");
     }
-    let turn_request_id = process.send_request("turn/start", params).await?;
-    let mut active_turn_id: Option<String> = None;
+    let turn_request_id = if adopted_turn.is_some() {
+        None
+    } else {
+        Some(process.send_request("turn/start", params).await?)
+    };
+    let mut goal_activation_id = None;
+    let mut goal_activation_pending = false;
+    let mut goal_gap: Option<Instant> = None;
+    if let Some(id) = adopted_turn.as_ref() {
+        let _ = on_event(CodexEvent::NativeTurnStarted(id.clone())).await?;
+    }
+    let mut active_turn_id: Option<String> = adopted_turn;
     let mut interrupt_request_id: Option<u64> = None;
     let mut queued_steers = VecDeque::new();
     let mut pending_steers = HashMap::new();
@@ -824,8 +929,17 @@ where
     let mut pending_inputs = FuturesUnordered::<PendingInput>::new();
     let mut open_inputs = HashMap::<NativeRequestId, CancellationToken>::new();
     let mut submitted_inputs = HashSet::new();
-    while !turn_completed {
+    loop {
+        if turn_completed
+            && ((!goal_active && !goal_activation_pending) || turn_error.is_some() || cancelled)
+        {
+            break;
+        }
         tokio::select! {
+          _=async{if let Some(deadline)=goal_gap{sleep_until(deadline).await;}}, if goal_gap.is_some() => {
+              turn_error=Some("Native goal is active but no continuation arrived within 30 seconds. Inspect /goal before resuming; no input was replayed.".to_string());
+              break;
+          }
           _=async{if let Some(bound)=bounded{sleep_until(bound.deadline).await;}}, if bounded.is_some() && !cancel.is_cancelled() => { cancel.cancel(); }
           Some((id, decision)) = pending_inputs.next(), if !pending_inputs.is_empty() => {
             if open_inputs.remove(&id).is_some() && !cancelled && !cancel.is_cancelled() {
@@ -855,6 +969,16 @@ where
                         let _=steer.response.send(Err(CodexSteerError::Rejected("native interruption pending".to_string())));
                         continue;
                     }
+                    if let Some(control)=steer.goal.as_ref() {
+                        if matches!(control,GoalControl::Pause|GoalControl::Clear) { staged_goal=false; }
+                        let result=tokio::time::timeout(Duration::from_secs(10),goals::mutate_control(&mut process,&thread_id,control)).await;
+                        match result {
+                            Ok(Ok(goal))=> { goal_active=goal.is_some_and(|g|g.status=="active"); let _=steer.response.send(Ok(())); }
+                            Ok(Err(error))=> { let _=steer.response.send(Err(CodexSteerError::Undetermined(error.to_string()))); }
+                            Err(_)=> {let _=steer.response.send(Err(CodexSteerError::Undetermined("Goal acknowledgment timed out; inspect /goal".into())));}
+                        }
+                        continue;
+                    }
                     if let Some(turn_id)=active_turn_id.as_deref() {
                         send_steer_request(&mut process,&thread_id,turn_id,steer,&mut pending_steers).await?;
                     } else {
@@ -868,7 +992,7 @@ where
             let Some(message)=next_message? else {break;};
             match message{
               RpcMessage::Response{id,result,error}=>{
-                if id==turn_request_id{
+                if Some(id)==turn_request_id{
                     if let Some(error)=error{
                         turn_error=Some(format_rpc_error(&error));
                         break;
@@ -877,6 +1001,12 @@ where
                         active_turn_id=Some(turn_id.to_string());
                         let _=on_event(CodexEvent::NativeTurnStarted(turn_id.to_string())).await?;
                     }
+                } else if goal_activation_id == Some(id) {
+                    goal_activation_pending=false;
+                    if let Some(error)=error { turn_error=Some(format!("Goal activation failed; inspect /goal: {}",format_rpc_error(&error))); break; }
+                    let goal=goals::parse_goal(result.as_ref().context("missing native goal activation result")?, &thread_id)?.context("goal activation returned no goal")?;
+                    goal_active=goal.status=="active";
+                    let _=on_event(CodexEvent::Progress(format!("Goal {}", goal.status))).await?;
                 } else if let Some(pending)=pending_steers.remove(&id) {
                     let _=pending.response.send(steer_response(&pending.expected_turn_id,result.as_ref(),error.as_ref()));
                 } else if interrupt_request_id==Some(id) {
@@ -888,7 +1018,10 @@ where
               }
               RpcMessage::Notification{method,params}=>{
                 if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
-                if method == "serverRequest/resolved" {
+                if method == "thread/goal/updated" {
+                    if let Some(goal)=goals::parse_goal(&params,&thread_id)? { goal_active=goal.status=="active"; }
+                } else if method == "thread/goal/cleared" { goal_active=false;
+                } else if method == "serverRequest/resolved" {
                     if let Some(id) = params.get("requestId") {
                         let id: NativeRequestId = serde_json::from_value(id.clone())?;
                         if submitted_inputs.remove(&id) && !cancelled {
@@ -924,6 +1057,17 @@ where
                 } else {handle_server_request(&mut process,id,&method,&params,on_event).await?;}
               }
             }
+            if staged_goal && active_turn_id.is_some() && goal_activation_id.is_none() {
+                goal_activation_id=Some(process.send_request("thread/goal/set",json!({"threadId":thread_id,"status":"active","origin":"user"})).await?);
+                // Keep the event stream until this mutation is acknowledged, even for a fast initial turn.
+                goal_active=true;
+                goal_activation_pending=true;
+            }
+            if active_turn_id.is_some() { turn_completed=false; goal_gap=None; }
+            else if turn_completed && goal_active && goal_gap.is_none() {
+                goal_gap=Some(Instant::now()+Duration::from_secs(30));
+                let _=on_event(CodexEvent::Progress("Waiting for native goal continuation".to_string())).await?;
+            }
             if let Some(turn_id)=active_turn_id.as_deref() {
                 while let Some(steer)=queued_steers.pop_front() {
                     send_steer_request(&mut process,&thread_id,turn_id,steer,&mut pending_steers).await?;
@@ -950,6 +1094,14 @@ where
     Ok(summary)
 }
 
+fn goal_definitions_match(current: Option<&NativeGoal>, expected: Option<&NativeGoal>) -> bool {
+    match (current, expected) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.same_definition(b),
+        _ => false,
+    }
+}
+
 /// Route only the selected thread and its current turn on a shared native transport.
 /// Legacy private stdio transports may omit scopes, but explicit mismatches are rejected.
 fn event_matches_run(
@@ -969,6 +1121,9 @@ fn event_matches_run(
         Some(id) if id != thread_id => return false,
         None if require_scope => return false,
         _ => {}
+    }
+    if method.starts_with("thread/goal/") {
+        return true;
     }
     let event_turn = params.get("turnId").and_then(Value::as_str).or_else(|| {
         params
@@ -1920,6 +2075,7 @@ impl AppServerProcess {
             stderr_buffer,
             stderr_task,
             next_id: 1,
+            buffered: VecDeque::new(),
         })
     }
     async fn initialize(&mut self) -> Result<()> {
@@ -1969,30 +2125,46 @@ impl AppServerProcess {
         self.write_line(&json!({"id":id,"result":result})).await
     }
     async fn await_response(&mut self, expected_id: u64) -> Result<Value> {
+        if let Some(index) = self
+            .buffered
+            .iter()
+            .position(|m| matches!(m,RpcMessage::Response{id,..} if *id==expected_id))
+        {
+            if let Some(RpcMessage::Response { result, error, .. }) = self.buffered.remove(index) {
+                if let Some(error) = error {
+                    bail!("{}", format_rpc_error(&error));
+                }
+                return Ok(result.unwrap_or(Value::Null));
+            }
+        }
         loop {
-            let Some(message) = self.next_message().await? else {
-                bail!("codex app-server closed before responding to request {expected_id}");
-            };
-            match message {
-                RpcMessage::Response { id, result, error } => {
-                    if id != expected_id {
-                        continue;
-                    }
+            let message = self
+                .read_message()
+                .await?
+                .context("codex app-server closed before metadata acknowledgment")?;
+            if let RpcMessage::Response { id, result, error } = &message {
+                if *id == expected_id {
                     if let Some(error) = error {
-                        bail!("{}", format_rpc_error(&error));
+                        bail!("{}", format_rpc_error(error));
                     }
-                    return Ok(result.unwrap_or(Value::Null));
+                    return Ok(result.clone().unwrap_or(Value::Null));
                 }
-                RpcMessage::Notification { .. } => {}
-                RpcMessage::ServerRequest { id, method, .. } => {
-                    bail!(
-                        "unexpected server request `{method}` before response {expected_id} (request id {id:?})"
-                    );
-                }
+            }
+            // Keep notifications on the process, including if the awaiting future
+            // times out. Output, questions and other acknowledgments cannot vanish.
+            self.buffered.push_back(message);
+            if self.buffered.len() > 256 {
+                bail!("native metadata response queue exceeded its bound");
             }
         }
     }
     async fn next_message(&mut self) -> Result<Option<RpcMessage>> {
+        if let Some(message) = self.buffered.pop_front() {
+            return Ok(Some(message));
+        }
+        self.read_message().await
+    }
+    async fn read_message(&mut self) -> Result<Option<RpcMessage>> {
         let line = match &mut self.transport {
             AppServerTransport::Stdio { stdout_lines, .. } => {
                 let Some(line) = stdout_lines

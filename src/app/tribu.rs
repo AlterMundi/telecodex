@@ -501,6 +501,7 @@ async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
                 chat_kind: "private".into(),
                 update_id: None,
                 tribu_admission: Some(id.clone()),
+                goal: None,
             })
             .is_err()
         {

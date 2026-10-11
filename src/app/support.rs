@@ -53,7 +53,8 @@ pub(super) fn command_uses_session_context(parsed: &ParsedInput) -> bool {
         ParsedInput::Forward(_) => true,
         ParsedInput::Bridge(command) => matches!(
             command,
-            BridgeCommand::Topic { .. }
+            BridgeCommand::Goal { .. }
+                | BridgeCommand::Topic { .. }
                 | BridgeCommand::Fork { .. }
                 | BridgeCommand::Review(_)
                 | BridgeCommand::Cd { .. }
