@@ -6,6 +6,7 @@ import base64
 import copy
 import hashlib
 import json
+import pathlib
 import struct
 import sys
 import threading
@@ -217,4 +218,5 @@ def delayed_snapshot(binary):
     finally:j.close()
 
 if __name__=='__main__':
-    lifecycle(sys.argv[1]);live_controls(sys.argv[1]);unsupported(sys.argv[1]);staged_controls(sys.argv[1],'pause');staged_controls(sys.argv[1],'clear');adopt_live_turn(sys.argv[1]);delayed_snapshot(sys.argv[1])
+    binary=str(pathlib.Path(sys.argv[1]).resolve())
+    lifecycle(binary);live_controls(binary);unsupported(binary);staged_controls(binary,'pause');staged_controls(binary,'clear');adopt_live_turn(binary);delayed_snapshot(binary)
