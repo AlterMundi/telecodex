@@ -180,6 +180,7 @@ High-level flow:
 | `/questions` | Reopen your pending native questions in this topic |
 | `/icon` | Choose this topic's icon from Telegram's paginated emoji catalog |
 | `/status` | Show the current Telegram session, selected Codex session, and runtime settings |
+| `/goal [objective\|clear\|edit [objective]\|pause\|resume]` | Manage the selected native goal and its continuation |
 | `/rename <new name>` | Rename the current Codex session and Telegram topic together |
 | `/stop` | Stop the active turn |
 | `/retry <turn_id>` | Retry a failed or cancelled turn without attachments |
@@ -492,3 +493,41 @@ For rollback, pause this writer and disable ingress admission while keeping the
 qualified writer, conversation, databases and polling offsets. Older binaries
 without the dedicated controls must not accept input in this topic. Live human
 acceptance is separate from synthetic HTTP/TLS/socket/native contract tests.
+
+### Native goal commands
+
+`/goal` reads the selected native goal without a model turn, including its
+objective, status, elapsed accounting time, token usage and optional budget.
+`/goal <objective>` starts a goal; unfinished goals require a topic/user-bound
+replacement confirmation. Replacement resets accounting. `/goal edit` opens a
+quoted ForceReply editor; `/goal edit <objective>` updates directly. Editing
+preserves accounting and budget, including native budgets set by the CLI.
+Ordinary unquoted messages continue to steer work and are never captured by the
+editor. Controls expire after 15 minutes and cannot survive a restart as live
+responders. Reopen `/goal edit` after expiry.
+
+`/goal pause`, `/goal resume` and `/goal clear` use native metadata APIs.
+Pause/clear stop further goal continuation without interrupting the current
+turn. `/stop` interrupts a running turn. Terminal goals are restarted by editing
+their objective or creating a new goal rather than resuming them. The bridge
+follows native continuation turns on the existing subscription, retaining
+answers, approvals, questions and steering. Native `active`, `paused`, `blocked`,
+`usageLimited`, `budgetLimited` and `complete` states remain authoritative;
+`/status` and its activity companion continue to display that same native goal.
+
+Idle activation first stages a paused native goal, sends one explicit kickoff
+with the current Telegram application context, then activates it after native
+turn admission. This prevents an idle API mutation from starting work with an
+old artifact directory. Intervening pause/clear cancels staged activation. An
+already-running native turn is adopted without another kickoff. If the stream
+fails, goal metadata and native binding remain; inspect `/goal` before explicitly
+resuming. `/retry` never replays a goal operation. There is no automatic input
+replay or startup resumption, and a paused goal is not reported as active work.
+
+A text document captioned `/goal <objective>` can supply a longer objective
+(up to 1 MiB per text document). Objectives exceeding the native 4,000-character
+limit are stored in a private durable goal file and referenced by the native
+goal. Files remain available to native sessions after completion or clearing;
+clearing goal metadata does not erase its referenced work. Unsupported native
+APIs report a command error instead of forwarding `/goal` as model text. Goal
+commands remain disabled in the dedicated bounded Tribu attention topic.

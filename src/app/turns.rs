@@ -11,6 +11,16 @@ pub(super) async fn process_turn(
     steer_slot: Arc<StdMutex<Option<ActiveTurnSteerHandle>>>,
     mut queued: QueuedTurn,
 ) -> Result<()> {
+    if let Some(goal) = queued.goal.as_ref() {
+        if shared
+            .store
+            .bot_state_value(&super::goals::intent_key(queued.request.session_key))?
+            .as_deref()
+            != Some(goal.intent.as_str())
+        {
+            return send_markdown_message(&shared.telegram,queued.request.session_key.chat_id,Some(queued.request.session_key.thread_id).filter(|id|*id!=0),"Queued goal activation was cancelled by a newer goal command. No native input was submitted.",None).await.map(|_|());
+        }
+    }
     if !super::tribu::prepare(&shared, &mut queued).await? {
         return Ok(());
     }
@@ -32,6 +42,11 @@ pub(super) async fn process_turn(
     let turn_id = shared
         .store
         .record_turn_started(session.id, &queued.request)?;
+    if queued.goal.is_some() {
+        shared
+            .store
+            .save_bot_state(&format!("goal_turn:{turn_id}"), "native")?;
+    }
     if let Some(id) = queued.tribu_admission.as_deref() {
         shared.store.tribu_link_turn(id, turn_id)?;
     }
@@ -198,6 +213,11 @@ pub(super) async fn process_turn(
             }
         }));
     }
+    let runner = if let Some(goal) = queued.goal.clone() {
+        runner.with_goal_activation(goal)
+    } else {
+        runner
+    };
     let run =
         runner
             .run_turn(&session, &runtime_request, cancel.clone(), steer_rx, {
