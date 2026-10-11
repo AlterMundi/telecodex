@@ -4,6 +4,18 @@ This change implements [#43](https://github.com/AlterMundi/telecodex/issues/43)
 using the existing native question broker and activity observer. It does not
 add a native RPC queue, model attention, memory ingestion or a Mini App.
 
+## Conversation first
+
+Ordinary conversation is the default. Discuss ideas, acknowledge spontaneous
+feedback and answer status questions directly. Native question widgets are useful
+when the human requests one or a consequential choice needs structured input.
+A durable task is for a concrete important external action that needs to remain
+findable after the turn, such as a necessary phone test or private credential
+handoff. Routine confirmations, optional suggestions and conversational questions
+do not need a widget or a task. Do not redeclare an existing pending action.
+The runtime names this distinction in each turn's application context; it does
+not infer or create requests from ordinary messages.
+
 ## Reopen without scrolling
 
 `/pending` and `/questions` are equivalent. They list the requesting allowed
