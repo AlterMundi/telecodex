@@ -76,6 +76,16 @@ No webhook infrastructure. No browser dependency. No cloud relay between Telegra
 ### Attachments and artifacts
 
 - Accepts text, images, documents, audio, and video attachments.
+- Receives direct and quoted Telegram stickers as native image input. Static
+  stickers retain their original image bytes and transparency. Animated TGS and
+  video WebM stickers use Telegram's still thumbnail when available; both the
+  native prompt and a topic-local notice label it as a preview, without claiming
+  to perceive motion. Full animation rendering is not implemented.
+- A missing sticker preview or failed download produces feedback in the same
+  topic without starting an analysis turn, replacing its native binding or
+  replaying the input. Sticker metadata remains in the incoming-message journal.
+- Replies that quote stickers stay queued as image turns while another turn is
+  active; they cannot be consumed as plain-text steering or armed text answers.
 - Stages incoming files under:
 
 ```text

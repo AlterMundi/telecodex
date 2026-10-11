@@ -386,14 +386,7 @@ pub(super) async fn handle_text_answer(
     user: i64,
     text: &str,
 ) -> Result<bool> {
-    if text.is_empty()
-        || text.starts_with('/')
-        || message.document.is_some()
-        || !message.photo.is_empty()
-        || message.audio.is_some()
-        || message.voice.is_some()
-        || message.video.is_some()
-    {
+    if !is_text_only_steer_candidate(message, text) || text.starts_with('/') {
         return Ok(false);
     }
     let key = SessionKey::new(message.chat.id, message.message_thread_id);
