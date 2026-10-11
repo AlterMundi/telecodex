@@ -454,3 +454,31 @@ The optional activity companion also reads `thread/goal/get` for `/status`, show
 native goal state and a literal, length-bounded objective, including paused and
 blocked goals. This is a metadata read without model inference. Goals do not
 create a Working card while idle; unavailable goal APIs omit the goal line.
+
+### Human-triggered Tribu topic
+
+An explicitly configured `[tribu]` policy connects genuine paired-human public
+`@` requests to the **same persistent conversation** as an existing private
+**Tribu** topic. This is opt-in and Source-only for the current rollout. It uses
+the maintained authenticated Matrix human ingress and a private local Unix
+socket; it does not consume the public bot again or watch peer inboxes.
+
+The policy pins `socket_path`, `owner_client_file`, `being_ref`, `body_label`,
+`embodiment_id`, `human_id`, `chat_id`, `topic_id` and `activated_after`.
+`deadline_seconds` defaults to 300 (maximum 300); `max_pending` defaults to 20.
+The destination must be a fresh, authorized topic named `Tribu`, with shared
+App Server enabled. Public admissions and ordinary private messages use one
+queue and writer; new private messages do not steer an active turn. Every turn
+receives its start, limit and UTC deadline before work, including continuations.
+Native goals and multi-agent continuation are disabled for this dedicated thread.
+
+`/tribu pause` persistently closes admission and requests interruption;
+`/tribu resume` accepts new input without replaying withdrawn work.
+`/tribu status` reports retained states; `/tribu reconcile` checks only the
+already-admitted native turn. Unconfirmed termination blocks subsequent dispatch.
+Session replacement and goal/review commands are disabled in this topic.
+
+For rollback, pause this writer and disable ingress admission while keeping the
+qualified writer, conversation, databases and polling offsets. Older binaries
+without the dedicated controls must not accept input in this topic. Live human
+acceptance is separate from synthetic HTTP/TLS/socket/native contract tests.

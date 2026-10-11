@@ -9,6 +9,9 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+mod tribu;
+pub use tribu::TribuAdmission;
+
 use crate::{
     config::{CodexConfig, SearchMode},
     models::{
@@ -65,6 +68,7 @@ impl Store {
         store.init_schema()?;
         let stale_cutoff = stale_instance_cutoff();
         store.claim_instance_lock(&stale_cutoff)?;
+        store.init_tribu()?;
         // A restarted process cannot continue a previous command's activity lease.
         store.conn.lock().expect("store mutex poisoned").execute(
             "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",

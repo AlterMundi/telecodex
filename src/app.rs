@@ -26,6 +26,7 @@ mod presentation;
 mod questions;
 mod rename;
 mod support;
+mod tribu;
 mod turns;
 
 use crate::{
@@ -153,6 +154,7 @@ struct QueuedTurn {
     request: TurnRequest,
     chat_kind: String,
     update_id: Option<i64>,
+    tribu_admission: Option<String>,
 }
 
 tokio::task_local! {
@@ -299,6 +301,7 @@ impl App {
     }
 
     pub async fn run(self) -> Result<()> {
+        tribu::start(self.clone()).await?;
         self.shared
             .telegram
             .set_my_commands(&default_bot_commands())
@@ -472,6 +475,9 @@ impl App {
             .or(message.caption.as_deref())
             .unwrap_or("")
             .trim();
+        if tribu::handle_topic_control(self, &message, from.id, text).await? {
+            return Ok(());
+        }
         if is_foreign_bot_command(text, self.shared.bot_username.as_deref()) {
             return Ok(());
         }
@@ -509,7 +515,13 @@ impl App {
         let session = self.maybe_assign_session_title_from_text(session, text)?;
         self.announce_session_if_switched(from.id, &message.chat, session.key, &session)
             .await?;
-        if is_text_only_steer_candidate(&message, text)
+        if !self
+            .shared
+            .config
+            .tribu
+            .as_ref()
+            .is_some_and(|p| p.key() == session.key)
+            && is_text_only_steer_candidate(&message, text)
             && self
                 .try_steer_active_turn(session.key, from.id, text)
                 .await?
@@ -2124,6 +2136,12 @@ impl App {
         self.ensure_session(request.session_key, request.from_user_id)?;
         let handle = self.worker_for(request.session_key).await?;
         let update_id = HUMAN_UPDATE_ID.try_with(|id| *id).ok();
+        let admission = tribu::private_admission(&self.shared, &request, update_id)?;
+        if let Some(a) = &admission {
+            if !a.fresh || a.state != "queued" {
+                bail!("Tribu input retained without execution: {}", a.state);
+            }
+        }
         if let Some(id) = update_id {
             self.shared.store.mark_update_queued(id)?;
         }
@@ -2133,6 +2151,7 @@ impl App {
                 request,
                 chat_kind: chat_kind.to_string(),
                 update_id,
+                tribu_admission: admission.map(|a| a.id),
             })
             .map_err(|_| anyhow!("session worker dropped"));
         if queued.is_err() {
@@ -2223,7 +2242,8 @@ impl App {
     }
 
     async fn worker_for(&self, key: SessionKey) -> Result<SessionWorkerHandle> {
-        if let Some(existing) = self.workers.lock().await.get(&key).cloned() {
+        let mut workers = self.workers.lock().await;
+        if let Some(existing) = workers.get(&key).cloned() {
             return Ok(existing);
         }
 
@@ -2235,14 +2255,20 @@ impl App {
             cancel: cancel.clone(),
             steer: steer.clone(),
         };
-        self.workers.lock().await.insert(key, handle.clone());
+        workers.insert(key, handle.clone());
 
         let shared = self.shared.clone();
         tokio::spawn(async move {
             while let Some(turn) = rx.recv().await {
                 let update_id = turn.update_id;
+                let admission = turn.tribu_admission.clone();
                 let result =
                     process_turn(shared.clone(), cancel.clone(), steer.clone(), turn).await;
+                if let Some(id) = admission {
+                    if let Err(error) = shared.store.tribu_finish(&id) {
+                        tracing::error!("failed to retain Tribu execution uncertainty: {error:#}");
+                    }
+                }
                 if let Some(id) = update_id {
                     if let Err(error) = shared.store.finish_update_turn(id, result.is_ok()) {
                         tracing::error!("failed to record input turn outcome: {error:#}");
