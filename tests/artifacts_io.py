@@ -163,7 +163,10 @@ import_desktop_history=false
                 wait(lambda:any('Turn failed:' in d.get('text','') for m,d in calls if m in ('sendMessage','editMessageText')))
                 assert len(uploads)==(2 if mode in ('rejected','uncertain') else 0)
                 assert db.execute("SELECT COUNT(*) FROM audit_log WHERE action='artifact_delivery_accepted'").fetchone()[0]==(1 if uploads else 0)
-                assert len(list((root/'.telecodex/turns').glob('1-*/out')))==(0 if mode in ('stale','missing') else 1),'failed output retention mismatch'
+                # A recorded failure and a received Telegram request precede the
+                # final response acknowledgement and asynchronous workspace cleanup.
+                expected_outputs = 0 if mode in ('stale','missing') else 1
+                wait(lambda:len(list((root/'.telecodex/turns').glob('1-*/out')))==expected_outputs)
                 process.send_signal(signal.SIGINT);process.communicate(timeout=10);process=start()
                 wait(lambda:sum(m=='setMyCommands' for m,_ in calls)==2)
                 time.sleep(.3)
