@@ -964,9 +964,9 @@ def run(args):
                     if command:
                         report = active_text = command['line']
                         text = command['line'] if now-command['started'] >= 30 else None
+                    work_active = bool(active_text)
                     update = pending_update_line(args.pending_update_record, key, now)
                     report, active_text, text = combine_update_status(report, active_text, text, update)
-                    work_active = bool(active_text)
                     pending = pending_requests(bridge,topic['chat_id'],topic['thread_id'],topic['creator_user_id'])
                     if pending and pending['pending']:
                         active_text = with_pending(active_text,pending)
