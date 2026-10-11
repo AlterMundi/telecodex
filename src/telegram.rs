@@ -898,6 +898,7 @@ pub struct Message {
     pub audio: Option<Audio>,
     pub voice: Option<Voice>,
     pub video: Option<Video>,
+    pub sticker: Option<Sticker>,
     pub forum_topic_edited: Option<ForumTopicEdited>,
 }
 
@@ -912,6 +913,7 @@ pub struct ReplyMessage {
     pub from: Option<User>,
     pub text: Option<String>,
     pub caption: Option<String>,
+    pub sticker: Option<Sticker>,
 }
 impl ReplyMessage {
     pub fn quoted_text(&self) -> Option<&str> {
@@ -960,6 +962,48 @@ pub struct PhotoSize {
     pub width: i64,
     pub height: i64,
     pub file_size: Option<i64>,
+}
+
+/// Telegram sticker metadata retained in the durable incoming-message journal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Sticker {
+    pub file_id: String,
+    pub file_unique_id: String,
+    #[serde(rename = "type")]
+    pub sticker_type: String,
+    pub width: i64,
+    pub height: i64,
+    pub is_animated: bool,
+    pub is_video: bool,
+    pub thumbnail: Option<PhotoSize>,
+    pub emoji: Option<String>,
+    pub set_name: Option<String>,
+    pub file_size: Option<u64>,
+}
+
+impl Sticker {
+    /// Select the full static image or a still preview of an animation/video.
+    pub fn image_file_id(&self) -> Option<&str> {
+        if self.is_animated || self.is_video {
+            self.thumbnail
+                .as_ref()
+                .map(|thumbnail| thumbnail.file_id.as_str())
+        } else {
+            Some(self.file_id.as_str())
+        }
+        .filter(|file_id| !file_id.is_empty())
+    }
+
+    /// Describe the source format independently of Telegram's sticker type.
+    pub fn format_label(&self) -> &'static str {
+        if self.is_video {
+            "video"
+        } else if self.is_animated {
+            "animated"
+        } else {
+            "static"
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1178,6 +1222,68 @@ pub fn preferred_image_file_id(message: &Message) -> Option<&str> {
         .iter()
         .max_by_key(|size| size.file_size.unwrap_or(size.width * size.height))
         .map(|photo| photo.file_id.as_str())
+}
+
+#[cfg(test)]
+mod sticker_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_direct_and_quoted_stickers_in_serialized_updates() {
+        let sticker = serde_json::json!({
+            "file_id":"static", "file_unique_id":"unique-static", "type":"regular",
+            "width":512, "height":512, "is_animated":false, "is_video":false,
+            "emoji":"💛", "set_name":"Fixture", "file_size":128,
+            "thumbnail":{"file_id":"preview", "width":128, "height":128}
+        });
+        let value = serde_json::json!({"update_id":12,"message":{
+            "message_id":12,"chat":{"id":100,"type":"private"},
+            "sticker":sticker,"reply_to_message":{"message_id":11,"sticker":sticker}
+        }});
+        let update: Update = serde_json::from_value(value).unwrap();
+        let message = update.message.as_ref().unwrap();
+        assert_eq!(
+            message.sticker.as_ref().unwrap().image_file_id(),
+            Some("static")
+        );
+        assert_eq!(
+            message
+                .reply_to_message
+                .as_ref()
+                .unwrap()
+                .sticker
+                .as_ref()
+                .unwrap()
+                .emoji
+                .as_deref(),
+            Some("💛")
+        );
+        let journal = serde_json::to_value(&update).unwrap();
+        for source in [
+            &journal["message"]["sticker"],
+            &journal["message"]["reply_to_message"]["sticker"],
+        ] {
+            assert_eq!(source["file_unique_id"], "unique-static");
+            assert_eq!(source["set_name"], "Fixture");
+            assert_eq!(source["thumbnail"]["file_id"], "preview");
+            assert_eq!(source["file_size"], 128);
+        }
+    }
+
+    #[test]
+    fn animations_and_videos_select_only_a_still_preview() {
+        for format in ["animated", "video"] {
+            let mut sticker: Sticker = serde_json::from_value(serde_json::json!({
+                "file_id":"motion", "file_unique_id":"unique-motion", "type":"regular",
+                "width":512, "height":512, "is_animated":format=="animated", "is_video":format=="video",
+                "thumbnail":{"file_id":"preview", "width":128, "height":128}
+            })).unwrap();
+            assert_eq!(sticker.image_file_id(), Some("preview"));
+            assert_eq!(sticker.format_label(), format);
+            sticker.thumbnail = None;
+            assert_eq!(sticker.image_file_id(), None);
+        }
+    }
 }
 
 #[cfg(test)]

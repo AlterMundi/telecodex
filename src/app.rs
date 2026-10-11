@@ -548,11 +548,7 @@ impl App {
             return Ok(());
         }
 
-        let prompt = if !text.is_empty() {
-            text.to_string()
-        } else {
-            "Analyze the attached files.".to_string()
-        };
+        let prompt = io::sticker_input_prompt(&message, text);
         let request = TurnRequest {
             session_key,
             from_user_id: from.id,
@@ -788,7 +784,7 @@ impl App {
                 let request = TurnRequest {
                     session_key,
                     from_user_id: user.tg_user_id,
-                    prompt: text,
+                    prompt: io::sticker_input_prompt(message, &text),
                     runtime_instructions: None,
                     attachments: self.download_attachments(message, &session).await?,
                     review_mode: None,
@@ -2437,6 +2433,11 @@ fn is_text_only_steer_candidate(message: &Message, text: &str) -> bool {
         && message.audio.is_none()
         && message.voice.is_none()
         && message.video.is_none()
+        && message.sticker.is_none()
+        && message
+            .reply_to_message
+            .as_ref()
+            .is_none_or(|reply| reply.sticker.is_none())
 }
 
 async fn shutdown_signal(shutdown: CancellationToken) {

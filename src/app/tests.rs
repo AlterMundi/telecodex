@@ -450,6 +450,21 @@ fn only_plain_text_messages_are_steer_candidates() {
         mime_type: Some("text/plain".to_string()),
     });
     assert!(!is_text_only_steer_candidate(&message, "hello"));
+    message.document = None;
+    let sticker = serde_json::json!({
+        "file_id":"sticker-file", "file_unique_id":"unique-sticker", "type":"regular",
+        "width":512, "height":512, "is_animated":false, "is_video":false
+    });
+    message.sticker = Some(serde_json::from_value(sticker.clone()).unwrap());
+    assert!(!is_text_only_steer_candidate(&message, "hello"));
+    message.sticker = None;
+    message.reply_to_message = Some(
+        serde_json::from_value(serde_json::json!({
+            "message_id":2, "sticker":sticker
+        }))
+        .unwrap(),
+    );
+    assert!(!is_text_only_steer_candidate(&message, "hello"));
 }
 
 #[test]
