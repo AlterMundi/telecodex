@@ -6,6 +6,12 @@ use serde::Deserialize;
 
 pub(super) const MANIFEST: &str = "human-requests.json";
 
+// Like native Other answer, explicit arming selects one next text in this
+// human/topic. It is deliberately process-local and never restored on restart.
+pub(super) async fn disarm_text(shared: &AppShared, key: SessionKey, user: i64) {
+    shared.pending_task_text.lock().await.remove(&(key, user));
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Declaration {
@@ -158,6 +164,9 @@ async fn send_item(
         "Human request: {}\n\n{}\n\n{} · {}",
         item.title, item.action, kind, state
     );
+    if reply {
+        text.push_str("\n\nSend your next text as feedback, or reply to this message. Commands and attachments do not answer this request; /stop clears text capture.");
+    }
     if let Some(delivery) = item.source["delivery"].as_str() {
         text.push_str(&format!("\nFeedback delivery: {delivery}. Answered means your feedback was recorded, not that the model has accepted it."));
     }
@@ -263,7 +272,16 @@ pub(super) async fn handle_callback(
         return Ok(true);
     }
     match action {
-        "reply" => send_item(shared, message, &item, true).await?,
+        "reply" => {
+            disarm_text(shared, key, user).await;
+            questions::disarm_text(shared, key, user).await;
+            send_item(shared, message, &item, true).await?;
+            shared
+                .pending_task_text
+                .lock()
+                .await
+                .insert((key, user), item.id.clone());
+        }
         "done" | "cancel" => {
             let state = if action == "done" {
                 "completed"
@@ -274,6 +292,11 @@ pub(super) async fn handle_callback(
                 .store
                 .transition_interaction(key, user, id, "pending", state)?
             {
+                let mut capture = shared.pending_task_text.lock().await;
+                if capture.get(&(key, user)) == Some(&item.id) {
+                    capture.remove(&(key, user));
+                }
+                drop(capture);
                 questions::notice(
                     shared,
                     message,
@@ -299,24 +322,45 @@ pub(super) async fn handle_text(
     user: i64,
     text: &str,
 ) -> Result<TextAnswer> {
+    let key = SessionKey::new(message.chat.id, message.message_thread_id);
+    if normalize_command(text, shared.bot_username.as_deref())
+        .is_some_and(|(command, _)| command == "/stop")
+    {
+        disarm_text(shared, key, user).await;
+    }
     if !is_text_only_steer_candidate(message, text) || text.is_empty() || text.starts_with('/') {
         return Ok(TextAnswer::None);
     }
-    let Some(quoted) = message.reply_to_message.as_ref() else {
-        return Ok(TextAnswer::None);
-    };
-    let key = SessionKey::new(message.chat.id, message.message_thread_id);
-    let id = shared.store.interaction_message(key, quoted.message_id)?;
-    let recognized = quoted
-        .from
-        .as_ref()
-        .is_some_and(|f| f.is_bot && f.id == shared.bot_id)
-        && quoted
-            .text
-            .as_deref()
-            .is_some_and(|t| t.starts_with("Human request: "));
+    let mut id = None;
+    let mut recognized = false;
+    if let Some(quoted) = message.reply_to_message.as_ref() {
+        id = shared.store.interaction_message(key, quoted.message_id)?;
+        let own_bot = quoted
+            .from
+            .as_ref()
+            .is_some_and(|f| f.is_bot && f.id == shared.bot_id);
+        recognized = own_bot
+            && quoted
+                .text
+                .as_deref()
+                .is_some_and(|t| t.starts_with("Human request: "));
+        // Explicit native quotes, including expired ones, belong to the native
+        // broker. They must never consume a separately armed human task.
+        if shared.store.is_question_message(key, quoted.message_id)?
+            || own_bot
+                && quoted
+                    .text
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("Codex question "))
+        {
+            return Ok(TextAnswer::None);
+        }
+    }
     if id.is_none() && !recognized {
-        return Ok(TextAnswer::None);
+        id = shared.pending_task_text.lock().await.remove(&(key, user));
+        if id.is_none() {
+            return Ok(TextAnswer::None);
+        }
     }
     let item = match id {
         Some(id) => shared.store.interaction(key, user, &id)?,
@@ -331,6 +375,8 @@ pub(super) async fn handle_text(
                 .try_with(|id| *id)
                 .context("human task answer has no journal update")?,
         )? {
+            disarm_text(shared, key, user).await;
+            questions::disarm_text(shared, key, user).await;
             return Ok(TextAnswer::Forward(format!(
                 "[Feedback for human request: {}]\n{}",
                 item.title, text

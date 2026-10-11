@@ -38,7 +38,14 @@ Saved records remain readable. A changed native binding is explicit and cannot
 redirect an old answer to a replacement session.
 
 A durable human task survives the native turn and bridge restart. **Reply with
-feedback** opens ForceReply; quoted feedback is recorded and forwarded through
+feedback** opens ForceReply and explicitly selects the next text from the same
+human in this topic. This also works when a Telegram client sends no task quote
+or attaches an unrelated reply instead. A directly quoted task remains supported.
+Commands and attachments do not consume the selection; `/stop` clears it.
+Selecting another task or native **Other answer** replaces the selection. The
+selection exists only in this bridge process: after restart, reopen the pending
+task and select **Reply with feedback** again. Explicit expired task/native
+quotes never consume another selected answer. Feedback is recorded and forwarded through
 the existing native steering/turn admission path, on the same source binding.
 Its answered state means the human feedback was recorded. Its detail separately
 shows the original input journal's delivery state, including unknown outcomes;
