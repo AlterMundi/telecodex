@@ -64,7 +64,13 @@ Completed assistant messages are never edited or deleted. The observer removes i
 native work and tracked child work end and foreground delivery is no longer
 running. If deletion is unavailable, it marks that message inactive.
 
-The observer uses only `initialize`, metadata-only `thread/read` and
+When a topic has a native goal, both requested status and automatic working
+cards include its literal state and the beginning of its objective, capped at
+180 characters with an ellipsis. Reading `thread/goal/get` starts no inference.
+Goal metadata alone never creates a working card: paused or blocked goals in
+otherwise idle topics remain visible through `/status` without implying activity.
+
+The observer uses only `initialize`, metadata-only `thread/read`, `thread/goal/get` and
 `account/rateLimits/read` on the existing Codex App Server proxy. It reads the
 bridge SQLite database and native index in
 read-only mode, selecting only topic bindings whose creator remains allowed.
