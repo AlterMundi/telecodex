@@ -23,6 +23,39 @@ pub struct Config {
     pub tmp_dir: Option<PathBuf>,
     #[serde(default)]
     pub background_maintenance: bool,
+    /// Explicit human-only admission. Omitted on ordinary listeners.
+    pub tribu: Option<TribuConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TribuConfig {
+    pub socket_path: PathBuf,
+    pub owner_client_file: PathBuf,
+    pub being_ref: String,
+    pub body_label: String,
+    pub embodiment_id: String,
+    pub human_id: i64,
+    pub chat_id: i64,
+    pub topic_id: i64,
+    pub activated_after: i64,
+    #[serde(default = "default_tribu_deadline")]
+    pub deadline_seconds: u64,
+    #[serde(default = "default_tribu_pending")]
+    pub max_pending: usize,
+}
+
+fn default_tribu_deadline() -> u64 {
+    300
+}
+fn default_tribu_pending() -> usize {
+    20
+}
+
+impl TribuConfig {
+    pub fn key(&self) -> crate::models::SessionKey {
+        crate::models::SessionKey::new(self.chat_id, Some(self.topic_id))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -128,6 +161,25 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
+        if let Some(policy) = &self.tribu {
+            if !policy.socket_path.is_absolute()
+                || !policy.owner_client_file.is_absolute()
+                || policy.human_id <= 0
+                || policy.chat_id == 0
+                || policy.topic_id <= 0
+                || policy.activated_after <= 0
+                || policy.deadline_seconds == 0
+                || policy.deadline_seconds > 300
+                || policy.max_pending == 0
+                || policy.max_pending > 100
+                || policy.being_ref.is_empty()
+                || policy.body_label.is_empty()
+                || policy.embodiment_id.is_empty()
+                || !self.codex.shared_app_server
+            {
+                bail!("invalid Tribu admission configuration");
+            }
+        }
         if !self.codex.default_cwd.is_absolute() {
             bail!("codex.default_cwd must be an absolute path");
         }

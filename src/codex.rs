@@ -36,6 +36,15 @@ use tokio_util::sync::CancellationToken;
 pub struct CodexRunner {
     binary: PathBuf,
     shared_app_server: bool,
+    bounded_turn: Option<BoundedTurn>,
+}
+
+#[derive(Clone)]
+pub struct BoundedTurn {
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub deadline: Instant,
+    pub seconds: u64,
+    pub client_id: String,
 }
 pub enum QuoteTextLookup {
     Found {
@@ -69,6 +78,12 @@ pub enum CodexEvent {
     CommentaryCompleted(String),
     FinalAnswerCompleted(String),
     ThreadStarted(String),
+    NativeTurnStarted(String),
+    NativeTurnSubmitting,
+    NativeTurnTerminal {
+        id: String,
+        status: String,
+    },
     ApprovalRequest(CodexApprovalRequest),
     UserInputRequest {
         id: NativeRequestId,
@@ -241,14 +256,64 @@ struct SimpleCommandOutput {
 }
 
 impl CodexRunner {
+    pub async fn interrupt_selected_turn(&self, thread: &str, turn: &str) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
+            process.initialize().await?;
+            let id = process
+                .send_request("turn/interrupt", json!({"threadId":thread,"turnId":turn}))
+                .await?;
+            process.await_response(id).await?;
+            process.shutdown().await?;
+            Ok(())
+        })
+        .await
+        .context("selected native interruption acknowledgement unavailable")?
+    }
+
+    pub async fn admitted_turn_status(
+        &self,
+        thread: &str,
+        expected: Option<&str>,
+        client_id: &str,
+    ) -> Result<Option<(String, String)>> {
+        tokio::time::timeout(Duration::from_secs(10),async {
+            let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
+            process.initialize().await?;
+            let mut cursor:Option<String>=None;
+            for _ in 0..10 {
+                let id=process.send_request("thread/turns/list",json!({"threadId":thread,"limit":100,"sortDirection":"desc","cursor":cursor,"itemsView":"full"})).await?;
+                let page=process.await_response(id).await?;
+                for turn in page["data"].as_array().context("native turn page malformed")? {
+                    let id=turn["id"].as_str().context("native turn ID missing")?;
+                    let matches=expected.map(|old|old==id).unwrap_or_else(||turn["items"].as_array().is_some_and(|items|items.iter().any(|item|item["type"]=="userMessage" && item["clientId"]==client_id)));
+                    if matches {
+                        let status=turn["status"].as_str().context("native turn status missing")?.to_string();
+                        process.shutdown().await?;
+                        return Ok(Some((id.to_string(),status)));
+                    }
+                }
+                cursor=page["nextCursor"].as_str().map(str::to_string);
+                if cursor.is_none(){break;}
+            }
+            process.shutdown().await?;
+            // Absence in a bounded page is never evidence of non-submission.
+            Ok(None)
+        }).await.context("selected native reconciliation unavailable")?
+    }
     pub fn new(binary: PathBuf) -> Self {
         Self {
             binary,
             shared_app_server: false,
+            bounded_turn: None,
         }
     }
     pub fn with_shared_app_server(mut self, shared: bool) -> Self {
         self.shared_app_server = shared;
+        self
+    }
+    pub fn with_bounded_turn(mut self, bounded: BoundedTurn) -> Self {
+        self.bounded_turn = Some(bounded);
         self
     }
     pub fn build_review_command(
@@ -565,11 +630,15 @@ impl CodexRunner {
         Fut: std::future::Future<Output = Result<CodexEventOutcome>>,
     {
         if let Some(spec) = self.build_review_command(session, request) {
+            if self.bounded_turn.is_some() {
+                bail!("bounded Tribu turns do not run a separate review process");
+            }
             return run_review_turn(spec, cancel, on_event).await;
         }
         run_app_server_turn(
             &self.binary,
             self.shared_app_server,
+            self.bounded_turn.as_ref(),
             session,
             request,
             cancel,
@@ -655,9 +724,11 @@ impl CodexDeviceAuthSession {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_app_server_turn<F, Fut>(
     binary: &Path,
     shared_app_server: bool,
+    bounded: Option<&BoundedTurn>,
     session: &SessionRecord,
     request: &TurnRequest,
     cancel: CancellationToken,
@@ -692,7 +763,9 @@ where
             );
         }
     }
-    let (thread_id, native_model) = process.start_or_resume_thread(session, request).await?;
+    let (thread_id, native_model) = process
+        .start_or_resume_thread(session, request, bounded.is_some())
+        .await?;
     let mut effective_session = session.clone();
     effective_session.model = session.model.clone().or(native_model);
     if session.collaboration_mode.is_some() && effective_session.model.is_none() {
@@ -704,12 +777,30 @@ where
         stderr_text: String::new(),
     };
     let _ = on_event(CodexEvent::ThreadStarted(thread_id.clone())).await?;
-    let turn_request_id = process
-        .send_request(
-            "turn/start",
-            build_turn_start_params(&thread_id, &effective_session, request),
-        )
-        .await?;
+    if cancel.is_cancelled() {
+        bail!("cancelled before native submission");
+    }
+    let mut params = build_turn_start_params(&thread_id, &effective_session, request);
+    if let Some(bound) = bounded {
+        if Instant::now() >= bound.deadline {
+            bail!("deadline expired before native submission");
+        }
+        params["clientUserMessageId"] = json!(bound.client_id);
+        let deadline = bound.started_at + chrono::Duration::seconds(bound.seconds as i64);
+        let awareness = format!(
+            "This Tribu turn has a maximum of {} seconds (five minutes at the configured 300-second limit). Execution started at {}; absolute UTC deadline: {}. Queue wait is excluded. Plan within the remaining time and leave time to finish your answer. Report unfinished work honestly before expiry. Do not extend the limit, launch detached model work, use goals/subagents or start another turn to evade it. This is the same persistent Tribu conversation; the deadline does not reset its history.",
+            bound.seconds,
+            bound.started_at.to_rfc3339(),
+            deadline.to_rfc3339()
+        );
+        params["additionalContext"]["telecodex.tribu.deadline"] =
+            json!({"kind":"application","value":awareness});
+    }
+    let _ = on_event(CodexEvent::NativeTurnSubmitting).await?;
+    if cancel.is_cancelled() {
+        bail!("cancelled before native submission");
+    }
+    let turn_request_id = process.send_request("turn/start", params).await?;
     let mut active_turn_id: Option<String> = None;
     let mut interrupt_request_id: Option<u64> = None;
     let mut queued_steers = VecDeque::new();
@@ -735,6 +826,7 @@ where
     let mut submitted_inputs = HashSet::new();
     while !turn_completed {
         tokio::select! {
+          _=async{if let Some(bound)=bounded{sleep_until(bound.deadline).await;}}, if bounded.is_some() && !cancel.is_cancelled() => { cancel.cancel(); }
           Some((id, decision)) = pending_inputs.next(), if !pending_inputs.is_empty() => {
             if open_inputs.remove(&id).is_some() && !cancelled && !cancel.is_cancelled() {
                 match decision {
@@ -759,6 +851,10 @@ where
           steer=steer_rx.recv(), if steering_open => {
             match steer {
                 Some(steer) => {
+                    if cancel.is_cancelled() {
+                        let _=steer.response.send(Err(CodexSteerError::Rejected("native interruption pending".to_string())));
+                        continue;
+                    }
                     if let Some(turn_id)=active_turn_id.as_deref() {
                         send_steer_request(&mut process,&thread_id,turn_id,steer,&mut pending_steers).await?;
                     } else {
@@ -779,6 +875,7 @@ where
                     }
                     if let Some(turn_id)=result.as_ref().and_then(|v|v.get("turn")).and_then(|t|t.get("id")).and_then(Value::as_str){
                         active_turn_id=Some(turn_id.to_string());
+                        let _=on_event(CodexEvent::NativeTurnStarted(turn_id.to_string())).await?;
                     }
                 } else if let Some(pending)=pending_steers.remove(&id) {
                     let _=pending.response.send(steer_response(&pending.expected_turn_id,result.as_ref(),error.as_ref()));
@@ -835,7 +932,7 @@ where
           }
         }
     }
-    if !turn_completed && !cancelled && turn_error.is_none() {
+    if !turn_completed && (bounded.is_some() || !cancelled) && turn_error.is_none() {
         turn_error =
             Some("native event stream ended before the selected turn completed".to_string());
     }
@@ -998,6 +1095,7 @@ where
                 .and_then(Value::as_str)
             {
                 *active_turn_id = Some(turn_id.to_string());
+                let _ = on_event(CodexEvent::NativeTurnStarted(turn_id.to_string())).await?;
                 *assistant_message_completed = false;
             }
         }
@@ -1007,6 +1105,13 @@ where
                     .get("status")
                     .and_then(Value::as_str)
                     .unwrap_or("completed");
+                if let Some(id) = turn.get("id").and_then(Value::as_str) {
+                    let _ = on_event(CodexEvent::NativeTurnTerminal {
+                        id: id.to_string(),
+                        status: status.to_string(),
+                    })
+                    .await?;
+                }
                 if status == "failed" {
                     *turn_error = Some(
                         turn.get("error")
@@ -1197,7 +1302,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -1829,8 +1934,13 @@ impl AppServerProcess {
         &mut self,
         session: &SessionRecord,
         _request: &TurnRequest,
+        bounded: bool,
     ) -> Result<(String, Option<String>)> {
-        let (method, params) = build_thread_request(session);
+        let (method, mut params) = build_thread_request(session);
+        if bounded {
+            params["config"]["features.goals"] = json!(false);
+            params["config"]["features.multi_agent"] = json!(false);
+        }
         let request_id = self.send_request(method, params).await?;
         let response = self.await_response(request_id).await?;
         let thread_id = response
@@ -2160,6 +2270,103 @@ struct ExecItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tribu_cold_warm_turns_share_thread_and_receive_deadline_before_work() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let binary = proxy_fixture(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            for n in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                loop {
+                    let request: Value = serde_json::from_str(
+                        socket.next().await.unwrap().unwrap().to_text().unwrap(),
+                    )
+                    .unwrap();
+                    let method = request["method"].as_str().unwrap();
+                    let result = match method {
+                        "initialize" => json!({}),
+                        "initialized" => continue,
+                        "thread/start" | "thread/resume" => {
+                            assert_eq!(
+                                method,
+                                if n == 0 {
+                                    "thread/start"
+                                } else {
+                                    "thread/resume"
+                                }
+                            );
+                            assert_eq!(request["params"]["config"]["features.goals"], false);
+                            assert_eq!(request["params"]["config"]["features.multi_agent"], false);
+                            if n == 1 {
+                                assert_eq!(request["params"]["threadId"], "tribu-thread");
+                            }
+                            json!({"thread":{"id":"tribu-thread"},"model":"synthetic-model"})
+                        }
+                        "turn/start" => {
+                            let context =
+                                request["params"]["additionalContext"]["telecodex.tribu.deadline"]
+                                    ["value"]
+                                    .as_str()
+                                    .unwrap();
+                            assert!(context.contains("300 seconds"));
+                            assert!(context.contains("absolute UTC deadline"));
+                            assert_eq!(
+                                request["params"]["clientUserMessageId"],
+                                format!("human-{n}")
+                            );
+                            socket.send(WsMessage::Text(json!({"id":request["id"],"result":{"turn":{"id":format!("turn-{n}")}}}).to_string().into())).await.unwrap();
+                            socket.send(WsMessage::Text(json!({"method":"turn/completed","params":{"threadId":"tribu-thread","turn":{"id":format!("turn-{n}"),"status":"completed"}}}).to_string().into())).await.unwrap();
+                            break;
+                        }
+                        other => panic!("unexpected native request {other}"),
+                    };
+                    socket
+                        .send(WsMessage::Text(
+                            json!({"id":request["id"],"result":result})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+        let mut session = session_with_sandbox("read-only");
+        session.force_fresh_thread = true;
+        let mut request = review_request();
+        request.review_mode = None;
+        request.runtime_instructions = Some("application context".into());
+        let (tx, _) = mpsc::unbounded_channel::<CodexSteerRequest>();
+        drop(tx);
+        for n in 0..2 {
+            let runner = CodexRunner::new(binary.clone())
+                .with_shared_app_server(true)
+                .with_bounded_turn(BoundedTurn {
+                    started_at: chrono::Utc::now(),
+                    deadline: Instant::now() + Duration::from_secs(300),
+                    seconds: 300,
+                    client_id: format!("human-{n}"),
+                });
+            let (_, rx) = mpsc::unbounded_channel();
+            let summary = runner
+                .run_turn(
+                    &session,
+                    &request,
+                    CancellationToken::new(),
+                    rx,
+                    |_| async { Ok(CodexEventOutcome::None) },
+                )
+                .await
+                .unwrap();
+            assert_eq!(summary.codex_thread_id.as_deref(), Some("tribu-thread"));
+            session.codex_thread_id = summary.codex_thread_id;
+        }
+        server.await.unwrap();
+    }
 
     #[cfg(unix)]
     fn proxy_fixture(root: &Path, port: u16) -> PathBuf {

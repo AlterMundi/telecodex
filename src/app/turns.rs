@@ -9,18 +9,32 @@ pub(super) async fn process_turn(
     shared: Arc<AppShared>,
     cancel_slot: Arc<StdMutex<Option<CancellationToken>>>,
     steer_slot: Arc<StdMutex<Option<ActiveTurnSteerHandle>>>,
-    queued: QueuedTurn,
+    mut queued: QueuedTurn,
 ) -> Result<()> {
+    if !super::tribu::prepare(&shared, &mut queued).await? {
+        return Ok(());
+    }
     let session = shared.store.ensure_session(
         queued.request.session_key,
         queued.request.from_user_id,
         &shared.session_defaults,
     )?;
     let session = resolve_session_codex_binding_from_history(&shared, session)?;
+    let bounded = shared
+        .config
+        .tribu
+        .as_ref()
+        .filter(|p| p.key() == session.key);
+    if bounded.is_some() {
+        shared.store.tribu_check_thread(&session)?;
+    }
     shared.store.set_session_busy(session.key, true)?;
     let turn_id = shared
         .store
         .record_turn_started(session.id, &queued.request)?;
+    if let Some(id) = queued.tribu_admission.as_deref() {
+        shared.store.tribu_link_turn(id, turn_id)?;
+    }
     if let Some(update_id) = queued.update_id {
         shared.store.link_update_turn(update_id, turn_id)?;
     }
@@ -147,9 +161,45 @@ pub(super) async fn process_turn(
         });
     }
 
-    let run_result =
-        shared
-            .codex
+    let mut runner = shared.codex.clone();
+    let mut deadline_task = None;
+    let mut finish_deadline = None;
+    if let Some(policy) = bounded {
+        let started_at = chrono::Utc::now();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(policy.deadline_seconds);
+        finish_deadline = Some(deadline + Duration::from_secs(10));
+        let admission = queued
+            .tribu_admission
+            .clone()
+            .context("missing Tribu admission")?;
+        shared.store.tribu_deadline(
+            &admission,
+            &(started_at + chrono::Duration::seconds(policy.deadline_seconds as i64)).to_rfc3339(),
+        )?;
+        runner = runner.with_bounded_turn(crate::codex::BoundedTurn {
+            started_at,
+            deadline,
+            seconds: policy.deadline_seconds,
+            client_id: queued
+                .tribu_admission
+                .clone()
+                .context("missing Tribu admission correlation")?,
+        });
+        let interrupt = cancel.clone();
+        let deadline_shared = shared.clone();
+        deadline_task = Some(tokio::spawn(async move {
+            tokio::time::sleep_until(deadline).await;
+            interrupt.cancel();
+            if super::tribu::settle(&deadline_shared, &admission, true)
+                .await
+                .is_err()
+            {
+                tracing::warn!("Tribu deadline interruption unconfirmed; admission retained");
+            }
+        }));
+    }
+    let run =
+        runner
             .run_turn(&session, &runtime_request, cancel.clone(), steer_rx, {
                 let sink = sink.clone();
                 let shared = shared.clone();
@@ -157,13 +207,16 @@ pub(super) async fn process_turn(
                 let requester_user_id = queued.request.from_user_id;
                 let session_key = session.key;
                 let preserve_thread_binding = queued.request.review_mode.is_none();
+                let admission=queued.tribu_admission.clone();
                 move |event| {
                     let sink = sink.clone();
                     let shared = shared.clone();
                     let cancel = approval_cancel.clone();
+                    let admission=admission.clone();
                     async move {
                         match event {
                             CodexEvent::ThreadStarted(thread_id) => {
+                                if let Some(id)=admission.as_deref() {shared.store.tribu_native_thread(session_key,id,&thread_id)?;}
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
                                 if preserve_thread_binding {
                                     shared
@@ -208,6 +261,18 @@ pub(super) async fn process_turn(
                                 .await?;
                                 Ok(CodexEventOutcome::Approval(decision))
                             }
+                            CodexEvent::NativeTurnStarted(native_id) => {
+                                if let Some(id)=admission.as_deref(){shared.store.tribu_native_turn(id,&native_id,None)?;}
+                                Ok(CodexEventOutcome::None)
+                            }
+                            CodexEvent::NativeTurnSubmitting => {
+                                if let Some(id)=admission.as_deref(){super::tribu::revalidate_submission(&shared,id).await?;shared.store.tribu_submitting(session_key,id)?;}
+                                Ok(CodexEventOutcome::None)
+                            }
+                            CodexEvent::NativeTurnTerminal {id:native_id,status} => {
+                                if let Some(id)=admission.as_deref(){shared.store.tribu_native_turn(id,&native_id,Some(&status))?;}
+                                Ok(CodexEventOutcome::None)
+                            }
                             CodexEvent::UserInputRequest {
                                 id,
                                 request,
@@ -243,8 +308,33 @@ pub(super) async fn process_turn(
                         }
                     }
                 }
-            })
-            .await;
+            });
+    let run_result = if let Some(deadline) = finish_deadline {
+        match tokio::time::timeout_at(deadline, run).await {
+            Ok(result) => result,
+            Err(_) => Err(anyhow!(
+                "Tribu native deadline reached; execution completion unconfirmed"
+            )),
+        }
+    } else {
+        run.await
+    };
+    if let Some(task) = deadline_task {
+        let settled = queued
+            .tribu_admission
+            .as_deref()
+            .map(|id| shared.store.tribu_execution(id))
+            .transpose()?
+            .flatten()
+            .is_some_and(|v| {
+                v["terminal"]
+                    .as_str()
+                    .is_some_and(|s| matches!(s, "completed" | "failed" | "interrupted"))
+            });
+        if settled || run_result.is_ok() {
+            task.abort();
+        }
+    }
 
     shared
         .pending_questions
@@ -711,6 +801,9 @@ impl LiveTurnSink {
                 tracing::debug!("codex thread started: {thread_id}");
             }
             CodexEvent::UserInputRequest { .. }
+            | CodexEvent::NativeTurnStarted(_)
+            | CodexEvent::NativeTurnSubmitting
+            | CodexEvent::NativeTurnTerminal { .. }
             | CodexEvent::UserInputClosed(_)
             | CodexEvent::UserInputAnswered(_) => {}
             CodexEvent::ApprovalRequest(request) => {
@@ -1367,6 +1460,15 @@ pub(super) fn resolve_session_codex_binding_from_history(
     shared: &Arc<AppShared>,
     session: crate::models::SessionRecord,
 ) -> Result<crate::models::SessionRecord> {
+    if shared
+        .config
+        .tribu
+        .as_ref()
+        .is_some_and(|p| p.key() == session.key)
+    {
+        shared.store.tribu_check_thread(&session)?;
+        return Ok(session);
+    }
     if session.force_fresh_thread || !shared.config.codex.auto_attach_latest_history {
         return Ok(session);
     }
