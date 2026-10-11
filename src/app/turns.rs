@@ -274,7 +274,7 @@ pub(super) async fn process_turn(
                         summary: &summary,
                     },
                     || async {
-                        send_generated_artifacts(&shared, &session, &turn_workspace.out_dir).await
+                        send_generated_artifacts(&shared, &session, turn_id, &turn_workspace.out_dir, &summary.assistant_text).await
                     },
                     || async move { sink_for_success.lock().await.finish(None).await },
                     |message| async move { sink_for_failure.lock().await.finish(Some(message)).await },
@@ -368,7 +368,7 @@ async fn create_preview_sink_or_fail(
     ))))
 }
 
-fn cleanup_paths(attachments: &[LocalAttachment], turn_root: &Path) {
+fn cleanup_paths(attachments: &[LocalAttachment], turn_root: &Path, remove_turn_root: bool) {
     for path in attachments.iter().map(|attachment| &attachment.path) {
         if let Err(error) = fs::remove_file(path) {
             tracing::warn!(
@@ -376,6 +376,9 @@ fn cleanup_paths(attachments: &[LocalAttachment], turn_root: &Path) {
                 path.display()
             );
         }
+    }
+    if !remove_turn_root {
+        return;
     }
     if let Err(error) = fs::remove_dir_all(turn_root) {
         tracing::warn!(
@@ -390,7 +393,12 @@ pub(super) fn finish_turn_cleanup<T>(
     turn_root: &Path,
     result: Result<T>,
 ) -> Result<T> {
-    cleanup_paths(attachments, turn_root);
+    // Failed or uncertain deliveries need their output retained for explicit recovery.
+    let output_exists = match fs::read_dir(turn_root.join("out")) {
+        Ok(mut entries) => entries.next().is_some(),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    };
+    cleanup_paths(attachments, turn_root, result.is_ok() || !output_exists);
     result
 }
 
@@ -1164,7 +1172,7 @@ pub(super) fn prepare_runtime_request(
     }
 
     instruction_sections.push(format!(
-        "If you generate final deliverable images or files for the user, save only the final files in this directory:\n{}\nTelecodex automatically uploads files from that directory back to Telegram after your turn completes. Do not use /tmp paths, local Markdown image links, base64 blobs, or invented upload methods to deliver files. view_image is only for local inspection. Keep intermediate scratch files outside this directory.",
+        "This is the current turn's output contract. It supersedes output directories in earlier conversation context. If you generate final deliverable images or files for the user, save only the final files in this directory:\n{}\nTelecodex automatically uploads files from that directory back to Telegram after your turn completes. Do not use /tmp paths, local Markdown image links, base64 blobs, or invented upload methods to deliver files. view_image is only for local inspection. Keep intermediate scratch files outside this directory.",
         workspace.out_dir.display()
     ));
 
@@ -1389,23 +1397,33 @@ pub(super) fn resolve_session_codex_binding_from_history(
 async fn send_generated_artifacts(
     shared: &Arc<AppShared>,
     session: &crate::models::SessionRecord,
+    turn_id: i64,
     out_dir: &Path,
+    assistant_text: &str,
 ) -> Result<()> {
-    if !out_dir.exists() {
-        return Ok(());
+    validate_artifact_references(out_dir, assistant_text)?;
+    let directory = fs::symlink_metadata(out_dir)?;
+    if !directory.is_dir() || directory.file_type().is_symlink() {
+        bail!("Artifact output directory is not a regular directory; no files were uploaded");
     }
 
-    let mut entries = fs::read_dir(out_dir)?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let path = entry.path();
-            let metadata = entry.metadata().ok()?;
-            if metadata.is_file() { Some(path) } else { None }
-        })
-        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(out_dir)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.file_type().is_symlink() {
+            bail!("Artifact delivery refused a symbolic link; no linked files were uploaded");
+        }
+        if !metadata.is_file() {
+            bail!("Artifact output supports only top-level regular files; no files were uploaded");
+        }
+        entries.push(entry.path());
+    }
     entries.sort();
-
-    for path in entries.into_iter().take(10) {
+    if entries.len() > 10 {
+        bail!("Artifact delivery supports at most 10 files per turn; no files were uploaded");
+    }
+    for (accepted, path) in entries.into_iter().enumerate() {
         let extension = path
             .extension()
             .and_then(|value| value.to_str())
@@ -1431,7 +1449,14 @@ async fn send_generated_artifacts(
             .unwrap_or("artifact.bin")
             .to_string();
         let mime_type = mime_type_for_path(&path);
-        match action {
+        shared.store.audit(
+            None,
+            "artifact_delivery_attempted",
+            serde_json::json!({
+                "session":session.id,"turn":turn_id,"file":file_name
+            }),
+        )?;
+        let receipt = async { match action {
             ChatAction::UploadPhoto => {
                 shared
                     .telegram
@@ -1442,7 +1467,7 @@ async fn send_generated_artifacts(
                         &file_name,
                         mime_type.as_deref(),
                     )
-                    .await?;
+                    .await
             }
             ChatAction::UploadAudio => {
                 shared
@@ -1454,7 +1479,7 @@ async fn send_generated_artifacts(
                         &file_name,
                         mime_type.as_deref(),
                     )
-                    .await?;
+                    .await
             }
             ChatAction::UploadVideo => {
                 shared
@@ -1466,7 +1491,7 @@ async fn send_generated_artifacts(
                         &file_name,
                         mime_type.as_deref(),
                     )
-                    .await?;
+                    .await
             }
             _ => {
                 shared
@@ -1478,11 +1503,61 @@ async fn send_generated_artifacts(
                         &file_name,
                         mime_type.as_deref(),
                     )
-                    .await?;
+                    .await
+            }
+        }}.await.with_context(|| format!(
+            "Artifact '{file_name}' delivery unconfirmed; {accepted} file(s) already accepted by Telegram. Output is retained. No automatic retry."
+        ))?;
+        if receipt.chat.id != session.key.chat_id
+            || receipt.message_thread_id.unwrap_or(0) != session.key.thread_id
+        {
+            bail!(
+                "Artifact receipt does not match this topic; delivery unconfirmed. Output is retained. No automatic retry."
+            );
+        }
+        shared.store.audit(
+            None,
+            "artifact_delivery_accepted",
+            serde_json::json!({
+                "session":session.id,"turn":turn_id,"file":file_name,"message_id":receipt.message_id
+            }),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_artifact_references(out_dir: &Path, assistant_text: &str) -> Result<()> {
+    // Inspect only explicit textual output references; never inspect historical directories.
+    let pattern = regex::Regex::new(r#"\.telecodex/turns/[^\s/`<>]+/out(?:/[^\s`<>\)\]\"]+)?"#)?;
+    let current = out_dir.to_string_lossy();
+    let current = current
+        .find(".telecodex/turns/")
+        .map(|i| &current[i..])
+        .unwrap_or(&current);
+    for reference in pattern.find_iter(assistant_text) {
+        let reference = reference
+            .as_str()
+            .trim_end_matches(['.', ',', ';', ':', '!']);
+        if reference != current && !reference.starts_with(&format!("{current}/")) {
+            bail!(
+                "The answer references an earlier turn's output directory. No historical files were uploaded. Generate deliverables in the current turn's output directory."
+            );
+        }
+        if let Some(file) = reference.strip_prefix(&format!("{current}/")) {
+            let relative = Path::new(file);
+            if relative.components().count() != 1
+                || relative
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                || !out_dir.join(relative).is_file()
+            {
+                bail!(
+                    "The answer references a missing or unsupported current-turn artifact. Its delivery is not confirmed."
+                );
             }
         }
     }
-
     Ok(())
 }
 
