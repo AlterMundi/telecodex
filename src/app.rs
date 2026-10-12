@@ -462,15 +462,7 @@ impl App {
         text: Option<&str>,
     ) -> Result<bool> {
         let key = SessionKey::new(message.chat.id, message.message_thread_id);
-        if self
-            .shared
-            .store
-            .bot_state_value(&format!(
-                "native_writer_hold:{}:{}",
-                key.chat_id, key.thread_id
-            ))?
-            .is_none()
-        {
+        if !self.shared.store.native_writer_held(key)? {
             return Ok(false);
         }
         let authorized = self

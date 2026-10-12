@@ -435,6 +435,15 @@ impl Store {
             .collect::<rusqlite::Result<Vec<i64>>>()?)
     }
 
+    pub fn native_writer_held(&self, key: SessionKey) -> Result<bool> {
+        Ok(self
+            .bot_state_value(&format!(
+                "native_writer_hold:{}:{}",
+                key.chat_id, key.thread_id
+            ))?
+            .is_some())
+    }
+
     pub fn bot_state_value(&self, key: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.query_row(

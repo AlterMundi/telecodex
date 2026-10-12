@@ -3,6 +3,15 @@ use super::*;
 use crate::nexus::{NexusConfig, NexusRoute, NexusTarget};
 use serde_json::{Value, json};
 
+#[derive(Debug)]
+struct WriterHeld;
+impl std::fmt::Display for WriterHeld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Nexus target is held for native writer maintenance; no new input admitted")
+    }
+}
+impl std::error::Error for WriterHeld {}
+
 fn config(shared: &AppShared) -> Result<&NexusConfig> {
     shared
         .config
@@ -25,6 +34,9 @@ fn target(doc: &Value) -> Result<NexusTarget> {
 /// Read only. A mismatch never repairs or replaces the native association.
 fn check_target(shared: &AppShared, t: &NexusTarget, r: &NexusRoute) -> Result<()> {
     let cfg = config(shared)?;
+    if shared.store.native_writer_held(t.key())? {
+        return Err(WriterHeld.into());
+    }
     if t.listener_id != cfg.listener_id
         || t.bot_id != shared.bot_id
         || t.human_user_id != r.human_user_id
@@ -83,6 +95,8 @@ async fn validate(shared: &AppShared, doc: &Value) -> Result<()> {
             &json!({"table_id":r.table_id,"author_ref":r.author_ref}),
         )
         .await?;
+    // Maintenance can acquire the durable hold while the operator is queried.
+    check_target(shared, &t, r)?;
     if local["target"] != doc["target"]
         || !binding["active"].as_bool().unwrap_or(false)
         || binding["binding_id"] != doc["request"]["binding_id"]
@@ -267,7 +281,10 @@ async fn poll(app: &App) -> Result<()> {
         if doc["request"]["request_id"] != id || doc["request"]["status"] != "queued" {
             continue;
         }
-        validate(&app.shared, &doc).await?;
+        match validate(&app.shared, &doc).await {
+            Err(error) if error.is::<WriterHeld>() => continue,
+            result => result?,
+        }
         let t = target(&doc)?;
         let session = app
             .shared
@@ -280,6 +297,12 @@ async fn poll(app: &App) -> Result<()> {
                 .get(&t.key())
                 .and_then(|w| w.steer.lock().expect("steer mutex poisoned").clone())
         };
+        // Lock acquisition yielded after validation. Refuse before journaling
+        // or scheduling another writer if maintenance acquired the hold.
+        match check_target(&app.shared, &t, route(cfg, &doc)?) {
+            Err(error) if error.is::<WriterHeld>() => continue,
+            result => result?,
+        }
         // A detached writer is never replaced with a new worker.
         if session.busy && active.is_none() {
             continue;
