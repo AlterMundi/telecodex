@@ -222,10 +222,14 @@ pub(super) async fn handle_callback(
         show_pending(shared, message, user).await?;
         return Ok(true);
     }
-    if let Some(offset) = data.strip_prefix("qpage:") {
+    let page = data
+        .strip_prefix("qpage:")
+        .map(|v| (v, false))
+        .or_else(|| data.strip_prefix("qhistory:").map(|v| (v, true)));
+    if let Some((offset, history)) = page {
         if let Ok(offset) = offset.parse::<usize>() {
             if offset <= 1_000_000 && offset % 50 == 0 {
-                show_pending_page(shared, message, user, offset).await?;
+                show_pending_page(shared, message, user, offset, history).await?;
             }
         }
         return Ok(true);
@@ -455,7 +459,39 @@ pub(super) async fn show_pending(
     message: &Message,
     user: i64,
 ) -> Result<()> {
-    show_pending_page(shared, message, user, 0).await
+    show_pending_page(shared, message, user, 0, false).await
+}
+
+fn request_button_label(state: &str, title: &str) -> String {
+    let mut short = title.chars().take(40).collect::<String>();
+    if title.chars().count() > 40 {
+        short.push('…');
+    }
+    format!("{state} · {short}")
+}
+fn request_state_label(state: &str, spanish: bool) -> &'static str {
+    match (state, spanish) {
+        ("pending", true) => "⏳ Pendiente",
+        ("pending", false) => "⏳ Pending",
+        ("answering", true) => "⌛ Confirmando",
+        ("answering", false) => "⌛ Receipt pending",
+        ("unknown", true) => "⚠️ Sin confirmar",
+        ("unknown", false) => "⚠️ Unknown receipt",
+        ("source_changed", true) => "↪️ Fuente cambió",
+        ("source_changed", false) => "↪️ Source changed",
+        ("answered", true) => "💬 Respondido",
+        ("answered", false) => "💬 Answered",
+        ("completed", true) => "✅ Completado",
+        ("completed", false) => "✅ Completed",
+        ("withdrawn", true) => "↩️ Retirado",
+        ("withdrawn", false) => "↩️ Withdrawn",
+        ("cancelled", true) => "◻️ Cancelado",
+        ("cancelled", false) => "◻️ Cancelled",
+        ("expired", true) => "⌛ Vencido",
+        ("expired", false) => "⌛ Expired",
+        (_, true) => "⚠️ Comprobar",
+        (_, false) => "⚠️ Inspect",
+    }
 }
 
 async fn show_pending_page(
@@ -463,103 +499,192 @@ async fn show_pending_page(
     message: &Message,
     user: i64,
     offset: usize,
+    history: bool,
 ) -> Result<()> {
     let key = SessionKey::new(message.chat.id, message.message_thread_id);
-    let guard = shared.pending_questions.lock().await;
-    let live = guard
-        .iter()
-        .filter(|(_, p)| {
-            p.session == key
-                && p.requester == user
-                && !p.closed.is_cancelled()
-                && !p.responder.is_closed()
-        })
-        .map(|(id, p)| {
-            (
-                id.clone(),
-                format!(
-                    "{} ({}/{})",
-                    p.request.questions[p.index].header,
-                    p.index + 1,
-                    p.request.questions.len()
-                ),
-            )
-        })
-        .collect::<HashMap<_, _>>();
-    drop(guard);
-    let items = shared.store.interactions_page(key, user, offset)?;
+    let spanish = matches!(
+        shared.config.telegram.human_request_language,
+        crate::config::HumanRequestLanguage::Es
+    );
+    let live = {
+        let guard = shared.pending_questions.lock().await;
+        guard
+            .iter()
+            .filter(|(_, p)| {
+                p.session == key
+                    && p.requester == user
+                    && !p.closed.is_cancelled()
+                    && !p.responder.is_closed()
+            })
+            .map(|(id, p)| {
+                (
+                    id.clone(),
+                    format!(
+                        "{} ({}/{})",
+                        p.request.questions[p.index].header,
+                        p.index + 1,
+                        p.request.questions.len()
+                    ),
+                )
+            })
+            .collect::<HashMap<_, _>>()
+    };
+    let page = shared.store.interactions_page(key, user, offset, history)?;
+    let total = if history {
+        page.history_total
+    } else {
+        page.actionable_total
+    };
     let mut rows = Vec::new();
-    let mut pending = 0;
-    for item in items.iter().take(50) {
-        let (label, callback) = if let Some(title) = live.get(&item.id) {
-            pending += 1;
-            (
-                format!(
-                    "{} · {}",
-                    title,
-                    if item.blocking {
-                        "blocking"
+    for item in page.items.iter().take(50) {
+        let (state, title, callback) =
+            if let Some(title) = live.get(&item.id).filter(|_| item.state == "pending") {
+                (
+                    if spanish {
+                        if item.blocking {
+                            "⏳ Bloqueante"
+                        } else {
+                            "⏳ No bloqueante"
+                        }
+                    } else if item.blocking {
+                        "⏳ Blocking"
                     } else {
-                        "nonblocking"
-                    }
-                ),
-                format!("qopen:{}", item.id),
-            )
-        } else if item.kind == "native" && item.state == "pending" {
-            pending += 1;
-            (
-                format!("{} · opening controls", item.title),
-                format!("qopen:{}", item.id),
-            )
-        } else {
-            if item.kind == "task" && item.state == "pending" {
-                pending += 1;
-            }
-            let state = if item.kind == "native" && item.state == "pending" {
-                "expired"
+                        "⏳ Nonblocking"
+                    },
+                    title.as_str(),
+                    format!("qopen:{}", item.id),
+                )
+            } else if item.kind == "native" && item.state == "pending" {
+                (
+                    if spanish {
+                        "⏳ Abriendo controles"
+                    } else {
+                        "⏳ Opening controls"
+                    },
+                    item.title.as_str(),
+                    format!("qopen:{}", item.id),
+                )
             } else {
-                &item.state
+                (
+                    request_state_label(&item.state, spanish),
+                    item.title.as_str(),
+                    format!("hp:{}:open", item.id),
+                )
             };
-            (
-                format!("{} · {}", item.title, state),
-                format!("hp:{}:open", item.id),
-            )
-        };
         rows.push(vec![InlineKeyboardButton {
-            text: label.chars().take(80).collect(),
+            text: request_button_label(state, title),
             callback_data: Some(callback),
             url: None,
         }]);
     }
-    let mut navigation = Vec::new();
+    let mut nav = Vec::new();
+    let prefix = if history { "qhistory" } else { "qpage" };
     for (label, next) in [
-        ("Previous", offset.checked_sub(50)),
-        ("Next", (items.len() > 50).then_some(offset + 50)),
+        (
+            if spanish { "Anterior" } else { "Previous" },
+            offset.checked_sub(50),
+        ),
+        (
+            if spanish { "Siguiente" } else { "Next" },
+            (page.items.len() > 50).then_some(offset + 50),
+        ),
     ] {
         if let Some(next) = next {
-            navigation.push(InlineKeyboardButton {
+            nav.push(InlineKeyboardButton {
                 text: label.into(),
-                callback_data: Some(format!("qpage:{next}")),
+                callback_data: Some(format!("{prefix}:{next}")),
                 url: None,
             });
         }
     }
-    if !navigation.is_empty() {
-        rows.push(navigation);
+    if !nav.is_empty() {
+        rows.push(nav);
     }
-    let text = if items.is_empty() {
-        "No pending questions or human tasks for you in this topic. Questions interrupted by a restart are not replayed.".into()
+    rows.push(vec![InlineKeyboardButton {
+        text: if history {
+            format!(
+                "{} ({})",
+                if spanish { "Pendientes" } else { "Pending" },
+                page.actionable_total
+            )
+        } else {
+            format!(
+                "{} ({})",
+                if spanish { "Historial" } else { "History" },
+                page.history_total
+            )
+        },
+        callback_data: Some(if history { "qpending" } else { "qhistory:0" }.into()),
+        url: None,
+    }]);
+    let showing = page.items.len().min(50);
+    let start = if showing == 0 { 0 } else { offset + 1 };
+    let end = if showing == 0 { 0 } else { offset + showing };
+    let text = if history {
+        if spanish {
+            format!(
+                "Historial · {total} registros en este topic\nMostrando {start}–{end}. {pending} solicitudes sin resolver.\nLos registros cerrados son de consulta; no se reenvían.",
+                pending = page.actionable_total
+            )
+        } else {
+            format!(
+                "History · {total} records in this topic\nShowing {start}–{end}. {pending} unresolved requests.\nClosed records are read-only; inputs are never replayed.",
+                pending = page.actionable_total
+            )
+        }
     } else {
-        format!(
-            "Human requests · {pending} pending for you\n\nChoose a request to reopen. Expired native questions are read-only; human tasks survive the turn. Recent resolved requests are included. Counts refer to this page (up to 50 requests)."
-        )
+        let receipts = page.actionable_total - page.pending_total;
+        let empty = if total == 0 {
+            if spanish {
+                "\nNo hay solicitudes pendientes para vos en este topic."
+            } else {
+                "\nNo pending requests for you in this topic."
+            }
+        } else {
+            ""
+        };
+        if spanish {
+            format!(
+                "Pendientes · {} para vos en este topic\n{} recibos por comprobar · Mostrando {start}–{end} de {total}.{empty}",
+                page.pending_total, receipts
+            )
+        } else {
+            format!(
+                "Human requests · {} pending for you in this topic\n{} receipts to inspect · Showing {start}–{end} of {total}.{empty}",
+                page.pending_total, receipts
+            )
+        }
     };
     let mut outgoing = SendMessage::html(message.chat.id, message.message_thread_id, text);
-    if !rows.is_empty() {
-        outgoing.reply_markup = Some(InlineKeyboardMarkup {
-            inline_keyboard: rows,
-        });
-    }
+    outgoing.reply_markup = Some(InlineKeyboardMarkup {
+        inline_keyboard: rows,
+    });
     shared.telegram.send_message(outgoing).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod mobile_tests {
+    use super::*;
+    #[test]
+    fn long_titles_never_hide_lifecycle_on_mobile() {
+        for spanish in [true, false] {
+            for state in [
+                "pending",
+                "answered",
+                "completed",
+                "cancelled",
+                "withdrawn",
+                "unknown",
+            ] {
+                let prefix = request_state_label(state, spanish);
+                let label =
+                    request_button_label(prefix, &"Título largo con evidencia 🌿 ".repeat(10));
+                assert!(label.starts_with(prefix));
+                assert!(label.contains("Título largo"));
+                assert!(label.ends_with('…'));
+                assert!(label.chars().count() < 80);
+            }
+        }
+    }
 }

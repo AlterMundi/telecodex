@@ -59,6 +59,14 @@ impl TribuConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HumanRequestLanguage {
+    #[default]
+    En,
+    Es,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct TelegramConfig {
     pub bot_token: Option<String>,
@@ -66,6 +74,8 @@ pub struct TelegramConfig {
     pub bot_token_file: Option<PathBuf>,
     #[serde(default)]
     pub lifecycle_notifications: bool,
+    #[serde(default)]
+    pub human_request_language: HumanRequestLanguage,
     #[serde(default = "default_telegram_api_base")]
     pub api_base: String,
     /// Explicit trusted local Bot API storage; never inferred from API responses.

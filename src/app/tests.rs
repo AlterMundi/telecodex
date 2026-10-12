@@ -87,6 +87,7 @@ fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
             bot_token_env: None,
             bot_token_file: None,
             lifecycle_notifications: false,
+            human_request_language: crate::config::HumanRequestLanguage::En,
             api_base: "https://api.telegram.org".to_string(),
             local_file_root: None,
             use_message_drafts: false,

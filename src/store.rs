@@ -12,7 +12,7 @@ use uuid::Uuid;
 mod interactions;
 mod nexus;
 mod tribu;
-pub use interactions::HumanInteraction;
+pub use interactions::{HumanInteraction, TaskWithdrawal};
 pub use tribu::TribuAdmission;
 
 use crate::{

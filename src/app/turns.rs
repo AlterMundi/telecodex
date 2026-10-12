@@ -421,9 +421,8 @@ pub(super) async fn process_turn(
                     },
                     || async {
                         if fs::symlink_metadata(turn_workspace.root.join(interactions::MANIFEST)).is_ok() {
-                        let current=shared.store.get_session(session.key)?.context("human task source session disappeared")?;
-                        let native=current.codex_thread_id.as_deref().context("human task source native thread missing")?;
-                        interactions::register_tasks(&shared,session.key,queued.request.from_user_id,turn_id,native,&turn_workspace.root)?;
+                        let native=summary.codex_thread_id.as_deref().context("human task source native thread was not observed")?;
+                        interactions::register_tasks(&shared,session.key,queued.request.from_user_id,turn_id,native,&turn_workspace.root).await?;
                         }
                         send_generated_artifacts(&shared, &session, turn_id, &turn_workspace.out_dir, &summary.assistant_text).await
                     },
@@ -1343,7 +1342,7 @@ pub(super) fn prepare_runtime_request(
     );
 
     instruction_sections.push(format!(
-        "If a human action must remain recoverable after this turn (for example a phone test), explicitly declare it in {}. This optional regular JSON file is outside out and is not uploaded. Schema: {{\"schema\":\"telecodex.human-requests/v1\",\"requests\":[{{\"id\":\"phone-test\",\"title\":\"Test playback\",\"action\":\"Open the app and report playback.\",\"links\":[]}}]}}. Use at most 10 requests, unique IDs (64 ASCII letters/digits/dash/underscore), titles <=120 characters, actions <=8000 characters and at most 5 public http(s) links {{\"label\":\"App\",\"url\":\"https://example.org\"}}. Never put secrets or private endpoints into previews or links. Telecodex admits the declaration only after successful native completion and scopes it to this turn's human, topic and native thread. /pending (also /questions) reopens it. Do not declare a request already answered; ordinary prose creates no durable request.",
+        "If a human action must remain recoverable after this turn (for example a phone test), explicitly declare it in {}. This optional regular JSON file is outside out and is not uploaded. Schema: {{\"schema\":\"telecodex.human-requests/v1\",\"requests\":[{{\"id\":\"phone-test\",\"title\":\"Test playback\",\"action\":\"Open the app and report playback.\",\"links\":[]}}]}}. Use at most 10 requests, unique IDs (64 ASCII letters/digits/dash/underscore), titles <=120 characters, actions <=8000 characters and at most 5 public http(s) links {{\"label\":\"App\",\"url\":\"https://example.org\"}}. Never put secrets or private endpoints into previews or links. Telecodex admits the declaration only after successful native completion and scopes it to this turn's human, topic and native thread. /pending (also /questions) reopens it. Do not declare a request already answered; ordinary prose creates no durable request. To retire a task issued in this same human/topic/native thread when its action is no longer needed, add optional withdrawals: [{{\"id\":\"retained-request-id\",\"reason\":\"Explicit reason and observed source\",\"links\":[]}}]. Use the exact retained task ID, at most 10 total requests/withdrawals, and reasons <=2000 characters. Native questions and uncertain receipts cannot be withdrawn this way. Withdrawal records an agent decision with an audit trail, never human approval or completion.",
         workspace.root.join(interactions::MANIFEST).display()
     ));
 
