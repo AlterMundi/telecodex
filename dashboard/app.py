@@ -127,7 +127,7 @@ def create_app(config=None, provider=None, validator=validate_launch):
 
     @app.get('/assets/{name}')
     def asset(name: str):
-        if name not in ('app.js', 'style.css'):
+        if name not in ('app.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         return FileResponse(public / name)
 
