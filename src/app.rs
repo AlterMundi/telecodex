@@ -24,6 +24,7 @@ mod goals;
 mod icons;
 mod interactions;
 mod io;
+mod merging;
 mod nexus;
 mod presentation;
 mod questions;
@@ -162,6 +163,7 @@ struct QueuedTurn {
     tribu_admission: Option<String>,
     goal: Option<crate::codex::GoalActivation>,
     nexus: Option<String>,
+    merge: Option<String>,
 }
 
 tokio::task_local! {
@@ -935,6 +937,15 @@ impl App {
                         }).await?;
                     }
                 }
+                BridgeCommand::Merge { args } => {
+                    if merging::command(self, message, user.tg_user_id, &args)
+                        .await
+                        .is_err()
+                    {
+                        self.send_status(message.chat.id, message.message_thread_id,
+                            "Merge did not finish. Existing conversations were preserved; /merge status shows retained stages before you decide what to retry.").await?;
+                    }
+                }
                 BridgeCommand::Topic { title } => {
                     self.handle_new_topic(user, message, title).await?;
                 }
@@ -1196,6 +1207,13 @@ impl App {
                             .store
                             .uncertain_update_ids(user.tg_user_id, session_key)?;
                         let mut text = format_session_status(&session, &message.chat);
+                        let merges = self
+                            .shared
+                            .store
+                            .merge_status(session_key, user.tg_user_id)?;
+                        if !merges.contains("No context merges in this topic.") {
+                            text.push_str(&format!("\n\n{merges}"));
+                        }
                         if !uncertain.is_empty() {
                             text.push_str(&format!("\n\nUnconfirmed inputs in this topic: `{uncertain:?}`. Codex may have received them; review the conversation before retrying. They will not be resent automatically."));
                         }
@@ -1221,6 +1239,10 @@ impl App {
                     }
                 }
                 BridgeCommand::RetryTurn { turn_id } => {
+                    if !self.shared.store.merge_local(turn_id)?.is_empty() {
+                        self.send_status(message.chat.id,message.message_thread_id,"This turn carried a context merge. Inspect /merge status; /merge resume ID only resumes known unadmitted context. /retry does not replay merge input.").await?;
+                        return Ok(());
+                    }
                     if self
                         .shared
                         .store
@@ -2282,6 +2304,7 @@ impl App {
                 tribu_admission: admission.map(|a| a.id),
                 goal,
                 nexus,
+                merge: None,
             })
             .map_err(|_| anyhow!("session worker dropped"));
         if queued.is_err() {
@@ -2394,8 +2417,12 @@ impl App {
                 let update_id = turn.update_id;
                 let admission = turn.tribu_admission.clone();
                 let nexus_id = turn.nexus.clone();
+                let merge_id = turn.merge.clone();
                 let result =
                     process_turn(shared.clone(), cancel.clone(), steer.clone(), turn).await;
+                if let Some(id) = merge_id {
+                    let _ = shared.store.merge_finish(&id);
+                }
                 if let Some(id) = nexus_id {
                     if shared.store.nexus_finish(&id).is_err() {
                         tracing::warn!("Nexus outcome retained without confirmed settlement");

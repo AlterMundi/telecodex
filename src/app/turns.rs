@@ -24,6 +24,9 @@ pub(super) async fn process_turn(
     if !super::nexus::prepare(&shared, &mut queued).await? {
         return Ok(());
     }
+    if !super::merging::prepare_turn(&shared, &mut queued)? {
+        return Ok(());
+    }
     if !super::tribu::prepare(&shared, &mut queued).await? {
         return Ok(());
     }
@@ -32,7 +35,11 @@ pub(super) async fn process_turn(
         queued.request.from_user_id,
         &shared.session_defaults,
     )?;
-    let session = resolve_session_codex_binding_from_history(&shared, session)?;
+    let session = if queued.merge.is_some() {
+        session
+    } else {
+        resolve_session_codex_binding_from_history(&shared, session)?
+    };
     let bounded = shared
         .config
         .tribu
@@ -47,6 +54,9 @@ pub(super) async fn process_turn(
         .record_turn_started(session.id, &queued.request)?;
     if let Some(id) = queued.nexus.as_deref() {
         shared.store.nexus_link(id, turn_id)?;
+    }
+    if let Some(id) = queued.merge.as_deref() {
+        shared.store.merge_link(id, turn_id)?;
     }
     if queued.goal.is_some() {
         shared
@@ -245,6 +255,7 @@ pub(super) async fn process_turn(
                     async move {
                         match event {
                             CodexEvent::ThreadStarted(thread_id) => {
+                                shared.store.merge_thread(turn_id,&thread_id)?;
                                 super::nexus::thread(&shared,turn_id,&thread_id)?;
                                 if let Some(id)=admission.as_deref() {shared.store.tribu_native_thread(session_key,id,&thread_id)?;}
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
@@ -292,16 +303,21 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::Approval(decision))
                             }
                             CodexEvent::NativeInputRejected => {
+                                for id in shared.store.merge_local(turn_id)? {
+                                    if shared.store.merge_leg(&id)?["phase"]=="submitting" {shared.store.merge_phase(&id,"rejected","Native explicitly rejected merge turn/start")?;}
+                                }
                                 for id in shared.store.nexus_local_requests(turn_id)? {
                                     if shared.store.nexus_request(&id)?.is_some_and(|r|r["phase"]=="submitting") { shared.store.nexus_receipt(&id,"rejected",None,None,Some("Native explicitly rejected turn/start"))?; }
                                 }
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeInputAccepted(native_id) => {
+                                shared.store.merge_input_accepted(turn_id,&native_id)?;
                                 shared.store.nexus_input_accepted(turn_id,&native_id)?;
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::FinalAnswerCompleted(text) => {
+                                if let Some(native)=physical_turn.lock().expect("native correlation mutex poisoned").as_deref(){shared.store.merge_answer(turn_id,native,&text)?;}
                                 if !shared.store.nexus_local_requests(turn_id)?.is_empty() {
                                     if let Some(native)=physical_turn.lock().expect("native correlation mutex poisoned").as_deref() {shared.store.nexus_final(turn_id,native,&text)?;}
                                 }
@@ -315,11 +331,13 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnSubmitting => {
+                                shared.store.merge_submitting(turn_id)?;
                                 super::nexus::submitting(&shared,turn_id).await?;
                                 if let Some(id)=admission.as_deref(){super::tribu::revalidate_submission(&shared,id).await?;shared.store.tribu_submitting(session_key,id)?;}
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnTerminal {id:native_id,status} => {
+                                shared.store.merge_terminal(turn_id,&native_id,&status)?;
                                 if !shared.store.nexus_local_requests(turn_id)?.is_empty() { shared.store.nexus_terminal(turn_id,&native_id,&status)?; }
                                 if let Some(id)=admission.as_deref(){shared.store.tribu_native_turn(id,&native_id,Some(&status))?;}
                                 Ok(CodexEventOutcome::None)
