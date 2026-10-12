@@ -26,6 +26,14 @@ pub struct Config {
     /// Explicit human-only admission. Omitted on ordinary listeners.
     pub tribu: Option<TribuConfig>,
     pub nexus: Option<crate::nexus::NexusConfig>,
+    pub session_control: Option<SessionControlConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionControlConfig {
+    pub socket_path: PathBuf,
+    pub human_id: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -172,6 +180,12 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
+        if self.session_control.as_ref().is_some_and(|c| {
+            !c.socket_path.is_absolute() || c.human_id <= 0 || !self.codex.shared_app_server
+        }) {
+            bail!("Invalid owner-local session control configuration");
+        }
+
         if let Some(nexus) = &self.nexus {
             nexus.validate()?;
             if !self.codex.shared_app_server {

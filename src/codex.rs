@@ -33,7 +33,7 @@ use tokio_tungstenite::{
 use tokio_util::sync::CancellationToken;
 
 mod goals;
-pub use goals::{GoalActivation, GoalControl, NativeGoal};
+pub use goals::{GoalActivation, GoalControl, GoalStopSnapshot, NativeGoal};
 
 #[derive(Clone)]
 pub struct CodexRunner {
@@ -264,6 +264,78 @@ struct SimpleCommandOutput {
 }
 
 impl CodexRunner {
+    pub async fn native_descendants(&self, root: &str) -> Result<Vec<String>> {
+        tokio::time::timeout(Duration::from_secs(10),async {
+            let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;process.initialize().await?;
+            let mut parents=std::collections::HashMap::<String,String>::new();
+            for archived in [false,true] {
+                let mut cursor=None::<String>;let mut seen=std::collections::HashSet::new();let mut complete=false;
+                for _ in 0..6 {
+                    let request=process.send_request("thread/list",json!({"ancestorThreadId":root,"sourceKinds":["subAgent"],"archived":archived,"limit":20,"cursor":cursor})).await?;
+                    let page=process.await_response(request).await?;
+                    for child in page["data"].as_array().context("Native descendant page malformed")? {
+                        let id=child["id"].as_str().context("Native child ID missing")?;
+                        let parent=child["parentThreadId"].as_str().context("Native child parent missing")?;
+                        if id==root || id==parent || child["source"]["subAgent"].is_null() {bail!("Native descendant ancestry malformed");}
+                        if parents.insert(id.to_string(),parent.to_string()).is_some_and(|old|old!=parent){bail!("Native child ancestry changed");}
+                        if parents.len()>128 {bail!("Native descendant bound exceeded");}
+                    }
+                    cursor=page["nextCursor"].as_str().map(str::to_string);
+                    if let Some(c)=&cursor {if !seen.insert(c.clone()){bail!("Native descendant pagination repeated");}}else{complete=true;break;}
+                }
+                if !complete {bail!("Native descendant selection incomplete");}
+            }
+            for child in parents.keys() {
+                let mut selected=child.as_str();let mut seen=std::collections::HashSet::new();
+                while selected!=root {
+                    if !seen.insert(selected){bail!("Native descendant cycle");}
+                    selected=parents.get(selected).context("Native descendant is outside the selected root")?;
+                }
+            }
+            process.shutdown().await?;
+            let mut ids=parents.into_keys().collect::<Vec<_>>();ids.sort();Ok(ids)
+        }).await.context("Native descendant enumeration unavailable")?
+    }
+    pub async fn live_native_turn(&self, thread: &str) -> Result<Option<String>> {
+        tokio::time::timeout(Duration::from_secs(8),async {
+            let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;process.initialize().await?;
+            let mut cursor=None::<String>;let mut seen=std::collections::HashSet::new();
+            for _ in 0..6 {
+                let id=process.send_request("thread/turns/list",json!({"threadId":thread,"limit":20,"sortDirection":"desc","itemsView":"notLoaded","cursor":cursor})).await?;
+                let page=process.await_response(id).await?;
+                for turn in page["data"].as_array().context("Native turn page malformed")? {
+                    if turn["status"]=="inProgress" {let active=turn["id"].as_str().context("Native physical turn missing")?.to_string();process.shutdown().await?;return Ok(Some(active));}
+                }
+                cursor=page["nextCursor"].as_str().map(str::to_string);
+                if let Some(c)=&cursor {if !seen.insert(c.clone()){bail!("Native turn pagination repeated");}} else {process.shutdown().await?;return Ok(None);}
+            }
+            bail!("Native active turn selection incomplete")
+        }).await.context("Native physical turn selection unavailable")?
+    }
+    pub async fn native_activity(&self, thread: &str) -> Result<String> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
+            process.initialize().await?;
+            let id = process
+                .send_request(
+                    "thread/read",
+                    json!({"threadId":thread,"includeTurns":false}),
+                )
+                .await?;
+            let result = process.await_response(id).await?;
+            if result["thread"]["id"] != thread {
+                bail!("Native activity binding mismatch");
+            }
+            let status = result["thread"]["status"]["type"]
+                .as_str()
+                .context("Native activity unavailable")?
+                .to_string();
+            process.shutdown().await?;
+            Ok(status)
+        })
+        .await
+        .context("Native activity read timed out")?
+    }
     pub async fn interrupt_selected_turn(&self, thread: &str, turn: &str) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
@@ -1060,7 +1132,8 @@ where
                         continue;
                     }
                     if let Some(control)=steer.goal.as_ref() {
-                        if matches!(control,GoalControl::Pause|GoalControl::Clear) { staged_goal=false; }
+                        if let GoalControl::Stop(snapshot)=control {snapshot.lock().expect("goal stop snapshot mutex poisoned").was_staged=staged_goal;}
+                        if matches!(control,GoalControl::Pause|GoalControl::Clear|GoalControl::Stop(_)) { staged_goal=false; }
                         let result=tokio::time::timeout(Duration::from_secs(10),goals::mutate_control(&mut process,&thread_id,control)).await;
                         match result {
                             Ok(Ok(goal))=> { goal_snapshot_request_id=None; goal_active=goal.is_some_and(|g|g.status=="active"); let _=steer.response.send(Ok(None)); }

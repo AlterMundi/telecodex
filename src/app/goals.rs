@@ -359,6 +359,9 @@ async fn activate(
     objective: Option<String>,
     replace: bool,
 ) -> Result<()> {
+    if app.shared.store.stop_fenced(session.key)? {
+        bail!("Coordinated Stop holds this goal; no activation submitted");
+    }
     let objective = objective
         .as_deref()
         .map(|s| materialize(app, s))
@@ -620,7 +623,7 @@ fn revoke_queued(app: &App, key: SessionKey) -> Result<()> {
         .store
         .save_bot_state(&intent_key(key), &Uuid::now_v7().to_string())
 }
-async fn control_live(
+pub(super) async fn control_live(
     app: &App,
     session: &crate::models::SessionRecord,
     control: GoalControl,

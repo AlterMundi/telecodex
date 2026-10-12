@@ -3,6 +3,7 @@ mod codex;
 mod codex_history;
 mod commands;
 mod config;
+mod control_client;
 mod limits;
 mod models;
 mod nexus;
@@ -19,6 +20,13 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--control") {
+        if args.len() < 5 || args[3] != "stop" {
+            anyhow::bail!("Usage: telecodex --control CONFIG stop all|status ID|resume ID");
+        }
+        let config = config::Config::load(args[2].clone().into())?;
+        return control_client::run(&config, &args[4..].join(" ")).await;
+    }
     if args.get(1).map(String::as_str) == Some("--probe-native") {
         if !(args.len() == 4 || (args.len() == 5 && args[4] == "--create-thread-probes")) {
             anyhow::bail!(

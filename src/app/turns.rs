@@ -11,6 +11,29 @@ pub(super) async fn process_turn(
     steer_slot: Arc<StdMutex<Option<ActiveTurnSteerHandle>>>,
     mut queued: QueuedTurn,
 ) -> Result<()> {
+    if shared
+        .store
+        .stop_admission_epoch(queued.request.session_key)?
+        != queued.admission_epoch
+    {
+        if let Some(id) = queued.update_id {
+            shared.store.stop_retain_input(id)?;
+        }
+        return Ok(());
+    }
+    if let Some(id) = queued.stop_resume.as_deref() {
+        shared.store.stop_validate_resume(
+            id,
+            queued.request.session_key,
+            queued.request.from_user_id,
+        )?;
+    }
+    if queued.stop_resume.is_none() && shared.store.stop_fenced(queued.request.session_key)? {
+        if let Some(id) = queued.update_id {
+            shared.store.stop_retain_input(id)?;
+        }
+        return Ok(());
+    }
     if let Some(goal) = queued.goal.as_ref() {
         if shared
             .store
@@ -57,6 +80,15 @@ pub(super) async fn process_turn(
     }
     if let Some(id) = queued.merge.as_deref() {
         shared.store.merge_link(id, turn_id)?;
+    }
+    if let Some(id) = queued.stop_resume.as_deref() {
+        shared.store.stop_resume_event(
+            id,
+            session.key,
+            "resume_submitting",
+            Some(turn_id),
+            None,
+        )?;
     }
     if queued.goal.is_some() {
         shared
@@ -246,12 +278,16 @@ pub(super) async fn process_turn(
                 let preserve_thread_binding = queued.request.review_mode.is_none();
                 let admission=queued.tribu_admission.clone();
                 let physical_turn=physical_turn.clone();
+                let stop_resume=queued.stop_resume.clone();
+                let admission_epoch=queued.admission_epoch.clone();
                 move |event| {
                     let sink = sink.clone();
                     let shared = shared.clone();
                     let cancel = approval_cancel.clone();
                     let admission=admission.clone();
                     let physical_turn=physical_turn.clone();
+                    let stop_resume=stop_resume.clone();
+                    let admission_epoch=admission_epoch.clone();
                     async move {
                         match event {
                             CodexEvent::ThreadStarted(thread_id) => {
@@ -303,6 +339,8 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::Approval(decision))
                             }
                             CodexEvent::NativeInputRejected => {
+                                if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,"resume_rejected",Some(turn_id),None)?;}
+
                                 for id in shared.store.merge_local(turn_id)? {
                                     if shared.store.merge_leg(&id)?["phase"]=="submitting" {shared.store.merge_phase(&id,"rejected","Native explicitly rejected merge turn/start")?;}
                                 }
@@ -312,6 +350,8 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeInputAccepted(native_id) => {
+                                if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,"resume_accepted",Some(turn_id),Some(&native_id))?;}
+
                                 shared.store.merge_input_accepted(turn_id,&native_id)?;
                                 shared.store.nexus_input_accepted(turn_id,&native_id)?;
                                 Ok(CodexEventOutcome::None)
@@ -331,12 +371,17 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnSubmitting => {
+                                if shared.store.stop_admission_epoch(session_key)? != admission_epoch {anyhow::bail!("Input admission was retired by coordinated Stop; never replay automatically");}
+                                if let Some(id)=stop_resume.as_deref(){shared.store.stop_validate_resume(id,session_key,requester_user_id)?;}else if shared.store.stop_fenced(session_key)? {anyhow::bail!("Coordinated Stop prevents native submission; input retained");}
+
                                 shared.store.merge_submitting(turn_id)?;
                                 super::nexus::submitting(&shared,turn_id).await?;
                                 if let Some(id)=admission.as_deref(){super::tribu::revalidate_submission(&shared,id).await?;shared.store.tribu_submitting(session_key,id)?;}
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnTerminal {id:native_id,status} => {
+                                if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,&format!("resume_turn_{status}"),Some(turn_id),Some(&native_id))?;}
+
                                 shared.store.merge_terminal(turn_id,&native_id,&status)?;
                                 if !shared.store.nexus_local_requests(turn_id)?.is_empty() { shared.store.nexus_terminal(turn_id,&native_id,&status)?; }
                                 if let Some(id)=admission.as_deref(){shared.store.tribu_native_turn(id,&native_id,Some(&status))?;}
@@ -470,6 +515,14 @@ pub(super) async fn process_turn(
     }
     .await;
 
+    if shared
+        .store
+        .bot_state_value(&format!("stopped_turn:{turn_id}"))?
+        .is_some()
+    {
+        // Preserve inputs and partial artifacts needed by the explicit continuation.
+        return final_result;
+    }
     finish_turn_cleanup(
         &queued.request.attachments,
         &turn_workspace.root,
