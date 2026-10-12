@@ -8,6 +8,8 @@ tmp_dir = "/absolute/path/to/telecodex/tmp"
 [telegram]
 bot_token_env = "TELEGRAM_BOT_TOKEN"
 api_base = "https://api.telegram.org"
+# Pending/history labels: "en" (default) or "es"; independent of journal payloads.
+human_request_language = "en"
 use_message_drafts = true
 primary_forum_chat_id = -1001234567890
 auto_create_topics = false
