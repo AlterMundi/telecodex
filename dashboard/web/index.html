@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>Sessions · Telecodex</title>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="wordmark">
+          <span aria-hidden="true" class="orbit">◉</span> TELECODEX
+        </div>
+        <h1>Sessions</h1>
+        <p id="provider">Your conversations, in motion.</p>
+      </header>
+      <div id="feedback" role="status" aria-live="polite">
+        Connecting to Telegram…
+      </div>
+      <div class="toolbar">
+        <button id="refresh" type="button">Refresh</button
+        ><a href="#host">Host</a><span id="freshness"></span>
+      </div>
+      <section id="work" hidden aria-labelledby="work-title">
+        <div class="section-title">
+          <h2 id="work-title">Conversations</h2>
+          <span id="count"></span>
+        </div>
+        <nav aria-label="Session filters" class="filters">
+          <button data-filter="attention" aria-pressed="true">
+            Active & goals</button
+          ><button data-filter="all" aria-pressed="false">All</button>
+        </nav>
+        <div id="sessions"></div>
+      </section>
+      <section aria-labelledby="host-title" id="host" hidden>
+        <h2 id="host-title">Host</h2>
+        <div id="metrics" class="metrics"></div>
+      </section>
+      <section id="control" hidden aria-labelledby="control-title">
+        <h2 id="control-title">Session control</h2>
+        <p id="scope"></p>
+        <button id="stop" type="button" class="stop">
+          Stop owned sessions
+        </button>
+        <div id="receipt" role="status" aria-live="polite"></div>
+        <p class="note">
+          Stop pauses active goals and interrupts native turns. Native
+          inactivity does not certify that host subprocesses have stopped.
+        </p>
+      </section>
+      <footer>Native metadata · no model calls</footer>
+    </main>
+    <dialog id="confirm">
+      <h2>Stop these sessions?</h2>
+      <p id="confirm-scope"></p>
+      <p>
+        Previously paused or blocked goals stay unchanged. Work remains in its
+        native history.
+      </p>
+      <div class="dialog-actions">
+        <button id="cancel">Keep working</button
+        ><button id="approve" class="stop">Stop</button>
+      </div>
+    </dialog>
+  </body>
+</html>
