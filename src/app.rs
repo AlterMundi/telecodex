@@ -505,10 +505,10 @@ impl App {
         ) {
             return Ok(false);
         }
-        if let Ok(id) = HUMAN_UPDATE_ID.try_with(|id| *id) {
-            self.shared.store.stop_retain_input(id)?;
-        }
         if self.shared.store.stop_fenced(key)? {
+            if let Ok(id) = HUMAN_UPDATE_ID.try_with(|id| *id) {
+                self.shared.store.stop_retain_input(id)?;
+            }
             return self.send_plain_status(key.chat_id,Some(key.thread_id),"Coordinated Stop holds this conversation. Your input is retained without native submission; /stop status ID shows the operation and /stop resume ID requests continuation.").await.map(|_|true);
         }
         self.send_status(key.chat_id, Some(key.thread_id),
