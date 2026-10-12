@@ -40,7 +40,7 @@ class TribuJourney(Journey):
         with sqlite3.connect(self.root / 'state.sqlite') as db:
             columns = {r[1] for r in db.execute('PRAGMA table_info(sessions)')}
             row = {'chat_id':100,'thread_id':7,'creator_user_id':100,'cwd':str(self.root),
-                   'session_title':'Tribu','force_fresh_thread':1,'busy':0,
+                   'session_title':'Tribu' if self.mode == 'unknown' else 'I/O','force_fresh_thread':1,'busy':0,
                    'approval_policy':'never','sandbox_mode':'read-only','search_mode':'disabled',
                    'add_dirs_json':'[]','created_at':'2026-01-01T00:00:00Z','updated_at':'2026-01-01T00:00:00Z'}
             assert set(row) <= columns
@@ -149,6 +149,23 @@ def scenario(binary, mode):
         unauthorized = j.admit('another admin is not the paired human', user=101)
         j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?',(unauthorized,)) == [('handled',)])
         assert j.turn_sequence == 0
+        if mode == 'queue':
+            # A detached collector cannot allow a new writer, even after restart
+            # or through a callback. Only the deployment controller releases it.
+            hold_key = 'native_writer_hold:100:7'
+            with sqlite3.connect(j.root / 'state.sqlite') as db:
+                db.execute('INSERT INTO bot_state(key,value) VALUES(?,?)', (hold_key, '{}'))
+            for restarted in (False, True):
+                if restarted:
+                    j.stop(); j.start(); j.wait(j.ready)
+                held = j.admit('do not open another writer')
+                j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?', (held,)) == [('handled',)])
+                source = next(m[0] for m in reversed(j.messages) if m[0].get('message_thread_id') == 7)
+                pressed = j.admit(callback=(source, 'goal-resume:stale-button'))
+                j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?', (pressed,)) == [('handled',)])
+                assert j.turn_sequence == 0 and not j.row('SELECT id FROM tribu_admissions')
+            with sqlite3.connect(j.root / 'state.sqlite') as db:
+                db.execute('DELETE FROM bot_state WHERE key=?', (hold_key,))
         first=j.admit('first human request')
         j.wait(j.submitted.is_set)
         if mode=='queue':
