@@ -106,7 +106,8 @@ def create_app(config=None, provider=None, validator=validate_launch):
         response.headers['X-Robots-Tag'] = 'noindex, nofollow'
         response.headers['Content-Security-Policy'] = (
             "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; "
-            "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'")
+            "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+            "frame-ancestors 'self' https://web.telegram.org")
         return response
 
     def authorize(request):
