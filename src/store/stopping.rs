@@ -252,18 +252,19 @@ impl Store {
             conn.query_row("SELECT phase FROM stop_operations WHERE id=?", [id], |r| {
                 r.get(0)
             })?;
-        if current == "resuming"
-            && op.targets.iter().all(|t| {
-                matches!(
-                    t.phase.as_str(),
-                    "resume_accepted"
-                        | "resume_turn_completed"
-                        | "resume_turn_failed"
-                        | "resume_turn_interrupted"
-                        | "resume_unchanged"
-                )
-            })
-        {
+        if matches!(
+            current.as_str(),
+            "resuming" | "resumed" | "resumed_with_failures"
+        ) && op.targets.iter().all(|t| {
+            matches!(
+                t.phase.as_str(),
+                "resume_accepted"
+                    | "resume_turn_completed"
+                    | "resume_turn_failed"
+                    | "resume_turn_interrupted"
+                    | "resume_unchanged"
+            )
+        }) {
             op.phase = if op.targets.iter().any(|t| {
                 matches!(
                     t.phase.as_str(),
@@ -394,5 +395,19 @@ mod tests {
             "resume_accepted"
         );
         assert!(store.stop_validate_resume(&op.id, key, 100).is_err());
+        store
+            .stop_resume_event(
+                &op.id,
+                key,
+                "resume_turn_failed",
+                Some(99),
+                Some("physical"),
+            )
+            .unwrap();
+        assert_eq!(
+            store.stop_read(100, &op.id).unwrap().phase,
+            "resumed_with_failures"
+        );
+        assert!(!store.stop_fenced(key).unwrap()); // An accepted failed turn is never replayed.
     }
 }
