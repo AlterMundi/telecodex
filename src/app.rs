@@ -1789,18 +1789,9 @@ impl App {
         if destination.busy || destination.codex_thread_id.is_some() {
             anyhow::bail!("Destination already active; existing conversation preserved");
         }
-        self.shared.store.apply_session_template(key, template)?;
-        if let Some(title) = template
-            .session_title
-            .as_deref()
-            .filter(|title| !title.trim().is_empty())
-        {
-            // Topic names are chosen by this creation operation, not inferred
-            // from the first native input (which may start with handoff context).
-            self.shared.store.set_explicit_session_title(key, title)?;
-        } else {
-            self.shared.store.set_session_title(key, None)?;
-        }
+        self.shared
+            .store
+            .apply_empty_session_template(key, template, user_id)?;
         Ok(())
     }
 

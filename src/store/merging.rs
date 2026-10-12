@@ -496,4 +496,89 @@ mod tests {
         assert_eq!(leg["reply"], "Retained physical output");
         assert!(reopened.merge_resume(key, 100, "op").unwrap().is_empty());
     }
+    #[test]
+    fn new_topic_template_cannot_overwrite_an_intervening_writer_or_foreign_owner() {
+        let (_root, store, key, _turn, _doc) = fixture();
+        let original = store.get_session(key).unwrap().unwrap();
+        let fresh = SessionKey::new(100, Some(12));
+        let defaults = SessionDefaults {
+            cwd: original.cwd.clone(),
+            model: None,
+            reasoning_effort: None,
+            session_prompt: None,
+            sandbox_mode: "read-only".into(),
+            approval_policy: "never".into(),
+            search_mode: crate::config::SearchMode::Disabled,
+            add_dirs: vec![],
+        };
+        store.ensure_session(fresh, 100, &defaults).unwrap();
+        let precheck = store.get_session(fresh).unwrap().unwrap();
+        assert!(!precheck.busy && precheck.codex_thread_id.is_none());
+        // The other topic's first input arrives after the caller's read.
+        store
+            .set_session_codex_thread(fresh, "human-started-thread")
+            .unwrap();
+        assert!(
+            store
+                .apply_empty_session_template(fresh, &original, 100)
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .get_session(fresh)
+                .unwrap()
+                .unwrap()
+                .codex_thread_id
+                .as_deref(),
+            Some("human-started-thread")
+        );
+        let foreign = SessionKey::new(100, Some(13));
+        store.ensure_session(foreign, 101, &defaults).unwrap();
+        assert!(
+            store
+                .apply_empty_session_template(foreign, &original, 100)
+                .is_err()
+        );
+        assert_eq!(store.session_creator(foreign).unwrap(), 101);
+        let empty = SessionKey::new(100, Some(14));
+        store.ensure_session(empty, 100, &defaults).unwrap();
+        assert!(
+            store
+                .apply_empty_session_template(empty, &original, 100)
+                .is_ok()
+        );
+        for (topic, payload) in [
+            (
+                15,
+                json!({"message":{"chat":{"id":100},"message_thread_id":15,"from":{"id":100},"text":"/model human-model"}}),
+            ),
+            (
+                16,
+                json!({"callback_query":{"from":{"id":100},"message":{"chat":{"id":100},"message_thread_id":16}}}),
+            ),
+        ] {
+            let pending = SessionKey::new(100, Some(topic));
+            store.ensure_session(pending, 100, &defaults).unwrap();
+            let read = store.get_session(pending).unwrap().unwrap();
+            assert!(!read.busy && read.codex_thread_id.is_none());
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO incoming_updates VALUES(?,?,'handled',?,NULL,?)",
+                    params![topic, payload.to_string(), store.instance_id, now_string()],
+                )
+                .unwrap();
+            assert!(
+                store
+                    .apply_empty_session_template(pending, &original, 100)
+                    .is_err()
+            );
+            assert_eq!(
+                store.get_session(pending).unwrap().unwrap().codex_thread_id,
+                None
+            );
+        }
+    }
 }
