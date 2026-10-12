@@ -93,6 +93,17 @@ function host(data) {
       : `${bytes(data.network_tx_per_second)}/s`,
     "Includes virtual links",
   );
+  const ram =
+    data.memory_total && data.memory_available !== undefined
+      ? `${Math.round(100 * (1 - data.memory_available / data.memory_total))}%`
+      : "?";
+  const cpu = data.cpu_percent == null ? "Sampling…" : `${data.cpu_percent}%`;
+  const disks = (data.storage || [])
+    .map((d) => `${d.label} ${d.unavailable ? "?" : bytes(d.available)} free`)
+    .join(" · ");
+  const rate = (n) => (n == null ? "?" : `${bytes(n)}/s`);
+  $("#host-summary").textContent =
+    `CPU ${cpu} · RAM ${ram} · ${disks} · ↓ ${rate(data.network_rx_per_second)} ↑ ${rate(data.network_tx_per_second)}`;
   $("#host").hidden = false;
 }
 function tree(children, parent) {
@@ -115,6 +126,7 @@ function sessions() {
       (node) => node.dataset.session,
     ),
   );
+  const position = target.scrollTop;
   target.replaceChildren();
   const rows = [...snapshot.sessions]
     .sort(
@@ -132,6 +144,8 @@ function sessions() {
         s.children.some((c) => c.status === "active"),
     );
   $("#count").textContent = `${rows.length} / ${snapshot.sessions.length}`;
+  document.querySelector('[data-filter="all"]').textContent =
+    `All (${snapshot.sessions.length})`;
   if (!rows.length)
     target.append(
       el(
@@ -141,16 +155,32 @@ function sessions() {
     );
   for (const s of rows) {
     const card = el(
-      "article",
+      "details",
       undefined,
       `session ${s.status === "active" ? "active" : ""}`,
     );
-    const head = el("div", undefined, "session-head");
+    card.dataset.session = s.id;
+    card.open = expanded.has(s.id);
+    const head = el("summary", undefined, "session-head");
     head.append(
-      el("h3", s.title),
-      el("span", statuses[s.status] || s.status, "badge"),
+      el("span", s.title, "session-title"),
+      el(
+        "span",
+        [statuses[s.status] || s.status, elapsed(s.elapsed_seconds)]
+          .filter(Boolean)
+          .join(" · "),
+        "badge",
+      ),
     );
+    head.title = s.title;
+    if (s.goal) head.append(el("span", `Goal · ${s.goal.status}`, "goal-chip"));
+    const activeChildren = s.children.filter(
+      (child) => child.status === "active",
+    ).length;
+    if (activeChildren)
+      head.append(el("span", `${activeChildren} active`, "child-chip"));
     card.append(head);
+    card.append(el("h3", s.title, "full-title"));
     let meta = elapsed(s.elapsed_seconds);
     if (s.tools_active) meta += ` · ${s.tools_active} tool call(s)`;
     if (s.bridge_busy && s.status !== "active")
@@ -165,8 +195,8 @@ function sessions() {
       card.append(el("p", "Goal metadata unavailable", "session-meta"));
     if (s.children.length) {
       const detail = el("details");
-      detail.dataset.session = s.id;
-      detail.open = expanded.has(s.id);
+      detail.dataset.session = `${s.id}:children`;
+      detail.open = expanded.has(`${s.id}:children`);
       detail.append(
         el(
           "summary",
@@ -203,6 +233,7 @@ function sessions() {
     }
     target.append(card);
   }
+  target.scrollTop = position;
 }
 function receipt(op) {
   $("#receipt").replaceChildren();
@@ -227,10 +258,19 @@ function render() {
   $("#provider").textContent = snapshot.provider;
   const stale = Date.now() / 1000 - snapshot.observed_at > 30;
   $("#freshness").textContent =
-    `${stale ? "Stale · " : ""}${new Date(snapshot.observed_at * 1000).toLocaleTimeString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", hour: "2-digit", minute: "2-digit", second: "2-digit" })} AR`;
+    `${stale ? "Stale · " : ""}${new Date(snapshot.observed_at * 1000).toLocaleTimeString("es-AR", { timeZone: "America/Argentina/Buenos_Aires", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })} AR`;
   $("#feedback").textContent = stale
     ? "Showing an older observation. Refresh to check current work."
     : "";
+  const working = snapshot.sessions.filter((s) => s.status === "active").length;
+  const goals = snapshot.sessions.filter(
+    (s) => s.goal_state === "known",
+  ).length;
+  const children = snapshot.sessions
+    .flatMap((s) => s.children)
+    .filter((child) => child.status === "active").length;
+  $("#overview").textContent =
+    `${working} working · ${goals} goals · ${children} active subagents`;
   host(snapshot.host);
   sessions();
   $("#work").hidden = $("#control").hidden = false;

@@ -12,48 +12,56 @@
   <body>
     <main>
       <header>
-        <div class="wordmark">
-          <span aria-hidden="true" class="orbit">◉</span> TELECODEX
+        <div class="identity">
+          <svg class="resonance" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="16" r="13" />
+            <ellipse cx="16" cy="16" rx="7" ry="13" />
+            <ellipse cx="16" cy="16" rx="13" ry="5" />
+            <path d="M3 16h26M5 22c7-10 15 10 22-10" />
+          </svg>
+          <h1>Sessions</h1>
         </div>
-        <h1>Sessions</h1>
-        <p id="provider">Your conversations, in motion.</p>
+        <span id="provider">Telecodex</span>
       </header>
       <div id="feedback" role="status" aria-live="polite">
         Connecting to Telegram…
       </div>
       <div class="toolbar">
-        <button id="refresh" type="button">Refresh</button
-        ><a href="#host">Host</a><span id="freshness"></span>
+        <span id="overview">Reading native state…</span
+        ><button id="refresh" type="button" aria-label="Refresh sessions">
+          ↻
+        </button>
       </div>
+      <details id="host" hidden>
+        <summary id="host-summary">Host metrics</summary>
+        <div id="metrics" class="metrics"></div>
+      </details>
       <section id="work" hidden aria-labelledby="work-title">
         <div class="section-title">
           <h2 id="work-title">Conversations</h2>
           <span id="count"></span>
         </div>
         <nav aria-label="Session filters" class="filters">
-          <button data-filter="attention" aria-pressed="true">
-            Active & goals</button
+          <button data-filter="attention" aria-pressed="true">Attention</button
           ><button data-filter="all" aria-pressed="false">All</button>
         </nav>
         <div id="sessions"></div>
       </section>
-      <section aria-labelledby="host-title" id="host" hidden>
-        <h2 id="host-title">Host</h2>
-        <div id="metrics" class="metrics"></div>
-      </section>
       <section id="control" hidden aria-labelledby="control-title">
-        <h2 id="control-title">Session control</h2>
-        <p id="scope"></p>
+        <details class="control-info">
+          <summary id="control-title">Stop scope</summary>
+          <p id="scope"></p>
+          <p class="note">
+            Pauses active goals and interrupts native turns. Native inactivity
+            does not certify that host subprocesses have stopped.
+          </p>
+        </details>
         <button id="stop" type="button" class="stop">
           Stop owned sessions
         </button>
         <div id="receipt" role="status" aria-live="polite"></div>
-        <p class="note">
-          Stop pauses active goals and interrupts native turns. Native
-          inactivity does not certify that host subprocesses have stopped.
-        </p>
       </section>
-      <footer>Native metadata · no model calls</footer>
+      <footer><span id="freshness"></span><span>No model calls</span></footer>
     </main>
     <dialog id="confirm">
       <h2>Stop these sessions?</h2>

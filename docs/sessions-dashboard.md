@@ -95,3 +95,24 @@ Owning scope: [#70](https://github.com/AlterMundi/telecodex/issues/70); richer
 activity streams remain [#20](https://github.com/AlterMundi/telecodex/issues/20).
 Telegram launch constraints: [Mini Apps](https://core.telegram.org/bots/webapps),
 [private-chat menu](https://core.telegram.org/bots/api#setchatmenubutton).
+
+## Compact overview
+
+The default view uses a small header, aggregate working/goal/active-subagent
+counts, one collapsed host summary and bounded scrollable session rows. Each
+row exposes its state/elapsed time and retained goal state; opening it restores
+the full name, literal objective, tools, tree and return link. Host details and
+Stop scope remain available through disclosures. Refresh retains opened rows
+and list position. Readable text and44px touch targets are preserved.
+
+The page calls neither expand nor requestFullscreen. Telegram owns the native
+window height; compact page content does not prove half-height launch. The
+mode=compact parameter documented for registered Main/named direct links must
+not be appended to an unrelated HTTPS URL or redirected into the existing Nexus
+Main App. This update preserves the receiving menu and Nexus launch routing.
+
+The visual direction follows Cluster's maintained Star Trek-inspired Matrix
+reference: Space Grotesk, orbital/interference mark, deep-space canvas, cyan
+navigation and amber actions with restrained segmented control rails. The
+existing licensed Latin font is self-hosted with its original OFL and hash
+provenance. Light/dark themes preserve readable roles and touch targets.
