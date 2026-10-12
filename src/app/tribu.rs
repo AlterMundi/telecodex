@@ -345,7 +345,9 @@ pub(super) async fn start(app: App) -> Result<()> {
         .store
         .get_session(p.key())?
         .context("Create the dedicated Tribu topic before enabling admission")?;
-    if session.session_title.as_deref() != Some("Tribu") || user.tg_user_id != p.human_id {
+    // The selected chat/topic and owner establish the binding. Its title is
+    // presentation and may be I/O or a human-selected name.
+    if user.tg_user_id != p.human_id {
         bail!("Tribu topic binding mismatch");
     }
     app.shared.store.tribu_check_thread(&session)?;
