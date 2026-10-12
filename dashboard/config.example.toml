@@ -1,0 +1,13 @@
+# Owner-local configuration; never commit receiving values.
+receiver_config = "/private/telecodex/config.toml"
+native_home = "/private/native-codex"
+state_dir = "/private/dashboard"
+origin = "https://your-authorized-host"
+prefix = "/sessions"
+bot_id = 123456
+bot_username = "YourBot"
+label = "This receiving bot"
+
+[storage]
+Host = "/"
+Development = "/your-development-mount"
