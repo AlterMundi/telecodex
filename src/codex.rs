@@ -83,6 +83,8 @@ pub enum CodexEvent {
     FinalAnswerCompleted(String),
     ThreadStarted(String),
     NativeTurnStarted(String),
+    NativeInputAccepted(String),
+    NativeInputRejected,
     NativeTurnSubmitting,
     NativeTurnTerminal {
         id: String,
@@ -133,7 +135,7 @@ pub enum CodexSteerError {
     Undetermined(String),
 }
 
-pub type CodexSteerResponse = std::result::Result<(), CodexSteerError>;
+pub type CodexSteerResponse = std::result::Result<Option<String>, CodexSteerError>;
 
 /// Plain-text input waiting to be appended to an active Codex turn.
 pub struct CodexSteerRequest {
@@ -283,6 +285,29 @@ impl CodexRunner {
         expected: Option<&str>,
         client_id: &str,
     ) -> Result<Option<(String, String)>> {
+        Ok(self
+            .admitted_turn_observation(thread, expected, client_id)
+            .await?
+            .map(|(id, status, _)| (id, status)))
+    }
+
+    pub async fn selected_turn_reply(
+        &self,
+        thread: &str,
+        turn: &str,
+    ) -> Result<Option<(String, String)>> {
+        Ok(self
+            .admitted_turn_observation(thread, Some(turn), "")
+            .await?
+            .map(|(_, status, reply)| (status, reply)))
+    }
+
+    async fn admitted_turn_observation(
+        &self,
+        thread: &str,
+        expected: Option<&str>,
+        client_id: &str,
+    ) -> Result<Option<(String, String, String)>> {
         tokio::time::timeout(Duration::from_secs(10),async {
             let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
             process.initialize().await?;
@@ -295,8 +320,9 @@ impl CodexRunner {
                     let matches=expected.map(|old|old==id).unwrap_or_else(||turn["items"].as_array().is_some_and(|items|items.iter().any(|item|item["type"]=="userMessage" && item["clientId"]==client_id)));
                     if matches {
                         let status=turn["status"].as_str().context("native turn status missing")?.to_string();
+                        let reply=turn["items"].as_array().map(|items|items.iter().filter(|item|item["type"]=="agentMessage" && item["phase"]=="final_answer").filter_map(|item|item["text"].as_str()).collect::<Vec<_>>().join("\n\n")).unwrap_or_default();
                         process.shutdown().await?;
-                        return Ok(Some((id.to_string(),status)));
+                        return Ok(Some((id.to_string(),status,reply)));
                     }
                 }
                 cursor=page["nextCursor"].as_str().map(str::to_string);
@@ -981,7 +1007,7 @@ where
                         if matches!(control,GoalControl::Pause|GoalControl::Clear) { staged_goal=false; }
                         let result=tokio::time::timeout(Duration::from_secs(10),goals::mutate_control(&mut process,&thread_id,control)).await;
                         match result {
-                            Ok(Ok(goal))=> { goal_snapshot_request_id=None; goal_active=goal.is_some_and(|g|g.status=="active"); let _=steer.response.send(Ok(())); }
+                            Ok(Ok(goal))=> { goal_snapshot_request_id=None; goal_active=goal.is_some_and(|g|g.status=="active"); let _=steer.response.send(Ok(None)); }
                             Ok(Err(error))=> { let _=steer.response.send(Err(CodexSteerError::Undetermined(error.to_string()))); }
                             Err(_)=> {let _=steer.response.send(Err(CodexSteerError::Undetermined("Goal acknowledgment timed out; inspect /goal".into())));}
                         }
@@ -1007,12 +1033,14 @@ where
                     }
                 } else if Some(id)==turn_request_id{
                     if let Some(error)=error{
+                        let _=on_event(CodexEvent::NativeInputRejected).await?;
                         turn_error=Some(format_rpc_error(&error));
                         break;
                     }
                     if let Some(turn_id)=result.as_ref().and_then(|v|v.get("turn")).and_then(|t|t.get("id")).and_then(Value::as_str){
                         active_turn_id=Some(turn_id.to_string());
                         let _=on_event(CodexEvent::NativeTurnStarted(turn_id.to_string())).await?;
+                        let _=on_event(CodexEvent::NativeInputAccepted(turn_id.to_string())).await?;
                     }
                 } else if goal_activation_id == Some(id) {
                     goal_activation_pending=false;
@@ -1203,7 +1231,7 @@ fn steer_response(
         .and_then(|value| value.get("turnId"))
         .and_then(Value::as_str)
     {
-        Some(turn_id) if turn_id == expected_turn_id => Ok(()),
+        Some(turn_id) if turn_id == expected_turn_id => Ok(Some(turn_id.to_string())),
         Some(turn_id) => Err(CodexSteerError::Undetermined(format!(
             "turn/steer targeted `{turn_id}` instead of active turn `{expected_turn_id}`"
         ))),
@@ -1471,7 +1499,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -2947,7 +2975,10 @@ while True:
     fn accepts_matching_turn_steer_response() {
         let result = json!({"turnId": "turn-7"});
 
-        assert_eq!(steer_response("turn-7", Some(&result), None), Ok(()));
+        assert_eq!(
+            steer_response("turn-7", Some(&result), None),
+            Ok(Some("turn-7".to_string()))
+        );
     }
 
     #[test]

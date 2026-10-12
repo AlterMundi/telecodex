@@ -46,6 +46,9 @@ pub enum BridgeCommand {
     Goal {
         args: String,
     },
+    Nexus {
+        args: String,
+    },
     Questions,
     Icon,
     Rename {
@@ -169,6 +172,9 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/history" => BridgeCommand::History,
         "/status" => BridgeCommand::Status,
         "/goal" => BridgeCommand::Goal {
+            args: args.trim().to_string(),
+        },
+        "/nexus" => BridgeCommand::Nexus {
             args: args.trim().to_string(),
         },
         "/questions" | "/pending" => BridgeCommand::Questions,

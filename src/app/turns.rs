@@ -21,6 +21,9 @@ pub(super) async fn process_turn(
             return send_markdown_message(&shared.telegram,queued.request.session_key.chat_id,Some(queued.request.session_key.thread_id).filter(|id|*id!=0),"Queued goal activation was cancelled by a newer goal command. No native input was submitted.",None).await.map(|_|());
         }
     }
+    if !super::nexus::prepare(&shared, &mut queued).await? {
+        return Ok(());
+    }
     if !super::tribu::prepare(&shared, &mut queued).await? {
         return Ok(());
     }
@@ -42,6 +45,9 @@ pub(super) async fn process_turn(
     let turn_id = shared
         .store
         .record_turn_started(session.id, &queued.request)?;
+    if let Some(id) = queued.nexus.as_deref() {
+        shared.store.nexus_link(id, turn_id)?;
+    }
     if queued.goal.is_some() {
         shared
             .store
@@ -218,6 +224,7 @@ pub(super) async fn process_turn(
     } else {
         runner
     };
+    let physical_turn = Arc::new(StdMutex::new(None::<String>));
     let run =
         runner
             .run_turn(&session, &runtime_request, cancel.clone(), steer_rx, {
@@ -228,14 +235,17 @@ pub(super) async fn process_turn(
                 let session_key = session.key;
                 let preserve_thread_binding = queued.request.review_mode.is_none();
                 let admission=queued.tribu_admission.clone();
+                let physical_turn=physical_turn.clone();
                 move |event| {
                     let sink = sink.clone();
                     let shared = shared.clone();
                     let cancel = approval_cancel.clone();
                     let admission=admission.clone();
+                    let physical_turn=physical_turn.clone();
                     async move {
                         match event {
                             CodexEvent::ThreadStarted(thread_id) => {
+                                super::nexus::thread(&shared,turn_id,&thread_id)?;
                                 if let Some(id)=admission.as_deref() {shared.store.tribu_native_thread(session_key,id,&thread_id)?;}
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
                                 if preserve_thread_binding {
@@ -281,15 +291,36 @@ pub(super) async fn process_turn(
                                 .await?;
                                 Ok(CodexEventOutcome::Approval(decision))
                             }
+                            CodexEvent::NativeInputRejected => {
+                                for id in shared.store.nexus_local_requests(turn_id)? {
+                                    if shared.store.nexus_request(&id)?.is_some_and(|r|r["phase"]=="submitting") { shared.store.nexus_receipt(&id,"rejected",None,None,Some("Native explicitly rejected turn/start"))?; }
+                                }
+                                Ok(CodexEventOutcome::None)
+                            }
+                            CodexEvent::NativeInputAccepted(native_id) => {
+                                shared.store.nexus_input_accepted(turn_id,&native_id)?;
+                                Ok(CodexEventOutcome::None)
+                            }
+                            CodexEvent::FinalAnswerCompleted(text) => {
+                                if !shared.store.nexus_local_requests(turn_id)?.is_empty() {
+                                    if let Some(native)=physical_turn.lock().expect("native correlation mutex poisoned").as_deref() {shared.store.nexus_final(turn_id,native,&text)?;}
+                                }
+                                sink.lock().await.handle_event(CodexEvent::FinalAnswerCompleted(text)).await?;
+                                Ok(CodexEventOutcome::None)
+                            }
                             CodexEvent::NativeTurnStarted(native_id) => {
+                                *physical_turn.lock().expect("native correlation mutex poisoned")=Some(native_id.clone());
+                                if !shared.store.nexus_local_requests(turn_id)?.is_empty() { shared.store.nexus_native_started(turn_id,&native_id)?; }
                                 if let Some(id)=admission.as_deref(){shared.store.tribu_native_turn(id,&native_id,None)?;}
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnSubmitting => {
+                                super::nexus::submitting(&shared,turn_id).await?;
                                 if let Some(id)=admission.as_deref(){super::tribu::revalidate_submission(&shared,id).await?;shared.store.tribu_submitting(session_key,id)?;}
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnTerminal {id:native_id,status} => {
+                                if !shared.store.nexus_local_requests(turn_id)?.is_empty() { shared.store.nexus_terminal(turn_id,&native_id,&status)?; }
                                 if let Some(id)=admission.as_deref(){shared.store.tribu_native_turn(id,&native_id,Some(&status))?;}
                                 Ok(CodexEventOutcome::None)
                             }
@@ -836,6 +867,8 @@ impl LiveTurnSink {
                 tracing::debug!("codex thread started: {thread_id}");
             }
             CodexEvent::UserInputRequest { .. }
+            | CodexEvent::NativeInputRejected
+            | CodexEvent::NativeInputAccepted(_)
             | CodexEvent::NativeTurnStarted(_)
             | CodexEvent::NativeTurnSubmitting
             | CodexEvent::NativeTurnTerminal { .. }
@@ -1512,6 +1545,9 @@ pub(super) fn resolve_session_codex_binding_from_history(
         .is_some_and(|p| p.key() == session.key)
     {
         shared.store.tribu_check_thread(&session)?;
+        return Ok(session);
+    }
+    if super::nexus::tracks(shared, session.key)? {
         return Ok(session);
     }
     if session.force_fresh_thread || !shared.config.codex.auto_attach_latest_history {

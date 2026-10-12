@@ -80,6 +80,7 @@ impl Drop for CodexHomeGuard {
 
 fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
     Config {
+        nexus: None,
         tribu: None,
         telegram: crate::config::TelegramConfig {
             bot_token: Some("test-token".to_string()),
@@ -350,7 +351,10 @@ async fn sends_plain_text_to_the_active_turn() {
     let responder = tokio::spawn(async move {
         let steer = steer_rx.recv().await.expect("steer request");
         assert_eq!(steer.text, "change direction");
-        steer.response.send(Ok(())).expect("steer response");
+        steer
+            .response
+            .send(Ok(Some("observed-turn".into())))
+            .expect("steer response");
     });
 
     assert!(
@@ -1870,6 +1874,58 @@ fn rebinds_stale_session_to_latest_active_thread_for_same_cwd() {
     let rebound = resolve_session_codex_binding_from_history(&shared, session).unwrap();
 
     assert_eq!(rebound.codex_thread_id.as_deref(), Some("active-thread"));
+}
+
+#[test]
+fn deliberate_nexus_binding_never_falls_back_to_latest_cwd_history() {
+    let _lock = codex_home_test_lock().lock().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _guard = CodexHomeGuard::set(home.path());
+    let (mut app, _db) = sample_app();
+    let shared = Arc::get_mut(&mut app.shared).unwrap();
+    shared.config.nexus = Some(crate::nexus::NexusConfig {
+        python: "/local/python".into(),
+        operator: "/local/operator".into(),
+        workspace: "/local/nexus".into(),
+        state: "/local/state".into(),
+        listener_id: "listener".into(),
+        responder_ref: "daimon:test".into(),
+        launch_selector: "registered".into(),
+        poll_seconds: 3,
+        routes: vec![crate::nexus::NexusRoute {
+            table_id: "table".into(),
+            author_ref: "human:test".into(),
+            human_user_id: 100,
+            label: "Nexus".into(),
+        }],
+    });
+    let key = SessionKey::new(100, Some(7));
+    shared
+        .store
+        .ensure_session(key, 100, &sample_defaults())
+        .unwrap();
+    shared
+        .store
+        .set_session_codex_thread(key, "existing-unavailable-history")
+        .unwrap();
+    shared.store.nexus_save_binding("table","human:test",&serde_json::json!({"target":{"listener_id":"listener","bot_id":123,"human_user_id":100,"chat_id":100,"topic_id":7,"native_thread_id":"existing-unavailable-history"}})).unwrap();
+    std::fs::create_dir_all(home.path().join("sessions")).unwrap();
+    std::fs::write(home.path().join("sessions/rollout-other.jsonl"),serde_json::json!({"type":"session_meta","payload":{"id":"unrelated-latest-thread","cwd":sample_workspace(),"timestamp":"2026-10-12T00:00:00Z","source":"exec"}}).to_string()).unwrap();
+    let session = app.shared.store.get_session(key).unwrap().unwrap();
+    let resolved = resolve_session_codex_binding_from_history(&app.shared, session).unwrap();
+    assert_eq!(
+        resolved.codex_thread_id.as_deref(),
+        Some("existing-unavailable-history")
+    );
+    assert_eq!(
+        app.shared
+            .store
+            .get_session(key)
+            .unwrap()
+            .unwrap()
+            .codex_thread_id,
+        resolved.codex_thread_id
+    );
 }
 
 #[test]

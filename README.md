@@ -36,6 +36,10 @@ An optional [compact activity indicator](docs/activity-indicator.md) shows tools
 agent waits and native activity even for turns already running, without restarting
 the bridge or enabling unfinished answer previews.
 
+The opt-in [Nexus Mini App adapter](docs/nexus-conversation.md) brings selected
+human contributions into an existing native topic, retaining source references,
+observed replies and receipt-only recovery without resetting the conversation.
+
 ## ✨ What it is
 
 **Telecodex** is a Rust bridge that connects a local `codex` CLI instance to Telegram.
