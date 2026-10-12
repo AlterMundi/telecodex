@@ -8,10 +8,21 @@ from goals_io import Goals
 OPERATOR = '''import argparse,json,pathlib,sqlite3,sys
 p=argparse.ArgumentParser();p.add_argument('--workspace');p.add_argument('--state');p.add_argument('op');a=p.parse_args();v=json.load(sys.stdin)
 db=sqlite3.connect(pathlib.Path(a.state)/'operator.sqlite',timeout=5);db.row_factory=sqlite3.Row;db.execute('BEGIN IMMEDIATE')
-b=json.loads(db.execute("SELECT doc FROM binding").fetchone()[0])
+root_binding=json.loads(db.execute("SELECT doc FROM binding").fetchone()[0])
+selected=v.get('table_id')
+if a.op in ('inspect','dispatch'):
+ selected=json.loads(db.execute('SELECT doc FROM requests WHERE id=?',(v['request_id'],)).fetchone()[0])['request']['table_id']
+b=root_binding.get('extra',{}).get(selected,root_binding)
 def read(id):
  r=db.execute('SELECT doc,status,dispatch,native,reply FROM requests WHERE id=?',(id,)).fetchone();doc=json.loads(r['doc']);doc['request'].update(status=r['status'],native_turn_id=r['native'],reply=r['reply']);doc['dispatch_id']=r['dispatch'];return doc
-if a.op=='binding':out={k:b[k] for k in ('binding_id','revision','active','label','responder_ref')} if b.get('revision') else None
+if a.op=='binding':
+ # Simulate the maintenance operator acquiring the hold during this async lookup.
+ marker=pathlib.Path(a.state)/'hold-during-binding'
+ if marker.exists():
+  with sqlite3.connect(pathlib.Path(a.workspace)/'state.sqlite') as bridge:
+   bridge.execute("INSERT OR REPLACE INTO bot_state(key,value) VALUES('native_writer_hold:100:7','fixture-maintenance')")
+  marker.unlink()
+ out={k:b[k] for k in ('binding_id','revision','active','label','responder_ref')} if b.get('revision') else None
 elif a.op=='configure':
  assert v['expected_revision']==b['revision'] and v['table_id']=='table' and v['author_ref']=='human:test' and v['target']['human_user_id']==100 and v['target']['bot_id']==123
  b={**v,'binding_id':'binding','revision':b['revision']+1};db.execute('UPDATE binding SET doc=?',(json.dumps(b),));db.execute("UPDATE requests SET status='withdrawn' WHERE status='queued'");out={'binding_id':b['binding_id'],'revision':b['revision']}
@@ -73,10 +84,10 @@ human_user_id=100
 label="Nexus"
 ''')
         self.start();self.command('/nexus connect','Nexus: connected');self.mode='hold' if self.mode=='hold_after_connect' else self.mode
-    def enqueue(self,id='request'):
+    def enqueue(self,id='request',table='table'):
         with sqlite3.connect(self.state/'operator.sqlite') as db:
-            b=json.loads(db.execute('SELECT doc FROM binding').fetchone()[0]);assert b['active']
-            req={'request_id':id,'table_id':'table','author_ref':'human:test','binding_id':b['binding_id'],'binding_revision':b['revision'],'responder_ref':b['responder_ref'],'contribution':{'contribution_id':id+'-contribution','text':'Selected human question '+id,'anchors':[{'source_id':'source','transcript_version':'v1','start_ms':1000,'end_ms':2000}]},'return_context':{'playback_ms':1000}}
+            b=json.loads(db.execute('SELECT doc FROM binding').fetchone()[0]);b=b.get('extra',{}).get(table,b);assert b['active']
+            req={'request_id':id,'table_id':table,'author_ref':'human:test','binding_id':b['binding_id'],'binding_revision':b['revision'],'responder_ref':b['responder_ref'],'contribution':{'contribution_id':id+'-contribution','text':'Selected human question '+id,'anchors':[{'source_id':'source','transcript_version':'v1','start_ms':1000,'end_ms':2000}]},'return_context':{'playback_ms':1000}}
             doc={'target':b['target'],'request':req};db.execute("INSERT INTO requests VALUES(?,?,'queued',NULL,NULL,NULL)",(id,json.dumps(doc)))
     def state_of(self,id='request'):
         with sqlite3.connect(self.state/'operator.sqlite') as db:return db.execute('SELECT status,native,reply FROM requests WHERE id=?',(id,)).fetchone()
@@ -117,7 +128,7 @@ label="Nexus"
                 elif method=='thread/turns/list':send({'id':ident,'result':{'data':[v for (t,_),v in self.records.items() if t==p['threadId']],'nextCursor':None}})
                 elif method=='thread/name/set':send({'id':ident,'result':{}})
                 elif method=='turn/start':
-                    assert thread=='native-topic-7';self.native_turns+=1;turn=f'turn-{self.native_turns}'
+                    assert thread in ('native-topic-7','native-topic-8');self.native_turns+=1;turn=f'turn-{self.native_turns}'
                     if self.mode=='reject':send({'id':ident,'error':{'code':-32600,'message':'synthetic rejection'}});continue
                     if self.mode=='lost_ack':sock.close();return
                     send({'id':ident,'result':{'turn':{'id':turn}}});self.broadcast(thread,'turn/started',{'turn':{'id':turn,'status':'inProgress'}})
@@ -205,6 +216,83 @@ def connect_during_work(binary):
         print('PASS connect during existing work, steer into that physical turn, final retained after disconnect')
     finally:j.close()
 
+
+def writer_hold(binary):
+    j=Nexus(binary)
+    try:
+        j.prepare();starts=j.native_turns
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("INSERT INTO bot_state(key,value) VALUES('native_writer_hold:100:7','fixture-maintenance')")
+        j.enqueue();time.sleep(2.3)
+        assert j.state_of()[0]=='queued' and j.native_turns==starts, 'held topic admitted Nexus turn'
+        assert not j.row("SELECT id FROM nexus_requests WHERE id='request'")
+        j.stop();j.start();time.sleep(1.2)
+        assert j.state_of()[0]=='queued' and j.native_turns==starts, 'restart bypassed writer hold'
+        # The same hold namespace must not turn into a global ingress suspension.
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("DELETE FROM bot_state WHERE key='native_writer_hold:100:7'")
+            db.execute("INSERT INTO bot_state(key,value) VALUES('native_writer_hold:100:8','unrelated-maintenance')")
+        j.wait(lambda:j.state_of()[0]=='completed');j.idle()
+        assert j.native_turns==starts+1
+        print('PASS held Nexus remains queued across restart, unrelated hold does not block selected topic')
+    finally:j.close()
+
+
+def writer_hold_steer(binary):
+    j=Nexus(binary,'hold_after_connect')
+    try:
+        j.prepare();j.enqueue();j.wait(lambda:j.state_of()[0]=='accepted')
+        starts=j.native_turns;steers=sum(x.get('method')=='turn/steer' for x in j.rpc)
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("INSERT INTO bot_state(key,value) VALUES('native_writer_hold:100:7','fixture-maintenance')")
+        j.enqueue('correction');time.sleep(2.3)
+        assert j.state_of('correction')[0]=='queued' and j.native_turns==starts
+        assert sum(x.get('method')=='turn/steer' for x in j.rpc)==steers, 'held topic admitted Nexus steer'
+        assert j.state_of()[0]=='accepted', 'maintenance changed existing native work'
+        print('PASS active held writer is not steered or interrupted by Nexus')
+    finally:j.close()
+
+
+def writer_hold_race(binary):
+    j=Nexus(binary)
+    try:
+        j.prepare();starts=j.native_turns
+        (j.state/'hold-during-binding').write_text('acquire during binding')
+        j.enqueue();j.wait(lambda:not (j.state/'hold-during-binding').exists());time.sleep(1.2)
+        assert j.state_of()[0]=='queued' and j.native_turns==starts, 'async binding lookup bypassed new hold'
+        assert not j.row("SELECT id FROM nexus_requests WHERE id='request'")
+        print('PASS hold acquired during async validation refuses admission before native input')
+    finally:j.close()
+
+
+def writer_hold_other_target(binary):
+    j=Nexus(binary)
+    try:
+        j.prepare();j.stop();starts=j.native_turns
+        with j.config.open('a') as f:
+            f.write('\n[[nexus.routes]]\ntable_id="other"\nauthor_ref="human:test"\nhuman_user_id=100\nlabel="Other"\n')
+        with sqlite3.connect(j.state/'operator.sqlite') as db:
+            b=json.loads(db.execute('SELECT doc FROM binding').fetchone()[0])
+            other=json.loads(json.dumps(b));other.update(table_id='other',binding_id='other-binding',label='Other')
+            other['target'].update(topic_id=8,native_thread_id='native-topic-8')
+            b['extra']={'other':other};db.execute('UPDATE binding SET doc=?',(json.dumps(b),))
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.row_factory=sqlite3.Row
+            row=dict(db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone());row.pop('id')
+            row.update(thread_id=8,codex_thread_id='native-topic-8',session_title='Other')
+            db.execute('INSERT INTO sessions ('+','.join(row)+') VALUES ('+','.join('?' for _ in row)+')',list(row.values()))
+            db.execute('INSERT INTO nexus_bindings VALUES(?,?,?)',('other','human:test',json.dumps(other)))
+            db.execute("INSERT INTO bot_state(key,value) VALUES('native_writer_hold:100:7','fixture-maintenance')")
+        j.enqueue('held');j.enqueue('free',table='other');j.start()
+        j.wait(lambda:j.state_of('free')[0]=='completed');j.idle()
+        assert j.state_of('held')[0]=='queued' and j.native_turns==starts+1
+        assert not j.row("SELECT id FROM nexus_requests WHERE id='held'")
+        assert [x['params']['threadId'] for x in j.rpc if x.get('method')=='turn/start'][-1]=='native-topic-8'
+        print('PASS held request is skipped while another target delivers in the same poll')
+    finally:j.close()
+
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
-    for run in (delivered,controls,refusals,uncertainty,known_turn_recovery,connect_during_work):run(binary)
+    scenarios=(delivered,controls,refusals,uncertainty,known_turn_recovery,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
+    for run in scenarios:
+        if len(sys.argv)==2 or run.__name__ in sys.argv[2:]:run(binary)
