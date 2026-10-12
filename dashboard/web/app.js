@@ -185,7 +185,7 @@ function sessions() {
     } else if (s.children_state === "unavailable")
       card.append(el("p", "Subagent metadata unavailable", "session-meta"));
     if (s.topic_url) {
-      const link = el("a", "Open conversation");
+      const link = el("a", s.topic_link_scope === "bot_chat" ? "Open bot chat" : "Open conversation");
       link.href = s.topic_url;
       link.addEventListener("click", (e) => {
         if (tg?.openTelegramLink) {

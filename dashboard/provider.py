@@ -179,7 +179,8 @@ class Provider:
                 if row['chat_id'] == self.human and row['thread_id'] > 0:
                     username = self.config.get('bot_username')
                     if username:
-                        node['topic_url'] = f"https://t.me/{username}?thread={row['thread_id']}"
+                        node['topic_url'] = f"https://t.me/{username}"
+                        node['topic_link_scope'] = 'bot_chat'
                 elif str(row['chat_id']).startswith('-100') and row['thread_id'] > 0:
                     node['topic_url'] = f"https://t.me/c/{str(row['chat_id'])[4:]}/{row['thread_id']}"
                 try:

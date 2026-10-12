@@ -54,6 +54,9 @@ Telegram WebView authentication/phone acceptance receipt. Keep those separate.
 
 - Owned sessions only, active first; paused/blocked goals remain discoverable.
   Goals show native state and a literal 180-character objective preview.
+  Supergroup links use the established topic/message syntax. Private bot links
+  open the bot chat, where the human selects the named topic: a cross-client
+  private-topic deep link has not been qualified and is not fabricated.
 - Existing observer RPC/rollout helpers supply activity, elapsed time and tool
   counts. Metadata reads use `includeTurns:false`; no full native history is
   transported to the browser. Missing/unsupported data remains unavailable.
