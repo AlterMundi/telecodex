@@ -149,6 +149,23 @@ def scenario(binary, mode):
         unauthorized = j.admit('another admin is not the paired human', user=101)
         j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?',(unauthorized,)) == [('handled',)])
         assert j.turn_sequence == 0
+        if mode == 'queue':
+            # A detached collector cannot allow a new writer, even after restart
+            # or through a callback. Only the deployment controller releases it.
+            hold_key = 'native_writer_hold:100:7'
+            with sqlite3.connect(j.root / 'state.sqlite') as db:
+                db.execute('INSERT INTO bot_state(key,value) VALUES(?,?)', (hold_key, '{}'))
+            for restarted in (False, True):
+                if restarted:
+                    j.stop(); j.start(); j.wait(j.ready)
+                held = j.admit('do not open another writer')
+                j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?', (held,)) == [('handled',)])
+                source = next(m[0] for m in reversed(j.messages) if m[0].get('message_thread_id') == 7)
+                pressed = j.admit(callback=(source, 'goal-resume:stale-button'))
+                j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?', (pressed,)) == [('handled',)])
+                assert j.turn_sequence == 0 and not j.row('SELECT id FROM tribu_admissions')
+            with sqlite3.connect(j.root / 'state.sqlite') as db:
+                db.execute('DELETE FROM bot_state WHERE key=?', (hold_key,))
         first=j.admit('first human request')
         j.wait(j.submitted.is_set)
         if mode=='queue':

@@ -441,8 +441,62 @@ impl App {
         }
     }
 
+    // An owner-controlled upgrade may detach this topic's collector while its
+    // shared native execution continues. Retain the journal and refuse a second
+    // writer until the finite operator confirms native termination. A restart,
+    // stale busy flag or callback cannot release this durable hold.
+    async fn maintenance_writer_held(
+        &self,
+        message: &Message,
+        human: i64,
+        text: Option<&str>,
+    ) -> Result<bool> {
+        let key = SessionKey::new(message.chat.id, message.message_thread_id);
+        if self
+            .shared
+            .store
+            .bot_state_value(&format!(
+                "native_writer_hold:{}:{}",
+                key.chat_id, key.thread_id
+            ))?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let authorized = self
+            .shared
+            .store
+            .get_user(human)?
+            .is_some_and(|u| u.allowed)
+            && self.shared.store.session_creator(key)? == human;
+        if !authorized {
+            return Ok(true);
+        }
+        if matches!(
+            text,
+            Some("/status" | "/help" | "/goal" | "/goal pause" | "/goal clear")
+        ) {
+            return Ok(false);
+        }
+        self.send_status(key.chat_id, Some(key.thread_id),
+            "This topic's native work continues across a controlled upgrade. Its input journal is retained; no additional turn or replay was started. Use /goal or /status to inspect it, or /goal pause to pause the goal. New work waits for native termination and reconciliation.").await?;
+        Ok(true)
+    }
+
     async fn process_update(&self, update: crate::telegram::Update) -> Result<()> {
         if let Some(callback) = update.callback_query {
+            if let Some(message) = &callback.message {
+                if self
+                    .maintenance_writer_held(message, callback.from.id, None)
+                    .await?
+                {
+                    self.shared
+                        .telegram
+                        .answer_callback_query(&callback.id)
+                        .await?;
+                    return Ok(());
+                }
+            }
             self.process_callback_query(callback).await?;
             return Ok(());
         }
@@ -482,6 +536,12 @@ impl App {
             .or(message.caption.as_deref())
             .unwrap_or("")
             .trim();
+        if self
+            .maintenance_writer_held(&message, from.id, Some(text))
+            .await?
+        {
+            return Ok(());
+        }
         if tribu::handle_topic_control(self, &message, from.id, text).await? {
             return Ok(());
         }
