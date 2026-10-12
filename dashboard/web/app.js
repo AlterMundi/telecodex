@@ -185,7 +185,12 @@ function sessions() {
     } else if (s.children_state === "unavailable")
       card.append(el("p", "Subagent metadata unavailable", "session-meta"));
     if (s.topic_url) {
-      const link = el("a", s.topic_link_scope === "bot_chat" ? "Open bot chat" : "Open conversation");
+      const link = el(
+        "a",
+        s.topic_link_scope === "bot_chat"
+          ? "Open bot chat"
+          : "Open conversation",
+      );
       link.href = s.topic_url;
       link.addEventListener("click", (e) => {
         if (tg?.openTelegramLink) {
@@ -211,6 +216,12 @@ function receipt(op) {
     $("#receipt").append(el("p", `${count} ${state}`));
 }
 function render() {
+  if (
+    ["resumed", "resumed_with_failures", "released", "superseded"].includes(
+      snapshot.stop.state,
+    )
+  )
+    pendingNonce = undefined;
   csrf = snapshot.csrf;
   $("#provider").textContent = snapshot.provider;
   const stale = Date.now() / 1000 - snapshot.observed_at > 30;
