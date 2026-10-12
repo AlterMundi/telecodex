@@ -383,7 +383,7 @@ async fn activate(
         attached.sender.send(CodexSteerRequest{text:String::new(),goal:Some(GoalControl::Activate(activation)),response})
             .map_err(|_|anyhow!("The goal subscriber just finished. Inspect /goal and request the change again; it was not queued."))?;
         match tokio::time::timeout(Duration::from_secs(12), ack).await {
-            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Ok(_))) => {}
             Ok(Ok(Err(error))) => bail!("Native goal update was not confirmed: {error:?}"),
             _ => bail!(
                 "Native goal update acknowledgment unavailable; inspect /goal before retrying"
@@ -644,7 +644,7 @@ async fn control_live(
         })
         .map_err(|_| anyhow!("Goal subscriber finished; inspect /goal before retrying"))?;
     match tokio::time::timeout(Duration::from_secs(12), ack).await {
-        Ok(Ok(Ok(()))) => Ok(true),
+        Ok(Ok(Ok(_))) => Ok(true),
         Ok(Ok(Err(error))) => bail!("Goal mutation was not confirmed: {error:?}"),
         _ => bail!("Goal acknowledgment unavailable; inspect /goal before retrying"),
     }

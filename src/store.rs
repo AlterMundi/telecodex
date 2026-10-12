@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
 mod interactions;
+mod nexus;
 mod tribu;
 pub use interactions::HumanInteraction;
 pub use tribu::TribuAdmission;
@@ -72,6 +73,7 @@ impl Store {
         store.claim_instance_lock(&stale_cutoff)?;
         store.init_tribu()?;
         store.init_interactions()?;
+        store.init_nexus()?;
         // A restarted process cannot continue a previous command's activity lease.
         store.conn.lock().expect("store mutex poisoned").execute(
             "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",

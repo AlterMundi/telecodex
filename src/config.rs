@@ -25,6 +25,7 @@ pub struct Config {
     pub background_maintenance: bool,
     /// Explicit human-only admission. Omitted on ordinary listeners.
     pub tribu: Option<TribuConfig>,
+    pub nexus: Option<crate::nexus::NexusConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -161,6 +162,12 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
+        if let Some(nexus) = &self.nexus {
+            nexus.validate()?;
+            if !self.codex.shared_app_server {
+                bail!("Nexus requires the existing shared native App Server");
+            }
+        }
         if let Some(policy) = &self.tribu {
             if !policy.socket_path.is_absolute()
                 || !policy.owner_client_file.is_absolute()

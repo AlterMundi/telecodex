@@ -24,6 +24,7 @@ mod goals;
 mod icons;
 mod interactions;
 mod io;
+mod nexus;
 mod presentation;
 mod questions;
 mod rename;
@@ -160,6 +161,7 @@ struct QueuedTurn {
     update_id: Option<i64>,
     tribu_admission: Option<String>,
     goal: Option<crate::codex::GoalActivation>,
+    nexus: Option<String>,
 }
 
 tokio::task_local! {
@@ -309,9 +311,17 @@ impl App {
 
     pub async fn run(self) -> Result<()> {
         tribu::start(self.clone()).await?;
+        nexus::start(self.clone()).await?;
+        let mut menu = default_bot_commands();
+        if self.shared.config.nexus.is_some() {
+            menu.push(crate::telegram::BotCommand {
+                command: "nexus".into(),
+                description: "Connect or inspect your Nexus Mini App conversation".into(),
+            });
+        }
         self.shared
             .telegram
-            .set_my_commands(&default_bot_commands())
+            .set_my_commands(&menu)
             .await
             .context("failed to register bot commands")?;
 
@@ -865,6 +875,9 @@ impl App {
                 self.enqueue_turn(request, &message.chat.kind).await?;
             }
             ParsedInput::Bridge(command) => match command {
+                BridgeCommand::Nexus { args } => {
+                    nexus::command(self, message, user.tg_user_id, &args).await?;
+                }
                 BridgeCommand::Goal { args } => {
                     goals::handle_command(self, message, user.tg_user_id, &args).await?;
                 }
@@ -2238,6 +2251,16 @@ impl App {
         chat_kind: &str,
         goal: Option<crate::codex::GoalActivation>,
     ) -> Result<()> {
+        self.enqueue_input(request, chat_kind, goal, None).await
+    }
+
+    async fn enqueue_input(
+        &self,
+        request: TurnRequest,
+        chat_kind: &str,
+        goal: Option<crate::codex::GoalActivation>,
+        nexus: Option<String>,
+    ) -> Result<()> {
         self.ensure_session(request.session_key, request.from_user_id)?;
         let handle = self.worker_for(request.session_key).await?;
         let update_id = HUMAN_UPDATE_ID.try_with(|id| *id).ok();
@@ -2258,6 +2281,7 @@ impl App {
                 update_id,
                 tribu_admission: admission.map(|a| a.id),
                 goal,
+                nexus,
             })
             .map_err(|_| anyhow!("session worker dropped"));
         if queued.is_err() {
@@ -2312,7 +2336,7 @@ impl App {
         // Timing out never authorizes replay of an input already transmitted.
         let response = tokio::time::timeout(Duration::from_secs(10), response_rx).await;
         match response {
-            Ok(Ok(Ok(()))) => {
+            Ok(Ok(Ok(_))) => {
                 if let Some(id) = update_id {
                     self.shared.store.accept_update_steer(id)?;
                 }
@@ -2369,8 +2393,14 @@ impl App {
             while let Some(turn) = rx.recv().await {
                 let update_id = turn.update_id;
                 let admission = turn.tribu_admission.clone();
+                let nexus_id = turn.nexus.clone();
                 let result =
                     process_turn(shared.clone(), cancel.clone(), steer.clone(), turn).await;
+                if let Some(id) = nexus_id {
+                    if shared.store.nexus_finish(&id).is_err() {
+                        tracing::warn!("Nexus outcome retained without confirmed settlement");
+                    }
+                }
                 if let Some(id) = admission {
                     if let Err(error) = shared.store.tribu_finish(&id) {
                         tracing::error!("failed to retain Tribu execution uncertainty: {error:#}");
