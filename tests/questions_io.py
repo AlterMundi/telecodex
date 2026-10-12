@@ -64,6 +64,8 @@ class Journey:
                         result = [owner.updates.popleft()] if owner.updates else []
                     if not result:
                         time.sleep(.03)
+                elif method == 'createForumTopic' and hasattr(owner, 'created_topic'):
+                    result = owner.created_topic(payload)
                 elif method == 'sendMessage':
                     with owner.lock:
                         owner.message_id += 1

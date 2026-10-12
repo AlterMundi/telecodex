@@ -28,6 +28,9 @@ pub enum BridgeCommand {
     Fork {
         title: String,
     },
+    Merge {
+        args: String,
+    },
     Topic {
         title: Option<String>,
     },
@@ -159,6 +162,9 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/fork" => BridgeCommand::Fork {
             title: required_arg(args, "/fork <topic name>")?.to_string(),
         },
+        "/merge" => BridgeCommand::Merge {
+            args: args.to_string(),
+        },
         "/use" => BridgeCommand::Use {
             thread_id_prefix: required_arg(args, "/use <thread_id_prefix|latest>")?.to_string(),
         },
@@ -252,6 +258,9 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
 
 pub fn command_help(command: &str, args: &str) -> Option<CommandHelp> {
     match command {
+        "/merge" => Some(text_help(
+            "Usage: /merge Topic [--both | --new \"Name\"] [--focus \"Theme\"]\n/merge status\n/merge resume ID",
+        )),
         "/approval" => Some(choice_help(
             "Approval policy",
             &[
@@ -350,6 +359,7 @@ pub fn default_bot_commands() -> Vec<BotCommand> {
         bot_command("logout", "Remove stored Codex credentials"),
         bot_command("new", "Start a fresh Codex session in this topic"),
         bot_command("fork", "Fork this conversation into a named topic"),
+        bot_command("merge", "Bring context from another conversation"),
         bot_command("topic", "Create a new Telegram topic from this session"),
         bot_command("cd", "Set session working directory"),
         bot_command("pwd", "Show current working directory"),
@@ -646,6 +656,7 @@ mod tests {
             ("/new test", ParsedInputKind::Bridge),
             ("/topic test", ParsedInputKind::Bridge),
             ("/fork Shared Resources", ParsedInputKind::Bridge),
+            ("/merge Living context --both", ParsedInputKind::Bridge),
             ("/cd /workspace/project", ParsedInputKind::Bridge),
             ("/pwd", ParsedInputKind::Bridge),
             ("/model gpt-5.4", ParsedInputKind::Bridge),

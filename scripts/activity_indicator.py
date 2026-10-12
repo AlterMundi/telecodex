@@ -2,6 +2,7 @@
 """Read-only native activity observer; never consumes Telegram updates or runs turns."""
 import argparse
 import base64
+import collections
 import datetime as dt
 import fcntl
 import html
@@ -451,6 +452,9 @@ def with_goal(text, goal):
 
 
 COMMAND_PHASES = {
+    'collecting_merge': 'Reading merge source contexts',
+    'synthesizing_merge': 'Synthesizing context merge',
+    'delivering_merge': 'Delivering context merge',
     'locating_quote': 'Locating quoted message',
     'synthesizing_handoff': 'Synthesizing focused handoff',
     'forking_native_history': 'Forking native history',
@@ -458,6 +462,38 @@ COMMAND_PHASES = {
     'binding_conversation': 'Preparing new conversation',
     'delivering_links': 'Delivering fork links',
 }
+
+
+def merge_requests(database, chat, topic, user):
+    """Scoped delivery metadata; transport receipts never establish understanding."""
+    try:
+        if not database.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='merge_legs'").fetchone():
+            return None
+        rows = database.execute('''SELECT l.phase FROM merge_legs l
+            JOIN merge_operations m ON m.id=l.operation JOIN users u ON u.tg_user_id=m.requester
+            JOIN sessions s ON s.id=json_extract(l.target,'$.session')
+            WHERE m.requester=? AND u.allowed=1 AND s.creator_user_id=? AND s.chat_id=? AND s.thread_id=?
+              AND s.codex_thread_id IS json_extract(l.target,'$.native')
+              AND l.phase IN ('queued','retained_queue','detached_queue','dispatching','submitting','steering','unconfirmed','accepted','accepted_failed','accepted_interrupted')''', (user,user,chat,topic)).fetchall()
+        counts = collections.Counter(row[0] for row in rows)
+        if not counts:
+            return None
+        labels = {'queued':'queued', 'retained_queue':'unsent queue retained after restart',
+                  'detached_queue':'waiting for detached writer', 'dispatching':'preparing native input',
+                  'submitting':'awaiting native receipt', 'steering':'awaiting steering receipt',
+                  'unconfirmed':'delivery unconfirmed; inspect without replay',
+                  'accepted':'native input accepted; incorporation not yet qualified',
+                  'accepted_failed':'native input accepted; turn failed',
+                  'accepted_interrupted':'native input accepted; turn interrupted'}
+        return '🔀 Context merge · ' + ' · '.join(f'{n} {labels[state]}' for state,n in counts.items())
+    except (sqlite3.Error, TypeError):
+        return None
+
+
+def with_merge(text, merge):
+    if not merge:
+        return text
+    return text + '\n' + merge if text else merge
 
 
 def command_activity(database, chat, topic, now):
@@ -805,6 +841,7 @@ class StatusRequests:
             atomic_json(self.path, self.state)  # Never replay an ambiguous delivery.
             pending = pending_requests(self.database,row['chat'],row['topic'],row['requester'])
             text = with_pending(reports[key] + ' · ' + weekly(),pending)
+            text = with_merge(text, merge_requests(self.database,row['chat'],row['topic'],row['requester']))
             context = (contexts or {}).get(key, {})
             if publisher is not None and context.get('active') and not pending:
                 position = dict(context.get('position', {}))
@@ -968,11 +1005,14 @@ def run(args):
                     update = pending_update_line(args.pending_update_record, key, now)
                     report, active_text, text = combine_update_status(report, active_text, text, update)
                     pending = pending_requests(bridge,topic['chat_id'],topic['thread_id'],topic['creator_user_id'])
+                    merge = merge_requests(bridge,topic['chat_id'],topic['thread_id'],topic['creator_user_id'])
+                    active_text = with_merge(active_text,merge)
+                    text = with_merge(text,merge)
                     if pending and pending['pending']:
                         active_text = with_pending(active_text,pending)
                         text = with_pending(text,pending)
                     exchange = timestamp(reader.last_exchange)
-                    if (update or pending) and exchange is not None and now - exchange < 30:
+                    if (update or pending or merge) and exchange is not None and now - exchange < 30:
                         text = None
                     latest = latest_input(bridge, topic['chat_id'], topic['thread_id'])
                     position = {'exchange': reader.last_exchange,

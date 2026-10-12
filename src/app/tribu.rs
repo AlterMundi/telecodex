@@ -505,6 +505,7 @@ async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
                 tribu_admission: Some(id.clone()),
                 goal: None,
                 nexus: None,
+                merge: None,
             })
             .is_err()
         {

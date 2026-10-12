@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
 mod interactions;
+mod merging;
 mod nexus;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};
@@ -74,6 +75,7 @@ impl Store {
         store.init_tribu()?;
         store.init_interactions()?;
         store.init_nexus()?;
+        store.init_merging()?;
         // A restarted process cannot continue a previous command's activity lease.
         store.conn.lock().expect("store mutex poisoned").execute(
             "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",
@@ -681,9 +683,26 @@ impl Store {
     }
 
     pub fn apply_session_template(&self, key: SessionKey, template: &SessionRecord) -> Result<()> {
+        self.apply_template(key, template, None)
+    }
+    pub fn apply_empty_session_template(
+        &self,
+        key: SessionKey,
+        template: &SessionRecord,
+        human: i64,
+    ) -> Result<()> {
+        self.apply_template(key, template, Some(human))
+    }
+    fn apply_template(
+        &self,
+        key: SessionKey,
+        template: &SessionRecord,
+        empty_owner: Option<i64>,
+    ) -> Result<()> {
         let add_dirs = serde_json::to_string(&path_vec_to_strings(&template.add_dirs))?;
-        self.update_session_field(
-            key,
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let changed=tx.execute(
             "UPDATE sessions
              SET session_title = ?3,
                  codex_thread_id = ?4,
@@ -699,7 +718,10 @@ impl Store {
                  service_tier = ?14,
                  collaboration_mode = ?15,
                  updated_at = ?16
-             WHERE chat_id = ?1 AND thread_id = ?2",
+             WHERE chat_id = ?1 AND thread_id = ?2
+               AND (?17 IS NULL OR (creator_user_id=?17 AND EXISTS(SELECT 1 FROM users u WHERE u.tg_user_id=?17 AND u.allowed=1) AND busy=0 AND codex_thread_id IS NULL
+                 AND NOT EXISTS(SELECT 1 FROM turns t WHERE t.session_id=sessions.id)
+                 AND NOT EXISTS(SELECT 1 FROM incoming_updates i WHERE COALESCE(json_extract(i.payload_json,'$.message.chat.id'),json_extract(i.payload_json,'$.callback_query.message.chat.id'))=sessions.chat_id AND COALESCE(json_extract(i.payload_json,'$.message.message_thread_id'),json_extract(i.payload_json,'$.callback_query.message.message_thread_id'),0)=sessions.thread_id AND COALESCE(json_extract(i.payload_json,'$.message.from.id'),json_extract(i.payload_json,'$.callback_query.from.id'))=?17)))",
             params![
                 key.chat_id,
                 key.thread_id,
@@ -717,8 +739,28 @@ impl Store {
                 template.service_tier.as_deref(),
                 template.collaboration_mode.map(CollaborationMode::as_str),
                 now_string(),
+                empty_owner,
             ],
-        )
+        )?;
+        if changed == 0 {
+            return Err(anyhow!(
+                "Destination template precondition failed; existing conversation preserved"
+            ));
+        }
+        if empty_owner.is_some() {
+            let owner_key = format!("session_title_owner:{}:{}", key.chat_id, key.thread_id);
+            if let Some(title) = template
+                .session_title
+                .as_deref()
+                .filter(|t| !t.trim().is_empty())
+            {
+                tx.execute("INSERT INTO bot_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![owner_key,title])?;
+            } else {
+                tx.execute("DELETE FROM bot_state WHERE key=?", [owner_key])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn clear_session_conversation(&self, key: SessionKey) -> Result<()> {
