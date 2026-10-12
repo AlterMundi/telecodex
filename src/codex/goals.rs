@@ -1,7 +1,7 @@
 //! Native goal metadata and explicit Telegram goal activation.
 use super::*;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeGoal {
     pub thread_id: String,
@@ -127,10 +127,17 @@ pub(super) async fn mutate_live_goal(
         .context("native goal update returned no goal")
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct GoalStopSnapshot {
+    pub before: Option<NativeGoal>,
+    pub after: Option<NativeGoal>,
+    pub was_staged: bool,
+}
 #[derive(Debug, Clone)]
 pub enum GoalControl {
     Activate(GoalActivation),
     Pause,
+    Stop(Arc<std::sync::Mutex<GoalStopSnapshot>>),
     Clear,
 }
 pub(super) async fn mutate_control(
@@ -142,6 +149,27 @@ pub(super) async fn mutate_control(
         GoalControl::Activate(activation) => Ok(Some(
             mutate_live_goal(process, thread_id, activation).await?,
         )),
+        GoalControl::Stop(receipt) => {
+            let id = process
+                .send_request("thread/goal/get", json!({"threadId":thread_id}))
+                .await?;
+            let before = parse_goal(&process.await_response(id).await?, thread_id)?;
+            let after = if before.as_ref().is_some_and(|g| g.status == "active") {
+                let id = process
+                    .send_request(
+                        "thread/goal/set",
+                        json!({"threadId":thread_id,"status":"paused","origin":"user"}),
+                    )
+                    .await?;
+                parse_goal(&process.await_response(id).await?, thread_id)?
+            } else {
+                before.clone()
+            };
+            let mut snapshot = receipt.lock().expect("goal stop snapshot mutex poisoned");
+            snapshot.before = before;
+            snapshot.after = after.clone();
+            Ok(after)
+        }
         GoalControl::Pause => {
             let id = process
                 .send_request(

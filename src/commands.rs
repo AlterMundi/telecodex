@@ -58,6 +58,9 @@ pub enum BridgeCommand {
         title: String,
     },
     Stop,
+    StopControl {
+        args: String,
+    },
     RetryTurn {
         turn_id: i64,
     },
@@ -188,7 +191,10 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/rename" => BridgeCommand::Rename {
             title: required_arg(args, "/rename <new name>")?.to_string(),
         },
-        "/stop" => BridgeCommand::Stop,
+        "/stop" if args.trim().is_empty() => BridgeCommand::Stop,
+        "/stop" => BridgeCommand::StopControl {
+            args: args.trim().to_string(),
+        },
         "/retry" | "/retry_turn" | "/retry-turn" => BridgeCommand::RetryTurn {
             turn_id: parse_i64_arg(args, "/retry <turn_id>")?,
         },
@@ -381,7 +387,7 @@ pub fn default_bot_commands() -> Vec<BotCommand> {
         bot_command("history", "Browse messages in the selected Codex session"),
         bot_command("copy", "Resend the last assistant reply"),
         bot_command("clear", "Start a fresh Codex session on the next turn"),
-        bot_command("stop", "Stop the active turn"),
+        bot_command("stop", "Stop a turn or coordinate all sessions"),
         bot_command("retry", "Retry a failed or cancelled turn"),
         bot_command("restart_bot", "Admin: restart the bot process"),
         bot_command("allow", "Admin: allow a Telegram user"),

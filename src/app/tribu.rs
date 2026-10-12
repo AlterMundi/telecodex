@@ -483,6 +483,7 @@ async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
             .store
             .tribu_admit(p.key(), &id, Some(source_id), &record, p.max_pending)?;
     if admission.fresh && admission.state == "queued" {
+        let admission_epoch = app.shared.store.stop_admission_epoch(p.key())?;
         let handle = app.worker_for(p.key()).await?;
         let request = TurnRequest {
             session_key: p.key(),
@@ -504,6 +505,8 @@ async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
                 update_id: None,
                 tribu_admission: Some(id.clone()),
                 goal: None,
+                stop_resume: None,
+                admission_epoch,
                 nexus: None,
                 merge: None,
             })

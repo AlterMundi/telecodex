@@ -361,6 +361,17 @@ async fn deliver(app: &App, id: &str, chat_kind: &str) -> Result<()> {
     let human = leg["target"]["human"]
         .as_i64()
         .context("merge human missing")?;
+    let admission_epoch = super::stopping::input_epoch(&app.shared, key)?;
+    if admission_epoch != app.shared.store.stop_admission_epoch(key)?
+        || app.shared.store.stop_fenced(key)?
+    {
+        app.shared.store.merge_phase(
+            id,
+            "detached_queue",
+            "Stop retired this prepared delivery; retained without execution",
+        )?;
+        return Ok(());
+    }
     let active = {
         let workers = app.workers.lock().await;
         workers
@@ -421,8 +432,9 @@ async fn deliver(app: &App, id: &str, chat_kind: &str) -> Result<()> {
         }
         // Queue on the existing native worker, with independent durable merge receipts.
         // The command remains its original journaled human ingress, not a second fabricated update.
+        let admission_epoch = super::stopping::input_epoch(&app.shared, key)?;
         let worker = app.worker_for(key).await?;
-        worker.sender.send(QueuedTurn{request:TurnRequest{session_key:key,from_user_id:human,prompt:"Incorporate the explicitly requested context exchange and briefly explain what changed or remains open.".into(),runtime_instructions:None,attachments:vec![],review_mode:None,override_search_mode:None},chat_kind:chat_kind.into(),update_id:None,tribu_admission:None,goal:None,nexus:None,merge:Some(id.to_string())}).map_err(|_|anyhow!("merge worker closed"))?;
+        worker.sender.send(QueuedTurn{request:TurnRequest{session_key:key,from_user_id:human,prompt:"Incorporate the explicitly requested context exchange and briefly explain what changed or remains open.".into(),runtime_instructions:None,attachments:vec![],review_mode:None,override_search_mode:None},chat_kind:chat_kind.into(),update_id:None,tribu_admission:None,goal:None,nexus:None,stop_resume:None,admission_epoch,merge:Some(id.to_string())}).map_err(|_|anyhow!("merge worker closed"))?;
     }
     Ok(())
 }

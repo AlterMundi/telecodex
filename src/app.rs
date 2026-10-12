@@ -29,6 +29,7 @@ mod nexus;
 mod presentation;
 mod questions;
 mod rename;
+mod stopping;
 mod support;
 mod tribu;
 mod turns;
@@ -164,6 +165,8 @@ struct QueuedTurn {
     goal: Option<crate::codex::GoalActivation>,
     nexus: Option<String>,
     merge: Option<String>,
+    stop_resume: Option<String>,
+    admission_epoch: String,
 }
 
 tokio::task_local! {
@@ -330,6 +333,13 @@ impl App {
         self.notify_primary_user(&format!("🟢 Telecodex {} started", app_version_label()))
             .await;
 
+        stopping::start_control_socket(self.clone()).await?;
+        let restart_app = self.clone();
+        tokio::spawn(async move {
+            if stopping::recover_restart(restart_app).await.is_err() {
+                tracing::warn!("Explicit maintenance recovery unconfirmed; no input replayed");
+            }
+        });
         let heartbeat_app = self.clone();
         tokio::spawn(async move {
             heartbeat_app.run_instance_heartbeat_loop().await;
@@ -476,11 +486,30 @@ impl App {
         if !authorized {
             return Ok(true);
         }
+        if text.is_some_and(|t| {
+            t == "/stop all"
+                || t == "/stop status"
+                || t == "/stop resume"
+                || t == "/stop release"
+                || t == "/stop restart"
+                || t.starts_with("/stop status ")
+                || t.starts_with("/stop resume ")
+                || t.starts_with("/stop release ")
+                || t.starts_with("/stop restart ")
+        }) {
+            return Ok(false);
+        }
         if matches!(
             text,
             Some("/status" | "/help" | "/goal" | "/goal pause" | "/goal clear")
         ) {
             return Ok(false);
+        }
+        if self.shared.store.stop_fenced(key)? {
+            if let Ok(id) = HUMAN_UPDATE_ID.try_with(|id| *id) {
+                self.shared.store.stop_retain_input(id)?;
+            }
+            return self.send_plain_status(key.chat_id,Some(key.thread_id),"Coordinated Stop holds this conversation. Your input is retained without native submission; /stop status ID shows the operation and /stop resume ID requests continuation.").await.map(|_|true);
         }
         self.send_status(key.chat_id, Some(key.thread_id),
             "This topic's native work continues across a controlled upgrade. Its input journal is retained; no additional turn or replay was started. Use /goal or /status to inspect it, or /goal pause to pause the goal. New work waits for native termination and reconciliation.").await?;
@@ -1199,6 +1228,10 @@ impl App {
                             .store
                             .uncertain_update_ids(user.tg_user_id, session_key)?;
                         let mut text = format_session_status(&session, &message.chat);
+                        let stops = self.shared.store.stop_metadata(user.tg_user_id)?;
+                        if stops.as_array().is_some_and(|rows| !rows.is_empty()) {
+                            text.push_str(&format!("\n\nCoordinated Stop: {}", stops));
+                        }
                         let merges = self
                             .shared
                             .store
@@ -1212,6 +1245,21 @@ impl App {
                         self.send_status(message.chat.id, message.message_thread_id, &text)
                             .await?;
                     }
+                }
+                BridgeCommand::StopControl { args } => {
+                    let result = stopping::command(
+                        self,
+                        user.tg_user_id,
+                        &args,
+                        HUMAN_UPDATE_ID.try_with(|id| id.to_string()).ok(),
+                    )
+                    .await;
+                    let text = match result {
+                        Ok(value) => serde_json::to_string_pretty(&value)?,
+                        Err(e) => format!("Stop control failed: {e}"),
+                    };
+                    self.send_plain_status(message.chat.id, message.message_thread_id, &text)
+                        .await?;
                 }
                 BridgeCommand::Stop => {
                     if self.stop_session(session_key).await {
@@ -1231,6 +1279,14 @@ impl App {
                     }
                 }
                 BridgeCommand::RetryTurn { turn_id } => {
+                    if let Some(op) = self
+                        .shared
+                        .store
+                        .bot_state_value(&format!("stopped_turn:{turn_id}"))?
+                    {
+                        self.send_plain_status(message.chat.id,message.message_thread_id,&format!("This work was stopped by a coordinated human request. Use /stop status {op} and /stop resume {op}; /retry does not replay its original input.")).await?;
+                        return Ok(());
+                    }
                     if !self.shared.store.merge_local(turn_id)?.is_empty() {
                         self.send_status(message.chat.id,message.message_thread_id,"This turn carried a context merge. Inspect /merge status; /merge resume ID only resumes known unadmitted context. /retry does not replay merge input.").await?;
                         return Ok(());
@@ -2256,7 +2312,23 @@ impl App {
         chat_kind: &str,
         goal: Option<crate::codex::GoalActivation>,
     ) -> Result<()> {
-        self.enqueue_input(request, chat_kind, goal, None).await
+        self.enqueue_input(request, chat_kind, goal, None, None)
+            .await
+    }
+
+    async fn enqueue_stop_resume(
+        &self,
+        request: TurnRequest,
+        goal: Option<crate::codex::GoalActivation>,
+        id: &str,
+    ) -> Result<()> {
+        let kind = if request.session_key.chat_id < 0 {
+            "supergroup"
+        } else {
+            "private"
+        };
+        self.enqueue_input(request, kind, goal, None, Some(id.into()))
+            .await
     }
 
     async fn enqueue_input(
@@ -2265,10 +2337,22 @@ impl App {
         chat_kind: &str,
         goal: Option<crate::codex::GoalActivation>,
         nexus: Option<String>,
+        stop_resume: Option<String>,
     ) -> Result<()> {
         self.ensure_session(request.session_key, request.from_user_id)?;
+        let admission_epoch = if stop_resume.is_some() {
+            self.shared
+                .store
+                .stop_admission_epoch(request.session_key)?
+        } else {
+            stopping::input_epoch(&self.shared, request.session_key)?
+        };
         let handle = self.worker_for(request.session_key).await?;
-        let update_id = HUMAN_UPDATE_ID.try_with(|id| *id).ok();
+        let update_id = if stop_resume.is_some() {
+            None
+        } else {
+            HUMAN_UPDATE_ID.try_with(|id| *id).ok()
+        };
         let admission = tribu::private_admission(&self.shared, &request, update_id)?;
         if let Some(a) = &admission {
             if !a.fresh || a.state != "queued" {
@@ -2288,6 +2372,8 @@ impl App {
                 goal,
                 nexus,
                 merge: None,
+                stop_resume,
+                admission_epoch,
             })
             .map_err(|_| anyhow!("session worker dropped"));
         if queued.is_err() {
@@ -2316,8 +2402,17 @@ impl App {
         let Some(active) = active else {
             return Ok(false);
         };
+        let admission_epoch = stopping::input_epoch(&self.shared, session_key)?;
 
         let update_id = HUMAN_UPDATE_ID.try_with(|id| *id).ok();
+        if self.shared.store.stop_admission_epoch(session_key)? != admission_epoch
+            || self.shared.store.stop_fenced(session_key)?
+        {
+            if let Some(id) = update_id {
+                self.shared.store.stop_retain_input(id)?;
+            }
+            return Ok(true);
+        }
         if let Some(id) = update_id {
             self.shared.store.begin_update_steer(id, active.turn_id)?;
         }

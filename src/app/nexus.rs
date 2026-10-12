@@ -85,6 +85,7 @@ async fn validate(shared: &AppShared, doc: &Value) -> Result<()> {
     let r = route(cfg, doc)?;
     let t = target(doc)?;
     check_target(shared, &t, r)?;
+    let admission_epoch = shared.store.stop_admission_epoch(t.key())?;
     let local = shared
         .store
         .nexus_binding(&r.table_id, &r.author_ref)?
@@ -97,6 +98,9 @@ async fn validate(shared: &AppShared, doc: &Value) -> Result<()> {
         .await?;
     // Maintenance can acquire the durable hold while the operator is queried.
     check_target(shared, &t, r)?;
+    if admission_epoch != shared.store.stop_admission_epoch(t.key())? {
+        return Err(WriterHeld.into());
+    }
     if local["target"] != doc["target"]
         || !binding["active"].as_bool().unwrap_or(false)
         || binding["binding_id"] != doc["request"]["binding_id"]
@@ -326,6 +330,7 @@ async fn poll(app: &App) -> Result<()> {
                 "private",
                 None,
                 Some(id.to_string()),
+                None,
             )
             .await?;
         }
@@ -477,6 +482,7 @@ pub(super) async fn command(app: &App, message: &Message, human: i64, args: &str
                     "private",
                     None,
                     Some(id),
+                    None,
                 )
                 .await?;
             }

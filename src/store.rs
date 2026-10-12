@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 mod interactions;
 mod merging;
+mod stopping;
+pub use stopping::{StopOperation, StopTarget};
 mod nexus;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};
@@ -76,6 +78,7 @@ impl Store {
         store.init_interactions()?;
         store.init_nexus()?;
         store.init_merging()?;
+        store.init_stopping()?;
         // A restarted process cannot continue a previous command's activity lease.
         store.conn.lock().expect("store mutex poisoned").execute(
             "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",
@@ -235,6 +238,8 @@ impl Store {
              VALUES(?1,?2,'received',?3,?4)",
             params![update.update_id, payload, self.instance_id, now_string()],
         )?;
+        // Capture ownership epoch with journal admission, before attachment/network work.
+        tx.execute("INSERT INTO bot_state(key,value) SELECT ?,COALESCE(b.value,'initial') FROM (SELECT COALESCE((SELECT creator_user_id FROM sessions WHERE chat_id=COALESCE(json_extract(?,'$.message.chat.id'),json_extract(?,'$.callback_query.message.chat.id')) AND thread_id=COALESCE(json_extract(?,'$.message.message_thread_id'),json_extract(?,'$.callback_query.message.message_thread_id'),0)),COALESCE(json_extract(?,'$.message.from.id'),json_extract(?,'$.callback_query.from.id'))) AS human) s LEFT JOIN bot_state b ON b.key='stop_admission_epoch:'||s.human",params![format!("stop_input_epoch:{}",update.update_id),payload,payload,payload,payload,payload,payload])?;
         tx.execute(
             "INSERT INTO bot_state(key,value) VALUES('last_update_id',?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value
@@ -438,12 +443,13 @@ impl Store {
     }
 
     pub fn native_writer_held(&self, key: SessionKey) -> Result<bool> {
-        Ok(self
-            .bot_state_value(&format!(
-                "native_writer_hold:{}:{}",
-                key.chat_id, key.thread_id
-            ))?
-            .is_some())
+        Ok(self.stop_fenced(key)?
+            || self
+                .bot_state_value(&format!(
+                    "native_writer_hold:{}:{}",
+                    key.chat_id, key.thread_id
+                ))?
+                .is_some())
     }
 
     pub fn bot_state_value(&self, key: &str) -> Result<Option<String>> {
@@ -1823,7 +1829,7 @@ mod tests {
         assert_eq!(turn, 42);
     }
 
-    fn defaults() -> SessionDefaults {
+    pub(super) fn defaults() -> SessionDefaults {
         SessionDefaults {
             cwd: std::env::current_dir().unwrap(),
             model: Some("gpt-5.4".to_string()),
