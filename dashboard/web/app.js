@@ -126,6 +126,7 @@ function sessions() {
       (s) =>
         filter === "all" ||
         s.status === "active" ||
+        ["unknown", "systemError"].includes(s.status) ||
         s.bridge_busy ||
         s.goal_state === "known" ||
         s.children.some((c) => c.status === "active"),
