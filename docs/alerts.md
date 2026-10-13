@@ -86,7 +86,7 @@ disabled on stale/unavailable observations; ambiguous actions require inspection
 
 ## Qualification and remaining live evidence
 
-`tests/alerts_io.py` runs real HTTP/SQLite/process journeys against the pinned
+`tests/dashboard_alerts_io.py` runs real HTTP/SQLite/process journeys against the pinned
 core: scope filtering, pagination, two receiving consumers, lost claim/receipt
 replies, restart, resolution, grant/credential changes and authenticated Sessions
 reads/actions with native state unavailable. Its Telegram sender is fictional.
