@@ -61,7 +61,7 @@ def create_app(config=None, provider=None, validator=validate_launch):
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise ValueError('Unsafe dashboard state file')
     binding = digest(json.dumps([config['bot_id'],
-                     getattr(provider, 'receiver_bytes', b'').hex()]))
+                     getattr(provider, 'binding_bytes', getattr(provider, 'receiver_bytes', b'')).hex()]))
 
     @contextmanager
     def database():
@@ -111,6 +111,7 @@ def create_app(config=None, provider=None, validator=validate_launch):
         return response
 
     def authorize(request):
+        check_binding()
         token = request.cookies.get('telecodex_dashboard', '')
         headers = request.headers.getlist('authorization')
         if headers:
@@ -126,6 +127,13 @@ def create_app(config=None, provider=None, validator=validate_launch):
         if not session or not provider.authorized(session['human']):
             raise HTTPException(401, 'Open the dashboard from this bot in Telegram')
         return session
+
+    def check_binding():
+        if hasattr(provider, 'assert_binding'):
+            try:
+                provider.assert_binding()
+            except (ProviderUnavailable, OSError):
+                raise HTTPException(503, 'Receiving control binding changed; operator must requalify Sessions') from None
 
     public = Path(__file__).parent / 'web'
 
@@ -153,6 +161,7 @@ def create_app(config=None, provider=None, validator=validate_launch):
             human = validator(raw, config['bot_id'])
         except (ValueError, KeyError, TypeError):
             raise HTTPException(401, 'Invalid or expired Telegram launch') from None
+        check_binding()
         if not provider.authorized(human):
             raise HTTPException(403, 'This account has no receiving session control grant')
         token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
@@ -179,35 +188,52 @@ def create_app(config=None, provider=None, validator=validate_launch):
 
     @app.post('/api/stop')
     async def stop(request: Request):
+        return await action(request, 'stop')
+
+    @app.post('/api/resume')
+    async def resume(request: Request):
+        return await action(request, 'resume')
+
+    async def action(request, kind):
         session = authorize(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         try:
             body = await request.json()
             nonce = body['nonce']
-            if set(body) != {'nonce'} or not isinstance(nonce, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{16,64}', nonce):
+            expected = {'nonce'} if kind == 'stop' else {'nonce', 'operation'}
+            if set(body) != expected or not isinstance(nonce, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{16,64}', nonce):
+                raise ValueError()
+            operation = body.get('operation')
+            if kind == 'resume' and (not isinstance(operation, str) or
+                    not re.fullmatch(r'[a-zA-Z0-9_-]{1,128}', operation)):
                 raise ValueError()
         except (ValueError, KeyError, TypeError):
-            raise HTTPException(400, 'Invalid Stop request') from None
+            raise HTTPException(400, 'Invalid control request') from None
+        # Separate action/operation namespaces; never reuse another intent's receipt.
+        journal_nonce = nonce if kind == 'stop' else 'resume:' + digest(operation + ':' + nonce)
         with database() as db:
             # Claim before the first external effect; a concurrent retry cannot dispatch it twice.
             fresh = db.execute('INSERT OR IGNORE INTO actions VALUES(?,?,?,NULL)',
-                               (session['human'], nonce, 'requested')).rowcount == 1
+                               (session['human'], journal_nonce, 'requested')).rowcount == 1
             prior = db.execute('SELECT state,result FROM actions WHERE human=? AND nonce=?',
-                               (session['human'], nonce)).fetchone()
+                               (session['human'], journal_nonce)).fetchone()
         if not fresh:
             return JSONResponse(json.loads(prior['result']) if prior['result'] else
-                                {'state': 'unconfirmed', 'detail': 'Inspect Stop status before another action'},
+                                {'state': 'unconfirmed', 'detail': 'Inspect control status before another action'},
                                 status_code=200 if prior['result'] else 202)
         try:
-            # Sync control runs off the event loop; dashboard reads stay available during Stop.
+            # Sync control runs off the event loop; reads stay available during recovery.
             from starlette.concurrency import run_in_threadpool
-            result = await run_in_threadpool(provider.stop, nonce)
+            if kind == 'stop':
+                result = await run_in_threadpool(provider.stop, nonce)
+            else:
+                result = await run_in_threadpool(provider.resume, nonce, operation)
         except Exception:
-            result = {'state': 'unconfirmed', 'detail': 'Stop acknowledgement unavailable; inspect status before retrying'}
+            result = {'state': 'unconfirmed', 'detail': kind.title() + ' acknowledgement unavailable; inspect status before retrying'}
         with database() as db:
             db.execute('UPDATE actions SET state=?,result=? WHERE human=? AND nonce=?',
-                       (result.get('state', 'unconfirmed'), json.dumps(result), session['human'], nonce))
+                       (result.get('state', 'unconfirmed'), json.dumps(result), session['human'], journal_nonce))
         return JSONResponse(result, status_code=202)
 
     return app

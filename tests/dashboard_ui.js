@@ -16,7 +16,7 @@ function boot(fetchImpl) {
       if (!nodes.has(selector)) nodes.set(selector, {
         textContent: "", disabled: false, handlers: {},
         addEventListener(name, handler) { this.handlers[name] = handler; },
-        close() {},
+        close() {}, showModal() {},
       });
       return nodes.get(selector);
     },
@@ -93,6 +93,7 @@ const hung = (options) => new Promise((resolve, reject) => {
   const stop = boot((route, options) => route === "api/session" ? ok()
     : route === "api/stop" ? hung(options) : unavailable());
   await settle();
+  vm.runInContext('controlIntent = {kind:"stop"}', stop.context);
   const approval = stop.nodes.get("#approve").handlers.click();
   const stopDeadline = [...stop.timers.values()][0];
   assert.equal(stopDeadline.milliseconds, 30000);
@@ -103,5 +104,27 @@ const hung = (options) => new Promise((resolve, reject) => {
   assert.equal(vm.runInContext("pendingNonce", stop.context), "synthetic-action-nonce");
   assert.match(stop.nodes.get("#feedback").textContent, /Check Stop status/);
   assert.equal(stop.nodes.get("#stop").disabled, true);
+  // Observed Stop releases the pending Stop guard and offers the real Resume.
+  vm.runInContext('controlButton({state:"stopped",operation:"op-A"}, false, 2)', stop.context);
+  assert.equal(stop.nodes.get("#stop").textContent, "Resume owned sessions");
+  assert.equal(stop.nodes.get("#stop").disabled, false);
+  vm.runInContext('snapshot={stop:{state:"stopped",operation:"op-A"}}', stop.context);
+  stop.nodes.get("#stop").handlers.click();
+  assert.equal(stop.nodes.get("#approve").textContent, "Resume");
+  stop.nodes.get("#cancel").handlers.click();
+  assert.equal(stop.requests.filter((x) => x.route === "api/resume").length, 0);
+  // A real confirmation pins the observed operation, and uncertainty isn't replayed.
+  stop.nodes.get("#stop").handlers.click();
+  const continuation = stop.nodes.get("#approve").handlers.click();
+  await continuation;
+  const resumeRequest = stop.requests.find((x) => x.route === "api/resume");
+  assert.equal(JSON.parse(resumeRequest.options.body).operation, "op-A");
+  vm.runInContext('controlButton({state:"stopped",operation:"op-A"}, false, 2)', stop.context);
+  assert.equal(stop.nodes.get("#stop").disabled, true);
+  vm.runInContext('controlButton({state:"resumed",operation:"op-A"}, false, 2)', stop.context);
+  assert.equal(stop.nodes.get("#stop").disabled, false);
+  assert.equal(stop.nodes.get("#stop").textContent, "Stop owned sessions");
+  for (const phase of ["stopping", "resuming", "partial", "unknown"])
+    assert.equal(vm.runInContext(`controlButton({state:"${phase}"}, false, 2); $("#stop").disabled`, stop.context), true);
   console.log("dashboard UI: hidden launch, retry, HTTP deadlines and uncertain Stop passed");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

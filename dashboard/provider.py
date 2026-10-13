@@ -21,7 +21,19 @@ class ProviderUnavailable(Exception):
     pass
 
 
-def control(path, nonce):
+def receiving_authority(receiver):
+    """Only dependencies that select this dashboard's actor/data/control scope."""
+    telegram = receiver.get('telegram', {})
+    return json.dumps({
+        'db_path': receiver.get('db_path'),
+        'session_control': receiver.get('session_control'),
+        'telegram': {key: telegram.get(key) for key in
+                     ('api_base', 'bot_token', 'bot_token_file')},
+        'native_binary': receiver.get('codex', {}).get('binary', 'codex'),
+    }, sort_keys=True, separators=(',', ':')).encode()
+
+
+def control(path, nonce, command='all'):
     """One bounded connect-only request; a lost acknowledgement is not retried."""
     meta = Path(path).lstat()
     parent = Path(path).parent.lstat()
@@ -35,7 +47,7 @@ def control(path, nonce):
         _, uid, _ = struct.unpack('3i', stream.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         if uid != os.getuid():
             raise ProviderUnavailable('Receiving control owner mismatch')
-        stream.sendall(json.dumps({'command': 'all', 'nonce': nonce}).encode() + b'\n')
+        stream.sendall(json.dumps({'command': command, 'nonce': nonce}).encode() + b'\n')
         data = bytearray()
         while b'\n' not in data:
             block = stream.recv(min(4096, 65537 - len(data)))
@@ -102,6 +114,7 @@ class Provider:
         self.receiver_path = Path(config['receiver_config'])
         self.receiver_bytes = self.receiver_path.read_bytes()
         self.receiver = tomllib.loads(self.receiver_bytes.decode())
+        self.binding_bytes = receiving_authority(self.receiver)
         self.human = int(self.receiver['session_control']['human_id'])
         self.native_home = Path(config.get('native_home', Path.home() / '.codex'))
         self.native = None
@@ -111,7 +124,11 @@ class Provider:
         self.host = Host(config.get('storage', {'Host': '/'}))
 
     def assert_binding(self):
-        if self.receiver_path.read_bytes() != self.receiver_bytes:
+        try:
+            current = receiving_authority(tomllib.loads(self.receiver_path.read_text()))
+        except (OSError, ValueError):
+            raise ProviderUnavailable('Receiving configuration unavailable') from None
+        if current != self.binding_bytes:
             raise ProviderUnavailable('Receiving grant changed; operator must requalify the dashboard')
 
     def close(self):
@@ -263,3 +280,14 @@ class Provider:
         if not self.authorized(self.human):
             raise ProviderUnavailable('Receiving owner grant no longer authorizes Stop')
         return control(self.receiver['session_control']['socket_path'], nonce)
+
+    def resume(self, nonce, operation):
+        self.assert_binding()
+        if not self.authorized(self.human):
+            raise ProviderUnavailable('Receiving owner grant no longer authorizes Resume')
+        observed = self.stop_status()
+        if observed.get('operation') != operation or observed.get('state') != 'stopped':
+            raise ProviderUnavailable('Selected Stop is no longer the observed stopped operation')
+        self.assert_binding()
+        # The native coordinator rechecks owned targets, bindings and stopped state.
+        return control(self.receiver['session_control']['socket_path'], nonce, 'resume ' + operation)
