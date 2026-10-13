@@ -43,6 +43,7 @@ class NoticeSender:
         self.calls = []
         self.outcome = {'outcome': 'delivered', 'message_ref': 'message-17', 'destination_ref': 'human-100'}
     def verify(self): pass
+    def assert_binding(self): pass
     def send(self, projection):
         self.calls.append(projection)
         return dict(self.outcome)
@@ -282,6 +283,33 @@ class Receiving(unittest.TestCase):
         self.assertEqual(sender.send(self.projection), {'outcome': 'failed'})
         reply = []
         with self.assertRaises(AlertsUnavailable): Sender(self.provider, config).verify()
+        # Permission can be revoked during the cadence wait; no external send.
+        count = len(calls)
+        sender.next_send = time.monotonic() + .1
+        timer = threading.Timer(.02, lambda: setattr(self.provider, 'allowed', False))
+        timer.start()
+        with self.assertRaises(AlertsUnavailable): sender.send(self.projection)
+        timer.join()
+        self.assertEqual(len(calls), count)
+
+    def test_bot_rotation_denies_cached_browser_view(self):
+        bot_token = self.root / 'bot-token'
+        bot_token.write_text('fictional-original-bot-token')
+        bot_token.chmod(0o600)
+        self.provider.receiver = {'telegram': {'bot_token_file': str(bot_token)}}
+        config = {**self.config, 'bot_username': 'TestBot'}
+        self.receiver.sender = Sender(self.provider, config)
+        self.receiver.deliver = False
+        self.receiver.tick()
+        app = create_app(config, self.provider, lambda raw, bot: int(raw), alerts=self.receiver)
+        client = TestClient(app, base_url='https://example.test')
+        self.addCleanup(client.close)
+        headers = {'origin': 'https://example.test'}
+        session = client.post('/api/session', json={'init_data': '100'}, headers=headers).json()
+        headers['authorization'] = 'Bearer ' + session['session_token']
+        self.assertEqual(client.get('/api/alerts', headers=headers).status_code, 200)
+        bot_token.write_text('fictional-replacement-bot-token')
+        self.assertEqual(client.get('/api/alerts', headers=headers).status_code, 503)
 
 
 if __name__ == '__main__': unittest.main(verbosity=2)

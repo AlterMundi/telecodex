@@ -146,8 +146,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 raise HTTPException(503, 'Receiving control binding changed; operator must requalify Sessions') from None
         if alerts is not None:
             try:
-                alerts.client.assert_binding()
-            except (AlertsUnavailable, OSError):
+                alerts.assert_binding()
+            except (AlertsUnavailable, ProviderUnavailable, OSError):
                 raise HTTPException(503, 'Alerts receiving binding changed; operator must requalify Sessions') from None
 
     public = Path(__file__).parent / 'web'

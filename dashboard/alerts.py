@@ -68,14 +68,16 @@ class Client:
         self.opener = opener()
 
     def assert_binding(self):
-        if hashlib.sha256(private_token(self.token_file).encode()).hexdigest() != self.fingerprint:
+        token = private_token(self.token_file)
+        if hashlib.sha256(token.encode()).hexdigest() != self.fingerprint:
             raise AlertsUnavailable('credential_binding_changed')
+        return token
 
     def call(self, method, path, shape, value=None):
-        self.assert_binding()
+        token = self.assert_binding()
         request = urllib.request.Request(self.base + path, method=method,
             data=json.dumps(value).encode() if value is not None else None,
-            headers={'Authorization': 'Bearer ' + private_token(self.token_file),
+            headers={'Authorization': 'Bearer ' + token,
                      'Content-Type': 'application/json'})
         try:
             with self.opener.open(request, timeout=5) as response:
@@ -131,12 +133,17 @@ class Sender:
         self.verified = False
         self.next_send = 0
 
-    def call(self, method, payload):
+    def assert_binding(self):
         self.provider.assert_binding()
         if private_token(self.token_file) != self.token:
             raise AlertsUnavailable('bot_binding_changed')
+
+    def call(self, method, payload):
+        self.assert_binding()
         request = urllib.request.Request(f'{self.base}/bot{self.token}/{method}',
             data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
+        if method == 'sendMessage' and not self.provider.authorized(self.provider.human):
+            raise AlertsUnavailable('receiving_grant_unavailable')
         try:
             try:
                 response = self.opener.open(request, timeout=8)
@@ -232,9 +239,13 @@ class Receiver:
         finally:
             db.close()
 
-    def authorized(self):
+    def assert_binding(self):
         self.provider.assert_binding()
         self.client.assert_binding()
+        self.sender.assert_binding()
+
+    def authorized(self):
+        self.assert_binding()
         if not self.provider.authorized(self.provider.human):
             raise AlertsUnavailable('receiving_grant_unavailable')
 
