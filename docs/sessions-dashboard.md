@@ -73,6 +73,11 @@ Telegram WebView authentication/phone acceptance receipt. Keep those separate.
 - Refresh is bounded and cached for eight seconds. The client requests every ten
   seconds while visible and stops requesting when suspended. Stale/error states
   disable the Stop control. Native connection failures never become idle.
+  The first authenticated observation runs once even if the WebView initially
+  reports hidden; manual Refresh also runs independently of that flag. HTTP
+  reads/authentication have a20s client deadline; Stop has30s. A timeout restores
+  feedback/retry controls without replaying an uncertain Stop. Control remains
+  hidden and disabled until an authenticated observation enables it.
 
 ## Stop and recovery
 

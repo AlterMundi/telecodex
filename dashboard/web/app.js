@@ -38,17 +38,33 @@ const elapsed = (n) =>
       ? `${n}s`
       : `${Math.floor(n / 60)}m ${n % 60}s`;
 async function api(route, body) {
-  const response = await fetch(`api/${route}`, {
-    method: body ? "POST" : "GET",
-    credentials: "same-origin",
-    headers: body
-      ? { "Content-Type": "application/json", "X-Dashboard-CSRF": csrf || "" }
-      : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const value = await response.json();
-  if (!response.ok) throw new Error(value.detail || "Request unavailable");
-  return value;
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    route === "stop" ? 30000 : 20000,
+  );
+  try {
+    const response = await fetch(`api/${route}`, {
+      signal: controller.signal,
+      method: body ? "POST" : "GET",
+      credentials: "same-origin",
+      headers: body
+        ? { "Content-Type": "application/json", "X-Dashboard-CSRF": csrf || "" }
+        : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.detail || "Request unavailable");
+    return value;
+  } catch (e) {
+    if (controller.signal.aborted)
+      throw new Error(route === "session"
+        ? "Connection timed out. Close and reopen Sessions"
+        : "Request timed out. Refresh to check current state");
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 function metric(label, value, detail) {
   const box = el("div", undefined, "metric");
@@ -280,15 +296,17 @@ function render() {
     stale || !snapshot.sessions.length || pendingNonce !== undefined;
   receipt(snapshot.stop);
 }
-async function refresh() {
-  if (refreshing || !authenticated || document.hidden) return;
+async function refresh(force = false) {
+  if (refreshing || !authenticated || (document.hidden && !force)) return;
   refreshing = true;
   $("#refresh").disabled = true;
+  if (!snapshot) $("#overview").textContent = "Reading native state…";
   try {
     snapshot = await api("state");
     render();
   } catch (e) {
     $("#feedback").textContent = e.message;
+    if (!snapshot) $("#overview").textContent = "State unavailable";
     if (snapshot && Date.now() / 1000 - snapshot.observed_at > 30)
       $("#freshness").textContent = "Stale observation";
     $("#stop").disabled = true;
@@ -301,7 +319,7 @@ function schedule() {
   clearInterval(timer);
   if (!document.hidden) timer = setInterval(refresh, 10000);
 }
-$("#refresh").addEventListener("click", refresh);
+$("#refresh").addEventListener("click", () => refresh(true));
 for (const button of document.querySelectorAll("[data-filter]"))
   button.addEventListener("click", () => {
     filter = button.dataset.filter;
@@ -360,9 +378,13 @@ tg?.ready?.();
   try {
     await api("session", { init_data: tg.initData });
     authenticated = true;
-    await refresh();
+    // Some WebViews report hidden during launch and never emit visibilitychange.
+    // Fetch the first observation once; periodic refresh still requires visibility.
+    await refresh(true);
     schedule();
   } catch (e) {
     $("#feedback").textContent = e.message;
+    $("#overview").textContent = "Connection unavailable";
+    $("#refresh").disabled = true;
   }
 })();
