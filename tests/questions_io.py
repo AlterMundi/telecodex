@@ -64,6 +64,8 @@ class Journey:
                         result = [owner.updates.popleft()] if owner.updates else []
                     if not result:
                         time.sleep(.03)
+                elif method == 'createForumTopic' and hasattr(owner, 'created_topic'):
+                    result = owner.created_topic(payload)
                 elif method == 'sendMessage':
                     with owner.lock:
                         owner.message_id += 1
@@ -81,6 +83,8 @@ class Journey:
                     result = True
                 if owner.mode == 'restart_gap' and method == 'sendMessage' and payload['text'].startswith('Codex question'):
                     owner.delivery_reply.wait(timeout=10)
+                if method == 'sendMessage' and hasattr(owner, 'before_send_message_reply'):
+                    owner.before_send_message_reply(payload)
                 body = json.dumps({'ok': True, 'result': result}).encode()
                 self.send_response(200)
                 self.send_header('Content-Length', str(len(body)))
@@ -402,7 +406,7 @@ def scenario(binary, mode):
             j.wait(lambda: j.row("SELECT COUNT(*) FROM human_interactions WHERE state='pending'")==[(2,)])
             j.admit('/pending');j.wait(lambda:any('Human requests · 2 pending for you' in m[1]['text'] for m in j.messages))
             picker=next(m for m in reversed(j.messages) if 'Human requests · 2 pending for you' in m[1]['text'])
-            control=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if b['text'].startswith('Parallel'))
+            control=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if 'Parallel' in b['text'])
             previous=next(m for m in reversed(j.messages) if 'Second independent question' in m[1]['text'])
             j.admit(callback=(picker[0],control));j.wait(lambda:any('Second independent question' in m[1]['text'] and m[0]['message_id']!=previous[0]['message_id'] for m in j.messages))
             second=next(m for m in reversed(j.messages) if 'Second independent question' in m[1]['text'])
@@ -451,7 +455,7 @@ def scenario(binary, mode):
             j.stop();j.start();j.admit('/pending')
             j.wait(lambda:any('Human requests · 2 pending for you' in m[1]['text'] for m in j.messages))
             picker=next(m for m in reversed(j.messages) if 'Human requests · 2 pending for you' in m[1]['text'])
-            opener=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if b['text'].startswith('Phone playback'))
+            opener=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if 'Phone playback' in b['text'])
             j.admit(callback=(picker[0],opener),user=101);j.admit(callback=(picker[0],opener),topic=8)
             j.wait(lambda:len([m for m in j.messages if 'not available for you' in m[1]['text']])>=2)
             j.admit(callback=(picker[0],opener));j.wait(lambda:any(m[1]['text'].startswith('Human request: Phone playback') for m in j.messages))
@@ -466,7 +470,7 @@ def scenario(binary, mode):
             assert j.row("SELECT state FROM human_interactions WHERE json_extract(payload_json,'$.title')='Check wording'")==[('pending',)]
             j.admit('/pending');j.wait(lambda:any('Human requests · 1 pending for you' in m[1]['text'] for m in j.messages))
             picker=next(m for m in reversed(j.messages) if 'Human requests · 1 pending for you' in m[1]['text'])
-            opener=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if b['text'].startswith('Check wording'))
+            opener=next(b['callback_data'] for row in picker[1]['reply_markup']['inline_keyboard'] for b in row if 'Check wording' in b['text'])
             j.admit(callback=(picker[0],opener));j.wait(lambda:any(m[1]['text'].startswith('Human request: Check wording') for m in j.messages))
             task=next(m for m in reversed(j.messages) if m[1]['text'].startswith('Human request: Check wording'))
             j.wait(lambda:j.row('SELECT message_id FROM human_interaction_messages WHERE message_id=?',(task[0]['message_id'],)))

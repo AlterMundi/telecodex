@@ -16,7 +16,19 @@ pub(super) async fn disarm_text(shared: &AppShared, key: SessionKey, user: i64) 
 #[serde(deny_unknown_fields)]
 struct Declaration {
     schema: String,
+    #[serde(default)]
     requests: Vec<Task>,
+    #[serde(default)]
+    withdrawals: Vec<Withdrawal>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Withdrawal {
+    id: String,
+    reason: String,
+    #[serde(default)]
+    links: Vec<Link>,
 }
 
 #[derive(Deserialize)]
@@ -36,7 +48,7 @@ struct Link {
     url: String,
 }
 
-pub(super) fn register_tasks(
+pub(super) async fn register_tasks(
     shared: &AppShared,
     session: SessionKey,
     user: i64,
@@ -72,7 +84,9 @@ pub(super) fn register_tasks(
     }
     let declaration: Declaration =
         serde_json::from_slice(&bytes).map_err(|_| anyhow!("invalid human request declaration"))?;
-    if declaration.schema != "telecodex.human-requests/v1" || declaration.requests.len() > 10 {
+    if declaration.schema != "telecodex.human-requests/v1"
+        || declaration.requests.len() + declaration.withdrawals.len() > 10
+    {
         bail!("unsupported human request declaration schema or count");
     }
     let mut ids = std::collections::HashSet::new();
@@ -121,7 +135,52 @@ pub(super) fn register_tasks(
             },
         ));
     }
-    shared.store.save_human_tasks(session, &tasks)?;
+    let mut withdrawals = Vec::new();
+    for entry in declaration.withdrawals {
+        if entry.id.is_empty()
+            || entry.id.len() > 64
+            || !entry
+                .id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+            || !ids.insert(entry.id.clone())
+            || entry.reason.trim().is_empty()
+            || entry.reason.chars().count() > 2000
+            || entry.links.len() > 5
+        {
+            bail!("unsupported human request withdrawal");
+        }
+        for link in &entry.links {
+            let url = reqwest::Url::parse(&link.url).context("invalid withdrawal evidence link")?;
+            if !matches!(url.scheme(), "http" | "https")
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || link.url.len() > 2048
+                || link.label.trim().is_empty()
+                || link.label.chars().count() > 80
+            {
+                bail!("unsupported withdrawal evidence link");
+            }
+        }
+        withdrawals.push(crate::store::TaskWithdrawal {
+            id: entry.id,
+            reason: entry.reason,
+            links: serde_json::to_value(entry.links)?,
+        });
+    }
+    // Serialize retirement with capture arming. A ForceReply HTTP response may
+    // arrive after the task was withdrawn; the callback rechecks under this lock.
+    let mut selected = shared.pending_task_text.lock().await;
+    shared
+        .store
+        .save_human_requests(session, &tasks, Some((user, native, turn, &withdrawals)))?;
+    // A retired next-text selection must not capture later ordinary conversation.
+    if selected
+        .get(&(session, user))
+        .is_some_and(|id| withdrawals.iter().any(|w| &w.id == id))
+    {
+        selected.remove(&(session, user));
+    }
     Ok(())
 }
 
@@ -155,6 +214,7 @@ async fn send_item(
     } else {
         "controls are opening"
     } {
+        "withdrawn" => "withdrawn by the agent; no human completion claimed",
         "source_changed" => "source session changed",
         "unknown" => "outcome unknown",
         "answering" => "answer receipt pending",
@@ -164,6 +224,11 @@ async fn send_item(
         "Human request: {}\n\n{}\n\n{} · {}",
         item.title, item.action, kind, state
     );
+    if let Some(withdrawal) = item.source["agentWithdrawal"].as_object() {
+        if let Some(reason) = withdrawal.get("reason").and_then(|v| v.as_str()) {
+            text.push_str(&format!("\n\nWithdrawal reason: {reason}"));
+        }
+    }
     if reply {
         text.push_str("\n\nSend your next text as feedback, or reply to this message. Commands and attachments do not answer this request; /stop clears text capture.");
     }
@@ -276,11 +341,22 @@ pub(super) async fn handle_callback(
             disarm_text(shared, key, user).await;
             questions::disarm_text(shared, key, user).await;
             send_item(shared, message, &item, true).await?;
-            shared
-                .pending_task_text
-                .lock()
-                .await
-                .insert((key, user), item.id.clone());
+            let mut capture = shared.pending_task_text.lock().await;
+            if shared
+                .store
+                .interaction(key, user, &item.id)?
+                .is_some_and(|current| current.kind == "task" && current.state == "pending")
+            {
+                capture.insert((key, user), item.id.clone());
+            } else {
+                drop(capture);
+                questions::notice(
+                    shared,
+                    message,
+                    "This request is no longer pending. Text capture was not armed.",
+                )
+                .await?;
+            }
         }
         "done" | "cancel" => {
             let state = if action == "done" {

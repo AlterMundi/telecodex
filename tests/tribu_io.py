@@ -22,6 +22,7 @@ class TribuJourney(Journey):
         self.release = threading.Event()
         self.sends = []
         self.turn_sequence = 0
+        self.metadata_completed = False
         self.private = self.root / 'private'
         self.private.mkdir(mode=0o700)
 
@@ -40,7 +41,7 @@ class TribuJourney(Journey):
         with sqlite3.connect(self.root / 'state.sqlite') as db:
             columns = {r[1] for r in db.execute('PRAGMA table_info(sessions)')}
             row = {'chat_id':100,'thread_id':7,'creator_user_id':100,'cwd':str(self.root),
-                   'session_title':'Tribu','force_fresh_thread':1,'busy':0,
+                   'session_title':'Tribu' if self.mode == 'unknown' else 'I/O','force_fresh_thread':1,'busy':0,
                    'approval_policy':'never','sandbox_mode':'read-only','search_mode':'disabled',
                    'add_dirs_json':'[]','created_at':'2026-01-01T00:00:00Z','updated_at':'2026-01-01T00:00:00Z'}
             assert set(row) <= columns
@@ -126,18 +127,19 @@ max_pending=20
                 self.submitted.set()
                 if self.mode=='queue' and self.turn_sequence==1:
                     self.release.wait(5)
-                if self.mode=='queue': finish(turn,'completed')
+                if self.mode=='queue' or self.mode=='recovery' and self.turn_sequence>1: finish(turn,'completed')
             elif method=='turn/interrupt':
                 self.interrupted.set()
                 send({'id':ident,'result':{}})
-                if self.mode!='unknown':
+                if self.mode not in ('unknown','recovery'):
                     with self.lock:
                         primary=self.sends[0]
                     primary[1]({'method':'turn/completed','params':{'threadId':'tribu-native','turn':{'id':p['turnId'],'status':'interrupted'}}})
             elif method=='turn/steer':
                 raise AssertionError('dedicated private input must queue, never steer')
             elif method=='thread/turns/list':
-                send({'id':ident,'result':{'data':[],'nextCursor':None}})
+                data = [{'id':'turn-1','status':'completed','items':[]}] if self.metadata_completed else []
+                send({'id':ident,'result':{'data':data,'nextCursor':None}})
             elif ident is not None: send({'id':ident,'result':{}})
 
 
@@ -149,6 +151,23 @@ def scenario(binary, mode):
         unauthorized = j.admit('another admin is not the paired human', user=101)
         j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?',(unauthorized,)) == [('handled',)])
         assert j.turn_sequence == 0
+        if mode == 'queue':
+            # A detached collector cannot allow a new writer, even after restart
+            # or through a callback. Only the deployment controller releases it.
+            hold_key = 'native_writer_hold:100:7'
+            with sqlite3.connect(j.root / 'state.sqlite') as db:
+                db.execute('INSERT INTO bot_state(key,value) VALUES(?,?)', (hold_key, '{}'))
+            for restarted in (False, True):
+                if restarted:
+                    j.stop(); j.start(); j.wait(j.ready)
+                held = j.admit('do not open another writer')
+                j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?', (held,)) == [('handled',)])
+                source = next(m[0] for m in reversed(j.messages) if m[0].get('message_thread_id') == 7)
+                pressed = j.admit(callback=(source, 'goal-resume:stale-button'))
+                j.wait(lambda: j.row('SELECT status FROM incoming_updates WHERE update_id=?', (pressed,)) == [('handled',)])
+                assert j.turn_sequence == 0 and not j.row('SELECT id FROM tribu_admissions')
+            with sqlite3.connect(j.root / 'state.sqlite') as db:
+                db.execute('DELETE FROM bot_state WHERE key=?', (hold_key,))
         first=j.admit('first human request')
         j.wait(j.submitted.is_set)
         if mode=='queue':
@@ -180,11 +199,24 @@ def scenario(binary, mode):
             j.wait(j.ready)
             assert j.local_status()['undetermined_count']==1
             assert j.turn_sequence==1
-        assert all(m.get('params',{}).get('clientUserMessageId')==f'private:123:{first}' or mode=='queue' for m in j.rpc if m.get('method')=='turn/start')
+            if mode=='recovery':
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(5);s.connect(str(j.private/'attention.sock'))
+                    s.sendall(b'{"op":"reconcile"}\n')
+                    state=json.loads(s.recv(8192))
+                    assert state['ok'] and state['result']['undetermined_count']==1
+                assert j.turn_sequence==1
+                j.metadata_completed=True
+                j.admit('new human request after verified completion')
+                j.wait(lambda:j.turn_sequence==2)
+                j.wait(lambda:j.local_status()['undetermined_count']==0)
+                assert j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=7')==[('tribu-native',)]
+                j.wait(lambda:j.row('SELECT state FROM tribu_admissions ORDER BY created_at')==[('completed',),('completed',)])
+        assert all(m.get('params',{}).get('clientUserMessageId')==f'private:123:{first}' or mode in ('queue','recovery') for m in j.rpc if m.get('method')=='turn/start')
         print(json.dumps({'scenario':'tribu_'+mode,'persistent_writer':True,'no_automatic_replay':True}),flush=True)
     finally:j.close()
 
 
 if __name__=='__main__':
-    for mode in sys.argv[2:] or ['queue','pause','unknown']:
+    for mode in sys.argv[2:] or ['queue','pause','unknown','recovery']:
         scenario(str(pathlib.Path(sys.argv[1]).resolve()),mode)

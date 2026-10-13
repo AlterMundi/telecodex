@@ -63,6 +63,8 @@ class Goals(Journey):
                 if opcode!=1:continue
                 m=json.loads(bytes(v^mask[i%4] for i,v in enumerate(raw)));method=m.get('method');ident=m.get('id');p=m.get('params',{})
                 with self.lock:self.rpc.append(m)
+                if hasattr(self, 'handle_extra_rpc') and self.handle_extra_rpc(m, send):
+                    continue
                 if method=='initialize':send({'id':ident,'result':{}})
                 elif method in ('thread/start','thread/resume'):
                     if method=='thread/start':self.thread_sequence+=1;thread=f'native-topic-{self.thread_sequence+6}'

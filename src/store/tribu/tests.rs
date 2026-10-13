@@ -152,6 +152,110 @@ fn no_submission_error_is_not_an_unknown_model_and_pause_blocks_prepared_work() 
 }
 
 #[test]
+fn explicit_recovery_requeues_only_authenticated_never_submitted_source_once() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("store.sqlite");
+    let store = open(&path);
+    let key = SessionKey::new(1, Some(2));
+    store
+        .tribu_admit(
+            key,
+            "old",
+            Some("old-source"),
+            &json!({"id":"old-source"}),
+            20,
+        )
+        .unwrap();
+    assert!(store.tribu_reserve(key, "old").unwrap());
+    store.tribu_link_turn("old", 1).unwrap();
+    store
+        .tribu_native_thread(key, "old", "native-thread")
+        .unwrap();
+    store.tribu_submitting(key, "old").unwrap();
+    store.tribu_native_turn("old", "native-turn", None).unwrap();
+    drop(store);
+    let store = open(&path);
+    let record = json!({"id":"new-source","revision":"current","text":"current human input"});
+    assert_eq!(
+        store
+            .tribu_admit(key, "new", Some("new-source"), &record, 20)
+            .unwrap()
+            .state,
+        "blocked-uncertain"
+    );
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "new", "new-source", &record, 20)
+            .is_err()
+    );
+    store
+        .tribu_reconcile("old", "native-turn", "completed")
+        .unwrap();
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "old", "old-source", &json!({"id":"old-source"}), 20)
+            .is_err()
+    );
+    assert!(
+        store
+            .tribu_retry_unsubmitted(
+                SessionKey::new(1, Some(3)),
+                "new",
+                "new-source",
+                &record,
+                20
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "new", "wrong-source", &record, 20)
+            .is_err()
+    );
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "new", "new-source", &json!({"id":"substitution"}), 20)
+            .is_err()
+    );
+    store.tribu_pause(key, true).unwrap();
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "new", "new-source", &record, 20)
+            .is_err()
+    );
+    store.tribu_pause(key, false).unwrap();
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "new", "new-source", &record, 0)
+            .is_err()
+    );
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "new", "new-source", &record, 20)
+            .unwrap()
+            .fresh
+    );
+    assert!(
+        !store
+            .tribu_retry_unsubmitted(key, "new", "new-source", &record, 20)
+            .unwrap()
+            .fresh
+    );
+    assert!(store.tribu_reserve(key, "new").unwrap());
+    store.tribu_link_turn("new", 2).unwrap();
+    store.tribu_finish("new").unwrap();
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "new", "new-source", &record, 20)
+            .is_err()
+    );
+    assert_eq!(
+        store.tribu_admission("new").unwrap().unwrap().state,
+        "not-submitted"
+    );
+}
+
+#[test]
 fn recorded_terminal_survives_crash_before_presentation_finish() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("store.sqlite");

@@ -40,6 +40,10 @@ An opt-in [reaction capture experiment](docs/reaction-capture.md) preserves
 Telegram reaction events in the private input journal without invoking Codex.
 Native delivery in private bot topics still requires a real controlled exchange.
 
+The opt-in [Nexus Mini App adapter](docs/nexus-conversation.md) brings selected
+human contributions into an existing native topic, retaining source references,
+observed replies and receipt-only recovery without resetting the conversation.
+
 ## ✨ What it is
 
 **Telecodex** is a Rust bridge that connects a local `codex` CLI instance to Telegram.
@@ -535,3 +539,10 @@ goal. Files remain available to native sessions after completion or clearing;
 clearing goal metadata does not erase its referenced work. Unsupported native
 APIs report a command error instead of forwarding `/goal` as model text. Goal
 commands remain disabled in the dedicated bounded Tribu attention topic.
+
+## Daimon Field coordination
+
+Cross-repository decisions and repository-specific implications are indexed in
+[the Daimon Field projection](docs/daimon-field.md). The existing private
+[AlterMundi Project 13](https://github.com/orgs/AlterMundi/projects/13) is the canonical decision and roadmap surface;
+repository access and Project access are separate.

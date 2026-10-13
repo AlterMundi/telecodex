@@ -18,10 +18,17 @@ not infer or create requests from ordinary messages.
 
 ## Reopen without scrolling
 
-`/pending` and `/questions` are equivalent. They list the requesting allowed
-human's requests in this chat/topic, pending first, followed by recent resolved
-records. Pages contain up to 50 requests with Previous/Next navigation. Select
-an item to reopen its current native question or inspect its saved human task.
+`/pending` and `/questions` are equivalent. They show this allowed human's
+unresolved requests in the selected topic, with lifecycle at the start of each
+short mobile label. **History** opens answered/completed/cancelled/withdrawn and
+expired/source-changed records separately. Unconfirmed receipts remain visible
+for inspection without a new answer channel or replay. Pending, receipt and
+history counts cover the whole human/topic scope, not the current page. Pages
+hold up to 50 entries and clearly show the displayed range.
+
+Set `telegram.human_request_language = "es"` for Spanish list labels/headings or
+`"en"` (default) for English. This listener preference does not alter native
+question content, task text, incoming-update serialization or authorization.
 A compact count and **Open human requests** button appear on the activity card
 and `/status`. The observer reads only scoped ledger metadata, never task text.
 Automatic cards count the topic creator's requests; requested `/status` counts
@@ -63,6 +70,9 @@ Its answered state means the human feedback was recorded. Its detail separately
 shows the original input journal's delivery state, including unknown outcomes;
 it does not assert native acceptance. **Done** explicitly records human-reported
 completion and **Cancel request** cancels only that task. Neither starts inference.
+An agent withdrawal is separately attributed and displays **Withdrawn**, with
+its explicit reason. It does not assert human completion or product acceptance.
+The original task text/source and prior resolved records are retained.
 Old controls or quoted replies after resolution cannot create a new turn.
 
 ## Explicit declaration through the current turn workspace
@@ -100,6 +110,50 @@ uploaded as an artifact. This workspace transport works with existing warm
 native sessions; it requires neither dynamic-tool registration on thread/start
 nor a native fork. A task is not marked complete by elapsed time or successful
 code/tools. Declare only actions that remain for the human at completion.
+
+## Withdraw an obsolete agent-issued task
+
+The same bounded manifest may include optional `withdrawals`. An empty or absent
+`requests` list is valid. For example:
+
+```json
+{
+  "schema": "telecodex.human-requests/v1",
+  "withdrawals": [
+    {
+      "id": "retained-server-request-id",
+      "reason": "The requested handoff is now observed. This does not approve the product.",
+      "links": [{"label": "Handoff evidence", "url": "https://example.org/receipt"}]
+    }
+  ]
+}
+```
+
+Use the exact retained task ID, not an invented ID or its originating manifest's
+per-turn client ID. Obtain it from authorized metadata for this human/topic;
+never scan another conversation's tasks. The manifest cannot provide a human,
+topic, thread, source turn or completion state. There are at most ten combined
+requests/withdrawals, distinct IDs, a nonempty reason up to 2000 characters, and
+the same bounded public evidence-link rules as new tasks. Reasons/links report
+an observed source or a deliberate retirement decision, never instructions.
+
+The bridge derives the operation's provenance from the successfully completed
+native turn's observed thread and admitted human. The store verifies that current
+binding/turn and the original task's exact human/topic/native thread, then applies
+new tasks and withdrawals in one transaction. Only a still-pending agent-issued
+task can be withdrawn. Native questions, unconfirmed receipts and already
+answered/completed/cancelled tasks are refused, preserving their outcomes. Any
+invalid operation rolls back the entire declaration and retains its manifest.
+
+Withdrawal closes the task in the existing ledger with separate agent provenance
+(`source.agentWithdrawal`: reason, links, current source turn and time), and an
+explicit `human_task_withdrawn_by_agent` audit event. An identical repeated
+withdrawal is a no-op; changed content is refused. The persisted state remains
+`cancelled` for older-runtime compatibility and is projected as `withdrawn` by
+this version. Original text, source references and history stay intact. Retired
+text selection is cleared; stale buttons and quoted replies cannot revive the
+request or become a fresh native turn. Withdrawal never creates inference,
+marks a human action complete or establishes phone/product acceptance.
 
 ## Qualification and deployment
 

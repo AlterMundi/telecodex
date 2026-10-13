@@ -28,6 +28,9 @@ pub enum BridgeCommand {
     Fork {
         title: String,
     },
+    Merge {
+        args: String,
+    },
     Topic {
         title: Option<String>,
     },
@@ -46,12 +49,18 @@ pub enum BridgeCommand {
     Goal {
         args: String,
     },
+    Nexus {
+        args: String,
+    },
     Questions,
     Icon,
     Rename {
         title: String,
     },
     Stop,
+    StopControl {
+        args: String,
+    },
     RetryTurn {
         turn_id: i64,
     },
@@ -156,6 +165,9 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/fork" => BridgeCommand::Fork {
             title: required_arg(args, "/fork <topic name>")?.to_string(),
         },
+        "/merge" => BridgeCommand::Merge {
+            args: args.to_string(),
+        },
         "/use" => BridgeCommand::Use {
             thread_id_prefix: required_arg(args, "/use <thread_id_prefix|latest>")?.to_string(),
         },
@@ -171,12 +183,18 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
         "/goal" => BridgeCommand::Goal {
             args: args.trim().to_string(),
         },
+        "/nexus" => BridgeCommand::Nexus {
+            args: args.trim().to_string(),
+        },
         "/questions" | "/pending" => BridgeCommand::Questions,
         "/icon" => BridgeCommand::Icon,
         "/rename" => BridgeCommand::Rename {
             title: required_arg(args, "/rename <new name>")?.to_string(),
         },
-        "/stop" => BridgeCommand::Stop,
+        "/stop" if args.trim().is_empty() => BridgeCommand::Stop,
+        "/stop" => BridgeCommand::StopControl {
+            args: args.trim().to_string(),
+        },
         "/retry" | "/retry_turn" | "/retry-turn" => BridgeCommand::RetryTurn {
             turn_id: parse_i64_arg(args, "/retry <turn_id>")?,
         },
@@ -246,6 +264,9 @@ pub fn parse_command(command: &str, args: &str, original_text: &str) -> Result<P
 
 pub fn command_help(command: &str, args: &str) -> Option<CommandHelp> {
     match command {
+        "/merge" => Some(text_help(
+            "Usage: /merge Topic [--both | --new \"Name\"] [--focus \"Theme\"]\n/merge status\n/merge resume ID",
+        )),
         "/approval" => Some(choice_help(
             "Approval policy",
             &[
@@ -333,44 +354,132 @@ pub fn command_help(command: &str, args: &str) -> Option<CommandHelp> {
 
 pub fn default_bot_commands() -> Vec<BotCommand> {
     vec![
-        bot_command("help", "Show Codex help"),
-        bot_command("goal", "Manage the native session goal"),
-        bot_command("status", "Show status for this session"),
-        bot_command("questions", "Open pending questions in this topic"),
-        bot_command("pending", "Open human requests and their current states"),
-        bot_command("icon", "Choose an icon for this Telegram topic"),
-        bot_command("rename", "Rename this session and Telegram topic"),
-        bot_command("login", "Log in to Codex with device code"),
-        bot_command("logout", "Remove stored Codex credentials"),
-        bot_command("new", "Start a fresh Codex session in this topic"),
-        bot_command("fork", "Fork this conversation into a named topic"),
-        bot_command("topic", "Create a new Telegram topic from this session"),
-        bot_command("cd", "Set session working directory"),
-        bot_command("pwd", "Show current working directory"),
-        bot_command("model", "Set or show current model"),
-        bot_command("think", "Set or show reasoning effort"),
-        bot_command("plan", "Select native Plan mode for the next turn"),
-        bot_command("default", "Return to native default mode for the next turn"),
-        bot_command("fast", "Set or show fast mode"),
-        bot_command("prompt", "Set or show session prompt"),
-        bot_command("approval", "Set approval policy"),
-        bot_command("sandbox", "Set sandbox mode"),
-        bot_command("search", "Set web search mode"),
-        bot_command("add_dir", "Add writable directory"),
-        bot_command("limits", "Show latest Codex rate limits snapshot"),
-        bot_command("lane_check", "Show lane check for this topic"),
-        bot_command("review", "Run codex review"),
-        bot_command("environments", "Show importable Codex environments"),
-        bot_command("sessions", "List sessions in this chat"),
-        bot_command("history", "Browse messages in the selected Codex session"),
-        bot_command("copy", "Resend the last assistant reply"),
-        bot_command("clear", "Start a fresh Codex session on the next turn"),
-        bot_command("stop", "Stop the active turn"),
-        bot_command("retry", "Retry a failed or cancelled turn"),
-        bot_command("restart_bot", "Admin: restart the bot process"),
-        bot_command("allow", "Admin: allow a Telegram user"),
-        bot_command("deny", "Admin: deny a Telegram user"),
-        bot_command("role", "Admin: set user role"),
+        bot_command("help", "/help - native Codex help"),
+        bot_command(
+            "goal",
+            "/goal [objective|edit [objective]|pause|resume|clear] - no argument shows the goal",
+        ),
+        bot_command(
+            "status",
+            "/status - activity, goal, weekly allowance and reset time",
+        ),
+        bot_command(
+            "questions",
+            "/questions - reopen pending questions in this topic",
+        ),
+        bot_command(
+            "pending",
+            "/pending - reopen questions and durable human tasks",
+        ),
+        bot_command("icon", "/icon - open the topic icon picker"),
+        bot_command(
+            "rename",
+            "/rename <Name> - rename this topic and native session",
+        ),
+        bot_command("login", "/login - start native device-code login"),
+        bot_command("logout", "/logout - remove the current native credentials"),
+        bot_command(
+            "new",
+            "/new [Name] - start a fresh native session in this topic",
+        ),
+        bot_command(
+            "fork",
+            "/fork <Name> - create a new topic; reply to a message to choose the context cutoff",
+        ),
+        bot_command(
+            "merge",
+            "/merge <Topic> [--both|--new \"Name\"] [--focus \"Theme\"]; --both updates both, --new creates a topic; /merge status or /merge resume <ID>",
+        ),
+        bot_command(
+            "topic",
+            "/topic [Name] - create an independent topic using this session's settings",
+        ),
+        bot_command(
+            "cd",
+            "/cd <absolute_path> - change this session's working directory",
+        ),
+        bot_command("pwd", "/pwd - show this session's working directory"),
+        bot_command(
+            "model",
+            "/model [Name|default] - show choices or select a model",
+        ),
+        bot_command(
+            "think",
+            "/think [effort|default] - show choices or set a model-supported effort, e.g. high",
+        ),
+        bot_command(
+            "plan",
+            "/plan [prompt] - select Plan mode and optionally start a turn",
+        ),
+        bot_command(
+            "default",
+            "/default [prompt] - select default mode and optionally start a turn",
+        ),
+        bot_command("fast", "/fast [on|off|status] - set or inspect fast mode"),
+        bot_command(
+            "prompt",
+            "/prompt [text|clear] - show, replace or clear the session prompt",
+        ),
+        bot_command(
+            "approval",
+            "/approval <never|on-request|untrusted> - choose the approval policy",
+        ),
+        bot_command(
+            "sandbox",
+            "/sandbox <read-only|workspace-write|danger-full-access> - choose the sandbox",
+        ),
+        bot_command(
+            "search",
+            "/search <off|cached|live> - choose the web search mode",
+        ),
+        bot_command(
+            "add_dir",
+            "/add_dir <absolute_path> - add a writable directory",
+        ),
+        bot_command("limits", "/limits - show the native rate-limit snapshot"),
+        bot_command("lane_check", "/lane_check - inspect routing for this topic"),
+        bot_command(
+            "review",
+            "/review [--uncommitted|--base branch|--commit sha] [--title title] [prompt]",
+        ),
+        bot_command(
+            "environments",
+            "/environments - list importable native environments",
+        ),
+        bot_command(
+            "sessions",
+            "/sessions - list native sessions linked to this chat",
+        ),
+        bot_command(
+            "history",
+            "/history - browse the selected native session's messages",
+        ),
+        bot_command("copy", "/copy - resend the last assistant reply"),
+        bot_command(
+            "clear",
+            "/clear - create a fresh native session on the next turn",
+        ),
+        bot_command(
+            "stop",
+            "/stop [all|status [ID]|resume [ID]|restart [ID]|release [ID]] - bare: current turn; all: pause owned work; resume: continue retained work",
+        ),
+        bot_command(
+            "retry",
+            "/retry <turn_id> - retry a failed/cancelled turn without attachments",
+        ),
+        bot_command(
+            "restart_bot",
+            "/restart_bot - admin: restart this bot process",
+        ),
+        bot_command(
+            "allow",
+            "/allow <telegram_user_id> - admin: allow this user",
+        ),
+        bot_command("deny", "/deny <telegram_user_id> - admin: deny this user"),
+        bot_command(
+            "role",
+            "/role <telegram_user_id> <admin|user> - admin: set the user's role",
+        ),
     ]
 }
 
@@ -640,6 +749,7 @@ mod tests {
             ("/new test", ParsedInputKind::Bridge),
             ("/topic test", ParsedInputKind::Bridge),
             ("/fork Shared Resources", ParsedInputKind::Bridge),
+            ("/merge Living context --both", ParsedInputKind::Bridge),
             ("/cd /workspace/project", ParsedInputKind::Bridge),
             ("/pwd", ParsedInputKind::Bridge),
             ("/model gpt-5.4", ParsedInputKind::Bridge),

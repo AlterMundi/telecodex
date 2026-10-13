@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>Sessions · Telecodex</title>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="identity">
+          <svg class="resonance" viewBox="0 0 32 32" aria-hidden="true">
+            <circle cx="16" cy="16" r="13" />
+            <ellipse cx="16" cy="16" rx="7" ry="13" />
+            <ellipse cx="16" cy="16" rx="13" ry="5" />
+            <path d="M3 16h26M5 22c7-10 15 10 22-10" />
+          </svg>
+          <h1>Sessions</h1>
+        </div>
+        <span id="provider">Telecodex</span>
+      </header>
+      <div id="feedback" role="status" aria-live="polite">
+        Connecting to Telegram…
+      </div>
+      <div class="toolbar">
+        <span id="overview">Awaiting connection</span
+        ><button id="refresh" type="button" aria-label="Refresh sessions">
+          ↻
+        </button>
+      </div>
+      <details id="host" hidden>
+        <summary id="host-summary">Host metrics</summary>
+        <div id="metrics" class="metrics"></div>
+      </details>
+      <details id="operations" hidden>
+        <summary id="operations-summary">Operational alerts</summary>
+        <div id="alerts-state" role="status" aria-live="polite"></div>
+        <div id="incidents"></div>
+      </details>
+      <section id="work" hidden aria-labelledby="work-title">
+        <div class="section-title">
+          <h2 id="work-title">Conversations</h2>
+          <span id="count"></span>
+        </div>
+        <nav aria-label="Session filters" class="filters">
+          <button data-filter="attention" aria-pressed="true">Attention</button
+          ><button data-filter="all" aria-pressed="false">All</button>
+        </nav>
+        <div id="sessions"></div>
+      </section>
+      <section id="control" hidden aria-labelledby="control-title">
+        <details class="control-info">
+          <summary id="control-title">Stop scope</summary>
+          <p id="scope"></p>
+          <p class="note">
+            Pauses active goals and interrupts native turns. Native inactivity
+            does not certify that host subprocesses have stopped.
+          </p>
+        </details>
+        <button id="stop" type="button" class="stop" disabled>
+          Stop owned sessions
+        </button>
+        <div id="receipt" role="status" aria-live="polite"></div>
+      </section>
+      <footer><span id="freshness"></span><span>No model calls</span></footer>
+    </main>
+    <dialog id="confirm">
+      <h2 id="confirm-title">Stop these sessions?</h2>
+      <p id="confirm-scope"></p>
+      <p id="confirm-detail">
+        Previously paused or blocked goals stay unchanged. Work remains in its
+        native history.
+      </p>
+      <div class="dialog-actions">
+        <button id="cancel">Keep working</button
+        ><button id="approve" class="stop">Stop</button>
+      </div>
+    </dialog>
+  </body>
+</html>

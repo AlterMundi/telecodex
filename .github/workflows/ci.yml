@@ -26,16 +26,27 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: |
           python3 - <<'PY'
-          import os, subprocess
+          import os, subprocess, re
           base = os.environ['BASE_SHA']
           if not base or set(base) == {'0'}:
               files = ['Cargo.toml']
           else:
               files = subprocess.check_output(['git','diff','--name-only',base,os.environ['HEAD_SHA']], text=True).splitlines()
-          common = any(p in {'Cargo.toml','Cargo.lock','build.rs'} or not p.startswith(('src/','tests/','activity/','docs/','.github/')) and p not in {'README.md','LICENSE','.gitignore','config.example.toml'} for p in files)
-          text = common or '.github/workflows/ci.yml' in files or any(p.startswith('src/') or p.startswith('tests/') and not p.startswith('tests/activity') for p in files)
-          audio = common or any('audio' in p or 'transcrib' in p for p in files)
-          activity = common or any(p.startswith(('activity/','tests/activity')) for p in files)
+          common = any(p in {'Cargo.toml','Cargo.lock','build.rs'} or not p.startswith(('src/','tests/','activity/','dashboard/','docs/','.github/')) and p not in {'README.md','LICENSE','.gitignore','config.example.toml'} for p in files)
+          def workflow_job(source, name):
+              marker = '  ' + name + ':\n'
+              if marker not in source:
+                  return None
+              tail = source.split(marker, 1)[1]
+              next_job = re.search(r'^  [a-zA-Z0-9_-]+:\n', tail, re.M)
+              return (tail[:next_job.start()] if next_job else tail).rstrip()
+          current = open('.github/workflows/ci.yml').read()
+          previous = subprocess.check_output(['git','show',base+':.github/workflows/ci.yml'], text=True) if base and set(base) != {'0'} else ''
+          header_changed = current.split('jobs:',1)[0] != previous.split('jobs:',1)[0]
+          text_ci_changed = header_changed or workflow_job(current,'text') != workflow_job(previous,'text')
+          text = common or text_ci_changed or any(p.startswith('src/') or p.startswith('tests/') and not p.startswith(('tests/activity','tests/dashboard')) for p in files)
+          audio = common or header_changed or workflow_job(current,'audio') != workflow_job(previous,'audio') or any('audio' in p or 'transcrib' in p for p in files)
+          activity = common or header_changed or workflow_job(current,'activity') != workflow_job(previous,'activity') or any(p.startswith(('activity/','tests/activity','scripts/activity_indicator.py')) for p in files)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               for key, value in [('text',text),('audio',audio),('activity',activity)]:
                   out.write(f'{key}={str(value).lower()}\n')
@@ -69,7 +80,11 @@ jobs:
       - run: python3 -B tests/ingress_io.py target/release/telecodex
       - run: python3 -B tests/artifacts_io.py target/release/telecodex
       - run: python3 -B tests/questions_io.py target/release/telecodex
+      - run: python3 -B tests/pending_io.py target/release/telecodex
+      - run: python3 -B tests/merge_io.py target/release/telecodex
+      - run: python3 -B tests/stopping_io.py target/release/telecodex
       - run: python3 -B tests/goals_io.py target/release/telecodex
+      - run: python3 -B tests/nexus_io.py target/release/telecodex
       - run: python3 -B tests/icons_io.py target/release/telecodex
       - run: python3 -B tests/stickers_io.py target/release/telecodex
       - run: python3 -B tests/reactions_io.py target/release/telecodex
@@ -88,3 +103,28 @@ jobs:
           components: clippy
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-features
+
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r dashboard/requirements.lock
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
+        with:
+          toolchain: 1.95.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: AlterMundi/daimon-alerts
+          ref: d52c72102adc66078dd458cf870b2e1ac5727b1b
+          path: .alerts-core
+      - run: cargo build --locked --manifest-path .alerts-core/Cargo.toml
+      - run: python -B tests/dashboard_alerts_io.py
+        env:
+          ALERTS_CORE_SOURCE: .alerts-core
+      - run: python -B tests/dashboard_io.py
+      - run: node --check dashboard/web/app.js
+      - run: node tests/dashboard_ui.js

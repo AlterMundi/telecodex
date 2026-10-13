@@ -1,6 +1,6 @@
 use super::*;
 
-fn validate_title(title: &str) -> Result<&str> {
+pub(super) fn validate_title(title: &str) -> Result<&str> {
     let title = title.trim();
     if title.is_empty() || title.chars().count() > 128 || title.chars().any(char::is_control) {
         bail!("Use a name of 1–128 characters on one line.");

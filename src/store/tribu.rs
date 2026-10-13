@@ -186,6 +186,83 @@ impl Store {
         Ok(n == 1)
     }
 
+    /// Explicit owner recovery of a public input provably never submitted.
+    /// Current human source authentication belongs to the ingress adapter;
+    /// possible native effects, pause and destination fences remain durable.
+    pub fn tribu_retry_unsubmitted(
+        &self,
+        key: SessionKey,
+        id: &str,
+        source: &str,
+        record: &Value,
+        max_pending: usize,
+    ) -> Result<TribuAdmission> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (chat, topic, original, state, submitted, local, thread, turn, terminal) = tx.query_row(
+            "SELECT chat_id,topic_id,source,state,submitted,local_turn,native_thread,native_turn,terminal FROM tribu_admissions WHERE id=?",
+            [id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,Option<String>>(2)?,
+                r.get::<_,String>(3)?,r.get::<_,bool>(4)?,r.get::<_,Option<i64>>(5)?,
+                r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?)))?;
+        if chat != key.chat_id
+            || topic != key.thread_id
+            || original.as_deref() != Some(source)
+            || record["id"].as_str() != Some(source)
+            || record["private"] == true
+        {
+            bail!("Tribu retry destination or source mismatch");
+        }
+        if matches!(state.as_str(), "queued" | "reserved" | "running") {
+            let old = tx.query_row(
+                "SELECT record FROM tribu_admissions WHERE id=?",
+                [id],
+                |r| r.get::<_, String>(0),
+            )?;
+            return Ok(TribuAdmission {
+                id: id.into(),
+                state,
+                record: serde_json::from_str(&old)?,
+                fresh: false,
+            });
+        }
+        if submitted
+            || local.is_some()
+            || thread.is_some()
+            || turn.is_some()
+            || terminal.is_some()
+            || !matches!(
+                state.as_str(),
+                "blocked-uncertain"
+                    | "withdrawn-blocked"
+                    | "withdrawn-restart"
+                    | "withdrawn-worker"
+                    | "not-submitted-source-unavailable"
+            )
+        {
+            bail!("Tribu retry requires proven absence of native submission");
+        }
+        let blocked: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM bot_state WHERE key=?1 AND value='true') OR EXISTS(SELECT 1 FROM tribu_admissions WHERE chat_id=?2 AND topic_id=?3 AND state='undetermined')",
+            params![tribu_pause_key(key),key.chat_id,key.thread_id], |r| r.get(0))?;
+        let pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM tribu_admissions WHERE chat_id=? AND topic_id=? AND state IN ('queued','reserved','running')",
+            params![key.chat_id,key.thread_id], |r| r.get(0))?;
+        if blocked || pending >= max_pending as i64 {
+            bail!("Tribu retry blocked by pause, uncertain execution or full queue");
+        }
+        tx.execute(
+            "UPDATE tribu_admissions SET state='queued',record=?,updated_at=? WHERE id=?",
+            params![serde_json::to_string(record)?, now_string(), id],
+        )?;
+        tx.commit()?;
+        Ok(TribuAdmission {
+            id: id.into(),
+            state: "queued".into(),
+            record: record.clone(),
+            fresh: true,
+        })
+    }
+
     pub fn tribu_withdraw(&self, id: &str, reason: &str) -> Result<()> {
         self.conn.lock().expect("store mutex poisoned").execute("UPDATE tribu_admissions SET state=?1,updated_at=?2 WHERE id=?3 AND state IN ('queued','reserved')",params![reason,now_string(),id])?;
         Ok(())

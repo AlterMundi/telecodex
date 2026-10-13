@@ -17,6 +17,36 @@ pub struct HumanInteraction {
     pub source: serde_json::Value,
 }
 
+pub struct InteractionPage {
+    pub items: Vec<HumanInteraction>,
+    pub actionable_total: usize,
+    pub pending_total: usize,
+    pub history_total: usize,
+}
+#[derive(Debug, Clone)]
+pub struct TaskWithdrawal {
+    pub id: String,
+    pub reason: String,
+    pub links: serde_json::Value,
+}
+
+fn projected(
+    mut item: HumanInteraction,
+    state: String,
+    current: Option<String>,
+) -> HumanInteraction {
+    item.state = if matches!(state.as_str(), "pending" | "answering" | "unknown")
+        && current.as_deref() != Some(item.native_thread.as_str())
+    {
+        "source_changed".into()
+    } else if state == "cancelled" && item.source["agentWithdrawal"].is_object() {
+        "withdrawn".into()
+    } else {
+        state
+    };
+    item
+}
+
 impl Store {
     pub(super) fn init_interactions(&self) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
@@ -76,7 +106,9 @@ impl Store {
 
     #[cfg(test)]
     pub fn interactions(&self, key: SessionKey, user: i64) -> Result<Vec<HumanInteraction>> {
-        self.interactions_page(key, user, 0)
+        let mut pending = self.interactions_page(key, user, 0, false)?.items;
+        pending.extend(self.interactions_page(key, user, 0, true)?.items);
+        Ok(pending)
     }
 
     pub fn interactions_page(
@@ -84,35 +116,49 @@ impl Store {
         key: SessionKey,
         user: i64,
         offset: usize,
-    ) -> Result<Vec<HumanInteraction>> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        let mut stmt = conn.prepare("SELECT h.payload_json,h.state,s.codex_thread_id FROM human_interactions h
-            JOIN sessions s ON s.id=h.session_id JOIN users u ON u.tg_user_id=h.requester
-            WHERE s.chat_id=?1 AND s.thread_id=?2 AND h.requester=?3 AND u.allowed=1
-            ORDER BY CASE WHEN h.state IN ('pending','answering') THEN 0 ELSE 1 END,h.created_at DESC,h.id DESC LIMIT 51 OFFSET ?4")?;
-        stmt.query_map(
-            params![key.chat_id, key.thread_id, user, offset as i64],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                ))
-            },
-        )?
-        .map(|row| {
-            let (payload, state, current) = row?;
-            let mut item: HumanInteraction = serde_json::from_str(&payload)?;
-            item.state = if matches!(state.as_str(), "pending" | "answering" | "unknown")
-                && current.as_deref() != Some(item.native_thread.as_str())
-            {
-                "source_changed".into()
-            } else {
-                state
-            };
-            Ok(item)
+        history: bool,
+    ) -> Result<InteractionPage> {
+        // Counts and page share a read snapshot, including concurrent owner-local maintenance.
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let active =
+            "h.state IN ('pending','answering','unknown') AND h.native_thread=s.codex_thread_id";
+        let scope = "FROM human_interactions h JOIN sessions s ON s.id=h.session_id JOIN users u ON u.tg_user_id=h.requester WHERE s.chat_id=?1 AND s.thread_id=?2 AND h.requester=?3 AND u.allowed=1";
+        let (actionable_total,pending_total,total):(usize,usize,usize)=tx.query_row(&format!("SELECT COALESCE(SUM(CASE WHEN {active} THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.state='pending' AND h.native_thread=s.codex_thread_id THEN 1 ELSE 0 END),0),COUNT(*) {scope}"),params![key.chat_id,key.thread_id,user],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        let items = {
+            let query = format!(
+                "SELECT h.payload_json,h.state,s.codex_thread_id {scope} AND (CASE WHEN {active} THEN 1 ELSE 0 END)=?5 ORDER BY CASE WHEN h.state='pending' THEN 0 ELSE 1 END,h.created_at DESC,h.id DESC LIMIT 51 OFFSET ?4"
+            );
+            let mut stmt = tx.prepare(&query)?;
+            stmt.query_map(
+                params![
+                    key.chat_id,
+                    key.thread_id,
+                    user,
+                    offset as i64,
+                    i64::from(!history)
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )?
+            .map(|row| {
+                let (raw, state, current) = row?;
+                Ok(projected(serde_json::from_str(&raw)?, state, current))
+            })
+            .collect::<Result<Vec<_>>>()?
+        };
+        tx.commit()?;
+        Ok(InteractionPage {
+            items,
+            actionable_total,
+            pending_total,
+            history_total: total - actionable_total,
         })
-        .collect()
     }
 
     pub fn interaction(
@@ -138,14 +184,7 @@ impl Store {
             )
             .optional()?;
         row.map(|(payload, state, current)| {
-            let mut item: HumanInteraction = serde_json::from_str(&payload)?;
-            item.state = if matches!(state.as_str(), "pending" | "answering" | "unknown")
-                && current.as_deref() != Some(item.native_thread.as_str())
-            {
-                "source_changed".into()
-            } else {
-                state
-            };
+            let mut item = projected(serde_json::from_str(&payload)?, state, current);
             if let Some(update) = item.source["answerUpdateId"].as_i64() {
                 let delivery: Option<String> = conn
                     .query_row(
@@ -162,10 +201,19 @@ impl Store {
         .transpose()
     }
 
+    #[cfg(test)]
     pub fn save_human_tasks(
         &self,
         key: SessionKey,
         tasks: &[(String, HumanInteraction)],
+    ) -> Result<()> {
+        self.save_human_requests(key, tasks, None)
+    }
+    pub fn save_human_requests(
+        &self,
+        key: SessionKey,
+        tasks: &[(String, HumanInteraction)],
+        withdrawal: Option<(i64, &str, i64, &[TaskWithdrawal])>,
     ) -> Result<()> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
@@ -202,6 +250,34 @@ impl Store {
                     now_string()
                 ],
             )?;
+        }
+        if let Some((user, native, turn, withdrawals)) = withdrawal {
+            let session:Option<i64>=tx.query_row("SELECT s.id FROM sessions s JOIN users u ON u.tg_user_id=?3 JOIN turns t ON t.session_id=s.id AND t.id=?5 WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.codex_thread_id=?4 AND u.allowed=1 AND t.from_user_id=?3",params![key.chat_id,key.thread_id,user,native,turn],|r|r.get(0)).optional()?;
+            let session = session.context("withdrawal has no authorized current source binding")?;
+            for entry in withdrawals {
+                if entry.reason.trim().is_empty() || entry.reason.chars().count() > 2000 {
+                    return Err(anyhow!("withdrawal needs a bounded explicit reason"));
+                }
+                let row:Option<(String,String)>=tx.query_row("SELECT state,payload_json FROM human_interactions WHERE id=?1 AND session_id=?2 AND requester=?3 AND native_thread=?4 AND kind='task'",params![entry.id,session,user,native],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+                let (state, raw) =
+                    row.context("withdrawal target is not an owned task in this source session")?;
+                let mut doc: serde_json::Value = serde_json::from_str(&raw)?;
+                if state == "cancelled"
+                    && doc["source"]["agentWithdrawal"]["reason"] == entry.reason
+                    && doc["source"]["agentWithdrawal"]["links"] == entry.links
+                {
+                    continue;
+                }
+                if state != "pending" {
+                    return Err(anyhow!(
+                        "withdrawal target is already resolved or has an uncertain receipt"
+                    ));
+                }
+                let at = now_string();
+                doc["source"]["agentWithdrawal"] = serde_json::json!({"reason":entry.reason,"links":entry.links,"sourceTurn":turn,"at":at});
+                tx.execute("UPDATE human_interactions SET state='cancelled',payload_json=?2,updated_at=?3 WHERE id=?1 AND state='pending'",params![entry.id,serde_json::to_string(&doc)?,at])?;
+                tx.execute("INSERT INTO audit_log(actor_user_id,action,details_json,created_at) VALUES(NULL,'human_task_withdrawn_by_agent',?1,?2)",params![serde_json::json!({"interaction_id":entry.id,"requester":user,"source_turn":turn,"reason":entry.reason,"links":entry.links}).to_string(),at])?;
+            }
         }
         tx.commit()?;
         Ok(())
@@ -284,5 +360,273 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.query_row("SELECT interaction_id FROM human_interaction_messages WHERE chat_id=?1 AND thread_id=?2 AND message_id=?3",
                        params![key.chat_id,key.thread_id,message],|r|r.get(0)).optional().map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use serde_json::json;
+    fn fixture() -> (tempfile::TempDir, Store, SessionKey, i64) {
+        let root = tempfile::tempdir().unwrap();
+        let defaults = SessionDefaults {
+            cwd: root.path().into(),
+            model: None,
+            reasoning_effort: None,
+            session_prompt: None,
+            sandbox_mode: "read-only".into(),
+            approval_policy: "never".into(),
+            search_mode: crate::config::SearchMode::Disabled,
+            add_dirs: vec![],
+        };
+        let store = Store::open(&root.path().join("db"), &[100, 101], &defaults).unwrap();
+        let key = SessionKey::new(100, Some(7));
+        let session = store.ensure_session(key, 100, &defaults).unwrap();
+        store.set_session_codex_thread(key, "source").unwrap();
+        let turn = store
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: key,
+                    from_user_id: 100,
+                    prompt: "Human-directed work".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        (root, store, key, turn)
+    }
+    fn task(id: &str, turn: i64) -> HumanInteraction {
+        HumanInteraction {
+            id: id.into(),
+            kind: "task".into(),
+            state: "pending".into(),
+            requester: 100,
+            native_thread: "source".into(),
+            local_turn: turn,
+            title: "A long mobile title ".repeat(5),
+            action: "Do the selected human action".into(),
+            blocking: false,
+            source: json!({"links":[]}),
+        }
+    }
+    fn withdrawal(id: &str) -> TaskWithdrawal {
+        TaskWithdrawal {
+            id: id.into(),
+            reason: "The selected handoff is already observed; no human approval is inferred"
+                .into(),
+            links: json!([{ "label":"Evidence","url":"https://example.org/receipt" }]),
+        }
+    }
+    #[test]
+    fn pages_have_topic_totals_and_separate_terminal_history() {
+        let (_root, store, key, turn) = fixture();
+        for n in 0..60 {
+            let id = format!("task-{n:03}");
+            store
+                .save_human_tasks(key, &[(id.clone(), task(&id, turn))])
+                .unwrap();
+        }
+        store
+            .transition_interaction(key, 100, "task-000", "pending", "completed")
+            .unwrap();
+        store
+            .transition_interaction(key, 100, "task-001", "pending", "cancelled")
+            .unwrap();
+        let mut unknown = task("native-unknown", turn);
+        unknown.kind = "native".into();
+        unknown.state = "unknown".into();
+        store.save_interaction(key, &unknown, None).unwrap();
+        let page = store.interactions_page(key, 100, 0, false).unwrap();
+        assert_eq!(
+            (
+                page.actionable_total,
+                page.pending_total,
+                page.history_total,
+                page.items.len()
+            ),
+            (59, 58, 2, 51)
+        );
+        assert_eq!(
+            store
+                .interactions_page(key, 100, 50, false)
+                .unwrap()
+                .items
+                .len(),
+            9
+        );
+        let history = store.interactions_page(key, 100, 0, true).unwrap();
+        assert_eq!(history.items.len(), 2);
+        assert!(
+            history
+                .items
+                .iter()
+                .all(|i| matches!(i.state.as_str(), "completed" | "cancelled"))
+        );
+        assert!(
+            store
+                .interactions_page(key, 101, 0, false)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert!(
+            store
+                .interactions_page(SessionKey::new(100, Some(8)), 100, 0, true)
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        store.set_session_codex_thread(key, "replacement").unwrap();
+        assert_eq!(
+            store
+                .interactions_page(key, 100, 0, false)
+                .unwrap()
+                .actionable_total,
+            0
+        );
+        assert!(
+            store
+                .interactions_page(key, 100, 0, true)
+                .unwrap()
+                .items
+                .iter()
+                .any(|i| i.state == "source_changed")
+        );
+    }
+    #[test]
+    fn withdrawal_is_scoped_audited_idempotent_and_cannot_reopen() {
+        let (_root, store, key, turn) = fixture();
+        store
+            .save_human_tasks(key, &[("old".into(), task("old", turn))])
+            .unwrap();
+        let entry = withdrawal("old");
+        store
+            .save_human_requests(
+                key,
+                &[],
+                Some((100, "source", turn, std::slice::from_ref(&entry))),
+            )
+            .unwrap();
+        let item = store.interaction(key, 100, "old").unwrap().unwrap();
+        assert_eq!(item.state, "withdrawn");
+        assert_eq!(item.source["agentWithdrawal"]["sourceTurn"], turn);
+        assert_eq!(item.action, "Do the selected human action");
+        assert_eq!(
+            store
+                .interactions_page(key, 100, 0, false)
+                .unwrap()
+                .pending_total,
+            0
+        );
+        assert_eq!(
+            store
+                .interactions_page(key, 100, 0, true)
+                .unwrap()
+                .history_total,
+            1
+        );
+        store
+            .save_human_requests(key, &[], Some((100, "source", turn, &[entry])))
+            .unwrap();
+        assert_eq!(
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_log WHERE action='human_task_withdrawn_by_agent'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert!(
+            !store
+                .transition_interaction(key, 100, "old", "pending", "completed")
+                .unwrap()
+        );
+        assert!(!store.answer_human_task(key, 100, "old", 1).unwrap());
+        let mut changed = withdrawal("old");
+        changed.reason = "Another claimed reason".into();
+        assert!(
+            store
+                .save_human_requests(key, &[], Some((100, "source", turn, &[changed])))
+                .is_err()
+        );
+    }
+    #[test]
+    fn mixed_declaration_rolls_back_and_wrong_binding_native_or_resolved_targets_refuse() {
+        let (_root, store, key, turn) = fixture();
+        store
+            .save_human_tasks(key, &[("old".into(), task("old", turn))])
+            .unwrap();
+        let entries = [withdrawal("old"), withdrawal("missing")];
+        assert!(
+            store
+                .save_human_requests(
+                    key,
+                    &[("new".into(), task("new", turn))],
+                    Some((100, "source", turn, &entries))
+                )
+                .is_err()
+        );
+        assert!(store.interaction(key, 100, "new").unwrap().is_none());
+        assert_eq!(
+            store.interaction(key, 100, "old").unwrap().unwrap().state,
+            "pending"
+        );
+        for (wrong_key, user, native) in [
+            (SessionKey::new(100, Some(8)), 100, "source"),
+            (key, 101, "source"),
+            (key, 100, "other-source"),
+        ] {
+            assert!(
+                store
+                    .save_human_requests(
+                        wrong_key,
+                        &[],
+                        Some((user, native, turn, &[withdrawal("old")]))
+                    )
+                    .is_err()
+            );
+        }
+        let mut channel = task("channel", turn);
+        channel.kind = "native".into();
+        channel.state = "unknown".into();
+        store.save_interaction(key, &channel, None).unwrap();
+        assert!(
+            store
+                .save_human_requests(
+                    key,
+                    &[],
+                    Some((100, "source", turn, &[withdrawal("channel")]))
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .interaction(key, 100, "channel")
+                .unwrap()
+                .unwrap()
+                .state,
+            "unknown"
+        );
+        store
+            .transition_interaction(key, 100, "old", "pending", "completed")
+            .unwrap();
+        assert!(
+            store
+                .save_human_requests(key, &[], Some((100, "source", turn, &[withdrawal("old")])))
+                .is_err()
+        );
+        assert_eq!(
+            store.interaction(key, 100, "old").unwrap().unwrap().state,
+            "completed"
+        );
     }
 }

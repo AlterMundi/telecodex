@@ -80,6 +80,8 @@ impl Drop for CodexHomeGuard {
 
 fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
     Config {
+        nexus: None,
+        session_control: None,
         tribu: None,
         telegram: crate::config::TelegramConfig {
             capture_message_reactions: false,
@@ -87,6 +89,7 @@ fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
             bot_token_env: None,
             bot_token_file: None,
             lifecycle_notifications: false,
+            human_request_language: crate::config::HumanRequestLanguage::En,
             api_base: "https://api.telegram.org".to_string(),
             local_file_root: None,
             use_message_drafts: false,
@@ -335,6 +338,7 @@ async fn private_topic_creation_uses_real_api_and_starts_an_isolated_session() {
 async fn sends_plain_text_to_the_active_turn() {
     let (app, _db) = sample_app();
     let session_key = SessionKey::new(1, Some(2));
+    app.ensure_session(session_key, 100).unwrap();
     let (turn_tx, _turn_rx) = mpsc::unbounded_channel();
     let (steer_tx, mut steer_rx) = mpsc::unbounded_channel();
     app.workers.lock().await.insert(
@@ -351,7 +355,10 @@ async fn sends_plain_text_to_the_active_turn() {
     let responder = tokio::spawn(async move {
         let steer = steer_rx.recv().await.expect("steer request");
         assert_eq!(steer.text, "change direction");
-        steer.response.send(Ok(())).expect("steer response");
+        steer
+            .response
+            .send(Ok(Some("observed-turn".into())))
+            .expect("steer response");
     });
 
     assert!(
@@ -366,6 +373,7 @@ async fn sends_plain_text_to_the_active_turn() {
 async fn falls_back_when_the_active_turn_rejects_steering() {
     let (app, _db) = sample_app();
     let session_key = SessionKey::new(1, Some(2));
+    app.ensure_session(session_key, 100).unwrap();
     let (turn_tx, _turn_rx) = mpsc::unbounded_channel();
     let (steer_tx, mut steer_rx) = mpsc::unbounded_channel();
     app.workers.lock().await.insert(
@@ -401,6 +409,7 @@ async fn falls_back_when_the_active_turn_rejects_steering() {
 async fn keeps_steering_pending_past_the_previous_timeout() {
     let (app, _db) = sample_app();
     let session_key = SessionKey::new(1, Some(2));
+    app.ensure_session(session_key, 100).unwrap();
     let (turn_tx, _turn_rx) = mpsc::unbounded_channel();
     let (steer_tx, mut steer_rx) = mpsc::unbounded_channel();
     app.workers.lock().await.insert(
@@ -1874,6 +1883,58 @@ fn rebinds_stale_session_to_latest_active_thread_for_same_cwd() {
 }
 
 #[test]
+fn deliberate_nexus_binding_never_falls_back_to_latest_cwd_history() {
+    let _lock = codex_home_test_lock().lock().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _guard = CodexHomeGuard::set(home.path());
+    let (mut app, _db) = sample_app();
+    let shared = Arc::get_mut(&mut app.shared).unwrap();
+    shared.config.nexus = Some(crate::nexus::NexusConfig {
+        python: "/local/python".into(),
+        operator: "/local/operator".into(),
+        workspace: "/local/nexus".into(),
+        state: "/local/state".into(),
+        listener_id: "listener".into(),
+        responder_ref: "daimon:test".into(),
+        launch_selector: "registered".into(),
+        poll_seconds: 3,
+        routes: vec![crate::nexus::NexusRoute {
+            table_id: "table".into(),
+            author_ref: "human:test".into(),
+            human_user_id: 100,
+            label: "Nexus".into(),
+        }],
+    });
+    let key = SessionKey::new(100, Some(7));
+    shared
+        .store
+        .ensure_session(key, 100, &sample_defaults())
+        .unwrap();
+    shared
+        .store
+        .set_session_codex_thread(key, "existing-unavailable-history")
+        .unwrap();
+    shared.store.nexus_save_binding("table","human:test",&serde_json::json!({"target":{"listener_id":"listener","bot_id":123,"human_user_id":100,"chat_id":100,"topic_id":7,"native_thread_id":"existing-unavailable-history"}})).unwrap();
+    std::fs::create_dir_all(home.path().join("sessions")).unwrap();
+    std::fs::write(home.path().join("sessions/rollout-other.jsonl"),serde_json::json!({"type":"session_meta","payload":{"id":"unrelated-latest-thread","cwd":sample_workspace(),"timestamp":"2026-10-12T00:00:00Z","source":"exec"}}).to_string()).unwrap();
+    let session = app.shared.store.get_session(key).unwrap().unwrap();
+    let resolved = resolve_session_codex_binding_from_history(&app.shared, session).unwrap();
+    assert_eq!(
+        resolved.codex_thread_id.as_deref(),
+        Some("existing-unavailable-history")
+    );
+    assert_eq!(
+        app.shared
+            .store
+            .get_session(key)
+            .unwrap()
+            .unwrap()
+            .codex_thread_id,
+        resolved.codex_thread_id
+    );
+}
+
+#[test]
 fn keeps_truly_archived_session_unbound_when_no_active_replacement_exists() {
     let _lock = codex_home_test_lock().lock().unwrap();
     let codex_home = tempfile::tempdir().unwrap();
@@ -2239,4 +2300,51 @@ async fn unbound_rename_reports_topic_failure_and_applies_latest_name_after_bind
         native["params"],
         serde_json::json!({"threadId":"first-bound-thread","name":"Latest name"})
     );
+}
+
+#[tokio::test]
+async fn retired_queue_packet_never_runs_after_stop_release() {
+    let (app, _db) = sample_app();
+    let key = SessionKey::new(100, Some(7));
+    app.ensure_session(key, 100).unwrap();
+    let update:crate::telegram::Update=serde_json::from_value(serde_json::json!({"update_id":10,"message":{"message_id":1,"date":1,"chat":{"id":100,"type":"private"},"from":{"id":100,"is_bot":false,"first_name":"Synthetic"},"message_thread_id":7,"text":"slow attachment"}})).unwrap();
+    app.shared.store.admit_update(&update).unwrap();
+    let packet = QueuedTurn {
+        request: sample_turn_request(key),
+        chat_kind: "private".into(),
+        update_id: None,
+        tribu_admission: None,
+        goal: None,
+        nexus: None,
+        merge: None,
+        stop_resume: None,
+        admission_epoch: app.shared.store.stop_admission_epoch(key).unwrap(),
+    };
+    let (mut op, _) = app.shared.store.stop_begin(100, "maintenance").unwrap();
+    op.phase = "released".into();
+    app.shared.store.stop_save(&op, "stopping").unwrap();
+    assert!(!app.shared.store.stop_fenced(key).unwrap());
+    HUMAN_UPDATE_ID
+        .scope(10, async {
+            // Async preparation completed after release: epoch stays at original journal admission.
+            assert_eq!(
+                stopping::input_epoch(&app.shared, key).unwrap(),
+                packet.admission_epoch
+            );
+            assert_ne!(
+                stopping::input_epoch(&app.shared, key).unwrap(),
+                app.shared.store.stop_admission_epoch(key).unwrap()
+            );
+        })
+        .await;
+    // Dequeue after release. No HTTP/native fixture is available: any execution fails.
+    process_turn(
+        app.shared.clone(),
+        Arc::new(StdMutex::new(None)),
+        Arc::new(StdMutex::new(None)),
+        packet,
+    )
+    .await
+    .unwrap();
+    assert!(!app.shared.store.get_session(key).unwrap().unwrap().busy);
 }

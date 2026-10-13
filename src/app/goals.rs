@@ -359,6 +359,9 @@ async fn activate(
     objective: Option<String>,
     replace: bool,
 ) -> Result<()> {
+    if app.shared.store.stop_fenced(session.key)? {
+        bail!("Coordinated Stop holds this goal; no activation submitted");
+    }
     let objective = objective
         .as_deref()
         .map(|s| materialize(app, s))
@@ -383,7 +386,7 @@ async fn activate(
         attached.sender.send(CodexSteerRequest{text:String::new(),goal:Some(GoalControl::Activate(activation)),response})
             .map_err(|_|anyhow!("The goal subscriber just finished. Inspect /goal and request the change again; it was not queued."))?;
         match tokio::time::timeout(Duration::from_secs(12), ack).await {
-            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Ok(_))) => {}
             Ok(Ok(Err(error))) => bail!("Native goal update was not confirmed: {error:?}"),
             _ => bail!(
                 "Native goal update acknowledgment unavailable; inspect /goal before retrying"
@@ -620,7 +623,7 @@ fn revoke_queued(app: &App, key: SessionKey) -> Result<()> {
         .store
         .save_bot_state(&intent_key(key), &Uuid::now_v7().to_string())
 }
-async fn control_live(
+pub(super) async fn control_live(
     app: &App,
     session: &crate::models::SessionRecord,
     control: GoalControl,
@@ -644,7 +647,7 @@ async fn control_live(
         })
         .map_err(|_| anyhow!("Goal subscriber finished; inspect /goal before retrying"))?;
     match tokio::time::timeout(Duration::from_secs(12), ack).await {
-        Ok(Ok(Ok(()))) => Ok(true),
+        Ok(Ok(Ok(_))) => Ok(true),
         Ok(Ok(Err(error))) => bail!("Goal mutation was not confirmed: {error:?}"),
         _ => bail!("Goal acknowledgment unavailable; inspect /goal before retrying"),
     }
