@@ -7,6 +7,9 @@ prefix = "/sessions"
 bot_id = 123456
 bot_username = "YourBot"
 label = "This receiving bot"
+# Optional: set only after BotFather confirms this named app on this same bot,
+# pointing to the origin + prefix above. Menu then uses its half-height link.
+# miniapp_short_name = "sessions"
 
 [storage]
 Host = "/"
