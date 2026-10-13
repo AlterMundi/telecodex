@@ -111,7 +111,10 @@ Telegram launch constraints: [Mini Apps](https://core.telegram.org/bots/webapps)
 ## Compact overview
 
 The default view uses a small header, aggregate working/goal/active-subagent
-counts, one collapsed host summary and bounded scrollable session rows. Each
+counts, one collapsed host summary and scrollable session rows that fill the
+remaining stable WebView height. Header, filters and control remain readable;
+short screens and opened disclosures can scroll the page rather than clipping
+controls. Compact launch and expanding the native window both resize the list. Each
 row exposes its state/elapsed time and retained goal state; opening it restores
 the full name, literal objective, tools, tree and return link. Host details and
 Stop scope remain available through disclosures. Refresh retains opened rows
