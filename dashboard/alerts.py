@@ -172,8 +172,10 @@ class Sender:
         time.sleep(max(0, self.next_send - time.monotonic()))
         self.next_send = time.monotonic() + 1
         resolved = projection['processing_state'] == 'resolved'
-        text = (f"{'✅' if resolved else '⚠️'} {projection['producer_id']} · {projection['phase']}\n"
-                f"{projection['summary']}\n{projection['action']}\n"
+        text = (f"{'✅ Resolved' if resolved else '⚠️ Pending'} · {projection['producer_id']} · {projection['phase']}\n"
+                + (f"Previous report: {projection['summary']}\nPrevious action: {projection['action']}\n" if resolved
+                   else f"{projection['summary']}\n{projection['action']}\n")
+                +
                 f"Processing: {projection['processing_state']} · {projection['problem_code']}\n"
                 + ('Work preserved' if projection['work_preserved'] else 'Work preservation unconfirmed'))
         response = self.call('sendMessage', {'chat_id': self.provider.human, 'text': text})
@@ -285,9 +287,13 @@ class Receiver:
             status = self.client.call('GET', '/v1/status', 'Status')
             records, truncated = self.client.collection('/v1/incidents', 'IncidentPage', processing_state='open')
             incidents = [r for r in records if r['projection']['receiving_scope'] == self.scope]
+            history, history_truncated = self.client.collection('/v1/incidents', 'IncidentPage', processing_state='resolved')
+            history = sorted((r for r in history if r['projection']['receiving_scope'] == self.scope),
+                             key=lambda r: r['projection']['updated_at'], reverse=True)
             observers = [r for r in status['observers'] if r['receiving_scope'] == self.scope]
             self.authorized()
             view = {'state': 'available', 'observed_at': time.time(), 'incidents': incidents,
+                    'resolved_incidents': history[:20], 'history_truncated': history_truncated or len(history) > 20,
                     'observers': observers, 'truncated': truncated, 'delivery_enabled': self.deliver,
                     'observer_state': ('unobserved' if not observers else 'degraded'
                         if any(r['freshness'] != 'fresh' or r['source_state'] != 'healthy' for r in observers)

@@ -313,11 +313,11 @@ function alerts(data) {
   if (data.state === "unavailable" && explanations[data.error])
     $("#alerts-state").textContent += " " + explanations[data.error];
   const target = $("#incidents"); target.replaceChildren();
-  for (const incident of data.incidents || []) {
+  for (const incident of [...(data.incidents || []), ...(data.resolved_incidents || [])]) {
     const p = incident.projection;
     const item = el("article", undefined, "incident");
     item.append(el("h3", `${p.processing_state === "resolved" ? "Resolved" : "Pending"} · ${p.phase}`),
-      el("p", p.summary), el("p", p.action));
+      el("p", p.summary), el("p", p.processing_state === "resolved" ? `Previous action: ${p.action}` : p.action));
     const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";
     item.append(el("p", `Observation ${incident.freshness} · Delivery: ${deliveries}`, "note"));
     if (incident.acknowledgments.length) item.append(el("p", "Acknowledged. Producer recovery remains separate.", "note"));
@@ -339,6 +339,7 @@ function alerts(data) {
   }
   if (!data.incidents?.length && data.state === "available") target.append(el("p", "No open incidents reported in this receiving scope."));
   if (data.truncated) target.append(el("p", "Partial view: more incidents exist in this receiving scope.", "note"));
+  if (data.history_truncated) target.append(el("p", "Resolved history is partial; open incidents are listed separately.", "note"));
   const uncertain = (data.local_deliveries || []).filter((d) =>
     ["uncertain", "failed"].includes(d.outcome) || d.state === "claim_unconfirmed").length;
   if (uncertain) target.append(el("p", `${uncertain} recent delivery attempt(s) failed or unconfirmed. No automatic resend.`, "note"));

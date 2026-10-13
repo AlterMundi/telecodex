@@ -152,6 +152,7 @@ class Receiving(unittest.TestCase):
         self.assertEqual(len(self.sender.calls), 2)
         self.assertEqual(self.sender.calls[-1]['processing_state'], 'resolved')
         self.assertEqual(self.receiver.snapshot()['incidents'], [])
+        self.assertEqual(self.receiver.snapshot()['resolved_incidents'][0]['projection']['processing_state'], 'resolved')
 
     def test_parallel_receivers_and_ambiguous_send_do_not_repeat(self):
         other = self.make_receiver()

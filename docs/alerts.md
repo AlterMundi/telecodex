@@ -41,7 +41,9 @@ preserved. No token, private error or endpoint enters frontend data or logs.
 `interval_seconds` defaults to 15, bounded to 5–300. HTTP requests are bounded,
 redirects and environmental proxies are disabled, and responses are checked
 against the pinned closed schema. Incidents are paginated up to 200 per view,
-with explicit truncation, and filtered again to this receiver's scope. Delivery
+with explicit truncation, and filtered again to this receiver's scope. Resolved
+history is queried separately so it cannot hide active work; up to 20 resolved
+items from a bounded scan are shown with explicit history truncation. Delivery
 also checks the exact scope, adapter and captured projection association.
 
 ## Delivery and uncertainty
