@@ -321,7 +321,8 @@ impl App {
         if self.shared.config.nexus.is_some() {
             menu.push(crate::telegram::BotCommand {
                 command: "nexus".into(),
-                description: "Connect or inspect your Nexus Mini App conversation".into(),
+                description: "/nexus [connect|disconnect|status|reconcile|recover|open] [table]"
+                    .into(),
             });
         }
         self.shared
