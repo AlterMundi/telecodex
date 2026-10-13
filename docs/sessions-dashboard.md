@@ -29,8 +29,12 @@ production Ed25519 key using `init-data-py==1.0.0`, with five-minute freshness,
 
 There is no invitation/first-enrollment workaround: the account must be exactly
 the receiver's configured control human and currently allowed in its existing
-database. Receiver configuration drift denies private reads and Stop until an
-operator requalifies/restarts the dashboard. Sessions expire after one hour and
+database. Receiving authority drift denies private reads and control until an
+operator requalifies/restarts the dashboard. The pinned authority covers the
+database, control actor/socket, native executable and Telegram credential/endpoint
+references. Unrelated delivery, language, project or timing settings and TOML
+formatting can change without revoking the dashboard grant. Current allowed-user
+state remains checked for every request. Sessions expire after one hour and
 are bound to bot/config identity. The verified launch exchange returns an opaque
 session token held only in JavaScript memory and sent in an Authorization Bearer
 header; this allows WebViews that omit the secure session cookie to authenticate.
@@ -38,7 +42,9 @@ No browser storage, URL, Telegram message or log contains it. The existing
 HttpOnly/Secure/SameSiteStrict cookie remains supported for compatibility.
 An invalid explicit header fails closed rather than falling back to a cookie;
 both transports use the same session hash, expiry and live receiving grant.
-All writes require the exact HTTPS Origin;
+Upgrading from full-file session bindings requires reopening the Mini App once
+to exchange a new signed launch; existing native history/control records are not
+reset. All writes require the exact HTTPS Origin;
 Stop additionally requires a per-session action token. Anonymous browser visits
 receive only a login shell, never session titles, goals or host metrics.
 
@@ -79,7 +85,7 @@ Telegram WebView authentication/phone acceptance receipt. Keep those separate.
   or host configuration appear. Observation times use Argentina time.
 - Refresh is bounded and cached for eight seconds. The client requests every ten
   seconds while visible and stops requesting when suspended. Stale/error states
-  disable the Stop control. Native connection failures never become idle.
+disable the control. Native connection failures never become idle.
   The first authenticated observation runs once even if the WebView initially
   reports hidden; manual Refresh also runs independently of that flag. HTTP
   reads/authentication have a20s client deadline; Stop has30s. A timeout restores
@@ -94,7 +100,17 @@ and uses that same nonce in the existing durable Stop coordinator. Concurrent
 retries or service restart do not redispatch uncertain effects. Lost acceptance
 is unconfirmed, not stopped. The live view reads the coordinator's persisted
 phase/target receipts to distinguish requested, observed and failed/unconfirmed.
-Resume/restart/release stay on the existing `/stop` command surface for this MVP.
+When the operation is observed `stopped`, the same button becomes **Resume owned
+sessions**, with a separate confirmation. It submits the exact observed operation
+through the receiving native `resume ID` control, which rechecks target bindings,
+inactivity and unchanged goal definitions. Formerly active work continues from
+retained history; previously paused/blocked goals remain unchanged. Partial or
+unknown Stop states cannot resume, and a stale operation cannot select another.
+Both actions share Origin/CSRF/live-grant checks, but each Resume intent has its
+own operation/nonce journal namespace. Retries and restart never redispatch an
+uncertain action. Resume acceptance is distinct from actually observed recovered
+turns and child recovery. `/stop resume ID` remains the console/Telegram fallback;
+restart/release remain on that command surface.
 
 Preserve the dashboard SQLite action/session journal on code rollback. Take a
 verified snapshot before future migrations; this first version changes no

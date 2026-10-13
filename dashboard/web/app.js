@@ -8,7 +8,9 @@ let snapshot,
   timer,
   authenticated = false,
   sessionToken,
-  pendingNonce;
+  pendingNonce,
+  pendingKind,
+  controlIntent;
 const statuses = {
   active: "Working",
   idle: "Idle",
@@ -42,7 +44,7 @@ async function api(route, body) {
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
-    route === "stop" ? 30000 : 20000,
+    ["stop", "resume"].includes(route) ? 30000 : 20000,
   );
   try {
     const headers = body
@@ -267,13 +269,28 @@ function receipt(op) {
   for (const [state, count] of Object.entries(counts))
     $("#receipt").append(el("p", `${count} ${state}`));
 }
-function render() {
+function controlButton(op, stale, count) {
+  if (op.state === "stopped" && pendingKind === "stop") {
+    pendingNonce = undefined;
+    pendingKind = undefined;
+  }
   if (
     ["resumed", "resumed_with_failures", "released", "superseded"].includes(
-      snapshot.stop.state,
+      op.state,
     )
-  )
+  ) {
     pendingNonce = undefined;
+    pendingKind = undefined;
+  }
+  const phase = op.state;
+  $("#stop").textContent = phase === "stopped" ? "Resume owned sessions"
+    : phase === "resuming" ? "Resuming…"
+    : phase === "stopping" ? "Stopping…" : "Stop owned sessions";
+  $("#stop").disabled = stale || !count || pendingNonce !== undefined
+    || !["no_operation", "stopped", "resumed", "resumed_with_failures", "released", "superseded"].includes(phase)
+    || (phase === "stopped" && !op.operation);
+}
+function render() {
   csrf = snapshot.csrf;
   $("#provider").textContent = snapshot.provider;
   const stale = Date.now() / 1000 - snapshot.observed_at > 30;
@@ -296,8 +313,7 @@ function render() {
   $("#work").hidden = $("#control").hidden = false;
   const scope = `${snapshot.sessions.length} owned conversation(s) on ${snapshot.provider}. Filters do not change Stop scope.`;
   $("#scope").textContent = $("#confirm-scope").textContent = scope;
-  $("#stop").disabled =
-    stale || !snapshot.sessions.length || pendingNonce !== undefined;
+  controlButton(snapshot.stop, stale, snapshot.sessions.length);
   receipt(snapshot.stop);
 }
 async function refresh(force = false) {
@@ -331,22 +347,44 @@ for (const button of document.querySelectorAll("[data-filter]"))
       peer.setAttribute("aria-pressed", String(peer === button));
     if (snapshot) sessions();
   });
-$("#stop").addEventListener("click", () => $("#confirm").showModal());
-$("#cancel").addEventListener("click", () => $("#confirm").close());
+$("#stop").addEventListener("click", () => {
+  if (!snapshot || $("#stop").disabled) return;
+  const resume = snapshot.stop.state === "stopped";
+  controlIntent = resume ? { kind: "resume", operation: snapshot.stop.operation } : { kind: "stop" };
+  $("#confirm-title").textContent = resume ? "Resume these sessions?" : "Stop these sessions?";
+  $("#approve").textContent = resume ? "Resume" : "Stop";
+  $("#confirm-detail").textContent = resume
+    ? "Continue formerly active work from retained history. Previously paused or blocked goals stay unchanged. Subagent recovery is delegated to the resumed parent."
+    : "Previously paused or blocked goals stay unchanged. Work remains in its native history.";
+  $("#confirm").showModal();
+});
+$("#cancel").addEventListener("click", () => {
+  controlIntent = undefined;
+  $("#confirm").close();
+});
 $("#approve").addEventListener("click", async () => {
   $("#confirm").close();
+  if (!controlIntent) return;
+  const intent = controlIntent;
+  controlIntent = undefined;
   $("#stop").disabled = true;
   pendingNonce = crypto.randomUUID();
+  pendingKind = intent.kind;
+  let failure;
   try {
-    const op = await api("stop", { nonce: pendingNonce });
+    const body = { nonce: pendingNonce };
+    if (intent.kind === "resume") body.operation = intent.operation;
+    const op = await api(intent.kind, body);
     receipt(op);
+    controlButton(op, false, snapshot?.sessions?.length || 0);
     $("#feedback").textContent =
-      "Stop requested. Its observed progress will appear below.";
+      `${intent.kind === "resume" ? "Resume" : "Stop"} requested. Its observed progress will appear below.`;
   } catch (e) {
-    $("#feedback").textContent =
-      `${e.message}. Check Stop status before trying another action.`;
+    failure = `${e.message}. Check Stop status before trying another action.`;
+    $("#feedback").textContent = failure;
   } finally {
-    await refresh();
+    await refresh(true);
+    if (failure) $("#feedback").textContent = failure;
   }
 });
 document.addEventListener("visibilitychange", () => {

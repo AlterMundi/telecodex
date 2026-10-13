@@ -30,6 +30,7 @@ class Receiver:
         self.allowed = True
         self.calls = []
         self.failed = False
+        self.resumes = []
     def authorized(self, human): return self.allowed and human == self.human
     def snapshot(self): return {'schema': 'test', 'sessions': [], 'stop': {'state':'no_operation'}}
     def stop(self, nonce):
@@ -37,6 +38,10 @@ class Receiver:
         if self.failed: raise TimeoutError()
         return {'state':'stopping', 'operation':'native-operation'}
     def close(self): pass
+    def resume(self, nonce, operation):
+        self.resumes.append((nonce, operation))
+        if self.failed: raise TimeoutError()
+        return {'state':'resuming','operation':operation}
 
 
 class DashboardHTTP(unittest.TestCase):
@@ -104,6 +109,31 @@ class DashboardHTTP(unittest.TestCase):
         self.provider.snapshot=revoke
         response=self.client.get('/api/state')
         self.assertEqual(response.status_code,401);self.assertNotIn('hidden',response.text)
+
+    def test_resume_intent_is_scoped_durable_and_not_replayed(self):
+        csrf=self.login();nonce='resume-123456789012'
+        def resume(operation='op-A', origin=True):
+            return self.client.post('/api/resume',json={'nonce':nonce,'operation':operation},
+                headers={**(self.headers if origin else {}),'x-dashboard-csrf':csrf})
+        self.assertEqual(resume(origin=False).status_code,403)
+        self.assertEqual(self.client.post('/api/resume',json={'nonce':nonce,'operation':'op-A'},headers=self.headers).status_code,403)
+        self.assertEqual(resume('../foreign').status_code,400)
+        self.assertEqual(self.provider.resumes,[])
+        # Same nonce as a Stop never reuses the Stop result or skips Resume.
+        self.assertEqual(self.stop(nonce,csrf).json()['state'],'stopping')
+        self.assertEqual(resume().json()['state'],'resuming')
+        self.assertEqual(resume().json()['state'],'resuming')
+        self.client.close()
+        self.client=TestClient(create_app(self.config,self.provider,lambda raw,bot:int(raw)),base_url='https://example.test')
+        csrf=self.login()
+        self.assertEqual(resume().json()['state'],'resuming')
+        self.assertEqual(self.provider.resumes,[(nonce,'op-A')])
+        self.provider.failed=True
+        self.assertEqual(resume('op-B').json()['state'],'unconfirmed')
+        self.assertEqual(resume('op-B').json()['state'],'unconfirmed')
+        self.assertEqual(self.provider.resumes,[(nonce,'op-A'),(nonce,'op-B')])
+        self.provider.allowed=False
+        self.assertEqual(resume().status_code,401)
 
     def test_cookie_restricted_webview_session_and_stop_survive_service_restart(self):
         response=self.client.post('/api/session',json={'init_data':'100'},headers=self.headers)
@@ -291,17 +321,68 @@ class ProviderIO(unittest.TestCase):
         with patch('dashboard.provider.control') as call:
             with self.assertRaises(Exception):self.provider.stop('delayed-123456789012')
             call.assert_not_called()
+
+    def test_unrelated_configuration_changes_preserve_cookie_and_read_grant(self):
+        config={'state_dir':str(self.root/'dashboard'), 'origin':'https://example.test',
+                'prefix':'/sessions','bot_id':123}
+        with TestClient(create_app(config,self.provider,lambda raw,bot:int(raw)),base_url='https://example.test') as client:
+            token=client.post('/api/session',json={'init_data':'100'},headers={'origin':'https://example.test'}).json()['session_token']
+            auth={'authorization':'Bearer '+token}
+            path=self.provider.receiver_path
+            path.write_text(path.read_text()+'\n# harmless formatting\n[tribu]\ndeadline_seconds=30\n')
+            self.assertTrue(self.provider.authorized(100))
+            self.assertEqual(client.get('/api/state',headers=auth).status_code,200)
+            # Requalified process uses the same semantic session binding.
+            replacement=Provider(self.provider.config);replacement.native=NativeMetadata()
+            with TestClient(create_app(config,replacement,lambda raw,bot:int(raw)),base_url='https://example.test') as restarted:
+                self.assertEqual(restarted.get('/api/state',headers=auth).status_code,200)
+            original=path.read_text()
+            for altered in [original.replace('human_id=100','human_id=101'),
+                            original.replace('control.sock','other.sock'),
+                            original.replace('binary="codex"','binary="other"'),
+                            original.replace(str(self.db),str(self.root/'foreign.sqlite')),
+                            original+'\n[telegram]\napi_base="https://foreign.invalid"\n',
+                            original+'\n[telegram]\nbot_token_file="/foreign"\n',
+                            '[malformed']:
+                path.write_text(altered)
+                self.assertFalse(self.provider.authorized(100))
+                self.assertEqual(client.get('/api/state',headers=auth).status_code,503)
+                response=client.post('/api/session',json={'init_data':'100'},headers={'origin':'https://example.test'})
+                self.assertEqual(response.status_code,503)
+                self.assertIn('operator must requalify',response.json()['detail'])
+                with patch('dashboard.provider.control') as call:
+                    with self.assertRaises(Exception):self.provider.stop('delayed-123456789012')
+                    with self.assertRaises(Exception):self.provider.resume('delayed-123456789012','op-A')
+                    call.assert_not_called()
+
+    def test_resume_selects_only_the_observed_owned_stopped_operation(self):
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute('INSERT INTO stop_operations VALUES(?,?,?,?)',('op-A',100,'stopped',json.dumps({'targets':[]})));db.commit()
+        with patch('dashboard.provider.control',return_value={'state':'resuming'}) as call:
+            self.assertEqual(self.provider.resume('resume-123456789012','op-A')['state'],'resuming')
+            call.assert_called_once_with(self.provider.receiver['session_control']['socket_path'],'resume-123456789012','resume op-A')
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute('UPDATE stop_operations SET phase="resuming"');db.commit()
+        with patch('dashboard.provider.control') as call:
+            with self.assertRaises(Exception):self.provider.resume('another-123456789012','op-A')
+            with self.assertRaises(Exception):self.provider.resume('another-123456789012','foreign')
+            call.assert_not_called()
     def test_unix_provider_carries_the_exact_stable_nonce_once(self):
         path=self.root/'control.sock';server=socket.socket(socket.AF_UNIX);server.bind(str(path));os.chmod(path,0o600);server.listen()
         requests=[]
         def receive():
-            with closing(server.accept()[0]) as stream:
-                data=stream.recv(4096);requests.append(json.loads(data))
-                stream.sendall(b'{"ok":true,"result":{"state":"stopping","operation":"retained"}}\n')
+            for state in ['stopping','resuming']:
+                with closing(server.accept()[0]) as stream:
+                    data=stream.recv(4096);requests.append(json.loads(data))
+                    stream.sendall(json.dumps({'ok':True,'result':{'state':state,'operation':'retained'}}).encode()+b'\n')
         worker=threading.Thread(target=receive);worker.start()
-        result=control(path,'stable-nonce-12345678');worker.join(timeout=2);server.close()
-        self.assertEqual(requests,[{'command':'all','nonce':'stable-nonce-12345678'}])
+        result=control(path,'stable-nonce-12345678')
+        resumed=control(path,'resume-nonce-12345678','resume retained')
+        worker.join(timeout=2);server.close()
+        self.assertEqual(requests,[{'command':'all','nonce':'stable-nonce-12345678'},
+                                   {'command':'resume retained','nonce':'resume-nonce-12345678'}])
         self.assertEqual(result['operation'],'retained')
+        self.assertEqual(resumed['state'],'resuming')
 
 
 if __name__=='__main__':unittest.main()
