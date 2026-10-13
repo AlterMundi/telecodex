@@ -45,7 +45,8 @@ function boot(fetchImpl) {
   return { context, nodes, requests, timers };
 }
 
-const ok = () => Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+const fixtureToken = "f".repeat(43);
+const ok = () => Promise.resolve({ ok: true, json: async () => ({ ok: true, session_token: fixtureToken }) });
 const unavailable = () => Promise.resolve({
   ok: false, json: async () => ({ detail: "Receiving metadata unavailable" }),
 });
@@ -58,6 +59,8 @@ const hung = (options) => new Promise((resolve, reject) => {
   const launch = boot((route) => route === "api/session" ? ok() : unavailable());
   await settle();
   assert.deepEqual(launch.requests.map((x) => x.route), ["api/session", "api/state"]);
+  assert.equal(launch.requests[0].options.headers.Authorization, undefined);
+  assert.equal(launch.requests[1].options.headers.Authorization, `Bearer ${fixtureToken}`);
   assert.equal(launch.nodes.get("#overview").textContent, "State unavailable");
   assert.equal(launch.nodes.get("#refresh").disabled, false);
   assert.equal(launch.nodes.get("#stop").disabled, true);
@@ -96,6 +99,7 @@ const hung = (options) => new Promise((resolve, reject) => {
   stopDeadline.callback();
   await approval;
   assert.equal(stop.requests.filter((x) => x.route === "api/stop").length, 1);
+  assert.equal(stop.requests.find((x) => x.route === "api/stop").options.headers.Authorization, `Bearer ${fixtureToken}`);
   assert.equal(vm.runInContext("pendingNonce", stop.context), "synthetic-action-nonce");
   assert.match(stop.nodes.get("#feedback").textContent, /Check Stop status/);
   assert.equal(stop.nodes.get("#stop").disabled, true);

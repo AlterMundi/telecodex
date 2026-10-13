@@ -30,8 +30,15 @@ production Ed25519 key using `init-data-py==1.0.0`, with five-minute freshness,
 There is no invitation/first-enrollment workaround: the account must be exactly
 the receiver's configured control human and currently allowed in its existing
 database. Receiver configuration drift denies private reads and Stop until an
-operator requalifies/restarts the dashboard. Cookies expire after one hour and
-are bound to bot/config identity. All writes require the exact HTTPS Origin;
+operator requalifies/restarts the dashboard. Sessions expire after one hour and
+are bound to bot/config identity. The verified launch exchange returns an opaque
+session token held only in JavaScript memory and sent in an Authorization Bearer
+header; this allows WebViews that omit the secure session cookie to authenticate.
+No browser storage, URL, Telegram message or log contains it. The existing
+HttpOnly/Secure/SameSiteStrict cookie remains supported for compatibility.
+An invalid explicit header fails closed rather than falling back to a cookie;
+both transports use the same session hash, expiry and live receiving grant.
+All writes require the exact HTTPS Origin;
 Stop additionally requires a per-session action token. Anonymous browser visits
 receive only a login shell, never session titles, goals or host metrics.
 

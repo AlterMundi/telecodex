@@ -112,6 +112,14 @@ def create_app(config=None, provider=None, validator=validate_launch):
 
     def authorize(request):
         token = request.cookies.get('telecodex_dashboard', '')
+        headers = request.headers.getlist('authorization')
+        if headers:
+            # A restricted WebView may omit cookies. Never downgrade an invalid
+            # explicit credential to a different ambient cookie session.
+            if len(headers) != 1 or not (match := re.fullmatch(
+                    r'Bearer ([A-Za-z0-9_-]{43})', headers[0], re.IGNORECASE)):
+                raise HTTPException(401, 'Invalid dashboard session credential')
+            token = match.group(1)
         with database() as db:
             session = db.execute('SELECT * FROM sessions WHERE token_hash=? AND expires>?',
                                  (digest(token + binding), time.time())).fetchone()
@@ -151,7 +159,9 @@ def create_app(config=None, provider=None, validator=validate_launch):
         with database() as db:
             db.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
             db.execute('INSERT INTO sessions VALUES(?,?,?,?)', (digest(token + binding), human, time.time() + 3600, csrf))
-        response = JSONResponse({'ok': True})
+        # Same short-lived, bot/config-bound session, carried explicitly by the
+        # authenticated WebView in memory; never persisted in browser storage.
+        response = JSONResponse({'ok': True, 'session_token': token})
         response.set_cookie('telecodex_dashboard', token, httponly=True, secure=True,
                             samesite='strict', path=prefix, max_age=3600)
         return response
