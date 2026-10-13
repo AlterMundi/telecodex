@@ -274,6 +274,7 @@ impl App {
     pub async fn bootstrap(config: Config) -> Result<Self> {
         let token = config.telegram.resolve_token()?;
         let telegram = TelegramClient::new(token, config.telegram.api_base.clone())
+            .with_reaction_capture(config.telegram.capture_message_reactions)
             .with_local_file_root(config.telegram.local_file_root.clone())?;
         let me = telegram.get_me().await.context("telegram getMe failed")?;
         let handy_model_dir = detect_handy_parakeet_model_dir();
@@ -518,6 +519,12 @@ impl App {
     }
 
     async fn process_update(&self, update: crate::telegram::Update) -> Result<()> {
+        if update.message_reaction.is_some() {
+            // Receipt only: no inferred topic, ACL grant, native input or reply.
+            // Telegram may deliver already queued events after capture is disabled.
+            tracing::debug!("Telegram reaction event retained in the ingress journal");
+            return Ok(());
+        }
         if let Some(callback) = update.callback_query {
             if let Some(message) = &callback.message {
                 if self
