@@ -121,7 +121,7 @@ jobs:
           ref: d52c72102adc66078dd458cf870b2e1ac5727b1b
           path: .alerts-core
       - run: cargo build --locked --manifest-path .alerts-core/Cargo.toml
-      - run: python -B tests/alerts_io.py
+      - run: python -B tests/dashboard_alerts_io.py
         env:
           ALERTS_CORE_SOURCE: .alerts-core
       - run: python -B tests/dashboard_io.py
