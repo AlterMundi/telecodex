@@ -7,6 +7,7 @@ let snapshot,
   refreshing = false,
   timer,
   authenticated = false,
+  sessionToken,
   pendingNonce;
 const statuses = {
   active: "Working",
@@ -44,13 +45,16 @@ async function api(route, body) {
     route === "stop" ? 30000 : 20000,
   );
   try {
+    const headers = body
+      ? { "Content-Type": "application/json", "X-Dashboard-CSRF": csrf || "" }
+      : {};
+    if (sessionToken && route !== "session")
+      headers.Authorization = `Bearer ${sessionToken}`;
     const response = await fetch(`api/${route}`, {
       signal: controller.signal,
       method: body ? "POST" : "GET",
       credentials: "same-origin",
-      headers: body
-        ? { "Content-Type": "application/json", "X-Dashboard-CSRF": csrf || "" }
-        : {},
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
     const value = await response.json();
@@ -376,7 +380,13 @@ tg?.ready?.();
     return;
   }
   try {
-    await api("session", { init_data: tg.initData });
+    const connection = await api("session", { init_data: tg.initData });
+    // Older qualified backends still support the secure cookie transport.
+    if (connection.session_token !== undefined) {
+      if (!/^[A-Za-z0-9_-]{43}$/.test(connection.session_token))
+        throw new Error("Invalid session response. Close and reopen Sessions");
+      sessionToken = connection.session_token;
+    }
     authenticated = true;
     // Some WebViews report hidden during launch and never emit visibilitychange.
     // Fetch the first observation once; periodic refresh still requires visibility.

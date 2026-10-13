@@ -105,6 +105,60 @@ class DashboardHTTP(unittest.TestCase):
         response=self.client.get('/api/state')
         self.assertEqual(response.status_code,401);self.assertNotIn('hidden',response.text)
 
+    def test_cookie_restricted_webview_session_and_stop_survive_service_restart(self):
+        response=self.client.post('/api/session',json={'init_data':'100'},headers=self.headers)
+        self.assertEqual(response.status_code,200)
+        token=response.json()['session_token']
+        self.assertRegex(token,r'^[A-Za-z0-9_-]{43}$')
+        self.client.cookies.clear()  # This is the restricted WebView boundary.
+        denied=self.client.get('/api/state')
+        self.assertEqual(denied.status_code,401)
+        self.assertEqual(denied.json()['detail'],'Open the dashboard from this bot in Telegram')
+        auth={'authorization':'Bearer '+token}
+        state=self.client.get('/api/state',headers=auth)
+        self.assertEqual(state.status_code,200)
+        csrf=state.json()['csrf'];nonce='webview-123456789012'
+        def submit():
+            return self.client.post('/api/stop',json={'nonce':nonce},headers={**self.headers,**auth,'x-dashboard-csrf':csrf})
+        self.assertEqual(self.client.post('/api/stop',json={'nonce':nonce},headers={**self.headers,**auth}).status_code,403)
+        self.assertEqual(self.client.post('/api/stop',json={'nonce':nonce},headers={**auth,'x-dashboard-csrf':csrf}).status_code,403)
+        self.assertEqual(submit().status_code,202)
+        self.client.close()
+        self.client=TestClient(create_app(self.config,self.provider,lambda raw,bot:int(raw)),base_url='https://example.test')
+        self.assertEqual(self.client.get('/api/state',headers=auth).status_code,200)
+        self.assertEqual(submit().json()['operation'],'native-operation')
+        self.assertEqual(self.provider.calls,[nonce])
+        # Hashes only: opaque credentials are never retained verbatim in SQLite.
+        self.assertNotIn(token,(Path(self.tmp.name)/'dashboard.sqlite3').read_bytes().decode(errors='ignore'))
+        self.provider.allowed=False
+        self.assertEqual(self.client.get('/api/state',headers=auth).status_code,401)
+        self.assertEqual(submit().status_code,401)
+
+    def test_explicit_session_headers_are_bound_expiring_and_cannot_downgrade(self):
+        response=self.client.post('/api/session',json={'init_data':'100'},headers=self.headers)
+        token=response.json()['session_token']
+        self.client.cookies.set('telecodex_dashboard',token,path='/')
+        self.assertEqual(self.client.get('/api/state').status_code,200)
+        for header in ['Basic '+token,'Bearer short','Bearer '+'a'*43,'Bearer '+token+', Bearer '+token]:
+            self.assertEqual(self.client.get('/api/state',headers={'authorization':header}).status_code,401)
+        self.assertEqual(self.client.get('/api/state',headers=[('authorization','Bearer '+token),('authorization','Bearer '+token)]).status_code,401)
+        changed=Receiver();changed.receiver_bytes=b'changed receiving grant'
+        with TestClient(create_app(self.config,changed,lambda raw,bot:int(raw)),base_url='https://example.test') as other:
+            self.assertEqual(other.get('/api/state',headers={'authorization':'Bearer '+token}).status_code,401)
+        with TestClient(create_app({**self.config,'bot_id':124},self.provider,lambda raw,bot:int(raw)),base_url='https://example.test') as other:
+            self.assertEqual(other.get('/api/state',headers={'authorization':'Bearer '+token}).status_code,401)
+        with closing(sqlite3.connect(Path(self.tmp.name)/'dashboard.sqlite3')) as db:
+            db.execute('UPDATE sessions SET expires=?',(time.time()-1,));db.commit()
+        self.assertEqual(self.client.get('/api/state',headers={'authorization':'Bearer '+token}).status_code,401)
+
+    def test_receiving_revocation_during_bearer_read_denies_response(self):
+        response=self.client.post('/api/session',json={'init_data':'100'},headers=self.headers)
+        self.client.cookies.clear()
+        def revoke(): self.provider.allowed=False;return {'private':'hidden'}
+        self.provider.snapshot=revoke
+        response=self.client.get('/api/state',headers={'authorization':'Bearer '+response.json()['session_token']})
+        self.assertEqual(response.status_code,401);self.assertNotIn('hidden',response.text)
+
 
 class MenuOperator(unittest.TestCase):
     def test_actual_http_menu_receipt_rollback_scope_and_unsafe_state(self):
