@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from init_data_py import errors, validate_by_signature
 
 from .provider import Provider, ProviderUnavailable
+from .alerts import Receiver as AlertsReceiver, AlertsUnavailable
 
 
 def validate_launch(raw, bot_id):
@@ -41,7 +42,7 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def create_app(config=None, provider=None, validator=validate_launch):
+def create_app(config=None, provider=None, validator=validate_launch, alerts=None):
     if config is None:
         config = tomllib.loads(Path(os.environ['TELECODEX_DASHBOARD_CONFIG']).read_text())
     provider = provider or Provider(config)
@@ -60,8 +61,13 @@ def create_app(config=None, provider=None, validator=validate_launch):
         info = db_path.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise ValueError('Unsafe dashboard state file')
-    binding = digest(json.dumps([config['bot_id'],
-                     getattr(provider, 'binding_bytes', getattr(provider, 'receiver_bytes', b'')).hex()]))
+    if alerts is None and config.get('alerts', {}).get('enabled') is True:
+        alerts = AlertsReceiver(config, provider)
+    scope_binding = [config['bot_id'],
+        getattr(provider, 'binding_bytes', getattr(provider, 'receiver_bytes', b'')).hex()]
+    if alerts is not None:
+        scope_binding.append(alerts.binding)
+    binding = digest(json.dumps(scope_binding))
 
     @contextmanager
     def database():
@@ -82,7 +88,11 @@ def create_app(config=None, provider=None, validator=validate_launch):
 
     @asynccontextmanager
     async def lifespan(app):
+        if alerts is not None:
+            alerts.start()
         yield
+        if alerts is not None:
+            alerts.close()
         provider.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -134,6 +144,11 @@ def create_app(config=None, provider=None, validator=validate_launch):
                 provider.assert_binding()
             except (ProviderUnavailable, OSError):
                 raise HTTPException(503, 'Receiving control binding changed; operator must requalify Sessions') from None
+        if alerts is not None:
+            try:
+                alerts.client.assert_binding()
+            except (AlertsUnavailable, OSError):
+                raise HTTPException(503, 'Alerts receiving binding changed; operator must requalify Sessions') from None
 
     public = Path(__file__).parent / 'web'
 
@@ -185,6 +200,40 @@ def create_app(config=None, provider=None, validator=validate_launch):
         # Recheck grants after native I/O, before any private response.
         authorize(request)
         return {**result, 'csrf': session['csrf']}
+
+    @app.get('/api/alerts')
+    def incidents(request: Request):
+        session = authorize(request)
+        try:
+            result = alerts.snapshot() if alerts is not None else {'state': 'not_configured'}
+        except (OSError, sqlite3.Error, ValueError):
+            raise HTTPException(503, 'Alerts receiving state unavailable') from None
+        authorize(request)
+        return {**result, 'csrf': session['csrf']}
+
+    @app.post('/api/alerts/acknowledge')
+    async def acknowledge(request: Request):
+        session = authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        if alerts is None:
+            raise HTTPException(503, 'Alerts are not configured')
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {'producer_id', 'incident_id', 'request_id'} or any(
+                    not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', value)
+                    for value in body.values()):
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise HTTPException(400, 'Invalid acknowledgment request') from None
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(alerts.acknowledge,
+                body['producer_id'], body['incident_id'], body['request_id'])
+        except (AlertsUnavailable, ProviderUnavailable, OSError, ValueError, sqlite3.Error):
+            raise HTTPException(503, 'Acknowledgment unconfirmed; refresh before retrying') from None
+        authorize(request)
+        return result
 
     @app.post('/api/stop')
     async def stop(request: Request):

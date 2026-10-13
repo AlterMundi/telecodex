@@ -11,6 +11,7 @@ let snapshot,
   pendingNonce,
   pendingKind,
   controlIntent;
+const acknowledgmentRequests = new Map();
 const statuses = {
   active: "Working",
   idle: "Idle",
@@ -290,6 +291,58 @@ function controlButton(op, stale, count) {
     || !["no_operation", "stopped", "resumed", "resumed_with_failures", "released", "superseded"].includes(phase)
     || (phase === "stopped" && !op.operation);
 }
+function alerts(data) {
+  const section = $("#operations");
+  if (!data || data.state === "not_configured") { section.hidden = true; return; }
+  section.hidden = false;
+  const open = (data.incidents || []).filter((i) => i.projection.processing_state === "open").length;
+  $("#operations-summary").textContent = `Operational alerts · ${open} open`;
+  $("#alerts-state").textContent = data.state === "unavailable"
+    ? "Alert service unavailable. Processing and delivery cannot be confirmed."
+    : data.state === "stale" ? "Showing an older observation. Refresh before acting."
+    : data.observer_state === "unobserved" ? "Worker observation has not been established."
+    : data.observer_state === "degraded" ? "Observation requires attention. Check source and observer freshness."
+    : "Observation route current. Processing and delivery are independent.";
+  const explanations = {
+    unauthorized: "Alert service credential needs attention.",
+    forbidden: "Alert service grant needs attention.",
+    credential_binding_changed: "Alert credentials changed; operator requalification is required.",
+    receiving_bot_unconfirmed: "The receiving bot has not been verified.",
+    local_capacity_exceeded: "The delivery journal is full; reconcile retained attempts.",
+  };
+  if (data.state === "unavailable" && explanations[data.error])
+    $("#alerts-state").textContent += " " + explanations[data.error];
+  const target = $("#incidents"); target.replaceChildren();
+  for (const incident of data.incidents || []) {
+    const p = incident.projection;
+    const item = el("article", undefined, "incident");
+    item.append(el("h3", `${p.processing_state === "resolved" ? "Resolved" : "Pending"} · ${p.phase}`),
+      el("p", p.summary), el("p", p.action));
+    const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";
+    item.append(el("p", `Observation ${incident.freshness} · Delivery: ${deliveries}`, "note"));
+    if (incident.acknowledgments.length) item.append(el("p", "Acknowledged. Producer recovery remains separate.", "note"));
+    else {
+      const button = el("button", "Acknowledge");
+      const requestKey = `${p.producer_id}/${p.incident_id}`;
+      button.disabled = data.state !== "available";
+      button.addEventListener("click", async () => {
+        if (!acknowledgmentRequests.has(requestKey)) acknowledgmentRequests.set(requestKey, crypto.randomUUID());
+        const requestId = acknowledgmentRequests.get(requestKey); button.disabled = true;
+        try {
+          await api("alerts/acknowledge", {producer_id:p.producer_id, incident_id:p.incident_id, request_id:requestId});
+          button.textContent = "Acknowledged";
+        } catch (e) { $("#alerts-state").textContent = e.message; button.disabled = false; }
+      });
+      item.append(button);
+    }
+    target.append(item);
+  }
+  if (!data.incidents?.length && data.state === "available") target.append(el("p", "No open incidents reported in this receiving scope."));
+  if (data.truncated) target.append(el("p", "Partial view: more incidents exist in this receiving scope.", "note"));
+  const uncertain = (data.local_deliveries || []).filter((d) =>
+    ["uncertain", "failed"].includes(d.outcome) || d.state === "claim_unconfirmed").length;
+  if (uncertain) target.append(el("p", `${uncertain} recent delivery attempt(s) failed or unconfirmed. No automatic resend.`, "note"));
+}
 function render() {
   csrf = snapshot.csrf;
   $("#provider").textContent = snapshot.provider;
@@ -321,6 +374,16 @@ async function refresh(force = false) {
   refreshing = true;
   $("#refresh").disabled = true;
   if (!snapshot) $("#overview").textContent = "Reading native state…";
+  // This request remains independent of native Codex availability.
+  const operations = api("alerts").then((data) => {
+    csrf = data.csrf;
+    alerts(data);
+  }).catch(() => {
+    $("#operations").hidden = false;
+    $("#operations-summary").textContent = "Operational alerts · unavailable";
+    $("#alerts-state").textContent = "Alert observation unavailable. Processing and delivery cannot be confirmed.";
+    for (const button of document.querySelectorAll("#incidents button")) button.disabled = true;
+  });
   try {
     snapshot = await api("state");
     render();
@@ -331,6 +394,7 @@ async function refresh(force = false) {
       $("#freshness").textContent = "Stale observation";
     $("#stop").disabled = true;
   } finally {
+    await operations;
     refreshing = false;
     $("#refresh").disabled = false;
   }

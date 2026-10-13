@@ -1,0 +1,570 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AlterMundi/daimon-alerts/schemas/daimon-alerts-v1.json",
+  "title": "Daimon Alerts v1",
+  "$defs": {
+    "IncidentInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "daimon-alerts/v1"
+        },
+        "producer_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "incident_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "operation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "receiving_scope": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "phase": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "resource_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ]
+        },
+        "problem_code": {
+          "type": "string",
+          "enum": [
+            "payment_required",
+            "quota_exhausted",
+            "authentication_failed",
+            "access_denied",
+            "rate_limited",
+            "service_unavailable",
+            "timeout",
+            "transport_error",
+            "invalid_request",
+            "response_incomplete",
+            "dispatch_unresolved",
+            "provider_error",
+            "worker_stopped",
+            "worker_stalled",
+            "observation_stale",
+            "observation_unreadable",
+            "notification_unavailable"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 280,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]*$"
+        },
+        "source_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updated_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "processing_state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "resolved"
+          ]
+        },
+        "work_preserved": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "producer_id",
+        "incident_id",
+        "operation_id",
+        "revision",
+        "receiving_scope",
+        "phase",
+        "resource_ref",
+        "severity",
+        "problem_code",
+        "summary",
+        "action",
+        "source_at",
+        "updated_at",
+        "processing_state",
+        "work_preserved"
+      ]
+    },
+    "ClaimInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        }
+      },
+      "required": [
+        "request_id"
+      ]
+    },
+    "AckInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": []
+    },
+    "ReceiptInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "delivered",
+            "uncertain",
+            "failed"
+          ]
+        },
+        "message_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "destination_ref": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        }
+      },
+      "required": [
+        "request_id",
+        "outcome"
+      ]
+    },
+    "Acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "daimon-alerts/v1"
+        },
+        "producer_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "incident_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "accepted_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "idempotent": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "producer_id",
+        "incident_id",
+        "revision",
+        "accepted_at",
+        "idempotent"
+      ]
+    },
+    "Acknowledgment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "actor_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "acknowledged_at": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "actor_id",
+        "request_id",
+        "acknowledged_at"
+      ]
+    },
+    "Delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "producer_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "incident_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "receiving_scope": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "adapter_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "uncertain",
+            "delivered",
+            "failed"
+          ]
+        },
+        "projection": {
+          "$ref": "#/$defs/IncidentInput"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claimed_by": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,128}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "claimed_at": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReceiptInput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "delivery_id",
+        "producer_id",
+        "incident_id",
+        "receiving_scope",
+        "adapter_id",
+        "created_at",
+        "state",
+        "projection",
+        "request_id",
+        "claimed_by",
+        "claimed_at",
+        "receipt"
+      ]
+    },
+    "Claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delivery_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "dispatch_allowed": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "uncertain",
+            "delivered",
+            "failed"
+          ]
+        }
+      },
+      "required": [
+        "delivery_id",
+        "request_id",
+        "dispatch_allowed",
+        "state"
+      ]
+    },
+    "Incident": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "projection": {
+          "$ref": "#/$defs/IncidentInput"
+        },
+        "accepted_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "observed_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "freshness": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "stale"
+          ]
+        },
+        "acknowledgments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Acknowledgment"
+          }
+        },
+        "deliveries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Delivery"
+          }
+        }
+      },
+      "required": [
+        "projection",
+        "accepted_at",
+        "observed_at",
+        "freshness",
+        "acknowledgments",
+        "deliveries"
+      ]
+    },
+    "IncidentPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Incident"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ]
+    },
+    "DeliveryPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Delivery"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ]
+    },
+    "Observer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "observer_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "receiving_scope": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        },
+        "observed_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_at": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_state": {
+          "type": "string",
+          "enum": [
+            "healthy",
+            "worker_stopped",
+            "worker_stalled",
+            "observation_stale",
+            "observation_unreadable"
+          ]
+        },
+        "freshness": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "stale"
+          ]
+        }
+      },
+      "required": [
+        "observer_id",
+        "receiving_scope",
+        "observed_at",
+        "source_at",
+        "source_state",
+        "freshness"
+      ]
+    },
+    "Status": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "daimon-alerts/v1"
+        },
+        "service_time": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "healthy",
+            "degraded",
+            "unobserved"
+          ]
+        },
+        "observers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Observer"
+          }
+        }
+      },
+      "required": [
+        "schema",
+        "service_time",
+        "state",
+        "observers"
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "daimon-alerts/v1"
+        },
+        "error": {
+          "type": "string",
+          "enum": [
+            "unauthorized",
+            "forbidden",
+            "not_found",
+            "invalid_request",
+            "stale_revision",
+            "revision_conflict",
+            "provenance_conflict",
+            "resolved_incident",
+            "claim_conflict",
+            "receipt_conflict",
+            "capacity_exceeded",
+            "internal_error",
+            "unavailable",
+            "payload_too_large",
+            "unsupported_media_type"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "error"
+      ]
+    }
+  }
+}

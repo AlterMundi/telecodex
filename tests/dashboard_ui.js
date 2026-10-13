@@ -6,20 +6,24 @@ const vm = require("node:vm");
 const source = fs.readFileSync("dashboard/web/app.js", "utf8");
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-function boot(fetchImpl) {
+function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf"})})) {
   const nodes = new Map(), requests = [], timers = new Map();
   let nextTimer = 0;
+  const element = () => ({
+    textContent: "", disabled: false, handlers: {}, children: [], dataset: {},
+    addEventListener(name, handler) { this.handlers[name] = handler; },
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; },
+    close() {}, showModal() {},
+  });
   const document = {
     hidden: true,
     documentElement: { dataset: {} },
     querySelector(selector) {
-      if (!nodes.has(selector)) nodes.set(selector, {
-        textContent: "", disabled: false, handlers: {},
-        addEventListener(name, handler) { this.handlers[name] = handler; },
-        close() {}, showModal() {},
-      });
+      if (!nodes.has(selector)) nodes.set(selector, element());
       return nodes.get(selector);
     },
+    createElement() { return element(); },
     querySelectorAll() { return []; },
     addEventListener() {},
   };
@@ -30,6 +34,7 @@ function boot(fetchImpl) {
     crypto: { randomUUID: () => "synthetic-action-nonce" },
     fetch(route, options) {
       requests.push({ route, options });
+      if (route === "api/alerts") return alertsImpl(route, options);
       return fetchImpl(route, options);
     },
     setTimeout(callback, milliseconds) {
@@ -58,7 +63,7 @@ const hung = (options) => new Promise((resolve, reject) => {
   // Regression: previously this bootstrap skipped state and stayed on Reading….
   const launch = boot((route) => route === "api/session" ? ok() : unavailable());
   await settle();
-  assert.deepEqual(launch.requests.map((x) => x.route), ["api/session", "api/state"]);
+  assert.deepEqual(launch.requests.map((x) => x.route), ["api/session", "api/alerts", "api/state"]);
   assert.equal(launch.requests[0].options.headers.Authorization, undefined);
   assert.equal(launch.requests[1].options.headers.Authorization, `Bearer ${fixtureToken}`);
   assert.equal(launch.nodes.get("#overview").textContent, "State unavailable");
@@ -126,5 +131,31 @@ const hung = (options) => new Promise((resolve, reject) => {
   assert.equal(stop.nodes.get("#stop").textContent, "Stop owned sessions");
   for (const phase of ["stopping", "resuming", "partial", "unknown"])
     assert.equal(vm.runInContext(`controlButton({state:"${phase}"}, false, 2); $("#stop").disabled`, stop.context), true);
+
+  // An unavailable native probe cannot suppress operational incidents/controls.
+  // All producer text stays literal, and acknowledgment IDs survive rerender.
+  const incident = {projection:{producer_id:"fixture",incident_id:"one",phase:"index",
+    summary:"<img src=x onerror=attack()>",action:"Restore credit",processing_state:"open"},
+    freshness:"stale",deliveries:[{state:"uncertain"}],acknowledgments:[]};
+  const operations = {state:"available",observer_state:"unobserved",incidents:[incident],csrf:"alerts-csrf"};
+  const independent = boot((route) => route === "api/session" ? ok()
+    : route === "api/alerts/acknowledge" ? Promise.resolve({ok:true,json:async () => ({request_id:"one"})})
+    : unavailable(), () => Promise.resolve({ok:true,json:async () => operations}));
+  await settle();
+  assert.equal(independent.nodes.get("#overview").textContent,"State unavailable");
+  assert.equal(independent.nodes.get("#operations").hidden,false);
+  assert.match(independent.nodes.get("#alerts-state").textContent,/not been established/);
+  const article = independent.nodes.get("#incidents").children[0];
+  assert.equal(article.children[1].textContent,incident.projection.summary);
+  const acknowledge = article.children.at(-1);
+  await acknowledge.handlers.click();
+  assert.equal(acknowledge.textContent,"Acknowledged");
+  const sent = independent.requests.find((r) => r.route === "api/alerts/acknowledge");
+  assert.equal(sent.options.headers["X-Dashboard-CSRF"],"alerts-csrf");
+  const original = JSON.parse(sent.options.body).request_id;
+  vm.runInContext('alerts('+JSON.stringify(operations)+')', independent.context);
+  await independent.nodes.get("#incidents").children[0].children.at(-1).handlers.click();
+  assert.equal(JSON.parse(independent.requests.filter((r) => r.route === "api/alerts/acknowledge").at(-1).options.body).request_id,original);
+  assert.equal(independent.requests.some((r) => r.route === "api/stop" || r.route === "api/resume"),false);
   console.log("dashboard UI: hidden launch, retry, HTTP deadlines and uncertain Stop passed");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
