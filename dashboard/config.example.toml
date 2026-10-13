@@ -11,6 +11,15 @@ label = "This receiving bot"
 # pointing to the origin + prefix above. Menu then uses its half-height link.
 # miniapp_short_name = "sessions"
 
+# Optional scoped durable incident receiver. Values stay private.
+# [alerts]
+# base_url = "http://127.0.0.1:8796"
+# token_file = "/private/alerts-receiver.token"
+# receiving_scope = "configured-human"
+# adapter_id = "configured-telegram"
+# interval_seconds = 15
+# deliver = false
+
 [storage]
 Host = "/"
 Development = "/your-development-mount"

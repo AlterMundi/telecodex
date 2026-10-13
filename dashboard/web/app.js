@@ -11,6 +11,7 @@ let snapshot,
   pendingNonce,
   pendingKind,
   controlIntent;
+const acknowledgmentRequests = new Map();
 const statuses = {
   active: "Working",
   idle: "Idle",
@@ -290,6 +291,45 @@ function controlButton(op, stale, count) {
     || !["no_operation", "stopped", "resumed", "resumed_with_failures", "released", "superseded"].includes(phase)
     || (phase === "stopped" && !op.operation);
 }
+function alerts(data) {
+  const section = $("#operations");
+  if (!data || data.state === "unconfigured") { section.hidden = true; return; }
+  section.hidden = false;
+  const open = (data.incidents || []).filter((i) => i.projection.processing_state === "open").length;
+  $("#operations-summary").textContent = `Operational alerts · ${open} open`;
+  const observationState = data.observer_state || data.state;
+  $("#alerts-state").textContent = ["unavailable", "stale", "checking"].includes(data.state)
+    ? "Alert service unavailable. Processing and delivery cannot be confirmed."
+    : observationState === "unobserved" ? "Worker observation has not been established."
+    : observationState === "degraded" ? "Observation requires attention. Check source and observer freshness."
+    : "Observation route current. Processing and delivery are independent.";
+  const target = $("#incidents"); target.replaceChildren();
+  for (const incident of data.incidents || []) {
+    const p = incident.projection;
+    const item = el("article", undefined, "incident");
+    item.append(el("h3", `${p.processing_state === "resolved" ? "Resolved" : "Pending"} · ${p.phase}`),
+      el("p", p.summary), el("p", p.action));
+    const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";
+    item.append(el("p", `Observation ${incident.freshness} · Delivery: ${deliveries}`, "note"));
+    if (incident.acknowledgments.length) item.append(el("p", "Acknowledged. Producer recovery remains separate.", "note"));
+    else {
+      const button = el("button", "Acknowledge");
+      const requestKey = `${p.producer_id}/${p.incident_id}`;
+      button.addEventListener("click", async () => {
+        if (!acknowledgmentRequests.has(requestKey)) acknowledgmentRequests.set(requestKey, crypto.randomUUID());
+        const requestId = acknowledgmentRequests.get(requestKey); button.disabled = true;
+        try {
+          await api("alerts/acknowledge", {producer_id:p.producer_id, incident_id:p.incident_id, request_id:requestId});
+          button.textContent = "Acknowledged";
+        } catch (e) { $("#alerts-state").textContent = e.message; button.disabled = false; }
+      });
+      item.append(button);
+    }
+    target.append(item);
+  }
+  if (!data.incidents?.length && data.state !== "unavailable") target.append(el("p", "No incidents in this receiving scope."));
+  if (data.has_more || data.truncated) target.append(el("p", "Showing the first 50 incidents; inspect the service for the remaining history.", "note"));
+}
 function render() {
   csrf = snapshot.csrf;
   $("#provider").textContent = snapshot.provider;
@@ -310,6 +350,7 @@ function render() {
     `${working} working · ${goals} goals · ${children} active subagents`;
   host(snapshot.host);
   sessions();
+  alerts(snapshot.alerts);
   $("#work").hidden = $("#control").hidden = false;
   const scope = `${snapshot.sessions.length} owned conversation(s) on ${snapshot.provider}. Filters do not change Stop scope.`;
   $("#scope").textContent = $("#confirm-scope").textContent = scope;
