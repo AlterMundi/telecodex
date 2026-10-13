@@ -22,6 +22,7 @@ class TribuJourney(Journey):
         self.release = threading.Event()
         self.sends = []
         self.turn_sequence = 0
+        self.metadata_completed = False
         self.private = self.root / 'private'
         self.private.mkdir(mode=0o700)
 
@@ -126,18 +127,19 @@ max_pending=20
                 self.submitted.set()
                 if self.mode=='queue' and self.turn_sequence==1:
                     self.release.wait(5)
-                if self.mode=='queue': finish(turn,'completed')
+                if self.mode=='queue' or self.mode=='recovery' and self.turn_sequence>1: finish(turn,'completed')
             elif method=='turn/interrupt':
                 self.interrupted.set()
                 send({'id':ident,'result':{}})
-                if self.mode!='unknown':
+                if self.mode not in ('unknown','recovery'):
                     with self.lock:
                         primary=self.sends[0]
                     primary[1]({'method':'turn/completed','params':{'threadId':'tribu-native','turn':{'id':p['turnId'],'status':'interrupted'}}})
             elif method=='turn/steer':
                 raise AssertionError('dedicated private input must queue, never steer')
             elif method=='thread/turns/list':
-                send({'id':ident,'result':{'data':[],'nextCursor':None}})
+                data = [{'id':'turn-1','status':'completed','items':[]}] if self.metadata_completed else []
+                send({'id':ident,'result':{'data':data,'nextCursor':None}})
             elif ident is not None: send({'id':ident,'result':{}})
 
 
@@ -197,11 +199,24 @@ def scenario(binary, mode):
             j.wait(j.ready)
             assert j.local_status()['undetermined_count']==1
             assert j.turn_sequence==1
-        assert all(m.get('params',{}).get('clientUserMessageId')==f'private:123:{first}' or mode=='queue' for m in j.rpc if m.get('method')=='turn/start')
+            if mode=='recovery':
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(5);s.connect(str(j.private/'attention.sock'))
+                    s.sendall(b'{"op":"reconcile"}\n')
+                    state=json.loads(s.recv(8192))
+                    assert state['ok'] and state['result']['undetermined_count']==1
+                assert j.turn_sequence==1
+                j.metadata_completed=True
+                j.admit('new human request after verified completion')
+                j.wait(lambda:j.turn_sequence==2)
+                j.wait(lambda:j.local_status()['undetermined_count']==0)
+                assert j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=7')==[('tribu-native',)]
+                j.wait(lambda:j.row('SELECT state FROM tribu_admissions ORDER BY created_at')==[('completed',),('completed',)])
+        assert all(m.get('params',{}).get('clientUserMessageId')==f'private:123:{first}' or mode in ('queue','recovery') for m in j.rpc if m.get('method')=='turn/start')
         print(json.dumps({'scenario':'tribu_'+mode,'persistent_writer':True,'no_automatic_replay':True}),flush=True)
     finally:j.close()
 
 
 if __name__=='__main__':
-    for mode in sys.argv[2:] or ['queue','pause','unknown']:
+    for mode in sys.argv[2:] or ['queue','pause','unknown','recovery']:
         scenario(str(pathlib.Path(sys.argv[1]).resolve()),mode)
