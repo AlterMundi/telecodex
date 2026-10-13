@@ -474,19 +474,22 @@ native goal state and a literal, length-bounded objective, including paused and
 blocked goals. This is a metadata read without model inference. Goals do not
 create a Working card while idle; unavailable goal APIs omit the goal line.
 
-### Human-triggered Tribu topic
+### Human-triggered I/O topic
 
 An explicitly configured `[tribu]` policy connects genuine paired-human public
 `@` requests to the **same persistent conversation** as an existing private
-**Tribu** topic. This is opt-in and Source-only for the current rollout. It uses
+**I/O** topic. Tribu remains the public social channel. This is opt-in and
+Source-only for the current rollout. It uses
 the maintained authenticated Matrix human ingress and a private local Unix
 socket; it does not consume the public bot again or watch peer inboxes.
 
 The policy pins `socket_path`, `owner_client_file`, `being_ref`, `body_label`,
 `embodiment_id`, `human_id`, `chat_id`, `topic_id` and `activated_after`.
 `deadline_seconds` defaults to 300 (maximum 300); `max_pending` defaults to 20.
-The destination must be a fresh, authorized topic named `Tribu`, with shared
-App Server enabled. Public admissions and ordinary private messages use one
+Prepare the dedicated authorized topic as `I/O`, with shared App Server
+enabled. If preparation already recorded a topic, reconcile that exact binding;
+do not create a replacement just to change its title. Titles are presentation,
+not native identity or authority. Public admissions and ordinary private messages use one
 queue and writer; new private messages do not steer an active turn. Every turn
 receives its start, limit and UTC deadline before work, including continuations.
 Native goals and multi-agent continuation are disabled for this dedicated thread.
@@ -501,6 +504,15 @@ For rollback, pause this writer and disable ingress admission while keeping the
 qualified writer, conversation, databases and polling offsets. Older binaries
 without the dedicated controls must not accept input in this topic. Live human
 acceptance is separate from synthetic HTTP/TLS/socket/native contract tests.
+
+The implemented owner-local recovery operations are `status`, `reconcile`,
+`admit` and restricted `retry`. Reconciliation uses actual native terminal
+information without inference; retry refuses any possibly submitted work. A
+source checkout or merged recovery PR does not prove that a receiving listener
+has selected it. Source's old admission remains an unfinished receiving rollout
+under [Matrix #310](https://github.com/AlterMundi/daimon-matrix/issues/310).
+The multi-session router and compaction renewal are separate future increments;
+renaming this topic does not activate them or peer attention.
 
 ### Native goal commands
 

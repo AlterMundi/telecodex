@@ -55,7 +55,7 @@ The SQLite database contains private human messages and native thread bindings. 
 
 ## Release and rollback
 
-Record the exact reviewed source commit, binary SHA256, toolchain, build feature set and current local configuration. Stop the existing consumer before replacing its binary; back up the installed binary/configuration and verify a SQLite snapshot. Preserve the token, allowlist, native auth and thread map. Start one consumer and check getMe, private-topic support, the configured human ACL and two independent topic sessions against the actual native harness.
+Record the exact reviewed source commit, binary SHA256, toolchain, build feature set and current local configuration. Verify actual native writers are idle, or use a qualified writer-preserving handoff with native reconciliation, before stopping the selected consumer and replacing its binary; back up the installed binary/configuration and verify a SQLite snapshot. Preserve the token, allowlist, native auth and thread map. Start one consumer and check getMe, private-topic support, the configured human ACL and two independent topic sessions against the actual native harness.
 
 Rollback replaces the binary and any explicitly changed configuration with their saved versions. Do not automatically restore an older database or roll back the polling offset: that can erase accepted input or repeat external effects. Additive incoming_updates state is retained. If a data recovery is required, first preserve the current database and inspect undetermined updates and native history.
 
@@ -82,3 +82,21 @@ including drafts when `use_message_drafts=true`. Each completed commentary and
 the final response are still published permanently, with normal long-message
 splitting. Interactive approval prompts and final error reports remain available.
 The default is `true`, preserving existing preview behavior.
+
+
+## Matrix integration and current profiles
+
+Use [Matrix current architecture and profiles](https://github.com/AlterMundi/daimon-matrix/blob/main/docs/current-architecture.md)
+and its CURRENT-STATE for actual receiving evidence. Telecodex owns topics,
+input journaling and native conversation admission; Matrix owns social identity,
+Tribu authorship and signed public reply. Matrix message intake is not inference.
+Source's bounded paired-human topic is named I/O, while the public channel
+remains Tribu. Existing `/tribu` controls keep their names. A topic/native turn,
+a transport ACK, a model completion and public reply delivery are distinct facts.
+
+Maintain private input and native histories through upgrades. An uncertain turn
+requires reconciliation, never a blind replacement or replay. Global Stop
+requires a fresh genuine human request for each operation; a deployment, old GO,
+Resume or peer request does not provide it. The current human-triggered deadline
+is not a provider spending fence. Peer attention and multi-session routing need
+the separately selected Matrix designs, not an installation-side default.
