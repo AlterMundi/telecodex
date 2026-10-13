@@ -328,7 +328,7 @@ function alerts(data) {
     target.append(item);
   }
   if (!data.incidents?.length && data.state !== "unavailable") target.append(el("p", "No incidents in this receiving scope."));
-  if (data.has_more || data.truncated) target.append(el("p", "Showing the first 50 incidents; inspect the service for the remaining history.", "note"));
+  if (data.has_more || data.truncated) target.append(el("p", "Showing a bounded incident history; inspect the service for the remaining records.", "note"));
 }
 function render() {
   csrf = snapshot.csrf;
