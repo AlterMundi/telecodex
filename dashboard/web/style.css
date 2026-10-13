@@ -33,11 +33,18 @@ body {
     sans-serif;
 }
 main {
+  height: 100vh;
+  height: var(--tg-viewport-stable-height, 100dvh);
+  display: flex;
+  flex-direction: column;
   max-width: 620px;
   margin: auto;
   padding: max(10px, env(safe-area-inset-top))
     max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom));
   padding-top: max(10px, var(--tg-content-safe-area-inset-top, 0px));
+}
+main > :not(#work) {
+  flex-shrink: 0;
 }
 header {
   display: flex;
@@ -141,6 +148,10 @@ summary {
   color: var(--muted);
 }
 #work {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 132px;
+  min-height: 132px;
   padding: 6px 0 6px 8px;
   border-left: 4px solid var(--accent);
   border-top: 2px solid var(--accent);
@@ -151,6 +162,7 @@ summary {
   content: "";
   display: block;
   height: 4px;
+  flex-shrink: 0;
   margin-bottom: 6px;
   border-radius: 0 2px 2px 0;
   background: linear-gradient(
@@ -164,6 +176,7 @@ summary {
   display: none;
 }
 .filters {
+  flex-shrink: 0;
   display: flex;
   gap: 8px;
   margin-bottom: 4px;
@@ -174,16 +187,10 @@ summary {
   color: var(--bg);
 }
 #sessions {
-  max-height: clamp(
-    88px,
-    calc(var(--tg-viewport-stable-height, 100vh) - 350px),
-    132px
-  );
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
-}
-#sessions:has(> .session[open]) {
-  max-height: min(360px, 60vh);
 }
 .session {
   border-left: 3px solid var(--line);
