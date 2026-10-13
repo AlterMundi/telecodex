@@ -29,8 +29,17 @@ never establishes child inactivity. These receipts certify selected native
 sessions/descendants, not arbitrary detached host processes. Other maintenance
 requires the relevant resource's own quiescence checks.
 
-Resume verifies the unchanged authorized native binding and paused goal
-definition. Only formerly active or already-staged goal intent resumes; already
+Resume immediately persists `resume_checking` and returns the operation receipt.
+The finite receiving coordinator then verifies native inactivity, unchanged
+authorized bindings and paused goal definitions. Long validation does not keep
+the Telegram command or owner-local socket waiting. Repeating Resume while it
+is checking, resuming or already resumed returns status without submitting
+another continuation. `/stop status [ID]` stays available throughout.
+
+If validation fails before submission, status returns to `stopped` with a retained
+`resume_error`; no continuation was sent. Correct the reported binding, goal or
+independent maintenance hold before explicitly retrying. A service restart during
+checking retains the fence as `unconfirmed`, without automatically retrying. Only formerly active or already-staged goal intent resumes; already
 paused/blocked/terminal goals retain their meaning. Ordinary interrupted work
 gets a new explicit continuation using retained history, rather than replay of
 its initiating prompt. The parent receives recorded child IDs and previous goal
@@ -103,3 +112,21 @@ Qualification uses locked text checks, real Unix/HTTP/WebSocket/SQLite journeys,
 scoped restart/admission/goal/descendant cases and the existing affected goal and
 merge journeys. Live human Stop-update-Resume and actual child recovery are
 separate receiving acceptance evidence. Implementation: issue #68.
+
+## Failed maintenance recovery
+
+Stop confirms inactivity; it does not execute, supervise or certify an external
+deployment. A maintenance operator must retain its checkpoint and report a
+terminal failure to the human with the operation ID, failed stage, whether
+changes or rollback occurred, and the exact `/stop status ID` and
+`/stop resume ID` commands. Do not claim that Resume happened merely because
+a coordinator was started. Do not automatically lift the fence after uncertain
+changes. An observed stopped operation can accept a human-requested Resume
+after the checkpoint is reconciled; `/stop release ID` is a separate explicit
+fence-only action.
+
+Held-input replies show the actual operation ID, state and concrete recovery
+commands. Telegram control replies summarize status in readable text; owner-local
+IPC keeps structured receipts, including recovery commands and validation errors.
+An omitted ID selects the latest operation. Held messages and failed command
+inputs are not automatically replayed by Resume.

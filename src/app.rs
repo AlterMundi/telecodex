@@ -509,7 +509,14 @@ impl App {
             if let Ok(id) = HUMAN_UPDATE_ID.try_with(|id| *id) {
                 self.shared.store.stop_retain_input(id)?;
             }
-            return self.send_plain_status(key.chat_id,Some(key.thread_id),"Coordinated Stop holds this conversation. Your input is retained without native submission; /stop status ID shows the operation and /stop resume ID requests continuation.").await.map(|_|true);
+            return self
+                .send_plain_status(
+                    key.chat_id,
+                    Some(key.thread_id),
+                    &stopping::held_input_message(self, human)?,
+                )
+                .await
+                .map(|_| true);
         }
         self.send_status(key.chat_id, Some(key.thread_id),
             "This topic's native work continues across a controlled upgrade. Its input journal is retained; no additional turn or replay was started. Use /goal or /status to inspect it, or /goal pause to pause the goal. New work waits for native termination and reconciliation.").await?;
@@ -1255,7 +1262,7 @@ impl App {
                     )
                     .await;
                     let text = match result {
-                        Ok(value) => serde_json::to_string_pretty(&value)?,
+                        Ok(value) => stopping::human_status(&value),
                         Err(e) => format!("Stop control failed: {e}"),
                     };
                     self.send_plain_status(message.chat.id, message.message_thread_id, &text)

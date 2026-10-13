@@ -27,13 +27,15 @@ pub struct StopOperation {
     pub human: i64,
     pub phase: String,
     pub targets: Vec<StopTarget>,
+    #[serde(default)]
+    pub resume_error: Option<String>,
 }
 impl Store {
     pub(super) fn init_stopping(&self) -> Result<()> {
         self.conn.lock().expect("store mutex poisoned").execute_batch("CREATE TABLE IF NOT EXISTS stop_operations(id TEXT PRIMARY KEY,human INTEGER NOT NULL,nonce TEXT NOT NULL,phase TEXT NOT NULL,document TEXT NOT NULL,UNIQUE(human,nonce));")?;
         // Retain fences on restart. Never replay a native mutation or continuation.
         self.conn.lock().expect("store mutex poisoned").execute(
-            "UPDATE stop_operations SET phase='unconfirmed' WHERE phase IN ('stopping','resuming')",
+            "UPDATE stop_operations SET phase='unconfirmed' WHERE phase IN ('stopping','resume_checking','resuming')",
             [],
         )?;
         Ok(())
@@ -53,7 +55,10 @@ impl Store {
         if let Some((doc, phase, prior_nonce)) = existing {
             let mut old: StopOperation = serde_json::from_str(&doc)?;
             old.phase = phase;
-            if prior_nonce == nonce || !old.targets.iter().any(|t| t.phase.starts_with("resume_")) {
+            if prior_nonce == nonce
+                || (old.phase != "resume_checking"
+                    && !old.targets.iter().any(|t| t.phase.starts_with("resume_")))
+            {
                 return Ok((old, false));
             }
             tx.execute(
@@ -89,6 +94,7 @@ impl Store {
             human,
             phase: "stopping".into(),
             targets,
+            resume_error: None,
         };
         tx.execute(
             "INSERT INTO stop_operations VALUES(?,?,?,?,?)",
@@ -326,6 +332,43 @@ mod tests {
         assert!(store.stop_fenced(owned).unwrap());
         assert_eq!(store.stop_begin(100, "human-request").unwrap().0.id, op.id);
     }
+    #[test]
+    fn a_new_stop_supersedes_resume_checks_and_prevents_submission() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(&tmp.path().join("stop.sqlite"), &[100], &defaults()).unwrap();
+        let key = SessionKey::new(100, Some(7));
+        store.ensure_session(key, 100, &defaults()).unwrap();
+        let (mut old, _) = store.stop_begin(100, "first").unwrap();
+        old.phase = "resume_checking".into();
+        old.targets[0].phase = "native_stopped".into();
+        store.stop_save(&old, "stopping").unwrap();
+        let (new, fresh) = store.stop_begin(100, "stop_again").unwrap();
+        assert!(fresh);
+        assert_ne!(old.id, new.id);
+        assert_eq!(store.stop_read(100, &old.id).unwrap().phase, "superseded");
+        old.phase = "resuming".into();
+        assert!(store.stop_save(&old, "resume_checking").is_err());
+        assert!(store.stop_fenced(key).unwrap());
+    }
+
+    #[test]
+    fn resume_checking_survives_as_uncertain_without_replaying() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("stop.sqlite");
+        let store = Store::open(&db, &[100], &defaults()).unwrap();
+        let key = SessionKey::new(100, Some(7));
+        store.ensure_session(key, 100, &defaults()).unwrap();
+        let (mut op, _) = store.stop_begin(100, "stop").unwrap();
+        op.phase = "resume_checking".into();
+        store.stop_save(&op, "stopping").unwrap();
+        assert!(store.stop_fenced(key).unwrap());
+        assert!(store.stop_validate_resume(&op.id, key, 100).is_err());
+        drop(store);
+        let store = Store::open(&db, &[100], &defaults()).unwrap();
+        assert_eq!(store.stop_read(100, &op.id).unwrap().phase, "unconfirmed");
+        assert!(store.stop_fenced(key).unwrap());
+    }
+
     #[test]
     fn retired_admission_and_explicit_restart_request_survive_reboot_once() {
         let tmp = tempfile::tempdir().unwrap();

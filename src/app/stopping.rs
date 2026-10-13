@@ -111,8 +111,85 @@ pub(super) async fn command(
     )
 }
 fn public_status(app: &App, op: &StopOperation) -> Value {
-    json!({"schema":"telecodex.session-control/v1","operation":op.id,"state":op.phase,"scope":"this receiving provider's owned conversations","external_processes":"not certified by native turn status","subagents":"native descendants are enumerated and observed; recovery is delegated to the resumed parent, not claimed from queue admission","targets":op.targets.iter().map(|t|json!({"topic":t.key.thread_id,"state":t.phase,"detail":t.reason,"restart_notice":app.shared.store.bot_state_value(&notice_key(op,t,"before")).ok().flatten(),"return_notice":app.shared.store.bot_state_value(&notice_key(op,t,"after")).ok().flatten()})).collect::<Vec<_>>()})
+    json!({"schema":"telecodex.session-control/v1","operation":op.id,"state":op.phase,"scope":"this receiving provider's owned conversations","external_processes":"not certified by native turn status","subagents":"native descendants are enumerated and observed; recovery is delegated to the resumed parent, not claimed from queue admission","resume_error":op.resume_error,"recovery":{"status":format!("/stop status {}",op.id),"resume":format!("/stop resume {}",op.id)},"targets":op.targets.iter().map(|t|json!({"topic":t.key.thread_id,"state":t.phase,"detail":t.reason,"restart_notice":app.shared.store.bot_state_value(&notice_key(op,t,"before")).ok().flatten(),"return_notice":app.shared.store.bot_state_value(&notice_key(op,t,"after")).ok().flatten()})).collect::<Vec<_>>()})
 }
+pub(super) fn human_status(value: &Value) -> String {
+    let Some(id) = value["operation"].as_str() else {
+        return "No coordinated Stop operation.".into();
+    };
+    let phase = value["state"].as_str().unwrap_or("unknown");
+    let count = value["targets"].as_array().map_or(0, Vec::len);
+    let detail = match phase {
+        "stopping" => "Stopping selected work. New input is retained while the fence is active.",
+        "stopped" => {
+            "Selected work is stopped. New input is retained. Maintenance does not automatically resume after a failure."
+        }
+        "resume_checking" => {
+            "Resume requested. Checking native inactivity, bindings and goals; the fence remains until continuation is confirmed."
+        }
+        "resuming" => {
+            "Resume is in progress. Native acceptance is still pending; do not resend earlier input."
+        }
+        "resumed" | "resumed_with_failures" => {
+            "The Stop fence is lifted. Formerly active work received continuation; idle conversations stay idle. Retained input was not replayed."
+        }
+        "released" => {
+            "The Stop fence was explicitly released without restoring goals or submitting continuation."
+        }
+        _ => {
+            "The operation is unconfirmed. Its fence remains; inspect the retained state before recovery."
+        }
+    };
+    let mut text =
+        format!("Coordinated Stop {id}\nState: {phase} ({count} conversations)\n{detail}");
+    if let Some(error) = value["resume_error"].as_str() {
+        text.push_str(&format!("\nResume check failed: {error}"));
+    }
+    text.push_str(&format!("\nStatus: /stop status {id}"));
+    if phase == "stopped" {
+        text.push_str(&format!("\nRequest continuation: /stop resume {id}\nYou can also use /stop resume without an ID for your latest operation."));
+    }
+    if let Some(detail) = value["detail"].as_str() {
+        text.push_str(&format!("\n{detail}"));
+    }
+    if let Some(restart) = value["restart"].as_str() {
+        text.push_str(&format!("\nRestart request: {restart}"));
+    }
+    if let Some(targets) = value["targets"].as_array() {
+        for target in targets.iter().filter(|target| {
+            !matches!(
+                target["state"].as_str(),
+                Some(
+                    "native_stopped"
+                        | "resume_unchanged"
+                        | "resume_accepted"
+                        | "resume_turn_completed"
+                )
+            )
+        }) {
+            text.push_str(&format!(
+                "\nTopic {}: {}. {}",
+                target["topic"],
+                target["state"].as_str().unwrap_or("unknown"),
+                target["detail"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    text
+}
+
+pub(super) fn held_input_message(app: &App, human: i64) -> Result<String> {
+    let operations = app.shared.store.stop_metadata(human)?;
+    if let Some(id) = operations[0]["id"].as_str() {
+        let op = app.shared.store.stop_read(human, id)?;
+        return Ok(format!(
+            "Your input is retained without native submission.\n{}",
+            human_status(&public_status(app, &op))
+        ));
+    }
+    Ok("Your input is retained. Stop state changed; use /stop status to inspect it before sending more work.".into())
+}
+
 fn notice_key(op: &StopOperation, t: &StopTarget, kind: &str) -> String {
     format!(
         "stop_notice:{}:{kind}:{}:{}",
@@ -462,9 +539,47 @@ async fn observe(app: &App, human: i64, t: &StopTarget) -> Result<bool> {
 }
 async fn resume(app: &App, human: i64, id: &str) -> Result<Value> {
     let mut op = app.shared.store.stop_read(human, id)?;
-    if op.phase != "stopped" {
-        bail!("Only an observed stopped operation can resume; inspect /stop status ID");
+    if matches!(
+        op.phase.as_str(),
+        "resume_checking" | "resuming" | "resumed" | "resumed_with_failures"
+    ) {
+        return Ok(public_status(app, &op));
     }
+    if op.phase != "stopped" {
+        bail!("Only an observed stopped operation can resume; inspect /stop status {id}");
+    }
+    // Claim before slow native reads. The caller receives a durable receipt and
+    // repeated requests cannot start another coordinator or continuation.
+    op.phase = "resume_checking".into();
+    op.resume_error = None;
+    app.shared.store.stop_save(&op, "stopped")?;
+    let worker = app.clone();
+    let operation = op.clone();
+    tokio::spawn(async move {
+        if let Err(error) = run_resume(&worker, operation.clone()).await {
+            let mut failed = operation;
+            failed.phase = "stopped".into();
+            failed.resume_error = Some(error.to_string());
+            // Only pre-submission failures can become retryable. A release,
+            // restart or partial transmission must never be overwritten.
+            if worker
+                .shared
+                .store
+                .stop_save(&failed, "resume_checking")
+                .is_ok()
+            {
+                maintenance_notice(&worker, &failed, "resume_failed", &format!(
+                    "Resume could not pass its checks. The Stop fence remains; no continuation was submitted. Inspect /stop status {} for the reason and recovery commands.", failed.id
+                )).await;
+            }
+        }
+    });
+    Ok(public_status(app, &op))
+}
+
+async fn run_resume(app: &App, mut op: StopOperation) -> Result<()> {
+    let human = op.human;
+    let id = op.id.clone();
     for t in &op.targets {
         if !observe(app, human, t).await? {
             bail!("Stop destination is no longer inactive");
@@ -506,9 +621,9 @@ async fn resume(app: &App, human: i64, id: &str) -> Result<Value> {
     for t in &mut op.targets {
         t.phase = "resume_intent".into();
     }
-    app.shared.store.stop_save(&op, "stopped")?;
+    app.shared.store.stop_save(&op, "resume_checking")?;
     for t in &op.targets {
-        let result = resume_target(app, human, t, id).await;
+        let result = resume_target(app, human, t, &id).await;
         let phase = match result {
             Ok(true) => "resume_queued",
             Ok(false) => "resume_unchanged",
@@ -516,10 +631,9 @@ async fn resume(app: &App, human: i64, id: &str) -> Result<Value> {
         };
         app.shared
             .store
-            .stop_resume_event(id, t.key, phase, None, None)?;
+            .stop_resume_event(&id, t.key, phase, None, None)?;
     }
-    op = app.shared.store.stop_read(human, id)?;
-    Ok(public_status(app, &op))
+    Ok(())
 }
 async fn resume_target(app: &App, human: i64, t: &StopTarget, id: &str) -> Result<bool> {
     app.shared.store.stop_binding(human, t)?;
