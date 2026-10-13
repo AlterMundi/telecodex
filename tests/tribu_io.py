@@ -211,7 +211,7 @@ def scenario(binary, mode):
                 j.wait(lambda:j.turn_sequence==2)
                 j.wait(lambda:j.local_status()['undetermined_count']==0)
                 assert j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=7')==[('tribu-native',)]
-                assert j.row('SELECT state FROM tribu_admissions ORDER BY created_at')==[('completed',),('completed',)]
+                j.wait(lambda:j.row('SELECT state FROM tribu_admissions ORDER BY created_at')==[('completed',),('completed',)])
         assert all(m.get('params',{}).get('clientUserMessageId')==f'private:123:{first}' or mode in ('queue','recovery') for m in j.rpc if m.get('method')=='turn/start')
         print(json.dumps({'scenario':'tribu_'+mode,'persistent_writer':True,'no_automatic_replay':True}),flush=True)
     finally:j.close()
