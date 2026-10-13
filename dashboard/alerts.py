@@ -21,6 +21,7 @@ import urllib.request
 
 from .alerts_contract import validate
 from .private_state import private_directory
+from .provider import ProviderUnavailable
 
 
 class AlertsUnavailable(Exception):
@@ -67,14 +68,16 @@ class Client:
         self.opener = opener()
 
     def assert_binding(self):
-        if hashlib.sha256(private_token(self.token_file).encode()).hexdigest() != self.fingerprint:
+        token = private_token(self.token_file)
+        if hashlib.sha256(token.encode()).hexdigest() != self.fingerprint:
             raise AlertsUnavailable('credential_binding_changed')
+        return token
 
     def call(self, method, path, shape, value=None):
-        self.assert_binding()
+        token = self.assert_binding()
         request = urllib.request.Request(self.base + path, method=method,
             data=json.dumps(value).encode() if value is not None else None,
-            headers={'Authorization': 'Bearer ' + private_token(self.token_file),
+            headers={'Authorization': 'Bearer ' + token,
                      'Content-Type': 'application/json'})
         try:
             with self.opener.open(request, timeout=5) as response:
@@ -128,13 +131,19 @@ class Sender:
             raise AlertsUnavailable('unsafe_telegram_endpoint')
         self.opener = opener()
         self.verified = False
+        self.next_send = 0
 
-    def call(self, method, payload):
+    def assert_binding(self):
         self.provider.assert_binding()
         if private_token(self.token_file) != self.token:
             raise AlertsUnavailable('bot_binding_changed')
+
+    def call(self, method, payload):
+        self.assert_binding()
         request = urllib.request.Request(f'{self.base}/bot{self.token}/{method}',
             data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'})
+        if method == 'sendMessage' and not self.provider.authorized(self.provider.human):
+            raise AlertsUnavailable('receiving_grant_unavailable')
         try:
             try:
                 response = self.opener.open(request, timeout=8)
@@ -152,16 +161,21 @@ class Sender:
         if not self.verified:
             response = self.call('getMe', {})
             bot = response.get('result', {}) if isinstance(response, dict) else {}
-            if (response is None or response.get('ok') is not True
+            if (not isinstance(response, dict) or not isinstance(bot, dict) or response.get('ok') is not True
                     or type(bot.get('id')) is not int or bot['id'] != self.config['bot_id']
                     or bot.get('username') != self.config.get('bot_username')):
                 raise AlertsUnavailable('receiving_bot_unconfirmed')
             self.verified = True
 
     def send(self, projection):
+        # Same private-chat cadence as the existing activity companion.
+        time.sleep(max(0, self.next_send - time.monotonic()))
+        self.next_send = time.monotonic() + 1
         resolved = projection['processing_state'] == 'resolved'
-        text = (f"{'✅' if resolved else '⚠️'} {projection['producer_id']} · {projection['phase']}\n"
-                f"{projection['summary']}\n{projection['action']}\n"
+        text = (f"{'✅ Resolved' if resolved else '⚠️ Pending'} · {projection['producer_id']} · {projection['phase']}\n"
+                + (f"Previous report: {projection['summary']}\nPrevious action: {projection['action']}\n" if resolved
+                   else f"{projection['summary']}\n{projection['action']}\n")
+                +
                 f"Processing: {projection['processing_state']} · {projection['problem_code']}\n"
                 + ('Work preserved' if projection['work_preserved'] else 'Work preservation unconfirmed'))
         response = self.call('sendMessage', {'chat_id': self.provider.human, 'text': text})
@@ -169,7 +183,9 @@ class Sender:
             result = response.get('result', {})
             if (response.get('ok') is True and isinstance(result, dict)
                     and type(result.get('message_id')) is int and result['message_id'] > 0
-                    and result.get('chat', {}).get('id') == self.provider.human):
+                    and isinstance(result.get('chat'), dict)
+                    and type(result['chat'].get('id')) is int
+                    and result['chat']['id'] == self.provider.human):
                 return {'outcome': 'delivered', 'message_ref': f"telegram-{result['message_id']}",
                         'destination_ref': f'telegram-{self.provider.human}'}
             if response.get('ok') is False and type(response.get('error_code')) is int and 400 <= response['error_code'] < 500:
@@ -188,11 +204,11 @@ class Receiver:
         if type(self.interval) is not int or not 5 <= self.interval <= 300 or type(self.deliver) is not bool:
             raise ValueError('Invalid Alerts receiving settings')
         self.client = client or Client(settings)
-        self.sender = sender or (Sender(provider, config) if self.deliver else None)
+        self.sender = sender or Sender(provider, config)
         self.binding = hashlib.sha256(json.dumps([self.client.base, self.client.fingerprint,
             self.scope, self.adapter, config['bot_id'], provider.human,
             provider.binding_bytes.hex(), getattr(self.sender, 'token', '')], sort_keys=True).encode()).hexdigest()
-        root = private_directory(Path(config['state_dir']) / 'alerts')
+        root = private_directory(private_directory(config['state_dir']) / 'alerts')
         self.db_path = root / 'delivery.sqlite3'
         if self.db_path.exists() or self.db_path.is_symlink():
             info = self.db_path.lstat()
@@ -225,9 +241,13 @@ class Receiver:
         finally:
             db.close()
 
-    def authorized(self):
+    def assert_binding(self):
         self.provider.assert_binding()
         self.client.assert_binding()
+        self.sender.assert_binding()
+
+    def authorized(self):
+        self.assert_binding()
         if not self.provider.authorized(self.provider.human):
             raise AlertsUnavailable('receiving_grant_unavailable')
 
@@ -237,8 +257,11 @@ class Receiver:
         if result['observed_at'] is not None and time.time() - result['observed_at'] > max(30, self.interval * 2):
             result['state'] = 'stale'
         with self.database() as db:
-            result['local_deliveries'] = [dict(r) for r in db.execute(
-                'SELECT delivery_id,state,updated FROM attempts ORDER BY updated DESC LIMIT 20')]
+            result['local_deliveries'] = []
+            for row in db.execute('SELECT delivery_id,state,updated,receipt FROM attempts ORDER BY updated DESC LIMIT 20'):
+                result['local_deliveries'].append({'delivery_id': row['delivery_id'],
+                    'state': row['state'], 'updated': row['updated'],
+                    'outcome': json.loads(row['receipt'])['outcome'] if row['receipt'] else None})
         return result
 
     def start(self):
@@ -264,9 +287,13 @@ class Receiver:
             status = self.client.call('GET', '/v1/status', 'Status')
             records, truncated = self.client.collection('/v1/incidents', 'IncidentPage', processing_state='open')
             incidents = [r for r in records if r['projection']['receiving_scope'] == self.scope]
+            history, history_truncated = self.client.collection('/v1/incidents', 'IncidentPage', processing_state='resolved')
+            history = sorted((r for r in history if r['projection']['receiving_scope'] == self.scope),
+                             key=lambda r: r['projection']['updated_at'], reverse=True)
             observers = [r for r in status['observers'] if r['receiving_scope'] == self.scope]
             self.authorized()
             view = {'state': 'available', 'observed_at': time.time(), 'incidents': incidents,
+                    'resolved_incidents': history[:20], 'history_truncated': history_truncated or len(history) > 20,
                     'observers': observers, 'truncated': truncated, 'delivery_enabled': self.deliver,
                     'observer_state': ('unobserved' if not observers else 'degraded'
                         if any(r['freshness'] != 'fresh' or r['source_state'] != 'healthy' for r in observers)
@@ -283,7 +310,7 @@ class Receiver:
                         break
                     if delivery['receiving_scope'] == self.scope and delivery['adapter_id'] == self.adapter:
                         self.dispatch(delivery)
-        except (AlertsUnavailable, OSError, ValueError, KeyError, sqlite3.Error) as error:
+        except (AlertsUnavailable, ProviderUnavailable, OSError, ValueError, KeyError, sqlite3.Error) as error:
             code = str(error) if isinstance(error, AlertsUnavailable) else 'receiving_unavailable'
             with self.lock:
                 self.view = {**self.view, 'state': 'unavailable', 'error': code}

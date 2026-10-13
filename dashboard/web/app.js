@@ -293,28 +293,38 @@ function controlButton(op, stale, count) {
 }
 function alerts(data) {
   const section = $("#operations");
-  if (!data || data.state === "unconfigured") { section.hidden = true; return; }
+  if (!data || data.state === "not_configured") { section.hidden = true; return; }
   section.hidden = false;
   const open = (data.incidents || []).filter((i) => i.projection.processing_state === "open").length;
   $("#operations-summary").textContent = `Operational alerts · ${open} open`;
-  const observationState = data.observer_state || data.state;
-  $("#alerts-state").textContent = ["unavailable", "stale", "checking"].includes(data.state)
+  $("#alerts-state").textContent = data.state === "unavailable"
     ? "Alert service unavailable. Processing and delivery cannot be confirmed."
-    : observationState === "unobserved" ? "Worker observation has not been established."
-    : observationState === "degraded" ? "Observation requires attention. Check source and observer freshness."
+    : data.state === "stale" ? "Showing an older observation. Refresh before acting."
+    : data.observer_state === "unobserved" ? "Worker observation has not been established."
+    : data.observer_state === "degraded" ? "Observation requires attention. Check source and observer freshness."
     : "Observation route current. Processing and delivery are independent.";
+  const explanations = {
+    unauthorized: "Alert service credential needs attention.",
+    forbidden: "Alert service grant needs attention.",
+    credential_binding_changed: "Alert credentials changed; operator requalification is required.",
+    receiving_bot_unconfirmed: "The receiving bot has not been verified.",
+    local_capacity_exceeded: "The delivery journal is full; reconcile retained attempts.",
+  };
+  if (data.state === "unavailable" && explanations[data.error])
+    $("#alerts-state").textContent += " " + explanations[data.error];
   const target = $("#incidents"); target.replaceChildren();
-  for (const incident of data.incidents || []) {
+  for (const incident of [...(data.incidents || []), ...(data.resolved_incidents || [])]) {
     const p = incident.projection;
     const item = el("article", undefined, "incident");
     item.append(el("h3", `${p.processing_state === "resolved" ? "Resolved" : "Pending"} · ${p.phase}`),
-      el("p", p.summary), el("p", p.action));
+      el("p", p.summary), el("p", p.processing_state === "resolved" ? `Previous action: ${p.action}` : p.action));
     const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";
     item.append(el("p", `Observation ${incident.freshness} · Delivery: ${deliveries}`, "note"));
     if (incident.acknowledgments.length) item.append(el("p", "Acknowledged. Producer recovery remains separate.", "note"));
     else {
       const button = el("button", "Acknowledge");
       const requestKey = `${p.producer_id}/${p.incident_id}`;
+      button.disabled = data.state !== "available";
       button.addEventListener("click", async () => {
         if (!acknowledgmentRequests.has(requestKey)) acknowledgmentRequests.set(requestKey, crypto.randomUUID());
         const requestId = acknowledgmentRequests.get(requestKey); button.disabled = true;
@@ -327,8 +337,12 @@ function alerts(data) {
     }
     target.append(item);
   }
-  if (!data.incidents?.length && data.state !== "unavailable") target.append(el("p", "No incidents in this receiving scope."));
-  if (data.has_more || data.truncated) target.append(el("p", "Showing a bounded incident history; inspect the service for the remaining records.", "note"));
+  if (!data.incidents?.length && data.state === "available") target.append(el("p", "No open incidents reported in this receiving scope."));
+  if (data.truncated) target.append(el("p", "Partial view: more incidents exist in this receiving scope.", "note"));
+  if (data.history_truncated) target.append(el("p", "Resolved history is partial; open incidents are listed separately.", "note"));
+  const uncertain = (data.local_deliveries || []).filter((d) =>
+    ["uncertain", "failed"].includes(d.outcome) || d.state === "claim_unconfirmed").length;
+  if (uncertain) target.append(el("p", `${uncertain} recent delivery attempt(s) failed or unconfirmed. No automatic resend.`, "note"));
 }
 function render() {
   csrf = snapshot.csrf;
@@ -350,7 +364,6 @@ function render() {
     `${working} working · ${goals} goals · ${children} active subagents`;
   host(snapshot.host);
   sessions();
-  alerts(snapshot.alerts);
   $("#work").hidden = $("#control").hidden = false;
   const scope = `${snapshot.sessions.length} owned conversation(s) on ${snapshot.provider}. Filters do not change Stop scope.`;
   $("#scope").textContent = $("#confirm-scope").textContent = scope;
@@ -362,6 +375,16 @@ async function refresh(force = false) {
   refreshing = true;
   $("#refresh").disabled = true;
   if (!snapshot) $("#overview").textContent = "Reading native state…";
+  // This request remains independent of native Codex availability.
+  const operations = api("alerts").then((data) => {
+    csrf = data.csrf;
+    alerts(data);
+  }).catch(() => {
+    $("#operations").hidden = false;
+    $("#operations-summary").textContent = "Operational alerts · unavailable";
+    $("#alerts-state").textContent = "Alert observation unavailable. Processing and delivery cannot be confirmed.";
+    for (const button of document.querySelectorAll("#incidents button")) button.disabled = true;
+  });
   try {
     snapshot = await api("state");
     render();
@@ -372,6 +395,7 @@ async function refresh(force = false) {
       $("#freshness").textContent = "Stale observation";
     $("#stop").disabled = true;
   } finally {
+    await operations;
     refreshing = false;
     $("#refresh").disabled = false;
   }
