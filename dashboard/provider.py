@@ -122,6 +122,10 @@ class Provider:
         self.cache = None
         self.readers = {}
         self.host = Host(config.get('storage', {'Host': '/'}))
+        self.alerts_receiver = None
+        if config.get('alerts'):
+            from .alerts import Receiver
+            self.alerts_receiver = Receiver(config, self)
 
     def assert_binding(self):
         try:
@@ -130,6 +134,32 @@ class Provider:
             raise ProviderUnavailable('Receiving configuration unavailable') from None
         if current != self.binding_bytes:
             raise ProviderUnavailable('Receiving grant changed; operator must requalify the dashboard')
+
+    def alerts(self):
+        if self.alerts_receiver is None:
+            return {'state':'unconfigured','incidents':[],'observers':[]}
+        result = self.alerts_receiver.snapshot()
+        if result['state'] == 'available':
+            try:
+                records, truncated = self.alerts_receiver.client.collection('/v1/incidents', 'IncidentPage')
+                result['incidents'] = [r for r in records if r['projection']['receiving_scope'] == self.alerts_receiver.scope]
+                result['truncated'] = truncated
+            except Exception:
+                result['state'] = 'unavailable'
+        return result
+
+    def start_alerts(self):
+        if self.alerts_receiver:
+            self.alerts_receiver.start()
+
+    def close_alerts(self):
+        if self.alerts_receiver:
+            self.alerts_receiver.close()
+
+    def acknowledge_alert(self, producer, incident, request):
+        if self.alerts_receiver is None:
+            raise ProviderUnavailable('Alerts receiver unconfigured')
+        return self.alerts_receiver.acknowledge(producer, incident, request)
 
     def close(self):
         if self.native:

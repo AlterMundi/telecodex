@@ -368,3 +368,12 @@ dialog::backdrop {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+#operations { flex: 0 0 auto; border-block: 1px solid var(--line, #28404b); }
+#operations summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+#incidents { max-height: 36vh; overflow-y: auto; }
+#alerts-state { font-size: 14px; line-height: 1.4; padding: 6px 0; }
+.incident { padding: 12px 0; border-bottom: 1px solid #28404b; overflow-wrap: anywhere; }
+.incident p { font-size: 16px; line-height: 1.4; margin: 8px 0; }
+.incident .note { font-size: 14px; }
+.incident button { min-height: 44px; }

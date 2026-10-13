@@ -82,7 +82,11 @@ def create_app(config=None, provider=None, validator=validate_launch):
 
     @asynccontextmanager
     async def lifespan(app):
+        if hasattr(provider, 'start_alerts'):
+            provider.start_alerts()
         yield
+        if hasattr(provider, 'close_alerts'):
+            provider.close_alerts()
         provider.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -184,7 +188,28 @@ def create_app(config=None, provider=None, validator=validate_launch):
             raise HTTPException(503, 'Receiving metadata unavailable; retry shortly') from None
         # Recheck grants after native I/O, before any private response.
         authorize(request)
-        return {**result, 'csrf': session['csrf']}
+        alerts = provider.alerts() if hasattr(provider, 'alerts') else {'state':'unconfigured','incidents':[]}
+        authorize(request)
+        return {**result, 'alerts': alerts, 'csrf': session['csrf']}
+
+    @app.post('/api/alerts/acknowledge')
+    async def acknowledge_alert(request: Request):
+        session = authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        try:
+            body = await request.json()
+            if set(body) != {'producer_id', 'incident_id', 'request_id'}:
+                raise ValueError()
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.acknowledge_alert,
+                body['producer_id'], body['incident_id'], body['request_id'])
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(400, 'Invalid acknowledgment request') from None
+        except Exception:
+            raise HTTPException(503, 'Acknowledgment unconfirmed; refresh before another action') from None
+        authorize(request)
+        return result
 
     @app.post('/api/stop')
     async def stop(request: Request):
