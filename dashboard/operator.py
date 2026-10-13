@@ -2,12 +2,28 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import tomllib
 import urllib.request
 
 from scripts.activity_indicator import Telegram
 from .private_state import private_directory, read_json, write_json
+
+
+def menu_selection(config):
+    """Select only this bot's explicitly registered named app or the HTTPS page."""
+    short_name = config.get('miniapp_short_name')
+    if short_name is None:
+        url = config['origin'].rstrip('/') + config.get('prefix', '/sessions') + '/'
+    else:
+        username = config.get('bot_username')
+        if not isinstance(short_name, str) or not re.fullmatch(r'[A-Za-z0-9_]{1,64}', short_name):
+            raise SystemExit('Invalid registered Mini App short name; no menu mutation requested')
+        if not isinstance(username, str) or not re.fullmatch(r'[A-Za-z0-9_]{1,64}', username):
+            raise SystemExit('Invalid receiving bot username; no menu mutation requested')
+        url = f'https://t.me/{username}/{short_name}?mode=compact'
+    return {'type': 'web_app', 'text': 'Sessions', 'web_app': {'url': url}}
 
 
 def main():
@@ -46,7 +62,7 @@ def main():
                           'has_main_web_app':bot.get('has_main_web_app', False)}))
         return
     rollback = state / 'menu-before.json'
-    selected = {'type':'web_app','text':'Sessions','web_app':{'url':config['origin'].rstrip('/')+config.get('prefix','/sessions')+'/'}}
+    selected = menu_selection(config) if args.operation != 'restore-menu' else None
     if args.operation == 'restore-menu':
         record = read_json(rollback)
         if record.get('binding') != binding:

@@ -332,7 +332,15 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
 function theme() {
-  if (tg) document.documentElement.dataset.theme = tg.colorScheme;
+  // The selected control-panel design stays dark even in a light Telegram shell.
+  document.documentElement.dataset.theme = "dark";
+  for (const method of ["setHeaderColor", "setBackgroundColor", "setBottomBarColor"]) {
+    try {
+      tg?.[method]?.("#090e17");
+    } catch (_) {
+      // Older clients may expose an SDK method without supporting its bridge.
+    }
+  }
 }
 theme();
 tg?.onEvent?.("themeChanged", theme);

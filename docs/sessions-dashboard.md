@@ -109,10 +109,22 @@ The page calls neither expand nor requestFullscreen. Telegram owns the native
 window height; compact page content does not prove half-height launch. The
 mode=compact parameter documented for registered Main/named direct links must
 not be appended to an unrelated HTTPS URL or redirected into the existing Nexus
-Main App. This update preserves the receiving menu and Nexus launch routing.
+Main App. To use a genuinely half-height entry, register a separate named app
+on the receiving bot through BotFather, pointing to this service's HTTPS page.
+Once BotFather confirms the app's actual short name, set `miniapp_short_name`
+in the private dashboard config and run `publish-menu`. The operator selects
+`https://t.me/<verified-bot>/<registered-short-name>?mode=compact`, which
+[MenuButtonWebApp supports](https://core.telegram.org/bots/api#menubuttonwebapp).
+This preserves the existing Nexus Main App and consumer. Do not set a guessed
+name or claim that menu read-back proves app registration or phone launch:
+registration is a separate BotFather action, and half-height needs real client
+acceptance. Omit the setting to retain the existing HTTPS menu. The same scoped
+`restore-menu` command remains available.
 
 The visual direction follows Cluster's maintained Star Trek-inspired Matrix
 reference: Space Grotesk, orbital/interference mark, deep-space canvas, cyan
 navigation and amber actions with restrained segmented control rails. The
 existing licensed Latin font is self-hosted with its original OFL and hash
-provenance. Light/dark themes preserve readable roles and touch targets.
+provenance. The selected canvas stays dark regardless of Telegram or OS light
+mode. Supported Telegram header, background and bottom-bar colors follow it;
+older clients retain their own chrome without preventing authentication or use.
