@@ -36,8 +36,10 @@ An optional [compact activity indicator](docs/activity-indicator.md) shows tools
 agent waits and native activity even for turns already running, without restarting
 the bridge or enabling unfinished answer previews.
 
-An opt-in [reaction capture experiment](docs/reaction-capture.md) preserves
-Telegram reaction events in the private input journal without invoking Codex.
+An opt-in [reaction feedback path](docs/reaction-capture.md) preserves
+Telegram reaction events and delivers authenticated feedback about known
+assistant messages as quoted user data in the next ordinary turn of the same
+native conversation. Reactions alone never start or steer a turn or answer a question.
 Native delivery in private bot topics still requires a real controlled exchange.
 
 The opt-in [Nexus Mini App adapter](docs/nexus-conversation.md) brings selected
