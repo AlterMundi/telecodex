@@ -301,8 +301,11 @@ import_desktop_history=false
                 match=re.search(r'explicitly declare it in ([^\s]+human-requests.json)',params.get('additionalContext',{}).get('telecodex.runtime',{}).get('value',''))
                 assert match,params
                 manifest=pathlib.Path(match[1])
-                assert params['collaborationMode']=={'mode': ('default' if params['input'][0]['text']=='implement after planning' else 'plan'),'settings':{
-                    'model':'fixture-model','reasoning_effort':None,'developer_instructions':None}}, params
+                if hasattr(self, 'check_turn_start'):
+                    self.check_turn_start(params)
+                else:
+                    assert params['collaborationMode']=={'mode': ('default' if params['input'][0]['text']=='implement after planning' else 'plan'),'settings':{
+                        'model':'fixture-model','reasoning_effort':None,'developer_instructions':None}}, params
                 send({'id': request_id, 'result': {'turn': {'id': turn}}})
                 event('turn/started', {'turn': {'id': turn}})
                 if self.mode.startswith('durable') and params['input'][0]['text'].startswith('[Feedback for human request:'):

@@ -82,7 +82,7 @@ pub struct TelegramConfig {
     pub bot_token_file: Option<PathBuf>,
     #[serde(default)]
     pub lifecycle_notifications: bool,
-    /// Experimental receipt-only capture; never starts or steers a native turn.
+    /// Capture reactions and queue authenticated feedback for ordinary human turns.
     #[serde(default)]
     pub capture_message_reactions: bool,
     #[serde(default)]

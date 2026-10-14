@@ -380,7 +380,9 @@ impl App {
                     match result {
                         Ok(updates) => {
                             for update in updates {
-                                let admitted = self.shared.store.admit_update(&update)?;
+                                let admitted = self.shared.store.admit_update_with_reactions(
+                                    &update, self.shared.config.telegram.capture_message_reactions,
+                                )?;
                                 offset = self.shared.store.last_update_id()?.map(|id| id + 1);
                                 if !admitted {
                                     continue;
@@ -520,7 +522,8 @@ impl App {
 
     async fn process_update(&self, update: crate::telegram::Update) -> Result<()> {
         if update.message_reaction.is_some() {
-            // Receipt only: no inferred topic, ACL grant, native input or reply.
+            // Admission already saved eligible feedback atomically with the journal.
+            // A reaction never dispatches native input or consumes a question.
             // Telegram may deliver already queued events after capture is disabled.
             tracing::debug!("Telegram reaction event retained in the ingress journal");
             return Ok(());

@@ -14,6 +14,7 @@ mod merging;
 mod stopping;
 pub use stopping::{StopOperation, StopTarget};
 mod nexus;
+mod reactions;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};
 pub use tribu::TribuAdmission;
@@ -79,6 +80,7 @@ impl Store {
         store.init_nexus()?;
         store.init_merging()?;
         store.init_stopping()?;
+        store.init_reactions()?;
         // A restarted process cannot continue a previous command's activity lease.
         store.conn.lock().expect("store mutex poisoned").execute(
             "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",
@@ -213,7 +215,16 @@ impl Store {
 
     /// Admit input and its Telegram acknowledgement boundary atomically.
     /// A duplicate ID never dispatches the same input a second time.
+    #[cfg(test)]
     pub fn admit_update(&self, update: &crate::telegram::Update) -> Result<bool> {
+        self.admit_update_with_reactions(update, false)
+    }
+
+    pub fn admit_update_with_reactions(
+        &self,
+        update: &crate::telegram::Update,
+        feedback_enabled: bool,
+    ) -> Result<bool> {
         let payload = serde_json::to_string(update)?;
         if payload.len() > 1_048_576 {
             return Err(anyhow!("telegram update exceeds ingress journal bound"));
@@ -238,6 +249,9 @@ impl Store {
              VALUES(?1,?2,'received',?3,?4)",
             params![update.update_id, payload, self.instance_id, now_string()],
         )?;
+        if feedback_enabled {
+            reactions::admit(&tx, update)?;
+        }
         // Capture ownership epoch with journal admission, before attachment/network work.
         tx.execute("INSERT INTO bot_state(key,value) SELECT ?,COALESCE(b.value,'initial') FROM (SELECT COALESCE((SELECT creator_user_id FROM sessions WHERE chat_id=COALESCE(json_extract(?,'$.message.chat.id'),json_extract(?,'$.callback_query.message.chat.id')) AND thread_id=COALESCE(json_extract(?,'$.message.message_thread_id'),json_extract(?,'$.callback_query.message.message_thread_id'),0)),COALESCE(json_extract(?,'$.message.from.id'),json_extract(?,'$.callback_query.from.id'))) AS human) s LEFT JOIN bot_state b ON b.key='stop_admission_epoch:'||s.human",params![format!("stop_input_epoch:{}",update.update_id),payload,payload,payload,payload,payload,payload])?;
         tx.execute(
@@ -1025,6 +1039,8 @@ impl Store {
              WHERE id = ?1",
             params![turn_id, status, assistant_text, now],
         )?;
+        // No native transport was attempted for a merely prepared feedback batch.
+        tx.execute("UPDATE reaction_feedback SET phase='pending',delivery_turn=NULL,delivery_instance=NULL WHERE delivery_turn=?1 AND phase='prepared'", [turn_id])?;
         // An acknowledged steer shares this turn's outcome. Unacknowledged attempts
         // remain uncertain even if the original turn completes successfully.
         tx.execute(
