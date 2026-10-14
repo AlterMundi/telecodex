@@ -298,7 +298,7 @@ function alerts(data) {
   section.hidden = false;
   const open = (data.incidents || []).filter((i) => i.projection.processing_state === "open").length;
   const unacknowledged = [...(data.incidents || []), ...(data.resolved_incidents || [])]
-    .filter((i) => !i.acknowledgments.length).length;
+    .filter((i) => i.projection.processing_state === "open" && !i.acknowledgments.length).length;
   section.dataset.attention = String(unacknowledged > 0);
   $("#operations-summary").textContent = `${unacknowledged ? "⚠ " : ""}Operational alerts · ${open} open`
     + (unacknowledged ? ` · ${unacknowledged} unacknowledged` : "");
