@@ -371,9 +371,26 @@ dialog::backdrop {
 
 #operations { flex: 0 0 auto; border-block: 1px solid var(--line, #28404b); }
 #operations summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+#operations[data-attention="true"] {
+  border-color: #f0bb57;
+  background: rgba(240, 187, 87, 0.1);
+  border-inline-start: 3px solid #f0bb57;
+  padding-inline-start: 10px;
+}
+#operations[data-attention="true"] > summary { color: #ffd486; font-weight: 700; }
 #incidents { max-height: 36vh; overflow-y: auto; }
 #alerts-state { font-size: 14px; line-height: 1.4; padding: 6px 0; }
 .incident { padding: 12px 0; border-bottom: 1px solid #28404b; overflow-wrap: anywhere; }
 .incident p { font-size: 16px; line-height: 1.4; margin: 8px 0; }
 .incident .note { font-size: 14px; }
 .incident button { min-height: 44px; }
+.incident-group-title { font-size: 15px; color: var(--muted); margin: 12px 0; }
+.incident { padding-inline: 10px; margin-block: 10px; border-radius: 6px; }
+.incident--open { border-inline-start: 3px solid var(--warn); background: rgba(244, 194, 131, 0.06); }
+.incident--resolved { border-inline-start: 3px solid var(--good); }
+.incident-status { display: flex; flex-wrap: wrap; gap: 6px; }
+.incident-badge { font-size: 13px; font-weight: 700; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.incident-badge--open { color: var(--warn); border-color: var(--warn); }
+.incident-badge--resolved { color: var(--good); border-color: var(--good); }
+.incident-history { border-top: 1px solid var(--line); margin-block-start: 12px; }
+.incident-history > summary { color: var(--muted); font-size: 15px; }

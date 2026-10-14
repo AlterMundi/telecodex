@@ -78,6 +78,19 @@ stale or unavailable; missing worker observation is explicitly unobserved.
 The compact Operations disclosure retains literal producer text, freshness,
 processing, delivery and acknowledgment separately.
 
+The disclosure uses an amber warning icon and explicit unacknowledged count,
+including displayed resolved notices that have not been acknowledged. Open
+incidents stay visible with an Open badge, a separate acknowledgment badge and
+their delivery state. Resolved incidents move into a history disclosure closed
+by default. Acknowledgment removes attention for that notice immediately after
+confirmed acceptance, but never moves an open incident into resolved history.
+Refreshing reads the service's durable acknowledgment state.
+
+History is a bounded receiving view, not deletion. The service owns retention;
+the installed core's 30-day policy only prunes eligible old resolved incidents
+without pending/uncertain delivery on new-incident admission. Open work and
+uncertain receipts stay retained. There is no browser clear-all operation.
+
 `POST /api/alerts/acknowledge` also requires HTTPS Origin and CSRF, bounded closed
 IDs, an explicit user click and the service's scope grant. Request IDs survive
 rerenders; the service records them idempotently. Acknowledgment means neither
