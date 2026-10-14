@@ -32,6 +32,9 @@ def main(binary):
         return sum(item.get('method') == 'turn/start' for item in journey.rpc)
 
     def wait_completed(count):
+        # The first native request proves startup/schema initialization completed;
+        # opening SQLite immediately after Popen can race CREATE TABLE.
+        journey.wait(lambda: len(observed) >= count)
         journey.wait(lambda: journey.row("SELECT COUNT(*) FROM turns WHERE status='completed'") == [(count,)])
         journey.wait(lambda: journey.row('SELECT busy FROM sessions') == [(0,)])
 
