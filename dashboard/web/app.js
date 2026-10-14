@@ -12,6 +12,7 @@ let snapshot,
   pendingKind,
   controlIntent;
 const acknowledgmentRequests = new Map();
+let resolvedHistoryExpanded = false;
 const statuses = {
   active: "Working",
   idle: "Idle",
@@ -296,7 +297,11 @@ function alerts(data) {
   if (!data || data.state === "not_configured") { section.hidden = true; return; }
   section.hidden = false;
   const open = (data.incidents || []).filter((i) => i.projection.processing_state === "open").length;
-  $("#operations-summary").textContent = `Operational alerts · ${open} open`;
+  const unacknowledged = [...(data.incidents || []), ...(data.resolved_incidents || [])]
+    .filter((i) => !i.acknowledgments.length).length;
+  section.dataset.attention = String(unacknowledged > 0);
+  $("#operations-summary").textContent = `${unacknowledged ? "⚠ " : ""}Operational alerts · ${open} open`
+    + (unacknowledged ? ` · ${unacknowledged} unacknowledged` : "");
   $("#alerts-state").textContent = data.state === "unavailable"
     ? "Alert service unavailable. Processing and delivery cannot be confirmed."
     : data.state === "stale" ? "Showing an older observation. Refresh before acting."
@@ -313,10 +318,26 @@ function alerts(data) {
   if (data.state === "unavailable" && explanations[data.error])
     $("#alerts-state").textContent += " " + explanations[data.error];
   const target = $("#incidents"); target.replaceChildren();
+  target.append(el("h3", `Open incidents · ${open}`, "incident-group-title"));
+  const resolvedItems = [...(data.incidents || []), ...(data.resolved_incidents || [])]
+    .filter((i) => i.projection.processing_state === "resolved");
+  const history = el("details", undefined, "incident-history");
+  history.open = resolvedHistoryExpanded;
+  history.addEventListener("toggle", () => { resolvedHistoryExpanded = history.open; });
+  const unseenHistory = resolvedItems.filter((i) => !i.acknowledgments.length).length;
+  history.append(el("summary", `Resolved history · ${resolvedItems.length}`
+    + (unseenHistory ? ` · ${unseenHistory} unacknowledged` : "")));
   for (const incident of [...(data.incidents || []), ...(data.resolved_incidents || [])]) {
     const p = incident.projection;
-    const item = el("article", undefined, "incident");
-    item.append(el("h3", `${p.processing_state === "resolved" ? "Resolved" : "Pending"} · ${p.phase}`),
+    const resolved = p.processing_state === "resolved";
+    const acknowledged = incident.acknowledgments.length > 0;
+    const item = el("article", undefined, `incident incident--${resolved ? "resolved" : "open"}`);
+    item.dataset.processingState = p.processing_state;
+    item.dataset.acknowledgment = acknowledged ? "acknowledged" : "unacknowledged";
+    const badges = el("div", undefined, "incident-status");
+    badges.append(el("span", resolved ? "✓ Resolved" : "! Open", `incident-badge incident-badge--${resolved ? "resolved" : "open"}`),
+      el("span", acknowledged ? "Acknowledged" : "Unacknowledged", "incident-badge"));
+    item.append(badges, el("h3", `Phase: ${p.phase}`),
       el("p", p.summary), el("p", p.processing_state === "resolved" ? `Previous action: ${p.action}` : p.action));
     const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";
     item.append(el("p", `Observation ${incident.freshness} · Delivery: ${deliveries}`, "note"));
@@ -329,17 +350,22 @@ function alerts(data) {
         if (!acknowledgmentRequests.has(requestKey)) acknowledgmentRequests.set(requestKey, crypto.randomUUID());
         const requestId = acknowledgmentRequests.get(requestKey); button.disabled = true;
         try {
-          await api("alerts/acknowledge", {producer_id:p.producer_id, incident_id:p.incident_id, request_id:requestId});
+          const acknowledgment = await api("alerts/acknowledge", {producer_id:p.producer_id, incident_id:p.incident_id, request_id:requestId});
           button.textContent = "Acknowledged";
+          // Reflect confirmed acceptance immediately; polling supplies durable state.
+          const accepted = (items) => (items || []).map((i) => i === incident
+            ? {...i, acknowledgments:[acknowledgment]} : i);
+          alerts({...data, incidents:accepted(data.incidents), resolved_incidents:accepted(data.resolved_incidents)});
         } catch (e) { $("#alerts-state").textContent = e.message; button.disabled = false; }
       });
       item.append(button);
     }
-    target.append(item);
+    (resolved ? history : target).append(item);
   }
   if (!data.incidents?.length && data.state === "available") target.append(el("p", "No open incidents reported in this receiving scope."));
   if (data.truncated) target.append(el("p", "Partial view: more incidents exist in this receiving scope.", "note"));
-  if (data.history_truncated) target.append(el("p", "Resolved history is partial; open incidents are listed separately.", "note"));
+  if (data.history_truncated) history.append(el("p", "Resolved history is partial; open incidents are listed separately.", "note"));
+  if (resolvedItems.length || data.history_truncated) target.append(history);
   const uncertain = (data.local_deliveries || []).filter((d) =>
     ["uncertain", "failed"].includes(d.outcome) || d.state === "claim_unconfirmed").length;
   if (uncertain) target.append(el("p", `${uncertain} recent delivery attempt(s) failed or unconfirmed. No automatic resend.`, "note"));
