@@ -163,14 +163,17 @@ const hung = (options) => new Promise((resolve, reject) => {
   await activeArticle().children.at(-1).handlers.click();
   assert.equal(JSON.parse(independent.requests.filter((r) => r.route === "api/alerts/acknowledge").at(-1).options.body).request_id,original);
   assert.equal(independent.requests.some((r) => r.route === "api/stop" || r.route === "api/resume"),false);
-  // Resolution does not acknowledge a notice the human has not yet seen.
+  // Resolved history retains acknowledgment state without active attention.
   const resolved = {...incident, projection:{...incident.projection,processing_state:"resolved"}};
   vm.runInContext('alerts('+JSON.stringify({...operations,incidents:[],resolved_incidents:[resolved]})+')',independent.context);
-  assert.match(independent.nodes.get("#operations-summary").textContent,/0 open.*1 unacknowledged/);
+  assert.equal(independent.nodes.get("#operations").dataset.attention,"false");
+  assert.match(independent.nodes.get("#operations-summary").textContent,/0 open/);
+  assert.doesNotMatch(independent.nodes.get("#operations-summary").textContent,/⚠|unacknowledged/);
   const history = independent.nodes.get("#incidents").children.find((n) => n.className === "incident-history");
   assert.equal(history.open,false);
   assert.equal(history.children[1].dataset.processingState,"resolved");
   assert.equal(history.children[1].dataset.acknowledgment,"unacknowledged");
+  assert.match(history.children[0].textContent,/1 unacknowledged/);
   history.open=true;history.handlers.toggle();
   resolved.acknowledgments=[{request_id:"ack-confirmed"}];
   vm.runInContext('alerts('+JSON.stringify({...operations,incidents:[],resolved_incidents:[resolved]})+')',independent.context);
