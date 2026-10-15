@@ -36,6 +36,8 @@ table_id = "selected-table"
 author_ref = "selected-human"
 human_user_id = 100 # Synthetic example; use the actually approved account locally.
 label = "Nexus"
+# Optional per-table destination; omitted routes keep the legacy global selector.
+launch_selector = "registered-selector-for-this-table"
 ```
 
 Requires `codex.shared_app_server = true`, the actual configured bot's Main Mini
@@ -48,7 +50,10 @@ thread before Nexus's revision-checked configure call. It refuses fresh/unbound
 contexts and the dedicated Tribu topic. No `/new`, history reset or latest-cwd
 replacement is performed, including when the bound history is unavailable.
 
-`/nexus open` returns the configured Main Mini App link. A start selector routes
+`/nexus open <table>` returns that route's Main Mini App link. Multiple research,
+project and recording tables can use distinct `launch_selector` values without
+changing their participant/native bindings. The global selector remains the
+fallback for existing single-table deployments. A start selector routes
 the table; signed Mini App identity and membership remain Nexus's responsibility.
 The link is not proof of launch or an exact private-topic return URL. The
 existing Nexus frontend owns its verified conversation/return link, source

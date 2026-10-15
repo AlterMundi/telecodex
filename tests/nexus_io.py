@@ -157,6 +157,21 @@ def delivered(binary):
     finally:j.close()
 
 
+def table_launches(binary):
+    j=Nexus(binary)
+    try:
+        j.prepare();starts=j.native_turns;j.stop()
+        with j.config.open('a') as config:
+            config.write('\n[[nexus.routes]]\ntable_id="research"\nauthor_ref="human:test"\nhuman_user_id=100\nlabel="Research"\nlaunch_selector="research-launch"\n')
+        j.start()
+        j.command('/nexus open research','startapp=research-launch')
+        j.command('/nexus open table','startapp=fixture-launch')
+        assert j.native_turns==starts
+        assert j.row('SELECT id,codex_thread_id,session_title,cwd FROM sessions WHERE thread_id=7')==j.before
+        print('PASS selected research launch and legacy recording launch retain their own destinations without native input or rebinding')
+    finally:j.close()
+
+
 def reviewed_iteration(binary):
     j=Nexus(binary)
     try:
@@ -321,6 +336,6 @@ def writer_hold_other_target(binary):
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
-    scenarios=(delivered,reviewed_iteration,controls,refusals,uncertainty,known_turn_recovery,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
+    scenarios=(delivered,table_launches,reviewed_iteration,controls,refusals,uncertainty,known_turn_recovery,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
     for run in scenarios:
         if len(sys.argv)==2 or run.__name__ in sys.argv[2:]:run(binary)
