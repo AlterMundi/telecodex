@@ -83,6 +83,48 @@ without fallback or replay. `/stop` in the actual topic remains the interruption
 control. This version does not reinterpret Mini App question text as commands
 or add an independent Mini App interruption API.
 
+## Ordinary chat perspective at ingress
+
+[Telecodex #94](https://github.com/AlterMundi/telecodex/issues/94) extends the same
+adapter with Nexus's [visit contract](https://github.com/compaii/daimon-nexus/blob/main/docs/visit-contract.md).
+After Telegram input is journaled, an allowed non-bot sender in their deliberately
+connected private topic is matched to the actual existing native thread. Before
+per-topic dispatch, attachment download, transcription or native steering, the
+adapter synchronously reserves a durable capture row and an ingress time cutoff,
+then starts `capture-input` independently of the topic dispatcher with stable
+`telegram:BOT:UPDATE` identity and the authenticated target. This local read/capture
+has a two-second deadline and does not block global polling or other topics. The
+topic dispatcher awaits its result in original message order. A view revision
+committed after the ingress cutoff returns `view_changed_during_ingress`, never
+silently B for an input received during A. Failure is explicitly unavailable and never repaired
+by sampling a later view when a worker starts. Other operator operations retain
+their existing ten-second bound. No call happens for commands, callbacks,
+reactions, other participants or unconnected topics.
+
+The same immutable envelope accompanies a queued turn or active-turn steering.
+A rejected steer can queue the input with the original perspective. Current
+focus may move independently; source data in this envelope is not runtime policy
+or permission to execute an effect. Missing, stale, ambiguous and no-selection
+states remain explicit. Native routing and private drafts/camera are excluded
+from the model-visible prompt. A changed native target refuses dispatch rather
+than silently moving the contextual input to another conversation.
+
+A crash during capture retains `capture_interrupted`; restart and duplicate
+Telegram delivery do not recapture or replay input. The existing uncertain-input
+journal remains authoritative. This is a separate additive SQLite table; existing
+journals and offsets are not rewritten. Current authorized views can be read on
+demand through the operator's `current-visits` verb using the actual native target;
+that read does not replace any frozen input or create model attention.
+
+Ordinary Telegram audio is captured before download/STT, at receipt time. The Bot
+API message supplies no trusted earlier voice/composition visit revision: receipt
+perspective must not be described as the user's view when recording began. An
+explicit earlier composition using the owner-local `capture-input` contract can
+supply `visit_id` and `view_revision`; existing Mini App contribution snapshots
+keep their own composition context. Never parse claimed routing IDs out of chat
+text or guess a recording target. Group presence, general routing and voice-room
+integration remain their owning increments.
+
 ## Recovery and deployment
 
 `/nexus status` shows this human/topic's retained adapter state. `/nexus reconcile`
@@ -114,6 +156,7 @@ cargo clippy --locked --all-targets --no-default-features -- -D warnings
 cargo test --locked --no-default-features
 cargo build --locked --release --no-default-features
 python3 -B tests/nexus_io.py target/release/telecodex
+python3 -B tests/nexus_context_io.py target/release/telecodex
 /local/nexus/.venv/bin/python -B tests/nexus_operator_io.py /local/nexus
 ```
 

@@ -358,8 +358,10 @@ impl App {
 
         // Polling must not wait for native steering, uploads or outbound rate limits.
         // Preserve arrival order within a topic while other topics keep dispatching.
-        let mut dispatchers =
-            HashMap::<SessionKey, mpsc::UnboundedSender<crate::telegram::Update>>::new();
+        let mut dispatchers = HashMap::<
+            SessionKey,
+            mpsc::UnboundedSender<(crate::telegram::Update, tokio::task::JoinHandle<Result<()>>)>,
+        >::new();
         let mut offset = self.shared.store.last_update_id()?.map(|value| value + 1);
         tracing::info!("telecodex started {}", app_version_label());
         let shutdown = shutdown_signal(self.shared.shutdown.clone());
@@ -385,6 +387,14 @@ impl App {
                                 if !admitted {
                                     continue;
                                 }
+                                // Capture independently of topic work and further polling. A slow
+                                // Nexus provider must not serialize unrelated updates or controls.
+                                let capture_input = nexus::prepare_ingress(&self.shared, &update)?;
+                                let capture_shared = self.shared.clone();
+                                let capture_id = update.update_id;
+                                let capture = tokio::spawn(async move {
+                                    nexus::capture_ingress(&capture_shared, capture_id, capture_input).await
+                                });
                                 let message = update.message.as_ref().or_else(|| {
                                     update.callback_query.as_ref().and_then(|callback| callback.message.as_ref())
                                 });
@@ -393,12 +403,15 @@ impl App {
                                     thread_id: message.message_thread_id.unwrap_or(0),
                                 }).unwrap_or(SessionKey { chat_id: 0, thread_id: 0 });
                                 let sender = dispatchers.entry(key).or_insert_with(|| {
-                                    let (sender, mut receiver) = mpsc::unbounded_channel::<crate::telegram::Update>();
+                                    let (sender, mut receiver) = mpsc::unbounded_channel::<(crate::telegram::Update, tokio::task::JoinHandle<Result<()>>)>();
                                     let app = self.clone();
                                     tokio::spawn(async move {
-                                        while let Some(update) = receiver.recv().await {
+                                        while let Some((update, capture)) = receiver.recv().await {
                                             let update_id = update.update_id;
                                             let result = async {
+                                                // Admission capture runs even while a previous
+                                                // message holds this topic dispatcher.
+                                                capture.await.context("Nexus ingress capture task interrupted")??;
                                                 app.shared.store.begin_update(update_id)?;
                                                 HUMAN_UPDATE_ID.scope(update_id, app.process_update(update)).await
                                             }.await;
@@ -412,7 +425,7 @@ impl App {
                                     });
                                     sender
                                 });
-                                sender.send(update).map_err(|_| anyhow!("topic update dispatcher dropped"))?;
+                                sender.send((update, capture)).map_err(|_| anyhow!("topic update dispatcher dropped"))?;
                             }
                         }
                         Err(error) => {
@@ -2341,7 +2354,7 @@ impl App {
 
     async fn enqueue_input(
         &self,
-        request: TurnRequest,
+        mut request: TurnRequest,
         chat_kind: &str,
         goal: Option<crate::codex::GoalActivation>,
         nexus: Option<String>,
@@ -2361,6 +2374,13 @@ impl App {
         } else {
             HUMAN_UPDATE_ID.try_with(|id| *id).ok()
         };
+        request.prompt = nexus::input_prompt(
+            &self.shared,
+            update_id,
+            request.session_key,
+            request.from_user_id,
+            &request.prompt,
+        )?;
         let admission = tribu::private_admission(&self.shared, &request, update_id)?;
         if let Some(a) = &admission {
             if !a.fresh || a.state != "queued" {
@@ -2421,15 +2441,16 @@ impl App {
             }
             return Ok(true);
         }
+        let contextual_text =
+            nexus::input_prompt(&self.shared, update_id, session_key, from_user_id, text)?;
         if let Some(id) = update_id {
             self.shared.store.begin_update_steer(id, active.turn_id)?;
         }
-
         let (response_tx, response_rx) = oneshot::channel();
         if active
             .sender
             .send(CodexSteerRequest {
-                text: text.to_string(),
+                text: contextual_text,
                 goal: None,
                 response: response_tx,
             })

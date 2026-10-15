@@ -5,7 +5,8 @@ use serde_json::{Value, json};
 impl Store {
     pub(super) fn init_nexus(&self) -> Result<()> {
         self.conn.lock().expect("store mutex poisoned").execute_batch(
-            "CREATE TABLE IF NOT EXISTS nexus_bindings(table_id TEXT NOT NULL,author_ref TEXT NOT NULL,doc TEXT NOT NULL,PRIMARY KEY(table_id,author_ref));
+            "CREATE TABLE IF NOT EXISTS nexus_input_context(update_id INTEGER PRIMARY KEY REFERENCES incoming_updates(update_id), target TEXT NOT NULL, capture TEXT, captured_at TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS nexus_bindings(table_id TEXT NOT NULL,author_ref TEXT NOT NULL,doc TEXT NOT NULL,PRIMARY KEY(table_id,author_ref));
              CREATE TABLE IF NOT EXISTS nexus_requests(id TEXT PRIMARY KEY,doc TEXT NOT NULL,phase TEXT NOT NULL,dispatch_id TEXT,local_turn INTEGER,native_turn TEXT,instance_id TEXT NOT NULL,reason TEXT,echo_attempted INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE IF NOT EXISTS nexus_executions(local_turn INTEGER NOT NULL,native_turn TEXT NOT NULL,terminal TEXT,reply TEXT NOT NULL DEFAULT '',PRIMARY KEY(local_turn,native_turn));
              CREATE TABLE IF NOT EXISTS nexus_receipts(id INTEGER PRIMARY KEY,request_id TEXT NOT NULL,status TEXT NOT NULL,doc TEXT NOT NULL,sent INTEGER NOT NULL DEFAULT 0,UNIQUE(request_id,status));"
@@ -13,6 +14,44 @@ impl Store {
         self.nexus_reconcile_observations()?;
         self.conn.lock().expect("store mutex poisoned").execute("UPDATE nexus_requests SET phase=CASE WHEN phase='queued' THEN 'retained_queue' ELSE 'undetermined' END,reason='Listener restarted; inspect retained state before any explicit recovery' WHERE instance_id!=? AND phase IN ('queued','claiming','claimed','submitting','steering')",[&self.instance_id])?;
         Ok(())
+    }
+    /// Reserve capture before operator I/O. A crash never authorizes later recapture.
+    pub fn nexus_begin_input_capture(&self, id: i64, target: &Value) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Ok(conn.execute("INSERT OR IGNORE INTO nexus_input_context(update_id,target,captured_at) SELECT ?,?,? FROM incoming_updates WHERE update_id=? AND status='received' AND instance_id=?",params![id,serde_json::to_string(target)?,now_string(),id,self.instance_id])? == 1)
+    }
+    pub fn nexus_finish_input_capture(&self, id: i64, capture: &Value) -> Result<()> {
+        let raw = serde_json::to_string(capture)?;
+        if raw.len() > 512 * 1024 {
+            return Err(anyhow!("Nexus input capture exceeds bound"));
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        if conn.execute(
+            "UPDATE nexus_input_context SET capture=? WHERE update_id=? AND capture IS NULL",
+            params![raw, id],
+        )? != 1
+        {
+            let previous: String = conn.query_row(
+                "SELECT capture FROM nexus_input_context WHERE update_id=?",
+                [id],
+                |r| r.get(0),
+            )?;
+            if previous != raw {
+                return Err(anyhow!("Nexus input capture is immutable"));
+            }
+        }
+        Ok(())
+    }
+    pub fn nexus_input_context(&self, id: i64) -> Result<Option<Value>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let row: Option<(String, Option<String>, String)> = conn
+            .query_row(
+                "SELECT target,capture,captured_at FROM nexus_input_context WHERE update_id=?",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        row.map(|(target,capture,at)| Ok(json!({"target":serde_json::from_str::<Value>(&target)?,"capture":capture.map(|s|serde_json::from_str::<Value>(&s)).transpose()?.unwrap_or(json!({"status":"capture_interrupted","perspective":null})),"ingress_at":at}))).transpose()
     }
     pub fn nexus_reconcile_observations(&self) -> Result<()> {
         let retained: Vec<(String, i64, String)> = {
@@ -363,6 +402,43 @@ mod tests {
             },
         )
         .unwrap()
+    }
+    #[test]
+    fn ingress_capture_is_immutable_across_restart_and_failed_capture_is_not_retried() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("db");
+        let store = open(&path);
+        let update = |id| {
+            serde_json::from_value::<crate::telegram::Update>(json!({"update_id":id,"message":{"message_id":id,"from":{"id":100,"is_bot":false,"first_name":"Human"},"chat":{"id":100,"type":"private"},"message_thread_id":7,"text":"this node"}})).unwrap()
+        };
+        let target = json!({"human_user_id":100,"native_thread_id":"native-a"});
+        assert!(store.admit_update(&update(1)).unwrap());
+        assert!(store.nexus_begin_input_capture(1, &target).unwrap());
+        let a = json!({"status":"captured","perspective":{"selection":{"object_id":"A"}}});
+        store.nexus_finish_input_capture(1, &a).unwrap();
+        store.nexus_finish_input_capture(1, &a).unwrap();
+        assert!(
+            store
+                .nexus_finish_input_capture(
+                    1,
+                    &json!({"status":"captured","perspective":{"selection":{"object_id":"B"}}})
+                )
+                .is_err()
+        );
+        assert!(store.admit_update(&update(2)).unwrap());
+        assert!(store.nexus_begin_input_capture(2, &target).unwrap());
+        drop(store);
+        let store = open(&path);
+        assert_eq!(store.nexus_input_context(1).unwrap().unwrap()["capture"], a);
+        assert_eq!(
+            store.nexus_input_context(2).unwrap().unwrap()["capture"]["status"],
+            "capture_interrupted"
+        );
+        assert!(!store.admit_update(&update(1)).unwrap());
+        assert!(!store.nexus_begin_input_capture(1, &target).unwrap());
+        assert!(!store.nexus_begin_input_capture(2, &target).unwrap());
+        assert!(!store.nexus_begin_input_capture(3, &target).unwrap());
+        assert!(store.nexus_input_context(3).unwrap().is_none());
     }
     fn doc(id: &str) -> Value {
         json!({"dispatch_id":"dispatch-one","target":{"chat_id":100,"topic_id":7,"human_user_id":100,"native_thread_id":"existing"},"request":{"request_id":id,"binding_id":"binding","binding_revision":1,"contribution":{"text":"Human question","anchors":[]}}})

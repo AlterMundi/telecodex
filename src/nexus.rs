@@ -94,7 +94,14 @@ impl NexusConfig {
     pub async fn call(&self, operation: &str, input: &Value) -> Result<Value> {
         if !matches!(
             operation,
-            "binding" | "configure" | "pending" | "inspect" | "dispatch" | "receipt"
+            "binding"
+                | "configure"
+                | "pending"
+                | "inspect"
+                | "dispatch"
+                | "receipt"
+                | "capture-input"
+                | "current-visits"
         ) {
             bail!("unsupported Nexus operation");
         }
@@ -117,7 +124,8 @@ impl NexusConfig {
             .kill_on_drop(true)
             .spawn()
             .context("Nexus operator unavailable")?;
-        let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let timeout = if operation == "capture-input" { 2 } else { 10 };
+        let result = tokio::time::timeout(Duration::from_secs(timeout), async {
             let mut stdin = child.stdin.take().context("Nexus input pipe unavailable")?;
             stdin.write_all(&raw).await?;
             drop(stdin);

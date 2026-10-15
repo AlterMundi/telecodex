@@ -12,7 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workspace', type=Path, required=True)
     parser.add_argument('--state', type=Path, required=True)
-    parser.add_argument('operation', choices=['binding', 'configure', 'pending', 'inspect', 'dispatch', 'receipt'])
+    parser.add_argument('operation', choices=['binding', 'configure', 'pending', 'inspect', 'dispatch', 'receipt', 'capture-input', 'current-visits'])
     args = parser.parse_args()
     os.umask(0o077)
     directory = args.state.lstat()
@@ -71,6 +71,10 @@ def main():
                 passage.update(segments=kept, excerpt_limited=limited)
                 excerpts.append(passage)
             request['selected_evidence'] = excerpts
+    elif args.operation in {'capture-input', 'current-visits'}:
+        from backend.visits import VisitStore
+        visits = VisitStore(store)
+        result = visits.capture(body) if args.operation == 'capture-input' else visits.latest_native(body)
     else:
         result = bridge.receipt(body)
     print(json.dumps(result, ensure_ascii=False))

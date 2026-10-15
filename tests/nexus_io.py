@@ -132,9 +132,10 @@ label="Nexus"
                     if self.mode=='reject':send({'id':ident,'error':{'code':-32600,'message':'synthetic rejection'}});continue
                     if self.mode=='lost_ack':sock.close();return
                     send({'id':ident,'result':{'turn':{'id':turn}}});self.broadcast(thread,'turn/started',{'turn':{'id':turn,'status':'inProgress'}})
-                    if self.mode=='hold':self.holding[thread]=turn
+                    if self.mode in ('hold','reject_steer'):self.holding[thread]=turn
                     else:self.finish(thread,turn)
                 elif method=='turn/steer':
+                    if self.mode=='reject_steer':send({'id':ident,'error':{'code':-32600,'message':'synthetic definite steer rejection'}});continue
                     if self.mode=='lost_steer':sock.close();return
                     send({'id':ident,'result':{'turnId':turn}})
                 elif method=='turn/interrupt':send({'id':ident,'result':{}});self.broadcast(thread,'turn/completed',{'turn':{'id':turn,'status':'interrupted'}})
