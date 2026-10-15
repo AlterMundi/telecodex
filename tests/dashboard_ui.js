@@ -149,9 +149,21 @@ const hung = (options) => new Promise((resolve, reject) => {
   assert.match(independent.nodes.get("#alerts-state").textContent,/not been established/);
   const activeArticle = () => independent.nodes.get("#incidents").children.find((n) => n.dataset.processingState === "open");
   const article = activeArticle();
-  assert.equal(article.children[2].textContent,incident.projection.summary);
+  assert.equal(article.children[1].textContent,"fixture · index");
+  assert.equal(article.children[2].textContent,"Reported by: fixture · Resource: Unspecified");
+  assert.equal(article.children[3].textContent,incident.projection.summary);
+  // Current and legacy memory producers identify DMK without hiding exact provenance.
+  for (const producer of ["hmk-compaii", "dmk-oliva", "other-reporter"]) {
+    const attributed = {...incident, projection:{...incident.projection,producer_id:producer,
+      resource_ref:"memory-worker",phase:"capture"}};
+    vm.runInContext('alerts('+JSON.stringify({...operations,incidents:[attributed]})+')',independent.context);
+    assert.equal(activeArticle().children[1].textContent,
+      `${producer === "other-reporter" ? producer : "DMK (Memory)"} · capture`);
+    assert.equal(activeArticle().children[2].textContent,`Reported by: ${producer} · Resource: memory-worker`);
+  }
+  vm.runInContext('alerts('+JSON.stringify(operations)+')',independent.context);
   assert.equal(article.dataset.acknowledgment,"unacknowledged");
-  const acknowledge = article.children.at(-1);
+  const acknowledge = activeArticle().children.at(-1);
   await acknowledge.handlers.click();
   assert.equal(acknowledge.textContent,"Acknowledged");
   assert.equal(independent.nodes.get("#operations").dataset.attention,"false");
