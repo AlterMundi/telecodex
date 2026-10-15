@@ -29,6 +29,27 @@ with tempfile.TemporaryDirectory(prefix='telecodex-nexus-operator-') as director
     app.state.store.approve_access(pending['request_id'],'table','human:nico','Nico')
     binding=call('configure',config)
     assert call('binding',{'table_id':'table','author_ref':'human:nico'})['revision']==1
+    # Actual backend: frozen A survives B; explicit earlier composition stays A.
+    from backend.research_projection import project
+    from backend.tests.test_service import ORIGIN
+    graph=project({'provider':'fixture','context_id':'context','version':'v1','table_id':'table','title':'Research','scope_note':'Two sections','author_ref':'test','documents':[{'observed_at':'2026-10-15T10:00:00Z','document':{'doc_id':'report.md','kind':'source','title':'Report','body':'# A\n\nOne.\n\n# B\n\nTwo.\n'}}]})
+    app.state.contexts.install(graph)
+    a,b=[n['node_id'] for n in graph['nodes'] if n['title'] in {'A','B'}]
+    view={'context_id':'context','version':'v1','focus':a,'selection':{'kind':'node','object_id':a},'path':[],'expansions':{},'renderers':{},'drafts':[]}
+    command={'request_id':'visit-a','expected_revision':0,'input_enabled':True,'perspective':view}
+    assert client.put('/api/tables/table/visits/phone',json=command,headers={'Origin':ORIGIN}).status_code==200
+    incoming={'input_id':'telegram:123:42','native':target}
+    frozen=call('capture-input',incoming);assert frozen['status']=='captured' and frozen['perspective']['selection']['object_id']==a
+    import time
+    ingress_cutoff=time.time()
+    moved={**command,'request_id':'visit-b','expected_revision':1,'perspective':{**view,'focus':b,'selection':{'kind':'node','object_id':b}}}
+    assert client.put('/api/tables/table/visits/phone',json=moved,headers={'Origin':ORIGIN}).status_code==200
+    assert call('capture-input',{**incoming,'input_id':'capture-race','ingress_at':ingress_cutoff})['status']=='view_changed_during_ingress'
+    assert call('capture-input',incoming)==frozen
+    assert call('current-visits',target)['visits'][0]['perspective']['selection']['object_id']==b
+    assert call('capture-input',{**incoming,'input_id':'earlier-composition','visit_id':'phone','view_revision':1})['perspective']['selection']['object_id']==a
+    assert call('capture-input',{**incoming,'input_id':'stranger','native':{**target,'human_user_id':999}})['status']=='missing'
+    assert 'drafts' not in json.dumps(frozen) and 'native_thread_id' not in json.dumps(frozen)
     note={'contribution_id':'own-question','kind':'question','text':'Selected human question','anchors':[anchor()]}
     assert post(client,'/api/tables/table/contributions',note).status_code==200
     command={'request_id':'request','binding_id':binding['binding_id'],'binding_revision':1,'contribution_id':'own-question'}

@@ -63,6 +63,12 @@ pub(super) async fn process_turn(
     } else {
         resolve_session_codex_binding_from_history(&shared, session)?
     };
+    super::nexus::validate_input_target(
+        &shared,
+        queued.update_id,
+        session.key,
+        queued.request.from_user_id,
+    )?;
     let bounded = shared
         .config
         .tribu
