@@ -119,6 +119,10 @@ impl Store {
             let old: Value = serde_json::from_str(&old)?;
             if old["target"] != doc["target"]
                 || old["request"]["contribution"] != doc["request"]["contribution"]
+                || old["request"]["request_kind"] != doc["request"]["request_kind"]
+                || old["request"]["iteration"] != doc["request"]["iteration"]
+                || old["request"]["iteration_id"] != doc["request"]["iteration_id"]
+                || old["request"]["iteration_revision"] != doc["request"]["iteration_revision"]
                 || old["request"]["binding_id"] != doc["request"]["binding_id"]
                 || old["request"]["binding_revision"] != doc["request"]["binding_revision"]
             {
@@ -155,6 +159,10 @@ impl Store {
                 "binding_id",
                 "binding_revision",
                 "contribution",
+                "request_kind",
+                "iteration",
+                "iteration_id",
+                "iteration_revision",
                 "return_context",
                 "responder_ref",
             ]
@@ -472,6 +480,33 @@ mod tests {
         let mut changed = doc("r");
         changed["target"]["native_thread_id"] = json!("other");
         assert!(store.nexus_receive("r", &changed).is_err());
+    }
+    #[test]
+    fn reviewed_iteration_cannot_change_during_claim_or_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("db");
+        let store = open(&path);
+        let mut selected = doc("iteration-request");
+        selected["request"]
+            .as_object_mut()
+            .unwrap()
+            .remove("contribution");
+        selected["request"]["request_kind"] = json!("iteration");
+        selected["request"]["iteration_id"] = json!("research");
+        selected["request"]["iteration_revision"] = json!(1);
+        selected["request"]["iteration"] = json!({"revision":1,"spec":{"iteration_id":"research","tasks":[{"task_id":"map","instruction":"Preserve evidence boundaries"}]}});
+        assert!(store.nexus_receive("iteration-request", &selected).unwrap());
+        assert!(store.nexus_begin_claim("iteration-request").unwrap());
+        let mut changed = selected.clone();
+        changed["request"]["iteration"]["spec"]["tasks"][0]["instruction"] =
+            json!("Different work");
+        assert!(store.nexus_receive("iteration-request", &changed).is_err());
+        assert!(store.nexus_claimed("iteration-request", &changed).is_err());
+        store.nexus_claimed("iteration-request", &selected).unwrap();
+        drop(store);
+        let store = open(&path);
+        assert!(!store.nexus_receive("iteration-request", &selected).unwrap());
+        assert!(store.nexus_receive("iteration-request", &changed).is_err());
     }
     #[test]
     fn notifications_do_not_accept_input_and_steer_ack_owns_its_turn() {

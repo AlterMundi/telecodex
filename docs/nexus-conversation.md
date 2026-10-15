@@ -165,3 +165,19 @@ The second uses Nexus's actual backend with synthetic sources/receipts. Neither
 proves a real model or phone delivery. Acceptance still requires the human's
 real-source Mini App → intended existing native conversation → actual reply,
 correction/interruption and preserved return/close/reopen loop.
+
+## Reviewed iteration requests
+
+The same authenticated binding and dispatch ledger also accepts Nexus requests
+with `request_kind: iteration`. Their frozen package contains the reviewed
+iteration spec, selected node/relation versions and task states at admission.
+The native prompt asks for scoped work through existing authorized work/provider
+tools. It does not fabricate an audio contribution, grant new permissions or
+retarget the package when navigation changes. Ingress, dispatch and retries
+compare the complete frozen iteration; restart reconciliation does not resubmit.
+
+A native response is a private conversation receipt, not a task or iteration
+result. Provider observations and the Nexus work ledger own execution/completion.
+The optional `tests/nexus_operator_io.py` qualification covers the real Nexus API;
+`tests/nexus_io.py ... reviewed_iteration` exercises process/HTTP/WebSocket/SQLite
+with a synthetic native endpoint. Neither claims a genuine model/provider effect.
