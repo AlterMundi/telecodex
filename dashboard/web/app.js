@@ -486,17 +486,18 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refresh();
 });
 function theme() {
-  // The selected control-panel design stays dark even in a light Telegram shell.
-  document.documentElement.dataset.theme = "dark";
+  const background = typeof getComputedStyle === "function"
+    ? getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() : "#090e17";
   for (const method of ["setHeaderColor", "setBackgroundColor", "setBottomBarColor"]) {
     try {
-      tg?.[method]?.("#090e17");
+      tg?.[method]?.(background || "#090e17");
     } catch (_) {
       // Older clients may expose an SDK method without supporting its bridge.
     }
   }
 }
 theme();
+window.addEventListener?.("home-style:resolved", theme);
 tg?.onEvent?.("themeChanged", theme);
 tg?.onEvent?.("activated", () => {
   schedule();

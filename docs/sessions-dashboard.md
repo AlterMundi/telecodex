@@ -159,3 +159,30 @@ existing licensed Latin font is self-hosted with its original OFL and hash
 provenance. The selected canvas stays dark regardless of Telegram or OS light
 mode. Supported Telegram header, background and bottom-bar colors follow it;
 older clients retain their own chrome without preventing authentication or use.
+
+## Shared appearance and public asset loading
+
+The optional `appearance_origin` is the exact HTTPS origin of this receiving
+body's established home style consumer. It is not another Homemaker deployment.
+The HTML head loads that home's public `style.css?surface=sessions` before paint
+and reuses `home-style.js` for visible updates and last-valid failure fallback.
+Palette/font roles map to existing controls; native Telegram chrome follows the
+computed background. The editor's authored shell is unaffected. Without this
+configuration, the existing local Matrix composition remains the fallback.
+
+This source is public author appearance only: no dashboard bearer, initData,
+human ID or private viewer preference is sent to it. CSP permits only the
+configured style/font origin and its exact shared-consumer script; private
+connections and control endpoints remain self-only. HTML/private data stay
+no-store. Content-versioned public JS/CSS is immutable; other static resources
+can revalidate through ETag. New code gets new URLs without clearing private
+state. A currently open page still needs a safe reload to adopt new code;
+foreground style changes do not reload or replay native operations.
+
+Keep the existing dedicated bot/receiver grant and menu selection. Shared style
+and a shared launcher do not transfer another bot's native session authority.
+
+The header includes a direct **Apps** link to the shared launcher at
+`https://apps.dmn.homes/`. It navigates in the current WebView without forwarding
+Telegram launch data or changing receiving grants. It does not replace internal
+BackButton navigation. Native conversation work continues independently.
