@@ -70,7 +70,7 @@ pub(super) fn prepare_ingress(
             .store
             .nexus_binding(&route.table_id, &route.author_ref)?
         {
-            if target(&local)?.key() == key {
+            if local["active"] == true && target(&local)?.key() == key {
                 bound = true;
             }
         }

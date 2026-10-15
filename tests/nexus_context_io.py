@@ -68,7 +68,10 @@ def steering_uncertainty_and_isolation(binary):
         j.wait(lambda:bool(j.prompt('turn/steer','Continue without guessing')));assert j.context(missing)['status']=='unavailable'
         foreign=j.admit('Another participant',user=101);j.wait(lambda:j.row('SELECT status FROM incoming_updates WHERE update_id=?',(foreign,))==[('started',)])
         assert j.context(foreign) is None and 'Nexus perspective' not in j.prompt('turn/steer','Another participant')
-        print('PASS native steering, explicit ambiguity/unavailability, no borrowed participant perspective')
+        j.command('/nexus disconnect','Nexus: not connected')
+        detached=j.admit('Ordinary chat after disconnect');j.wait(lambda:j.row('SELECT status FROM incoming_updates WHERE update_id=?',(detached,))==[('started',)])
+        assert j.context(detached) is None and 'Nexus perspective' not in j.prompt('turn/steer','Ordinary chat after disconnect')
+        print('PASS native steering, explicit ambiguity/unavailability, participant isolation and disconnected ordinary chat')
     finally:j.close()
 
 def independent_ingress_and_changed_binding(binary):
