@@ -157,6 +157,33 @@ def delivered(binary):
     finally:j.close()
 
 
+def reviewed_iteration(binary):
+    j=Nexus(binary)
+    try:
+        j.prepare();starts=j.native_turns;j.stop();j.enqueue('iteration-request')
+        # Use the same ingress ledger with a reviewed work package, not an audio note.
+        with sqlite3.connect(j.state/'operator.sqlite') as db:
+            doc=json.loads(db.execute("SELECT doc FROM requests WHERE id='iteration-request'").fetchone()[0])
+            request=doc['request'];request.pop('contribution');request.pop('return_context')
+            request.update(request_kind='iteration',iteration_id='research',iteration_revision=1,iteration={
+                'revision':1,'state':'active','activated_by':'human:test','tasks':[{'task_id':'map','revision':0,'state':'ready'}],
+                'spec':{'iteration_id':'research','title':'Clarify evidence layers','scope':'Selected research only','tasks':[{
+                    'task_id':'map','instruction':'Keep measured geometry separate from human plausibility',
+                    'targets':[{'context_id':'research','version':'v1','kind':'relation','object_id':'evidence-link'}],
+                    'acceptance':'Retain canonical source and published map observations','executor':'daimon'}]}})
+            db.execute("UPDATE requests SET doc=? WHERE id='iteration-request'",(json.dumps(doc),))
+        j.start();j.wait(lambda:j.state_of('iteration-request')[0]=='completed');j.idle()
+        assert j.native_turns==starts+1
+        submitted=[x for x in j.rpc if x.get('method')=='turn/start'][-1]['params']['input'][0]['text']
+        assert 'requested Advance' in submitted and '"object_id":"evidence-link"' in submitted
+        assert '"revision":1' in submitted and 'A native reply does not complete the iteration' in submitted
+        assert 'Selected human question' not in submitted
+        j.stop();j.start();j.command('/nexus reconcile','Nexus: connected')
+        assert j.native_turns==starts+1
+        print('PASS reviewed iteration uses existing native thread with frozen relation/version scope and no replay; fixture reply is not a work effect')
+    finally:j.close()
+
+
 def controls(binary):
     j=Nexus(binary,'hold_after_connect')
     try:
@@ -294,6 +321,6 @@ def writer_hold_other_target(binary):
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
-    scenarios=(delivered,controls,refusals,uncertainty,known_turn_recovery,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
+    scenarios=(delivered,reviewed_iteration,controls,refusals,uncertainty,known_turn_recovery,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
     for run in scenarios:
         if len(sys.argv)==2 or run.__name__ in sys.argv[2:]:run(binary)

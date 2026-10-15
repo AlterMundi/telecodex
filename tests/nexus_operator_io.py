@@ -67,6 +67,25 @@ with tempfile.TemporaryDirectory(prefix='telecodex-nexus-operator-') as director
     complete={**receipt,'status':'completed','reply':'Synthetic native receipt; not a live model result.'}
     assert call('receipt',complete)['reply']==complete['reply']
     assert call('receipt',receipt)['status']=='completed'
+    # The same real backend dispatches a reviewed iteration without requiring or
+    # fabricating recording evidence. Native transport receipts never settle work.
+    plan={'iteration_id':'research-iteration','title':'Clarify a selected relation','scope':'Selected context only',
+          'tasks':[{'task_id':'clarify','title':'Check meaning','instruction':'Clarify the retained source',
+                    'intended_outcome':'An evidenced clarification','acceptance':'Observe the source revision and result',
+                    'targets':[{'context_id':'context','version':'v1','kind':'node','object_id':a}],
+                    'executor':'daimon','operation':'context.iterate','authority_basis':'Fixture work; no external effects'}]}
+    app.state.work.create('table','human:nico',plan)
+    app.state.work.advance('table','research-iteration','human:nico',{'request_id':'activate-iteration','expected_revision':0})
+    selected={'request_id':'iterate','binding_id':binding['binding_id'],'binding_revision':1,
+              'iteration_id':'research-iteration','iteration_revision':1}
+    assert post(client,'/api/tables/table/iteration-requests',selected).status_code==200
+    dispatch=call('dispatch',{'listener_id':'listener','request_id':'iterate'})
+    assert dispatch['request']['iteration']['spec']['tasks'][0]['targets']==plan['tasks'][0]['targets']
+    assert 'selected_evidence' not in dispatch['request'] and 'contribution' not in dispatch['request']
+    receipt={'request_id':'iterate','dispatch_id':dispatch['dispatch_id'],'native_thread_id':'existing-native','native_turn_id':'fixture-iteration-turn','status':'accepted'}
+    call('receipt',receipt)
+    call('receipt',{**receipt,'status':'completed','reply':'Fixture reply, no effect.'})
+    assert app.state.work.read('table','research-iteration')['state']=='active'
     call('configure',{**config,'expected_revision':1,'active':False})
     assert call('pending',{'listener_id':'listener'})==[]
     # The API may return selected old versions; permission/symlink checks happen

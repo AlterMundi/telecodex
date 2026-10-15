@@ -48,7 +48,7 @@ def main():
         result = getattr(bridge, args.operation)(body['request_id'], body['listener_id'])
         # Only explicitly selected source/version anchors, never native history.
         request = result.get('request')
-        if request and args.operation == 'dispatch' and result.get('dispatch'):
+        if request and request.get('contribution') and args.operation == 'dispatch' and result.get('dispatch'):
             excerpts, remaining = [], 24000
             for anchor in request['contribution']['anchors']:
                 try:
