@@ -33,6 +33,8 @@ pub struct NexusRoute {
     pub author_ref: String,
     pub human_user_id: i64,
     pub label: String,
+    #[serde(default)]
+    pub launch_selector: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -56,19 +58,27 @@ pub fn identifier(value: &str) -> bool {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
 }
+fn launch_selector(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+}
 impl NexusConfig {
+    pub fn launch_for<'a>(&'a self, route: &'a NexusRoute) -> &'a str {
+        route
+            .launch_selector
+            .as_deref()
+            .unwrap_or(&self.launch_selector)
+    }
     pub fn validate(&self) -> Result<()> {
         if [&self.python, &self.operator, &self.workspace, &self.state]
             .iter()
             .any(|p| !p.is_absolute())
             || !identifier(&self.listener_id)
             || !identifier(&self.responder_ref)
-            || self.launch_selector.is_empty()
-            || self.launch_selector.len() > 64
-            || !self
-                .launch_selector
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+            || !launch_selector(&self.launch_selector)
             || self.poll_seconds == 0
             || self.poll_seconds > 60
             || self.routes.is_empty()
@@ -82,6 +92,7 @@ impl NexusConfig {
                 || route.human_user_id <= 0
                 || route.label.is_empty()
                 || route.label.len() > 200
+                || !launch_selector(self.launch_for(route))
                 || self.routes[..i]
                     .iter()
                     .any(|r| r.table_id == route.table_id && r.author_ref == route.author_ref)

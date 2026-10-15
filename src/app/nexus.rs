@@ -742,7 +742,7 @@ pub(super) async fn command(app: &App, message: &Message, human: i64, args: &str
     if let Some(username) = app.shared.bot_username.as_deref() {
         text.push_str(&format!(
             "\n\n[Open Nexus in Telegram](https://t.me/{username}?startapp={}&mode=fullscreen)",
-            cfg.launch_selector
+            cfg.launch_for(r)
         ));
     }
     app.send_status(key.chat_id, Some(key.thread_id), &text)

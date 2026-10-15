@@ -1903,6 +1903,7 @@ fn deliberate_nexus_binding_never_falls_back_to_latest_cwd_history() {
             author_ref: "human:test".into(),
             human_user_id: 100,
             label: "Nexus".into(),
+            launch_selector: None,
         }],
     });
     let key = SessionKey::new(100, Some(7));
