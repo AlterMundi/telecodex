@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix='telecodex-nexus-operator-') as director
         assert (result.returncode==0)==ok,(operation,result.stderr)
         return json.loads(result.stdout) if ok else result
     target={'listener_id':'listener','bot_id':123,'human_user_id':100,'chat_id':100,'topic_id':7,'native_thread_id':'existing-native'}
-    config={'table_id':'table','author_ref':'human:nico','expected_revision':0,'label':'Nexus','responder_ref':'daimon:test','target':target}
+    config={'table_id':'table','author_ref':'human:nico','expected_revision':0,'supported_requests':['contribution','iteration','peer'],'label':'Nexus','responder_ref':'daimon:test','target':target}
     call('configure',config,False)  # No approved Telegram membership.
     selector=app.state.store.register_launch('table')['start_param']
     _,pending=app.state.store.telegram_access(selector,123,100)
@@ -86,6 +86,20 @@ with tempfile.TemporaryDirectory(prefix='telecodex-nexus-operator-') as director
     call('receipt',receipt)
     call('receipt',{**receipt,'status':'completed','reply':'Fixture reply, no effect.'})
     assert app.state.work.read('table','research-iteration')['state']=='active'
+    # Same operator, separate native and signed-peer response lanes.
+    app.state.peers.configure(dict(route_id='peer',table_id='table',expected_revision=0,being_ref='dm:being:v1:fixture_peer',label='Fixture peer',profile_id='fixture-profile'))
+    shared=dict(request_id='peer-review',route_id='peer',route_revision=1,target=dict(context_id='context',version='v1',kind='relation',object_id=graph['relations'][0]['relation_id']),shared_text='Explicit fixture disclosure only.',disclosure='whole-tribe')
+    assert post(client,'/api/tables/table/peer-requests',shared).status_code==200
+    command=dict(binding_id=binding['binding_id'],binding_revision=1,peer_request_id='peer-review')
+    native=post(client,'/api/tables/table/peer-conversation-requests',command).json()
+    dispatch=call('dispatch',dict(listener_id='listener',request_id=native['request_id']))
+    assert dispatch['request']['peer_request']['target']==shared['target']
+    assert 'profile_id' not in json.dumps(dispatch) and 'selected_evidence' not in dispatch['request']
+    receipt=dict(request_id=native['request_id'],dispatch_id=dispatch['dispatch_id'],native_thread_id='existing-native',native_turn_id='fixture-peer-turn',status='accepted')
+    call('receipt',receipt)
+    call('receipt',{**receipt,'status':'completed','reply':'Private fixture response; no peer effect.'})
+    assert app.state.peers.all('table')[0]['responses']==[]
+    assert app.state.peers.all('table')[0]['status']=='queued'
     call('configure',{**config,'expected_revision':1,'active':False})
     assert call('pending',{'listener_id':'listener'})==[]
     # The API may return selected old versions; permission/symlink checks happen

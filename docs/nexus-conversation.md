@@ -62,6 +62,23 @@ capture and per-message topic deep links are not qualified by this slice.
 
 ## Requests, observations and controls
 
+Bindings advertise `supported_requests` when `/nexus connect` is performed.
+This receiver implements `contribution`, `iteration` and `peer`. Nexus treats
+older bindings as contribution-only; installing a backend or frontend does not
+silently upgrade a running listener. Deploy the paired receiver and explicitly
+reconnect before submitting a new kind. This prevents a new package from being
+claimed by an incompatible old listener.
+
+An explicit `peer` request uses the same journal/worker/steer and receipt path.
+It freezes the chosen whole-Tribe disclosure, responder and exact node/relation
+version. Its native prompt asks the bound Daimon to use Nexus's existing finite
+Matrix adapter and preserve the exact message/send identity. It neither polls
+Matrix itself nor creates peer model attention. The human-input echo identifies
+the requested forwarding. A native final response stays in the author's private
+conversation; it is not the selected peer's signed response or task completion.
+Nexus rechecks withdrawal, route and requesting grant before native dispatch;
+the Matrix adapter rechecks them before external transmission as well.
+
 Only IDs from the owner-local Nexus pending API are discovered. Telecodex
 inspects their canonical scoped contribution and journals before dispatch.
 Dispatch is claimed when the existing worker is ready, or through its live

@@ -199,6 +199,33 @@ def reviewed_iteration(binary):
     finally:j.close()
 
 
+
+def peer_request(binary):
+    j=Nexus(binary)
+    try:
+        j.prepare();starts=j.native_turns;j.stop();j.enqueue('peer-request')
+        with sqlite3.connect(j.state/'operator.sqlite') as db:
+            doc=json.loads(db.execute("SELECT doc FROM requests WHERE id='peer-request'").fetchone()[0])
+            req=doc['request'];req.pop('contribution');req.pop('return_context')
+            req.update(request_kind='peer',peer_request_id='selected-peer-request',peer_request={
+                'request_id':'selected-peer-request','recipient_label':'Fixture peer',
+                'recipient_ref':'dm:being:v1:fixture_peer','disclosure':'whole-tribe',
+                'target':{'context_id':'research','version':'v2','kind':'relation','object_id':'exact-link'},
+                'shared_message':'Exactly the human-selected public-to-Tribe question.'})
+            db.execute("UPDATE requests SET doc=? WHERE id='peer-request'",(json.dumps(doc),))
+        j.start();j.wait(lambda:j.state_of('peer-request')[0]=='completed');j.idle()
+        assert j.native_turns==starts+1
+        text=[x for x in j.rpc if x.get('method')=='turn/start'][-1]['params']['input'][0]['text']
+        assert '"object_id":"exact-link"' in text and '"version":"v2"' in text
+        assert 'whole Tribe' in text and 'Your native reply is private' in text
+        assert 'Exactly the human-selected public-to-Tribe question.' in text
+        assert 'Selected human question' not in text
+        j.stop();j.start();j.command('/nexus reconcile','Nexus: connected')
+        assert j.native_turns==starts+1
+        print('PASS explicit peer disclosure reaches existing native thread once; native fixture reply is not a signed peer response')
+    finally:j.close()
+
+
 def controls(binary):
     j=Nexus(binary,'hold_after_connect')
     try:
@@ -336,6 +363,6 @@ def writer_hold_other_target(binary):
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
-    scenarios=(delivered,table_launches,reviewed_iteration,controls,refusals,uncertainty,known_turn_recovery,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
+    scenarios=(delivered,table_launches,reviewed_iteration,peer_request,controls,refusals,uncertainty,known_turn_recovery,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
     for run in scenarios:
         if len(sys.argv)==2 or run.__name__ in sys.argv[2:]:run(binary)
