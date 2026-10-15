@@ -337,7 +337,10 @@ function alerts(data) {
     const badges = el("div", undefined, "incident-status");
     badges.append(el("span", resolved ? "✓ Resolved" : "! Open", `incident-badge incident-badge--${resolved ? "resolved" : "open"}`),
       el("span", acknowledged ? "Acknowledged" : "Unacknowledged", "incident-badge"));
-    item.append(badges, el("h3", `Phase: ${p.phase}`),
+    // Legacy HMK producer IDs remain valid after the DMK project rename.
+    const source = /^(hmk|dmk)-/.test(p.producer_id) ? "DMK (Memory)" : p.producer_id;
+    item.append(badges, el("h3", `${source} · ${p.phase}`),
+      el("p", `Reported by: ${p.producer_id} · Resource: ${p.resource_ref || "Unspecified"}`, "note"),
       el("p", p.summary), el("p", p.processing_state === "resolved" ? `Previous action: ${p.action}` : p.action));
     const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";
     item.append(el("p", `Observation ${incident.freshness} · Delivery: ${deliveries}`, "note"));
