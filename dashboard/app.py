@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ import tomllib
 from urllib.parse import parse_qsl, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
 from init_data_py import errors, validate_by_signature
 
 from .provider import Provider, ProviderUnavailable
@@ -48,6 +49,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     provider = provider or Provider(config)
     origin = config['origin']
     prefix = config.get('prefix', '/sessions')
+    appearance = config.get('appearance_origin', '').rstrip('/')
+    if appearance:
+        u = urlparse(appearance)
+        if (u.scheme != 'https' or not u.netloc or u.path or u.query or u.fragment or
+                u.username or u.password or any(c.isspace() or c in "\\\"'<>" for c in appearance)):
+            raise ValueError('Exact public Homemaker consumer origin required')
     if (urlparse(origin).scheme != 'https' or urlparse(origin).netloc == ''
             or urlparse(origin).path not in ('', '/') or not re.fullmatch(r'/[a-zA-Z0-9_-]+', prefix)):
         raise ValueError('Exact HTTPS origin and one-segment prefix required')
@@ -110,13 +117,16 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                     return JSONResponse({'detail': 'Request too large'}, status_code=413)
             request._body = bytes(data)
         response = await call_next(request)
-        response.headers['Cache-Control'] = 'no-store'
+        response.headers.setdefault('Cache-Control', 'no-store')
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['X-Robots-Tag'] = 'noindex, nofollow'
         response.headers['Content-Security-Policy'] = (
-            "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; "
-            "img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+            "default-src 'self'; script-src 'self' https://telegram.org" +
+            (' '+appearance+'/home-style.js' if appearance else '') +
+            "; style-src 'self'" + (' '+appearance if appearance else '') +
+            "; font-src 'self'" + (' '+appearance if appearance else '') +
+            "; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
             "frame-ancestors 'self' https://web.telegram.org")
         return response
 
@@ -154,13 +164,28 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/')
     def shell():
-        return FileResponse(public / 'index.html')
+        body = (public / 'index.html').read_text()
+        for name in ('app.js', 'style.css'):
+            version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
+            body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
+        if appearance:
+            base = html.escape(appearance, quote=True)
+            body = body.replace('<html lang="en">', '<html lang="en" data-style-policy="inherit">')
+            body = body.replace('</head>', '<link rel="stylesheet" data-home-style href="'+base+
+                '/style.css?surface=sessions"><script src="'+base+'/home-style.js" defer></script></head>')
+        return HTMLResponse(body)
 
     @app.get('/assets/{name}')
-    def asset(name: str):
+    def asset(name: str, request: Request):
         if name not in ('app.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
-        return FileResponse(public / name)
+        version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
+        immutable = list(request.query_params.multi_items()) == [('v',version)]
+        headers = {'Cache-Control':'public, max-age=31536000, immutable' if immutable else 'public, max-age=0, must-revalidate',
+                   'ETag':'"'+version+'"'}
+        if request.headers.get('if-none-match') == headers['ETag']:
+            return Response(status_code=304,headers=headers)
+        return FileResponse(public / name, headers=headers)
 
     @app.get('/health')
     def health():

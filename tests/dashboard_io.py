@@ -385,4 +385,29 @@ class ProviderIO(unittest.TestCase):
         self.assertEqual(resumed['state'],'resuming')
 
 
-if __name__=='__main__':unittest.main()
+
+# Additional appearance transport coverage is intentionally independent of native control.
+class DashboardAppearance(unittest.TestCase):
+    def test_configured_public_style_is_render_blocking_but_never_receives_private_api_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp,0o700)
+            config={'state_dir':tmp,'origin':'https://example.test','prefix':'/sessions','bot_id':123,
+                    'appearance_origin':'https://home.example.test'}
+            with TestClient(create_app(config,Receiver(),lambda *_:100),base_url='https://example.test') as client:
+                response=client.get('/')
+                self.assertIn('data-home-style',response.text)
+                self.assertIn('https://home.example.test/style.css?surface=sessions',response.text)
+                self.assertIn('https://home.example.test/home-style.js',response.text)
+                self.assertNotIn('unsafe-inline',response.headers['content-security-policy'])
+                self.assertIn("connect-src 'self'",response.headers['content-security-policy'])
+                self.assertEqual(response.headers['cache-control'],'no-store')
+                import re
+                path=re.search(r'assets/app.js\?v=[a-f0-9]{16}',response.text).group(0)
+                self.assertIn('immutable',client.get('/'+path).headers['cache-control'])
+                self.assertNotIn('immutable',client.get('/assets/app.js?v=old').headers['cache-control'])
+                self.assertEqual(client.get('/api/state').status_code,401)
+            for origin in ('http://home.example.test','https://home.example.test/path','https://secret@home.example.test','https://home.example.test?token=x'):
+                with self.assertRaises(ValueError):create_app({**config,'appearance_origin':origin},Receiver())
+
+
+if __name__ == '__main__': unittest.main()
