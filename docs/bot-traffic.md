@@ -94,3 +94,62 @@ The request that first encountered a limit is not necessarily its cause. A
 counter measures traffic; it does not itself provide a shared send budget or
 repair a bridge waiting silently for that budget. Cross-producer rate control,
 priority for human commands and visible cooldown state are follow-up behavior.
+
+## Sessions and actionable alerts
+
+Enable the optional `[traffic]` section in the receiving Sessions config and point
+`meter_config` at this bot's existing private configuration. The meter now pins a
+bot fingerprint in its journal; a different bot refuses reuse. When adopting a
+pre-fingerprint journal, verify its existing bot/configuration and retained
+receiving receipt first, then update only the meter. Retain all original data.
+Sessions checks the same endpoint/token binding and reads SQLite in read-only
+mode. Its authenticated `/api/traffic` works independently of native Codex state.
+It projects 24-hour totals, a last-hour minute chart, service/method counts and the
+receiving human's conversation titles (top 20 methods / 12 conversations). No raw
+chat/topic identifiers or unrelated titles enter the projection. Unknown origins,
+unattributed topics, incomplete metadata and dropped writes remain visible.
+
+The deterministic Sessions companion runs only when explicitly enabled. With
+`[traffic.alerts]` it uses its own scoped Daimon Alerts credential with `publish`,
+`observe`, `status` and exact producer/observer/receiving-scope associations.
+The existing Sessions receiver retains its own read/delivery/acknowledgment
+credential. Reading the page neither publishes nor acknowledges an incident.
+No model turns, new Telegram update consumer or native control is involved.
+
+Actionable conditions are:
+
+- An observed HTTP/API 429, retained until each affected method succeeds after
+  its last rejection. A successful typing call cannot resolve a rejected reply;
+  expiry of `retry_after` alone means awaiting recovery, not recovered.
+- Three upstream/HTTP 5xx failures for one method within five minutes, retained
+  until a later successful response for that method. Uncertain calls are not retried.
+- Two consecutive collector observations failing (default about 20 seconds),
+  resolving when the collector/journal become observable again.
+- Newly dropped journal writes, resolving after 60 seconds without a new loss
+  while capture is healthy. The historical coverage gap remains visible.
+
+Raw volume alone has no alert threshold: method-specific Telegram quotas cannot
+be inferred from aggregate HTTP counts. The independent Alerts observer-freshness
+view exposes a stopped/stale Sessions observer; a running core is not proof the
+companion is healthy. Missing first observation stays unobserved.
+
+Incident transitions persist before HTTP, with stable IDs, increasing revisions
+and ordered exact replay after lost acceptance. Recurrence gets a new incident
+ID. The local pending transition outbox is bounded at 16; if exceeded it retains
+pending work, exposes a permanent history-incomplete flag and reconciles retained
+transitions before resuming current observation. Raw traffic remains independently
+retained by the meter. Acknowledgment does not imply producer recovery.
+
+The existing receiving delivery adapter defers before claiming a notification
+while a known sendMessage retry deadline is active, or capture is not healthy,
+fresh and initialized. Incidents remain visible in Sessions throughout. After
+the deadline it may make the original pending delivery attempt; it never repeats
+a claimed send. Service acceptance, Telegram API delivery and human reading remain
+separate. An already failed/uncertain delivery does not become retryable.
+
+Enable this only for the configured receiving body. Preserve exact prior config,
+core actor grants and sidecar release. A producer grant addition needs only an
+Alerts-core reload and the Sessions sidecar update; no listener restart or global
+Stop. Roll back software/config while preserving incident/outbox, meter, input
+and delivery journals. Stop/retire an intentionally removed observer through the
+Alerts operator contract; never disguise a stopped observer as healthy.

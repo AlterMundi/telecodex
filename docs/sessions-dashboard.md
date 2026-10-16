@@ -186,3 +186,13 @@ The header includes a direct **Apps** link to the shared launcher at
 `https://apps.dmn.homes/`. It navigates in the current WebView without forwarding
 Telegram launch data or changing receiving grants. It does not replace internal
 BackButton navigation. Native conversation work continues independently.
+
+## Bot traffic
+
+The optional **Bot traffic** panel reads the receiving bot's private metering
+journal, independently of native state. It shows 24h request/failure/body-volume
+counts, recent rates, service/method and conversation counts, plus capture gaps
+and Telegram cooldown/recovery state. Refresh uses the existing visible-page
+cadence; an unavailable native probe does not hide the traffic or Alerts panels.
+See [capture setup and actionable Alerts](bot-traffic.md#sessions-and-actionable-alerts)
+for scoped configuration, condition/recovery policy, qualification and rollback.

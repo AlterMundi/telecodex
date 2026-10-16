@@ -200,6 +200,7 @@ class Receiver:
         self.scope = identifier(settings['receiving_scope'])
         self.adapter = identifier(settings['adapter_id'])
         self.interval = settings.get('interval_seconds', 15)
+        self.dispatch_ready = lambda: True
         self.deliver = settings.get('deliver', False)
         if type(self.interval) is not int or not 5 <= self.interval <= 300 or type(self.deliver) is not bool:
             raise ValueError('Invalid Alerts receiving settings')
@@ -301,8 +302,10 @@ class Receiver:
             with self.lock:
                 self.view = view
             if self.deliver:
-                self.sender.verify()
                 self.reconcile()
+                if not self.dispatch_ready():
+                    return
+                self.sender.verify()
                 deliveries, _ = self.client.collection('/v1/deliveries', 'DeliveryPage',
                     adapter_id=self.adapter, state='pending')
                 for delivery in deliveries[:10]:
@@ -335,6 +338,8 @@ class Receiver:
 
     def dispatch(self, delivery):
         self.authorized()
+        if not self.dispatch_ready():
+            return
         value = delivery['projection']
         if (value['receiving_scope'] != self.scope or value['producer_id'] != delivery['producer_id']
                 or value['incident_id'] != delivery['incident_id']):

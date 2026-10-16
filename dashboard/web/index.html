@@ -41,6 +41,17 @@
         <div id="alerts-state" role="status" aria-live="polite"></div>
         <div id="incidents"></div>
       </details>
+      <details id="traffic" hidden>
+        <summary id="traffic-summary">Bot traffic</summary>
+        <div id="traffic-content">
+          <p id="traffic-status" role="status" aria-live="polite"></p>
+          <div id="traffic-metrics" class="metrics"></div>
+          <figure class="traffic-chart"><figcaption>Requests per minute · last hour</figcaption><div id="traffic-chart" role="img"></div></figure>
+          <h3>By service and method · 24h</h3><div id="traffic-sources"></div>
+          <h3>By conversation · 24h</h3><div id="traffic-topics"></div>
+          <p id="traffic-coverage" class="note"></p>
+        </div>
+      </details>
       <section id="work" hidden aria-labelledby="work-title">
         <div class="section-title">
           <h2 id="work-title">Conversations</h2>

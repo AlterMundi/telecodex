@@ -399,6 +399,54 @@ function render() {
   controlButton(snapshot.stop, stale, snapshot.sessions.length);
   receipt(snapshot.stop);
 }
+function traffic(data) {
+  $("#traffic").hidden = data.state === "not_configured";
+  if (data.state === "not_configured") return;
+  const available = ["available", "degraded"].includes(data.state) && data.totals;
+  if (!available) {
+    $("#traffic-summary").textContent = `Bot traffic · ${data.state === "checking" ? "checking" : "unavailable"}`;
+    $("#traffic-status").textContent = "Capture is not currently observable. Traffic and Telegram recovery cannot be confirmed.";
+    $("#traffic").dataset.attention = "true";
+    for (const id of ["traffic-metrics", "traffic-chart", "traffic-sources", "traffic-topics"]) $(`#${id}`).replaceChildren();
+    $("#traffic-coverage").textContent = "No current statistics available.";
+    return;
+  }
+  const cooldown = data.cooldown || {state:"none", methods:[]};
+  const blocked = cooldown.state !== "none";
+  $("#traffic").dataset.attention = String(blocked || !data.meter_healthy || data.dropped_records > 0 || (data.failed_methods || []).length > 0 || data.alerts_state === "unavailable");
+  $("#traffic-summary").textContent = `Bot traffic · ${Math.round(data.requests_last_5m / 5)}/min (5m)${blocked ? " · Telegram limited" : ""}`;
+  const until = cooldown.until ? new Date(cooldown.until * 1000).toLocaleString() : "not reported";
+  $("#traffic-status").textContent = !data.meter_healthy ? "Collector unavailable; showing retained journal data."
+    : cooldown.state === "active" ? `Telegram rejected ${cooldown.methods.join(", ")}. Retry deadline: ${until}.`
+    : cooldown.state === "awaiting_recovery" ? `Waiting for successful ${cooldown.methods.join(", ")} after the last rejection. The retry deadline alone does not confirm recovery.`
+    : "Capture active. No unrecovered rate limit observed in this capture.";
+  if ((data.failed_methods || []).length) $("#traffic-status").textContent += ` Repeated API failures: ${data.failed_methods.join(", ")}.`;
+  if (data.alerts_state === "unavailable" || data.alerts_state === "backlog")
+    $("#traffic-status").textContent += " Alert publication is unconfirmed; retained incidents will be reconciled.";
+  const metric = (label, value) => {
+    const box = document.createElement("div"), name = document.createElement("span"), number = document.createElement("strong");
+    name.textContent = label; number.textContent = String(value);box.append(name, number);return box;
+  };
+  $("#traffic-metrics").replaceChildren(metric("Requests · 24h", data.totals.requests), metric("Rate limits · 24h", data.totals.rate_limited),
+    metric("Body volume · 24h", `${((data.totals.request_bytes + data.totals.response_bytes) / 1024).toFixed(1)} KiB`), metric("API failures · 24h", data.totals.failures || 0), metric("Dropped records", data.dropped_records));
+  const byMinute = new Map(data.minutes.map((m) => [m.at, m]));
+  const current = Math.floor(data.observed_at / 60) * 60;
+  const minutes = Array.from({length:60}, (_, i) => byMinute.get(current - (59-i)*60) || {at:current-(59-i)*60,requests:0,rate_limited:0});
+  const peak = Math.max(0, ...minutes.map((m) => m.requests));
+  $("#traffic-chart").setAttribute("aria-label", `Requests per minute; peak ${peak}. ${data.totals.rate_limited} rate limits in 24 hours. Empty time before capture is unobserved.`);
+  $("#traffic-chart").replaceChildren(...minutes.map((m) => {
+    const bar = document.createElement("div");bar.className = "traffic-bar";bar.style.height = `${Math.max(1, m.requests / Math.max(1, peak) * 60)}px`;
+    bar.dataset.limited = String(m.rate_limited > 0);bar.title = `${new Date(m.at*1000).toLocaleTimeString()} · ${m.at < data.capture_started-60 ? "unobserved" : m.requests+" requests"}`;return bar;
+  }));
+  const row = (name, value) => {
+    const line = document.createElement("div"), label = document.createElement("span"), count = document.createElement("span");
+    line.className = "traffic-row";label.textContent=name;count.textContent=value;line.append(label,count);return line;
+  };
+  $("#traffic-sources").replaceChildren(...data.sources.map((r) => row(`${r.source} · ${r.method}`, `${r.requests}${r.rate_limited ? " · "+r.rate_limited+" limited" : ""}`)));
+  $("#traffic-topics").replaceChildren(...(data.topics.length ? data.topics.map((r) => row(r.name, `${r.requests}${r.rate_limited ? " · "+r.rate_limited+" limited" : ""}`)) : [row("No attributed conversations", "—")]));
+  $("#traffic-coverage").textContent = `Capture since ${new Date(data.capture_started*1000).toLocaleString()}. Retained endpoint traffic only. Unknown origin: ${data.totals.unknown_source}; no topic: ${data.totals.unknown_topic}; incomplete metadata: ${data.totals.incomplete}. Message content is not recorded.`;
+  if (data.alert_history_incomplete) $("#traffic-coverage").textContent += " Alert history exceeded its backlog bound; inspect retained traffic.";
+}
 async function refresh(force = false) {
   if (refreshing || !authenticated || (document.hidden && !force)) return;
   refreshing = true;
@@ -414,6 +462,7 @@ async function refresh(force = false) {
     $("#alerts-state").textContent = "Alert observation unavailable. Processing and delivery cannot be confirmed.";
     for (const button of document.querySelectorAll("#incidents button")) button.disabled = true;
   });
+  const trafficRead = api("traffic").then(traffic).catch(() => traffic({state:"unavailable"}));
   try {
     snapshot = await api("state");
     render();
@@ -424,7 +473,7 @@ async function refresh(force = false) {
       $("#freshness").textContent = "Stale observation";
     $("#stop").disabled = true;
   } finally {
-    await operations;
+    await Promise.all([operations, trafficRead]);
     refreshing = false;
     $("#refresh").disabled = false;
   }
