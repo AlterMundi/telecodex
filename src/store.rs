@@ -443,13 +443,16 @@ impl Store {
     }
 
     pub fn native_writer_held(&self, key: SessionKey) -> Result<bool> {
-        Ok(self.stop_fenced(key)?
-            || self
-                .bot_state_value(&format!(
-                    "native_writer_hold:{}:{}",
-                    key.chat_id, key.thread_id
-                ))?
-                .is_some())
+        Ok(self.stop_fenced(key)? || self.maintenance_writer_held(key)?)
+    }
+
+    pub fn maintenance_writer_held(&self, key: SessionKey) -> Result<bool> {
+        Ok(self
+            .bot_state_value(&format!(
+                "native_writer_hold:{}:{}",
+                key.chat_id, key.thread_id
+            ))?
+            .is_some())
     }
 
     pub fn bot_state_value(&self, key: &str) -> Result<Option<String>> {

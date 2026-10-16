@@ -72,6 +72,12 @@ impl Store {
     pub fn nexus_finish(&self, id: &str) -> Result<()> {
         if let Some(doc) = self.nexus_request(id)? {
             match doc["phase"].as_str() {
+                Some("queued") => {
+                    self.conn.lock().expect("store mutex poisoned").execute(
+                        "UPDATE nexus_requests SET phase='retained_queue',reason='Worker ended before claim; explicit recovery required' WHERE id=? AND phase='queued' AND dispatch_id IS NULL AND local_turn IS NULL AND native_turn IS NULL AND instance_id=?",
+                        params![id,self.instance_id],
+                    )?;
+                }
                 Some("claimed") => self.nexus_receipt(
                     id,
                     "rejected",
@@ -456,6 +462,26 @@ mod tests {
         assert!(store.nexus_begin_claim(id).unwrap());
         store.nexus_claimed(id, &doc(id)).unwrap();
         store.nexus_link(id, turn).unwrap();
+    }
+    #[test]
+    fn unstarted_worker_retains_queue_for_explicit_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open(&root.path().join("db"));
+        assert!(store.nexus_receive("r", &doc("r")).unwrap());
+        store.nexus_finish("r").unwrap();
+        store.nexus_finish("r").unwrap();
+        assert_eq!(
+            store.nexus_request("r").unwrap().unwrap()["phase"],
+            "retained_queue"
+        );
+        assert!(!store.nexus_begin_claim("r").unwrap());
+        assert!(store.nexus_recover_queue("r").unwrap());
+        assert!(store.nexus_begin_claim("r").unwrap());
+        store.nexus_finish("r").unwrap();
+        assert_eq!(
+            store.nexus_request("r").unwrap().unwrap()["phase"],
+            "claiming"
+        );
     }
     #[test]
     fn duplicate_race_has_one_journal_and_claim() {
