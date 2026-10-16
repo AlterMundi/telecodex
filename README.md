@@ -558,3 +558,9 @@ Cross-repository decisions and repository-specific implications are indexed in
 [the Daimon Field projection](docs/daimon-field.md). The existing private
 [AlterMundi Project 13](https://github.com/orgs/AlterMundi/projects/13) is the canonical decision and roadmap surface;
 repository access and Project access are separate.
+
+## Terminal access to topic conversations
+
+Use [codex-tg2tmux](docs/tg2tmux.md) to open existing topic conversations in named
+tmux sessions, inspect title differences and reconcile native names without
+sending a prompt or starting another Telegram consumer.
