@@ -74,14 +74,15 @@ async function api(route, body) {
     clearTimeout(timeout);
   }
 }
-function metric(label, value, detail) {
+function metric(label, value, detail, target = "#metrics") {
   const box = el("div", undefined, "metric");
   box.append(
     el("div", label, "metric-label"),
     el("div", value, "metric-value"),
   );
   if (detail) box.append(el("div", detail, "metric-detail"));
-  $("#metrics").append(box);
+  if (target) $(target).append(box);
+  return box;
 }
 function host(data) {
   $("#metrics").replaceChildren();
@@ -423,12 +424,9 @@ function traffic(data) {
   if ((data.failed_methods || []).length) $("#traffic-status").textContent += ` Repeated API failures: ${data.failed_methods.join(", ")}.`;
   if (data.alerts_state === "unavailable" || data.alerts_state === "backlog")
     $("#traffic-status").textContent += " Alert publication is unconfirmed; retained incidents will be reconciled.";
-  const metric = (label, value) => {
-    const box = document.createElement("div"), name = document.createElement("span"), number = document.createElement("strong");
-    name.textContent = label; number.textContent = String(value);box.append(name, number);return box;
-  };
-  $("#traffic-metrics").replaceChildren(metric("Requests · 24h", data.totals.requests), metric("Rate limits · 24h", data.totals.rate_limited),
-    metric("Body volume · 24h", `${((data.totals.request_bytes + data.totals.response_bytes) / 1024).toFixed(1)} KiB`), metric("API failures · 24h", data.totals.failures || 0), metric("Dropped records", data.dropped_records));
+  const trafficMetric = (label, value) => metric(label, String(value), undefined, null);
+  $("#traffic-metrics").replaceChildren(trafficMetric("Requests · 24h", data.totals.requests), trafficMetric("Rate limits · 24h", data.totals.rate_limited),
+    trafficMetric("Body volume · 24h", `${((data.totals.request_bytes + data.totals.response_bytes) / 1024).toFixed(1)} KiB`), trafficMetric("API failures · 24h", data.totals.failures || 0), trafficMetric("Dropped records", data.dropped_records));
   const byMinute = new Map(data.minutes.map((m) => [m.at, m]));
   const current = Math.floor(data.observed_at / 60) * 60;
   const minutes = Array.from({length:60}, (_, i) => byMinute.get(current - (59-i)*60) || {at:current-(59-i)*60,requests:0,rate_limited:0});
