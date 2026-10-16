@@ -115,7 +115,7 @@ class Traffic(unittest.TestCase):
         rows=self.wait_rows(3);self.assertEqual(len(rows),3);self.assertEqual([r['topic_id'] for r in rows[:2]],[7,7]);self.assertEqual(rows[1]['api_error'],429)
         self.assertEqual(rows[1]['retry_after'],90);self.assertEqual(len(Upstream.calls),4)
         with closing(sqlite3.connect(self.root/'state/traffic.sqlite3')) as db:self.assertEqual(db.execute('SELECT topic_id,kind,count FROM ingress').fetchall(),[(7,'message',1)])
-        report=meter.report(self.root/'state');self.assertEqual(report['totals'][0],3)
+        report=meter.report(self.root/'state');self.assertEqual(report['totals'][0],3);self.assertEqual(report['totals'][3],1);self.assertEqual(report['columns']['totals'][3],'rate_limited')
         self.process.terminate();self.process.wait(timeout=10);self.log.flush()
         for path in (self.root/'state').iterdir():
             raw=path.read_bytes();self.assertNotIn(TOKEN.encode(),raw);self.assertNotIn(SECRET.encode(),raw);self.assertNotIn(OTHER.encode(),raw)
