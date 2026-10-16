@@ -69,7 +69,7 @@ class Receiving(unittest.TestCase):
         self.token.chmod(0o600)
         actor = dict(actor_id='fixture-receiver', token_sha256=hashlib.sha256(value.encode()).hexdigest(),
             producers=['fixture'], scopes=['human', 'other'], adapters=['telegram'],
-            grants=['publish', 'read', 'status', 'acknowledge', 'deliver'])
+            grants=['publish', 'read', 'status', 'acknowledge', 'deliver', *getattr(self, 'extra_grants', [])])
         config = dict(database=str(self.root / 'core.sqlite'), listen=f'127.0.0.1:{port}',
             freshness_seconds=60, max_incidents=1000, retention_seconds=600, actors=[actor],
             routes=[dict(receiving_scope='human', adapter_id='telegram'),

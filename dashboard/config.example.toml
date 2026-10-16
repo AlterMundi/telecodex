@@ -27,3 +27,16 @@ Development = "/your-development-mount"
 # adapter_id = "your-telegram-adapter"
 # interval_seconds = 15
 # deliver = false # Enable after qualifying this bot/destination and service grants.
+
+# Optional private Bot API meter; no capture or observer activation by default.
+# [traffic]
+# enabled = true
+# meter_config = "/private/receiving/meter.toml"
+# interval_seconds = 10
+# [traffic.alerts]
+# enabled = true
+# base_url = "http://127.0.0.1:8791"
+# token_file = "/private/alerts/traffic-producer-token"
+# producer_id = "your-bot-traffic"
+# observer_id = "your-bot-traffic-observer"
+# receiving_scope = "your-receiving-scope"

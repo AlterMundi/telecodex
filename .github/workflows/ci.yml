@@ -127,6 +127,9 @@ jobs:
         env:
           ALERTS_CORE_SOURCE: .alerts-core
       - run: python -B tests/bot_traffic_io.py
+      - run: python -B tests/dashboard_traffic_io.py
+        env:
+          ALERTS_CORE_SOURCE: .alerts-core
       - run: python -B tests/dashboard_io.py
       - run: node --check dashboard/web/app.js
       - run: node tests/dashboard_ui.js

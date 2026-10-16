@@ -20,6 +20,7 @@ from init_data_py import errors, validate_by_signature
 
 from .provider import Provider, ProviderUnavailable
 from .alerts import Receiver as AlertsReceiver, AlertsUnavailable
+from .traffic import Traffic
 
 
 def validate_launch(raw, bot_id):
@@ -43,7 +44,7 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def create_app(config=None, provider=None, validator=validate_launch, alerts=None):
+def create_app(config=None, provider=None, validator=validate_launch, alerts=None, traffic=None):
     if config is None:
         config = tomllib.loads(Path(os.environ['TELECODEX_DASHBOARD_CONFIG']).read_text())
     provider = provider or Provider(config)
@@ -70,6 +71,10 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise ValueError('Unsafe dashboard state file')
     if alerts is None and config.get('alerts', {}).get('enabled') is True:
         alerts = AlertsReceiver(config, provider)
+    if traffic is None and config.get('traffic', {}).get('enabled') is True:
+        traffic = Traffic(config, provider)
+    if traffic is not None and alerts is not None:
+        alerts.dispatch_ready = traffic.notification_ready
     scope_binding = [config['bot_id'],
         getattr(provider, 'binding_bytes', getattr(provider, 'receiver_bytes', b'')).hex()]
     if alerts is not None:
@@ -95,11 +100,15 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @asynccontextmanager
     async def lifespan(app):
+        if traffic is not None:
+            traffic.start()
         if alerts is not None:
             alerts.start()
         yield
         if alerts is not None:
             alerts.close()
+        if traffic is not None:
+            traffic.close()
         provider.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -225,6 +234,13 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         # Recheck grants after native I/O, before any private response.
         authorize(request)
         return {**result, 'csrf': session['csrf']}
+
+    @app.get('/api/traffic')
+    def bot_traffic(request: Request):
+        authorize(request)
+        result = traffic.snapshot() if traffic is not None else {'state': 'not_configured'}
+        authorize(request)
+        return result
 
     @app.get('/api/alerts')
     def incidents(request: Request):

@@ -10,7 +10,7 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
   const nodes = new Map(), requests = [], timers = new Map();
   let nextTimer = 0;
   const element = () => ({
-    textContent: "", disabled: false, handlers: {}, children: [], dataset: {},
+    style: {}, setAttribute(name, value) { this[name] = value; }, textContent: "", disabled: false, handlers: {}, children: [], dataset: {},
     addEventListener(name, handler) { this.handlers[name] = handler; },
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
@@ -34,6 +34,7 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
     crypto: { randomUUID: () => "synthetic-action-nonce" },
     fetch(route, options) {
       requests.push({ route, options });
+      if (route === "api/traffic") return Promise.resolve({ok:true,json:async () => ({state:"not_configured"})});
       if (route === "api/alerts") return alertsImpl(route, options);
       return fetchImpl(route, options);
     },
@@ -63,7 +64,7 @@ const hung = (options) => new Promise((resolve, reject) => {
   // Regression: previously this bootstrap skipped state and stayed on Reading….
   const launch = boot((route) => route === "api/session" ? ok() : unavailable());
   await settle();
-  assert.deepEqual(launch.requests.map((x) => x.route), ["api/session", "api/alerts", "api/state"]);
+  assert.deepEqual(launch.requests.map((x) => x.route), ["api/session", "api/alerts", "api/traffic", "api/state"]);
   assert.equal(launch.requests[0].options.headers.Authorization, undefined);
   assert.equal(launch.requests[1].options.headers.Authorization, `Bearer ${fixtureToken}`);
   assert.equal(launch.nodes.get("#overview").textContent, "State unavailable");
@@ -197,5 +198,23 @@ const hung = (options) => new Promise((resolve, reject) => {
   assert.equal(activeArticle().dataset.processingState,"open");
   assert.equal(activeArticle().dataset.acknowledgment,"acknowledged");
   assert.match(independent.nodes.get("#operations-summary").textContent,/1 open/);
+  // Traffic renders independently and keeps labels literal. Missing capture never claims health.
+  const observed = {state:"available",observed_at:Date.now()/1000,capture_started:Date.now()/1000-300,
+    meter_healthy:true,alerts_state:"available",requests_last_5m:150,dropped_records:2,
+    cooldown:{state:"active",until:Date.now()/1000+120,methods:["sendMessage"]},
+    totals:{requests:150,rate_limited:1,request_bytes:100,response_bytes:200,unknown_source:2,unknown_topic:3,incomplete:1},
+    minutes:[],sources:[{source:"bridge",method:"sendChatAction",requests:149,rate_limited:0}],
+    topics:[{name:"<img onerror=attack()>",requests:149,rate_limited:0}]};
+  vm.runInContext('traffic('+JSON.stringify(observed)+')', independent.context);
+  assert.match(independent.nodes.get("#traffic-summary").textContent,/30\/min.*Telegram limited/);
+  assert.match(independent.nodes.get("#traffic-status").textContent,/Retry deadline/);
+  assert.equal(independent.nodes.get("#traffic-topics").children[0].children[0].textContent, observed.topics[0].name);
+  assert.equal(independent.nodes.get("#traffic-chart").children.length,60);
+  observed.cooldown.state="awaiting_recovery";
+  vm.runInContext('traffic('+JSON.stringify(observed)+')', independent.context);
+  assert.match(independent.nodes.get("#traffic-status").textContent,/deadline alone does not confirm recovery/);
+  vm.runInContext('traffic({state:"unavailable"})', independent.context);
+  assert.equal(independent.nodes.get("#traffic-topics").children.length,0);
+  assert.match(independent.nodes.get("#traffic-status").textContent,/cannot be confirmed/);
   console.log("dashboard UI: hidden launch, retry, HTTP deadlines and uncertain Stop passed");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

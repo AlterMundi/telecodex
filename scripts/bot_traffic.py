@@ -131,6 +131,13 @@ class Journal:
     def checkpoint_loss(self):
         self.db.execute("INSERT OR REPLACE INTO settings VALUES('dropped_records',?)", (str(self.dropped),))
 
+    def bind_bot(self, fingerprint):
+        prior = self.db.execute("SELECT value FROM settings WHERE key='bot_fingerprint'").fetchone()
+        if prior and prior[0] != fingerprint:
+            raise ValueError('Traffic journal bot binding changed')
+        self.db.execute("INSERT OR IGNORE INTO settings VALUES('bot_fingerprint',?)", (fingerprint,))
+        self.db.commit()
+
     def start(self, source, pid, method):
         ident = uuid.uuid4().hex
         try:
@@ -272,6 +279,7 @@ def create_app(config):
         raise ValueError('Fixed loopback upstream required')
     fingerprint = private_token(config['token_file'])
     journal = Journal(config['state_dir'], config.get('retention_days', 7), config.get('max_events', 250000))
+    journal.bind_bot(fingerprint.hex())
     if config.get('activity_receipts'):
         journal.seed(config['activity_receipts'])
 
