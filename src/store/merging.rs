@@ -248,6 +248,13 @@ impl Store {
     pub fn merge_finish(&self, id: &str) -> Result<()> {
         let leg = self.merge_leg(id)?;
         match leg["phase"].as_str() {
+            Some("queued") => {
+                self.conn.lock().expect("store mutex poisoned").execute(
+                    "UPDATE merge_legs SET phase='detached_queue',reason='Worker ended before dispatch; explicit recovery required' WHERE id=? AND phase='queued' AND local_turn IS NULL AND native_turn IS NULL AND instance_id=?",
+                    params![id,self.instance_id],
+                )?;
+                Ok(())
+            }
             Some("dispatching") => {
                 self.merge_phase(id, "rejected", "Worker ended before native submission")
             }
@@ -363,6 +370,19 @@ mod tests {
             .unwrap();
         (root, store, key, turn, doc)
     }
+    #[test]
+    fn unstarted_worker_retains_queue_for_explicit_recovery() {
+        let (_root, store, key, _turn, _doc) = fixture();
+        store.merge_finish("op:0").unwrap();
+        store.merge_finish("op:0").unwrap();
+        assert_eq!(store.merge_leg("op:0").unwrap()["phase"], "detached_queue");
+        assert!(!store.merge_claim("op:0", "dispatching", None).unwrap());
+        assert_eq!(store.merge_resume(key, 100, "op").unwrap(), vec!["op:0"]);
+        assert!(store.merge_claim("op:0", "dispatching", None).unwrap());
+        store.merge_finish("op:0").unwrap();
+        assert_eq!(store.merge_leg("op:0").unwrap()["phase"], "rejected");
+    }
+
     #[test]
     fn start_ack_cannot_accept_steering_and_fast_observations_survive_late_ack() {
         let (_root, store, _key, turn, _doc) = fixture();

@@ -73,9 +73,9 @@ impl Store {
     }
     pub fn tribu_submitting(&self, key: SessionKey, id: &str) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        let n=conn.execute("UPDATE tribu_admissions SET submitted=1,updated_at=?1 WHERE id=?2 AND state='running' AND NOT EXISTS(SELECT 1 FROM bot_state WHERE key=?3 AND value='true')",params![now_string(),id,tribu_pause_key(key)])?;
+        let n=conn.execute("UPDATE tribu_admissions SET submitted=1,updated_at=?1 WHERE id=?2 AND state='running' AND NOT EXISTS(SELECT 1 FROM bot_state WHERE key=?3 AND value='true') AND NOT EXISTS(SELECT 1 FROM bot_state WHERE key=?4)",params![now_string(),id,tribu_pause_key(key),format!("native_writer_hold:{}:{}",key.chat_id,key.thread_id)])?;
         if n != 1 {
-            bail!("Tribu paused before native submission");
+            bail!("Tribu paused or native writer held before submission");
         }
         Ok(())
     }
@@ -236,19 +236,22 @@ impl Store {
                     | "withdrawn-blocked"
                     | "withdrawn-restart"
                     | "withdrawn-worker"
+                    | "withdrawn-native-writer"
                     | "not-submitted-source-unavailable"
             )
         {
             bail!("Tribu retry requires proven absence of native submission");
         }
         let blocked: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM bot_state WHERE key=?1 AND value='true') OR EXISTS(SELECT 1 FROM tribu_admissions WHERE chat_id=?2 AND topic_id=?3 AND state='undetermined')",
-            params![tribu_pause_key(key),key.chat_id,key.thread_id], |r| r.get(0))?;
+            "SELECT EXISTS(SELECT 1 FROM bot_state WHERE key=?1 AND value='true') OR EXISTS(SELECT 1 FROM tribu_admissions WHERE chat_id=?2 AND topic_id=?3 AND state='undetermined') OR EXISTS(SELECT 1 FROM bot_state WHERE key=?4)",
+            params![tribu_pause_key(key),key.chat_id,key.thread_id,format!("native_writer_hold:{}:{}",key.chat_id,key.thread_id)], |r| r.get(0))?;
         let pending: i64 = tx.query_row(
             "SELECT COUNT(*) FROM tribu_admissions WHERE chat_id=? AND topic_id=? AND state IN ('queued','reserved','running')",
             params![key.chat_id,key.thread_id], |r| r.get(0))?;
         if blocked || pending >= max_pending as i64 {
-            bail!("Tribu retry blocked by pause, uncertain execution or full queue");
+            bail!(
+                "Tribu retry blocked by pause, native writer hold, uncertain execution or full queue"
+            );
         }
         tx.execute(
             "UPDATE tribu_admissions SET state='queued',record=?,updated_at=? WHERE id=?",

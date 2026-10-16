@@ -34,6 +34,17 @@ pub(super) async fn process_turn(
         }
         return Ok(());
     }
+    if shared
+        .store
+        .maintenance_writer_held(queued.request.session_key)?
+    {
+        if let Some(id) = queued.tribu_admission.as_deref() {
+            shared.store.tribu_withdraw(id, "withdrawn-native-writer")?;
+        }
+        bail!(
+            "Native writer held during controlled maintenance; input retained without submission"
+        );
+    }
     if let Some(goal) = queued.goal.as_ref() {
         if shared
             .store
@@ -383,6 +394,9 @@ pub(super) async fn process_turn(
                                 shared.store.merge_submitting(turn_id)?;
                                 super::nexus::submitting(&shared,turn_id).await?;
                                 if let Some(id)=admission.as_deref(){super::tribu::revalidate_submission(&shared,id).await?;shared.store.tribu_submitting(session_key,id)?;}
+                                if shared.store.maintenance_writer_held(session_key)? {
+                                    bail!("Native writer held during controlled maintenance; input retained without submission");
+                                }
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnTerminal {id:native_id,status} => {

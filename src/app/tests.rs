@@ -165,6 +165,104 @@ fn sample_app() -> (App, NamedTempFile) {
 }
 
 #[tokio::test]
+async fn maintenance_hold_blocks_queued_turn_and_public_admission() {
+    let (mut app, _db) = sample_app();
+    let key = SessionKey::new(100, Some(7));
+    Arc::get_mut(&mut app.shared).unwrap().config.tribu = Some(crate::config::TribuConfig {
+        socket_path: sample_workspace().join("unused.sock"),
+        owner_client_file: sample_workspace().join("nonexistent-owner.json"),
+        being_ref: "synthetic-being".into(),
+        body_label: "fixture.codex@fixture".into(),
+        embodiment_id: "synthetic-embodiment".into(),
+        human_id: 100,
+        chat_id: 100,
+        topic_id: 7,
+        activated_after: 1,
+        deadline_seconds: 300,
+        max_pending: 20,
+    });
+    app.shared
+        .store
+        .ensure_session(key, 100, &app.shared.session_defaults)
+        .unwrap();
+    app.shared
+        .store
+        .save_bot_state("native_writer_hold:100:7", "{}")
+        .unwrap();
+    app.shared
+        .store
+        .tribu_admit(
+            key,
+            "queued-before-hold",
+            None,
+            &serde_json::json!({"private":true}),
+            20,
+        )
+        .unwrap();
+    let result = turns::process_turn(
+        app.shared.clone(),
+        Arc::new(StdMutex::new(None)),
+        Arc::new(StdMutex::new(None)),
+        QueuedTurn {
+            request: sample_turn_request(key),
+            chat_kind: "private".into(),
+            update_id: None,
+            tribu_admission: Some("queued-before-hold".into()),
+            goal: None,
+            stop_resume: None,
+            admission_epoch: app.shared.store.stop_admission_epoch(key).unwrap(),
+            nexus: None,
+            merge: None,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(result.to_string().contains("Native writer held"));
+    assert!(
+        app.shared
+            .store
+            .get_session(key)
+            .unwrap()
+            .unwrap()
+            .codex_thread_id
+            .is_none()
+    );
+    assert_eq!(
+        app.shared
+            .store
+            .tribu_admission("queued-before-hold")
+            .unwrap()
+            .unwrap()
+            .state,
+        "withdrawn-native-writer"
+    );
+    let source_id = "a".repeat(64);
+    let result = tribu::handle_socket(
+        &app,
+        &serde_json::json!({
+            "op":"admit", "source_id":source_id
+        }),
+    )
+    .await
+    .unwrap_err();
+    // This must fail on the hold before trying the absent owner-client file.
+    assert!(result.to_string().contains("Native writer held"));
+    assert!(
+        app.shared
+            .store
+            .tribu_admission(&format!("tribu:{source_id}"))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        tribu::handle_socket(&app, &serde_json::json!({"op":"status"}))
+            .await
+            .unwrap()["paused"],
+        false
+    );
+}
+
+#[tokio::test]
 async fn failed_queue_admission_is_visible_without_redispatch() {
     let (app, _db) = sample_app();
     let key = SessionKey::new(1, Some(2));

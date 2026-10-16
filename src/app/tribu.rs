@@ -469,7 +469,7 @@ pub(super) async fn start(app: App) -> Result<()> {
     Ok(())
 }
 
-async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
+pub(super) async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
     let p = app.shared.config.tribu.as_ref().context("Tribu disabled")?;
     if request["op"] == "status" && request.as_object().is_some_and(|v| v.len() == 1) {
         return app.shared.store.tribu_status(p.key());
@@ -491,6 +491,9 @@ async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
         if let Some(old) = app.shared.store.tribu_admission(&id)? {
             return Ok(json!({"id":old.id,"state":old.state,"duplicate":true}));
         }
+    }
+    if app.shared.store.native_writer_held(p.key())? {
+        bail!("Native writer held during controlled maintenance");
     }
     let record = source(&app.shared, source_id)
         .await?

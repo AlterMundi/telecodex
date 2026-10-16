@@ -20,6 +20,60 @@ fn open(path: &Path) -> Store {
 }
 
 #[test]
+fn maintenance_hold_after_reservation_prevents_native_submission() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(&root.path().join("store.sqlite"));
+    let key = SessionKey::new(1, Some(2));
+    store
+        .tribu_admit(key, "one", None, &json!({"private":true}), 20)
+        .unwrap();
+    assert!(store.tribu_reserve(key, "one").unwrap());
+    store.tribu_link_turn("one", 1).unwrap();
+    store
+        .save_bot_state("native_writer_hold:1:2", "{}")
+        .unwrap();
+    assert!(store.tribu_submitting(key, "one").is_err());
+    assert_eq!(
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT submitted FROM tribu_admissions WHERE id='one'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert!(
+        !store
+            .native_writer_held(SessionKey::new(1, Some(3)))
+            .unwrap()
+    );
+    assert!(store.native_writer_held(key).unwrap());
+    let record = json!({"id":"source"});
+    store
+        .tribu_admit(key, "two", Some("source"), &record, 20)
+        .unwrap();
+    store
+        .tribu_withdraw("two", "withdrawn-native-writer")
+        .unwrap();
+    assert!(
+        store
+            .tribu_retry_unsubmitted(key, "two", "source", &record, 20)
+            .is_err()
+    );
+    store.take_bot_state("native_writer_hold:1:2").unwrap();
+    let retry = store
+        .tribu_retry_unsubmitted(key, "two", "source", &record, 20)
+        .unwrap();
+    assert!(retry.fresh);
+    assert_eq!(retry.id, "two");
+    assert_eq!(retry.state, "queued");
+}
+
+#[test]
 fn concurrent_duplicates_have_one_admission_and_pause_withdraws_queue() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("store.sqlite");
