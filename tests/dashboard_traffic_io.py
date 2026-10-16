@@ -20,6 +20,7 @@ from dashboard.app import create_app
 
 
 class TrafficHTTP(fixture.Receiving):
+    extra_grants = ['observe']
     # Reuse the real published core setup; do not inherit unrelated test cases.
     def setUp(self):
         super().setUp()
@@ -53,6 +54,8 @@ class TrafficHTTP(fixture.Receiving):
         self.attempt(limited=True);self.attempt('sendChatAction');self.attempt('sendChatAction',topic=999)
         self.assertFalse(self.traffic.notification_ready())
         self.traffic.tick();view=self.traffic.snapshot()
+        self.assertEqual(view['alerts_state'],'available')
+        self.assertEqual(self.client.call('GET','/v1/status','Status')['observers'][0]['source_state'],'healthy')
         self.assertEqual(view['cooldown']['state'],'active');self.assertFalse(self.traffic.notification_ready())
         self.assertEqual(view['totals']['requests'],3);self.assertEqual(view['topics'],[{'name':'Owned topic','requests':2,'rate_limited':1}])
         self.assertNotIn('chat_id',json.dumps(view))
