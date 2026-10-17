@@ -114,6 +114,13 @@ known-unsent input; `/interaction retry ID` selects retained known-unsent input
 for recovery. Other native controls remain available in their own conversation.
 These operations do not initiate coordinated global Stop.
 
+A newly queued instruction that has not reached native submission after ten
+seconds gets a source-linked preparation notice. The notice rechecks the
+instruction phase after Telegram cooldown; an already submitted or withdrawn
+input does not receive that queued-state notice. This is an observation bound,
+not an expiry, cancellation or automatic retry. Active steer acceptance has its
+own bounded observation and uncertainty handling.
+
 `/interaction status OFFSET` pages over five enrolled conversations at a time.
 Each card distinguishes the latest input transport state, retained result
 transmission state and unresolved correction/coverage evidence. `/interaction
@@ -152,6 +159,32 @@ SQLite peers. Registry/publication tests distinguish preparation, uncertain
 transmission, native acceptance, worker declarations and task completion.
 These are automated fixture checks; they are not a receiving deployment or a
 real model's semantic coverage qualification.
+
+`tests/routing_native.py` is a separate opt-in qualification against the selected
+existing native daemon, using synthetic Telegram HTTP receipts. It creates only
+isolated test conversations and retains its SQLite journal, original inputs,
+configuration and reports. Pass `--run-native`, an existing `--native-home`, the
+native `--codex` executable and a new private `--state` directory. It exercises
+live correction, independent work, reverse completion, entry responsiveness and
+original-human/controller provenance, checking produced fixture contents
+separately from acceptance and worker coverage. Scoped cleanup must be confirmed;
+it never initiates a global Stop. `--resume` is restricted to the first input of
+an incomplete fixture whose native threads were confirmed idle and whose input
+remains known unsent; it uses the existing recovery command and retained identity.
+This test does not establish real Telegram delivery, production deployment or
+currency cost. Debug-level native preparation stage/elapsed logs contain no
+message payloads and distinguish proxy initialization from thread binding.
+
+The authorized native-model journey passed on the CI-qualified `a25f877` binary:
+Alpha incorporated a mid-work rate correction in its actual fixture output,
+Beta completed independently first, and the integrating entry answered while
+Alpha remained active. Original-human/controller provenance, worker coverage,
+exact synthetic return bindings and terminal native status were checked
+separately. One cold preparation took about 36 seconds; an active correction
+was acknowledged in about 66 ms and Beta admission in about 759 ms. These are
+individual observations under the test host's load, not latency guarantees.
+Native token totals were recorded; currency cost remains unknown. Real Telegram
+and receiving deployment acceptance remain separate work.
 
 Routed human-action declarations use the existing validated registration path
 and remain owned by the actual native worker. The controller points to that

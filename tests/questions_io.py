@@ -23,10 +23,12 @@ import time
 
 
 class Journey:
-    def __init__(self, binary, mode):
+    def __init__(self, binary, mode, *, state=None, resume=False):
         self.binary, self.mode = binary, mode
-        self.temporary = tempfile.TemporaryDirectory(prefix='telecodex-questions-')
-        self.root = pathlib.Path(self.temporary.name)
+        self.temporary = None if state else tempfile.TemporaryDirectory(prefix='telecodex-questions-')
+        self.root = pathlib.Path(state) if state else pathlib.Path(self.temporary.name)
+        if state:
+            self.root.mkdir(parents=True, mode=0o700, exist_ok=resume)
         self.lock = threading.RLock()
         self.updates = collections.deque()
         self.rpc, self.messages, self.answers, self.errors = [], [], [], []
@@ -164,7 +166,8 @@ import_desktop_history=false
         self.stop()
         for server in (self.telegram, self.native):
             server.shutdown(); server.server_close()
-        self.temporary.cleanup()
+        if self.temporary is not None:
+            self.temporary.cleanup()
 
     def admit(self, text=None, *, topic=7, user=100, callback=None, reply=None):
         with self.lock:

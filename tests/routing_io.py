@@ -24,6 +24,9 @@ class Routing(Goals):
         self.reject_next = False
         self.rejected_turn = None
         self.routed = False
+        self.block_binding = False
+        self.binding_held = threading.Event()
+        self.release_binding = threading.Event()
         self.packets = {}
         self.runs = {}
         super().__init__(binary)
@@ -52,6 +55,9 @@ topic_id=8
         self.start()
 
     def handle_extra_rpc(self, m, send):
+        if self.routed and self.block_binding and m.get('method') == 'thread/resume':
+            self.binding_held.set()
+            self.release_binding.wait(timeout=30)
         if self.routed and m.get('id') == 900 and not m.get('method'):
             self.answers.append(m)
             return True
@@ -374,6 +380,32 @@ def routed_human_declaration(binary):
         j.close()
 
 
+def preparation_wait_is_visible(binary):
+    j = Routing(binary)
+    try:
+        j.prepare()
+        j.block_binding = True
+        original = j.admit('#Alpha Work after native preparation', topic=1)
+        j.wait(j.binding_held.is_set)
+        j.wait(lambda: j.has('native submission has not started', 1), 15)
+        assert j.instructions(7)[0][1] == 'queued'
+        waiting = next((m,p) for m,p in j.messages if 'native submission has not started' in m['text'])
+        assert waiting[1]['reply_parameters']['message_id'] == original
+        assert not j.runs, 'A preparation notice must not submit native work'
+        j.admit('/interaction', topic=1)
+        j.wait(lambda: j.has('Interaction status', 1))
+        j.release_binding.set()
+        j.wait(lambda: j.instructions(7)[0][1] == 'accepted')
+        j.answer(7, 'Work completed after preparation')
+        j.wait(lambda: j.has('Work completed after preparation', 1))
+        j.idle()
+        assert len(j.instructions(7)) == 1
+        print('PASS preparation delay stays visible without cancellation or replay; entry remains usable')
+    finally:
+        j.release_binding.set()
+        j.close()
+
+
 if __name__ == '__main__':
     binary = str(pathlib.Path(sys.argv[1]).resolve())
     parallel_and_corrections(binary)
@@ -382,3 +414,4 @@ if __name__ == '__main__':
     publication_recovery(binary)
     cosmetic_wait_does_not_delay_next_turn(binary)
     routed_human_declaration(binary)
+    preparation_wait_is_visible(binary)

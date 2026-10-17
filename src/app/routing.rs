@@ -41,6 +41,15 @@ fn label(shared: &AppShared, key: SessionKey) -> String {
 }
 
 fn notice(shared: Arc<AppShared>, origin: ReturnRoute, text: String) {
+    notice_when(shared, origin, text, None);
+}
+
+fn notice_when(
+    shared: Arc<AppShared>,
+    origin: ReturnRoute,
+    text: String,
+    expected: Option<(String, i64, P)>,
+) {
     tokio::spawn(async move {
         for part in split_text(&text, 3000) {
             let mut msg = SendMessage::html(
@@ -58,6 +67,14 @@ fn notice(shared: Arc<AppShared>, origin: ReturnRoute, text: String) {
                     let Some(cfg) = shared.config.interaction.as_ref() else {
                         return Ok(None);
                     };
+                    if let Some((id, human, phase)) = &expected
+                        && !shared
+                            .store
+                            .interaction_instruction(id, *human)?
+                            .is_some_and(|i| i.phase == *phase)
+                    {
+                        return Ok(None);
+                    }
                     if !shared
                         .store
                         .get_user(cfg.human_id)?
@@ -573,6 +590,23 @@ async fn dispatch(app: &App, id: &str, human: i64) -> Result<()> {
         return Ok(());
     }
     let action = reserve_run(&app.shared, &i);
+    if !action.as_ref().is_some_and(|active| active.is_some()) {
+        let shared = app.shared.clone();
+        let waiting = i.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            notice_when(
+                shared.clone(),
+                waiting.origin,
+                format!(
+                    "#{}: your input is retained, but native submission has not started. The worker may still be preparing or finishing earlier work. Use /interaction input {} to inspect it. This wait does not cancel or replay the input.",
+                    label(&shared, waiting.target),
+                    waiting.id,
+                ),
+                Some((waiting.id, waiting.human_id, P::Queued)),
+            );
+        });
+    }
     match action {
         Some(Some(active)) => steer(app.clone(), i, active)?,
         Some(None) => {

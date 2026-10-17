@@ -930,7 +930,14 @@ where
     F: FnMut(CodexEvent) -> Fut,
     Fut: std::future::Future<Output = Result<CodexEventOutcome>>,
 {
+    let preparation_started = Instant::now();
+    tracing::debug!(stage = "proxy_start", "native turn preparation");
     let mut process = AppServerProcess::spawn(binary, shared_app_server).await?;
+    tracing::debug!(
+        stage = "initialize",
+        elapsed_ms = preparation_started.elapsed().as_millis(),
+        "native turn preparation"
+    );
     process.initialize().await?;
     if let Some(mode) = session.collaboration_mode {
         let id = process
@@ -954,9 +961,19 @@ where
             );
         }
     }
+    tracing::debug!(
+        stage = "thread_binding",
+        elapsed_ms = preparation_started.elapsed().as_millis(),
+        "native turn preparation"
+    );
     let (thread_id, native_model) = process
         .start_or_resume_thread(session, request, bounded.is_some())
         .await?;
+    tracing::debug!(
+        stage = "thread_bound",
+        elapsed_ms = preparation_started.elapsed().as_millis(),
+        "native turn preparation"
+    );
     let mut effective_session = session.clone();
     effective_session.model = session.model.clone().or(native_model);
     if session.collaboration_mode.is_some() && effective_session.model.is_none() {
