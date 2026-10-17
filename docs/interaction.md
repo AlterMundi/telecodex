@@ -484,6 +484,14 @@ a stable caller request ID, one existing unambiguous topic and at most 16,000
 bytes of session-authored text. It does not copy a transcript or create a topic.
 `session_requests` inspects the latest sixteen retained dependencies.
 
+Runtime context names the selected worker topic and separates its task from
+integrator-only clauses in the unchanged human message. For a continuing request,
+coverage declarations explicitly include earlier applicable instruction IDs whose
+constraints were actually carried forward, together with new incorporated context.
+A declaration covering only the most recent message does not establish cumulative
+coverage. Missing or unresolved constraints remain visible rather than being
+inferred from a prior answer or native history.
+
 A local dependency is a single level: another session's request or result cannot
 serve as a human parent. An accepted original human instruction can authorize at
 most four dependencies. Self-addressing is rejected. Reusing a request ID retains
