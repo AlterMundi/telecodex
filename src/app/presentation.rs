@@ -4,6 +4,35 @@ use crate::{codex::CodexApprovalRequest, codex_history::read_thread_runtime};
 use html_escape::encode_safe;
 use uuid::Uuid;
 
+/// Read-only receiver presentation; no native/model/Telegram operation.
+pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json::Value> {
+    let cfg = app
+        .shared
+        .config
+        .interaction
+        .as_ref()
+        .context("Interaction is not configured")?;
+    if cfg.human_id != human {
+        bail!("Interaction presentation owner mismatch");
+    }
+    let fields: Vec<_> = args.split_whitespace().collect();
+    match fields.as_slice() {
+        ["list", delivery, native] => app.shared.store.interaction_presentation_list(
+            human,
+            cfg.entry(),
+            delivery.parse()?,
+            native.parse()?,
+        ),
+        ["part", id, revision, offset] if id.len() <= 64 && revision.len() == 64 => app
+            .shared
+            .store
+            .interaction_presentation_part(human, cfg.entry(), id, revision, offset.parse()?),
+        _ => bail!(
+            "Expected presentation list DELIVERY_CURSOR NATIVE_CURSOR or part SOURCE REVISION OFFSET"
+        ),
+    }
+}
+
 pub(super) fn approval_waiting_text(kind: CodexApprovalKind) -> String {
     match kind {
         CodexApprovalKind::CommandExecution => {

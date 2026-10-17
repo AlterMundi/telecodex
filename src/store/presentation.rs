@@ -1,0 +1,476 @@
+//! Read-only canonical sources for receiving text/audio presentation.
+use super::*;
+use anyhow::bail;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+fn digest(value: &Value) -> String {
+    format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
+}
+
+fn entry_on(conn: &Connection, human: i64, entry: SessionKey) -> Result<(i64, String)> {
+    conn.query_row(
+        "SELECT s.id,s.codex_thread_id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
+         WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1
+         AND s.codex_thread_id IS NOT NULL AND s.force_fresh_thread=0",
+        params![entry.chat_id, entry.thread_id, human],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).context("Integrating entry owner or native binding unavailable")
+}
+
+impl Store {
+    /// Bounded incremental metadata. This never marks a result delivered/heard.
+    pub fn interaction_presentation_list(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        after_delivery: i64,
+        after_native: i64,
+    ) -> Result<Value> {
+        if after_delivery < 0 || after_native < 0 {
+            bail!("Invalid presentation cursor");
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = entry_on(&conn, human, entry)?;
+        let mut stmt = conn.prepare(
+            "SELECT d.rowid,d.id FROM interaction_deliveries d
+            JOIN interaction_requests r ON r.id=d.request_id
+            JOIN interaction_sources x ON x.id=r.input_id
+            JOIN sessions s ON s.id=r.session_id
+            WHERE d.rowid>?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2
+            AND s.creator_user_id=?2 AND x.origin_chat=?3 AND x.origin_thread=?4
+            ORDER BY d.rowid LIMIT 9",
+        )?;
+        let deliveries = stmt
+            .query_map(
+                params![after_delivery, human, entry.chat_id, entry.thread_id],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        format!("delivery:{}", r.get::<_, String>(1)?),
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut stmt = conn.prepare(
+            "SELECT m.rowid FROM interaction_native_messages m
+            JOIN turns t ON t.id=m.local_turn WHERE m.rowid>?1 AND t.session_id=?2
+            AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase='final_answer'
+            ORDER BY m.rowid LIMIT 9",
+        )?;
+        let natives = stmt
+            .query_map(params![after_native, session, human, native], |r| {
+                r.get::<_, i64>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut items = Vec::new();
+        for (_, id) in deliveries.iter().take(8) {
+            if let Some(mut source) = source_on(&conn, human, entry, id)? {
+                preview(&mut source);
+                items.push(source);
+            }
+        }
+        for row in natives.iter().take(8) {
+            if let Some(mut source) = source_on(&conn, human, entry, &format!("native:{row}"))? {
+                preview(&mut source);
+                items.push(source);
+            }
+        }
+        Ok(json!({"schema":"telecodex.presentation-list/v1",
+            "binding":digest(&json!([human,entry,session,native])),"items":items,
+            "cursor":{"delivery":deliveries.iter().take(8).next_back().map_or(after_delivery,|r|r.0),
+                      "native":natives.iter().take(8).next_back().copied().unwrap_or(after_native)},
+            "more":deliveries.len()>8 || natives.len()>8,"playback":"not_observed"}))
+    }
+
+    /// The revision fences source content, owner/native bindings and relevance.
+    /// A caller rechecks it after synthesis and immediately before serving audio.
+    pub fn interaction_presentation_part(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        revision: &str,
+        offset: usize,
+    ) -> Result<Value> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut source =
+            source_on(&conn, human, entry, id)?.context("Presentation source unavailable")?;
+        if source["revision"].as_str() != Some(revision) {
+            bail!("Presentation source revision changed");
+        }
+        let text = source["text"]
+            .as_str()
+            .context("Presentation text unavailable")?;
+        let chars = text.chars().count();
+        if offset >= chars {
+            bail!("Presentation offset outside source");
+        }
+        let selected: String = text.chars().skip(offset).take(1600).collect();
+        let end = offset + selected.chars().count();
+        source["text"] = json!(selected);
+        source["offset"] = json!(offset);
+        source["next_offset"] = if end < chars { json!(end) } else { Value::Null };
+        source["schema"] = json!("telecodex.presentation-part/v1");
+        Ok(source)
+    }
+}
+
+fn preview(source: &mut Value) {
+    source["preview"] = json!(
+        source["text"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(240)
+            .collect::<String>()
+    );
+    source
+        .as_object_mut()
+        .expect("source object")
+        .remove("text");
+}
+
+fn source_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Result<Option<Value>> {
+    let (entry_session, entry_native) = entry_on(conn, human, entry)?;
+    let mut source = if let Some(id) = id.strip_prefix("delivery:") {
+        let row:Option<(String,String,Option<String>,String,bool)>=conn.query_row(
+            "SELECT d.doc,d.phase,s.codex_thread_id,o.native_thread,s.force_fresh_thread FROM interaction_deliveries d
+             JOIN interaction_requests r ON r.id=d.request_id JOIN interaction_sources x ON x.id=r.input_id
+             JOIN sessions s ON s.id=r.session_id JOIN interaction_results o ON o.id=d.result_id
+             WHERE d.id=?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2 AND s.creator_user_id=?2
+             AND x.origin_chat=?3 AND x.origin_thread=?4",
+             params![id,human,entry.chat_id,entry.thread_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        let Some((doc, phase, current_native, result_native, force_fresh)) = row else {
+            return Ok(None);
+        };
+        let delivery: crate::interaction::Delivery = serde_json::from_str(&doc)?;
+        let (current, pending) = super::routing::freshness(
+            conn,
+            &delivery.request_id,
+            &delivery.covered,
+            delivery.declared,
+        )?;
+        json!({"id":format!("delivery:{id}"),"kind":"worker_result","text":delivery.body,
+            "request_id":delivery.request_id,"target":delivery.target,"current":current,
+            "correction_pending":pending,"completed":delivery.completed,"delivery_phase":phase,
+            "native_binding_current":!force_fresh && current_native.as_deref()==Some(result_native.as_str()),
+            "target_native":current_native,"result_native":result_native})
+    } else if let Some(row) = id
+        .strip_prefix("native:")
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|n| *n > 0)
+    {
+        let found:Option<(String,String,String)>=conn.query_row(
+            "SELECT m.text,m.native_turn,m.item_id FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn
+             WHERE m.rowid=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase='final_answer'",
+             params![row,entry_session,human,entry_native],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let Some((text, turn, item)) = found else {
+            return Ok(None);
+        };
+        json!({"id":id,"kind":"integrator_answer","text":text,"native_turn":turn,"native_item":item,
+            "current":Value::Null,"correction_pending":Value::Null,"completed":Value::Null,
+            "native_binding_current":true})
+    } else {
+        return Ok(None);
+    };
+    source["entry_binding"] = json!([human, entry, entry_session, entry_native]);
+    source["text_sha256"] = json!(format!(
+        "{:x}",
+        Sha256::digest(source["text"].as_str().unwrap_or("").as_bytes())
+    ));
+    source["text_characters"] = json!(source["text"].as_str().unwrap_or("").chars().count());
+    source["revision"] = json!(digest(&source));
+    source["playback"] = json!("not_observed");
+    Ok(Some(source))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interaction::{RequestRelation, ReturnRoute, SourceInput, TransportPhase};
+
+    fn setup() -> (
+        tempfile::NamedTempFile,
+        Store,
+        SessionKey,
+        SessionRecord,
+        crate::interaction::Instruction,
+        String,
+    ) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let defaults = super::super::tests::defaults();
+        let store = Store::open(file.path(), &[100], &defaults).unwrap();
+        let entry = SessionKey::new(100, Some(1));
+        let worker = SessionKey::new(100, Some(7));
+        for (key, native) in [(entry, "entry-native"), (worker, "worker-native")] {
+            store.ensure_session(key, 100, &defaults).unwrap();
+            store.set_session_codex_thread(key, native).unwrap();
+        }
+        let target = store.get_session(worker).unwrap().unwrap();
+        let (instruction, _) = store
+            .interaction_admit(
+                &SourceInput {
+                    transcription: None,
+                    channel: "fixture".into(),
+                    event_id: "1".into(),
+                    update_id: None,
+                    human_id: 100,
+                    target_sessions: vec![target.id],
+                    origin: ReturnRoute {
+                        chat_id: 100,
+                        thread_id: 1,
+                        message_id: 1,
+                    },
+                    text: "Calculate".into(),
+                },
+                worker,
+                RequestRelation::New,
+            )
+            .unwrap();
+        let local = store
+            .record_turn_started(
+                target.id,
+                &TurnRequest {
+                    session_key: worker,
+                    from_user_id: 100,
+                    prompt: instruction.text.clone(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(local, "worker-native")
+            .unwrap();
+        store
+            .interaction_transport(
+                &instruction.id,
+                100,
+                local,
+                TransportPhase::Submitting,
+                None,
+            )
+            .unwrap();
+        store
+            .interaction_transport(
+                &instruction.id,
+                100,
+                local,
+                TransportPhase::Accepted,
+                Some("physical"),
+            )
+            .unwrap();
+        let body = "Respuesta á😀 ".repeat(180);
+        let text = format!(
+            "{body}\n<daimon-result>{}</daimon-result>",
+            json!({"requests":instruction.requests,"covered":[instruction.id],"completed":instruction.requests})
+        );
+        store
+            .interaction_record_result(
+                &instruction.id,
+                100,
+                local,
+                "worker-native",
+                "physical",
+                "final",
+                &text,
+                false,
+            )
+            .unwrap();
+        (file, store, entry, target, instruction, body)
+    }
+
+    #[test]
+    fn canonical_result_parts_survive_reopen_without_mutating_delivery() {
+        let (file, store, entry, _, _, body) = setup();
+        let list = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap();
+        let source = &list["items"][0];
+        assert_eq!(source["kind"], "worker_result");
+        assert!(source.get("text").is_none());
+        assert_eq!(source["current"], true);
+        let id = source["id"].as_str().unwrap().to_string();
+        let revision = source["revision"].as_str().unwrap().to_string();
+        let mut joined = String::new();
+        let mut offset = 0;
+        loop {
+            let part = store
+                .interaction_presentation_part(100, entry, &id, &revision, offset)
+                .unwrap();
+            assert_eq!(part["playback"], "not_observed");
+            assert_eq!(part["delivery_phase"], "reserved");
+            joined.push_str(part["text"].as_str().unwrap());
+            let Some(next) = part["next_offset"].as_u64() else {
+                break;
+            };
+            offset = next as usize;
+        }
+        assert_eq!(joined, body.trim());
+        drop(store);
+        let reopened = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        assert!(
+            reopened
+                .interaction_presentation_part(100, entry, &id, &revision, 0)
+                .is_ok()
+        );
+        let cursor = list["cursor"]["delivery"].as_i64().unwrap();
+        assert!(
+            reopened
+                .interaction_presentation_list(100, entry, cursor, 0)
+                .unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn correction_binding_and_owner_changes_invalidate_selected_revision() {
+        let (_file, store, entry, target, instruction, _) = setup();
+        let list = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap();
+        let source = &list["items"][0];
+        let id = source["id"].as_str().unwrap();
+        let revision = source["revision"].as_str().unwrap();
+        assert!(
+            store
+                .interaction_presentation_list(101, entry, 0, 0)
+                .is_err()
+        );
+        let other = SessionKey::new(100, Some(9));
+        store
+            .ensure_session(other, 100, &super::super::tests::defaults())
+            .unwrap();
+        store.set_session_codex_thread(other, "other").unwrap();
+        assert!(
+            store
+                .interaction_presentation_part(100, other, id, revision, 0)
+                .is_err()
+        );
+        store
+            .interaction_admit(
+                &SourceInput {
+                    transcription: None,
+                    channel: "fixture".into(),
+                    event_id: "2".into(),
+                    update_id: None,
+                    human_id: 100,
+                    target_sessions: vec![target.id],
+                    origin: ReturnRoute {
+                        chat_id: 100,
+                        thread_id: 1,
+                        message_id: 2,
+                    },
+                    text: "Use updated values".into(),
+                },
+                target.key,
+                RequestRelation::Amends(instruction.requests),
+            )
+            .unwrap();
+        assert!(
+            store
+                .interaction_presentation_part(100, entry, id, revision, 0)
+                .is_err()
+        );
+        let updated = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap();
+        let changed = &updated["items"][0];
+        assert_eq!(changed["correction_pending"], true);
+        assert_eq!(changed["text_sha256"], source["text_sha256"]);
+        let revision = changed["revision"].as_str().unwrap();
+        store
+            .set_session_codex_thread(target.key, "replacement")
+            .unwrap();
+        assert!(
+            store
+                .interaction_presentation_part(100, entry, id, revision, 0)
+                .is_err()
+        );
+        store.upsert_user(100, UserRole::Admin, false).unwrap();
+        assert!(
+            store
+                .interaction_presentation_list(100, entry, 0, 0)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn entry_answers_exclude_progress_and_retire_with_entry_binding() {
+        let (_file, store, entry, _, _, _) = setup();
+        let session = store.get_session(entry).unwrap().unwrap();
+        let local = store
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: entry,
+                    from_user_id: 100,
+                    prompt: "Status".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(local, "entry-native")
+            .unwrap();
+        store
+            .record_native_message(
+                local,
+                "entry-native",
+                "entry-turn",
+                "progress",
+                Some("commentary"),
+                "Inspecting",
+            )
+            .unwrap();
+        store
+            .record_native_message(
+                local,
+                "entry-native",
+                "entry-turn",
+                "answer",
+                Some("final_answer"),
+                "Alpha is still working.",
+            )
+            .unwrap();
+        let list = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap();
+        assert_eq!(list["items"].as_array().unwrap().len(), 2);
+        let source = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["kind"] == "integrator_answer")
+            .unwrap();
+        assert!(source["current"].is_null());
+        let id = source["id"].as_str().unwrap();
+        let revision = source["revision"].as_str().unwrap();
+        let part = store
+            .interaction_presentation_part(100, entry, id, revision, 0)
+            .unwrap();
+        assert_eq!(part["text"], "Alpha is still working.");
+        store
+            .set_session_codex_thread(entry, "replacement-entry")
+            .unwrap();
+        assert!(
+            store
+                .interaction_presentation_part(100, entry, id, revision, 0)
+                .is_err()
+        );
+        assert_ne!(
+            store
+                .interaction_presentation_list(100, entry, 0, 0)
+                .unwrap()["binding"],
+            list["binding"]
+        );
+    }
+}

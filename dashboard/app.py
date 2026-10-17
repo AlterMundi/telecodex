@@ -23,6 +23,8 @@ from .alerts import Receiver as AlertsReceiver, AlertsUnavailable
 from .traffic import Traffic
 from .menu_attention import attention_projection
 from .operator import menu_selection
+from .speech import Speech, SpeechUnavailable
+from scripts.speech_render import RenderError
 
 
 def validate_launch(raw, bot_id):
@@ -50,6 +52,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     if config is None:
         config = tomllib.loads(Path(os.environ['TELECODEX_DASHBOARD_CONFIG']).read_text())
     provider = provider or Provider(config)
+    speech = Speech(config['speech']) if config.get('speech') else None
     origin = config['origin']
     prefix = config.get('prefix', '/sessions')
     launcher_origins = config.get('alerts', {}).get('launcher_origins', [])
@@ -251,6 +254,59 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         result = traffic.snapshot() if traffic is not None else {'state': 'not_configured'}
         authorize(request)
         return result
+
+    @app.get('/api/interaction')
+    async def interaction_sources(request: Request, delivery: int = 0, native: int = 0):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.presentation_list, delivery, native)
+        except (ProviderUnavailable, OSError, ValueError):
+            raise HTTPException(503, 'Integrating conversation unavailable; refresh before continuing') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/part')
+    async def interaction_part(request: Request, source: str, revision: str, offset: int = 0):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.presentation_part, source, revision, offset)
+        except (ProviderUnavailable, OSError, ValueError):
+            raise HTTPException(409, 'Selected result changed or is unavailable; refresh the conversation') from None
+        authorize(request)
+        return result
+
+    @app.post('/api/interaction/audio')
+    async def interaction_audio(request: Request):
+        session = authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        if speech is None:
+            raise HTTPException(503, 'Speech output is not configured')
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {'source', 'revision', 'offset'}:
+                raise ValueError()
+            from starlette.concurrency import run_in_threadpool
+            selected = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
+        except (ProviderUnavailable, OSError, ValueError, KeyError):
+            raise HTTPException(409, 'Selected result changed or is unavailable; refresh the conversation') from None
+        authorize(request)
+        try:
+            data, rendered = await speech.render(selected)
+            # Retained text, bindings and correction state are rechecked after synthesis.
+            latest = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
+            if latest != selected:
+                raise SpeechUnavailable('Presentation source changed')
+        except (SpeechUnavailable, RenderError, ProviderUnavailable, OSError, ValueError, KeyError, TimeoutError):
+            raise HTTPException(409, 'Speech outcome retained; refresh before continuing') from None
+        authorize(request)
+        return Response(data, media_type='audio/wav', headers={
+            'X-Presentation-Source':body['source'], 'X-Presentation-Revision':body['revision'],
+            'X-Presentation-Offset':str(body['offset']),
+            'X-Presentation-Next-Offset':str(selected['next_offset']) if selected['next_offset'] is not None else '',
+            'X-Audio-Sha256':rendered['audio_sha256'], 'X-Playback-Observation':'not_observed'})
 
     @app.post('/api/alerts/attention')
     async def launcher_attention(request: Request):
