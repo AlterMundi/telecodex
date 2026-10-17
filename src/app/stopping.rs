@@ -21,6 +21,9 @@ pub(super) async fn command(
     args: &str,
     nonce: Option<String>,
 ) -> Result<Value> {
+    if let Some(selected) = args.strip_prefix("presentation ") {
+        return presentation::owner_read(app, human, selected);
+    }
     if let Some(selected) = args.strip_prefix("attach-active ") {
         return goals::attach_active(app, human, selected).await;
     }
@@ -628,6 +631,10 @@ pub(super) async fn start_control_socket(app: App) -> Result<()> {
                     _ => json!({"ok":false,"error":"Control request unavailable or oversized"}),
                 };
                 let mut bytes = serde_json::to_vec(&reply).unwrap_or_default();
+                if bytes.len() > 65535 {
+                    bytes = br#"{"ok":false,"error":"Control response exceeds receiving bound"}"#
+                        .to_vec();
+                }
                 bytes.push(b'\n');
                 let _ = write.write_all(&bytes).await;
             });

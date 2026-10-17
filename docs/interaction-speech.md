@@ -2,9 +2,9 @@
 
 `scripts/speech_render.py` renders exact selected text to a private WAV using an
 owner-configured NVIDIA Magpie endpoint. This is a provider component for #118
-and AlterMundi/daimon-matrix#313. It is not yet connected to canonical result
-delivery, the dashboard, a device button or playback. It does not authenticate a
-human or authorize access to a conversation. Do not expose this CLI as a public
+and AlterMundi/daimon-matrix#313. The receiving presentation API below connects it
+to canonical results; device buttons and client playback remain separate work.
+The helper itself does not authenticate a human or authorize access to a conversation. Do not expose this CLI as a public
 endpoint or let a model choose its binding or receiving scope.
 
 The existing text result remains canonical. A future receiving caller must
@@ -68,8 +68,8 @@ silently bypass it with a new identity. Provider error payloads and credentials
 are not reflected in errors. Cache state stores text hashes; audio still carries
 the spoken content and must retain the original audience's access policy.
 
-There is no playback lease, client acknowledgment, reconnect UI, stale-result
-selection policy or speech streaming implementation here yet. Telegram delivery
+There is no playback lease, client acknowledgment, reconnect UI or speech
+streaming implementation here yet. Telegram delivery
 does not establish control over Telegram's audio player. Those remain receiving
 presentation work; synthesis success alone is not hearing or comprehension.
 
@@ -82,3 +82,66 @@ orphaned artifacts and input/response bounds. All provider voices, credentials
 and responses are synthetic; the suite makes zero external provider/model calls.
 Actual language quality, provider account access and human device playback need
 their own receiving evidence.
+
+## Authenticated receiving presentation
+
+The existing owner-local socket provides read-only `presentation list
+DELIVERY_CURSOR NATIVE_CURSOR` and `presentation part SOURCE REVISION OFFSET`
+commands. The same verbs are available through `telecodex --control CONFIG`.
+They neither start a native turn nor change a delivery receipt. The configured
+integrating entry, its current native binding, owning allowed human and original
+return route select sources. Worker results for other return conversations are
+excluded. Entry commentary is excluded; final entry answers remain distinct from
+worker declarations of coverage and completion.
+
+The list returns up to eight sources of each kind in increasing retained sequence,
+metadata/previews, separate continuation cursors, a binding identity and `more`.
+Continue while `more`; reset both cursors if the binding changes. These cursors
+advance through retained sources, not through acknowledgments or changes to old
+sources. Reload earlier metadata when reviewing history. A part is at most 1,600
+Unicode characters; follow `next_offset` to reconstruct the complete canonical
+text without truncation. Sources carry the full text hash, audience/entry binding,
+revision and relevance flags. An integrator answer does not declare a worker
+request complete. A later amendment can make an unchanged worker text pending;
+its revision changes without rewriting that text.
+
+The existing signed Telegram dashboard session exposes:
+
+- `GET /api/interaction?delivery=0&native=0` for the source list.
+- `GET /api/interaction/part?source=...&revision=...&offset=0` for exact text.
+- `POST /api/interaction/audio` with exactly `source`, `revision` and `offset`
+  for private WAV. The existing CSRF header and exact request origin are required.
+
+No browser-authored text, command, provider, path, human or destination is accepted
+by the audio endpoint. Add optional receiving dashboard configuration to enable
+synthesis:
+
+```toml
+[speech]
+binding = "/absolute/private/speech-route.json"
+timeout_seconds = 60
+```
+
+The listener must load the presentation commands before the dashboard can use
+them. The dashboard's authority binding includes the selected interaction profile;
+changes require requalification rather than silently adopting a different entry.
+It checks the source before synthesis and again after synthesis, then rechecks the
+live human grant immediately before returning audio. A changed source returns
+409; revoked access returns no private audio. Complete generated audio remains
+retained for an authorized later selection. Original text and native work are
+independent of this request, its connection and its deadline.
+
+Two owned renderers may run at once. Each has an overall deadline, bounded stdout
+and process-group cleanup; child error output is discarded. The receiving caller
+verifies the private artifact path, text/audio hashes, PCM format and route before
+responding. Reconnection uses the same scope derived from entry/source/part and
+therefore reuses a completed render. Response headers identify source, revision,
+offset, next offset, audio hash and `not_observed` playback. Receiving these bytes
+is not a playback, hearing, comprehension or worker-incorporation receipt.
+
+`tests/presentation_io.py` checks the HTTP/auth boundary through an actual helper
+process and private cache against a synthetic loopback speech provider, including
+reconnect reuse and corrections/revocation during a held synthesis. Rust store
+tests check canonical text reassembly, SQLite reopen, entry final/progress
+separation and original owner/native/correction fences. These tests make no
+external provider or native model calls and do not qualify a real Telegram device.

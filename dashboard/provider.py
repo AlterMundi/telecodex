@@ -27,6 +27,7 @@ def receiving_authority(receiver):
     return json.dumps({
         'db_path': receiver.get('db_path'),
         'session_control': receiver.get('session_control'),
+        'interaction': receiver.get('interaction'),
         'telegram': {key: telegram.get(key) for key in
                      ('api_base', 'bot_token', 'bot_token_file')},
         'native_binary': receiver.get('codex', {}).get('binary', 'codex'),
@@ -52,11 +53,11 @@ def control(path, nonce, command='all'):
         while b'\n' not in data:
             block = stream.recv(min(4096, 65537 - len(data)))
             if not block or len(data) + len(block) > 65536:
-                raise ProviderUnavailable('Stop acknowledgement unavailable')
+                raise ProviderUnavailable('Receiving operation acknowledgement unavailable')
             data.extend(block)
         reply = json.loads(data)
         if reply.get('ok') is not True:
-            raise ProviderUnavailable('Stop was not confirmed; inspect its status')
+            raise ProviderUnavailable('Receiving operation was not confirmed; inspect its status')
         return reply['result']
 
 
@@ -154,6 +155,37 @@ class Provider:
             if len(rows) > 128:
                 raise ProviderUnavailable('Session scope exceeds qualified bound')
             return [dict(row) for row in rows]
+
+    def presentation(self, command):
+        """Read the controller's canonical sources; never duplicate its freshness rules."""
+        self.assert_binding()
+        profile = self.receiver.get('interaction', {})
+        if profile.get('human_id') != self.human or not self.authorized(self.human):
+            raise ProviderUnavailable('Interaction presentation is not configured for this account')
+        result = control(self.receiver['session_control']['socket_path'], None, command)
+        self.assert_binding()
+        if not self.authorized(self.human):
+            raise ProviderUnavailable('Receiving presentation grant changed')
+        items = result.get('items', []) if result.get('schema') == 'telecodex.presentation-list/v1' else [result]
+        expected = {'chat_id':profile['chat_id'], 'thread_id':profile['topic_id']}
+        for item in items:
+            selected = item.get('entry_binding', [])
+            if len(selected) != 4 or selected[0] != self.human or selected[1] != expected:
+                raise ProviderUnavailable('Loaded integrating entry does not match the receiving configuration')
+        return result
+
+    def presentation_list(self, delivery, native):
+        if type(delivery) is not int or type(native) is not int or min(delivery, native) < 0:
+            raise ValueError('Invalid presentation cursor')
+        return self.presentation(f'presentation list {delivery} {native}')
+
+    def presentation_part(self, source, revision, offset):
+        import re
+        if (not isinstance(source, str) or not re.fullmatch(r'(?:delivery:[a-f0-9-]{36}|native:[1-9][0-9]{0,18})', source)
+                or not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{64}', revision)
+                or type(offset) is not int or not 0 <= offset <= 10**9):
+            raise ValueError('Invalid presentation selection')
+        return self.presentation(f'presentation part {source} {revision} {offset}')
 
     @staticmethod
     def identity(row):
