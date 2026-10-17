@@ -12,7 +12,7 @@ from conversation_input_control_io import Inputs
 
 
 def qualify(binary):
-    journey = Inputs(binary)
+    journey = Inputs(str(Path(binary).resolve()))
     client = None
     try:
         journey.start()
