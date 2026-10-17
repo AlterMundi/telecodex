@@ -186,10 +186,19 @@ class Provider:
 
     def presentation_part(self, source, revision, offset):
         import re
-        if (not isinstance(source, str) or not re.fullmatch(r'(?:delivery:[a-f0-9-]{36}|native:[1-9][0-9]{0,18}|request:[a-f0-9]{32})', source)
+        if (not isinstance(source, str) or not re.fullmatch(r'(?:(?:delivery|input):[a-f0-9-]{36}|native:[1-9][0-9]{0,18}|request:[a-f0-9]{32})', source)
                 or not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{64}', revision)
                 or type(offset) is not int or not 0 <= offset <= 10**9):
             raise ValueError('Invalid presentation selection')
+        if source.startswith('input:'):
+            value = self.presentation(f'input status {self.input_id(source[6:])}')
+            view = self.clarification_source(value)
+            if view is None or view['revision'] != revision or offset >= len(view['text']):
+                raise ProviderUnavailable('Selected destination question is no longer current')
+            text = view['text'][offset:offset+1600]
+            end = offset+len(text)
+            return {**view,'schema':'telecodex.presentation-part/v1','text':text,
+                'offset':offset,'next_offset':end if end<len(view['text']) else None}
         if source.startswith('request:'):
             view = self.conversation_request_detail(source[8:], offset, revision)
             if (view.get('revision') != revision or view.get('offset') != offset
@@ -220,10 +229,54 @@ class Provider:
             raise ValueError('Invalid input history cursor')
         if direction not in ('before', 'after'):
             raise ValueError('Invalid input history direction')
-        return self.presentation(f'input list {before} {direction}')
+        page = self.presentation(f'input list {before} {direction}')
+        for item in page['items']:
+            self.decorate_input(item,page.get('routing_choices'),page['entry_binding'],page['binding'])
+        return page
 
     def conversation_input_status(self, ident):
-        return self.presentation(f'input status {self.input_id(ident)}')
+        return self.decorate_input(self.presentation(f'input status {self.input_id(ident)}'))
+
+    @classmethod
+    def clarification_source(cls, value, choices=None, entry_binding=None, binding=None):
+        if (value.get('clarifiable') is not True or value.get('phase')!='awaiting_target'
+                or value.get('retired') is not False or value.get('routing')):
+            return None
+        ident = cls.input_id(value['id'])
+        choices = value.get('routing_choices') if choices is None else choices
+        if not isinstance(choices,list) or len(choices)>128:
+            raise ProviderUnavailable('Destination choices unavailable')
+        if any(not isinstance(item,dict) or 'label' not in item for item in choices):
+            raise ProviderUnavailable('Destination labels unavailable')
+        labels = [item['label'] for item in choices]
+        if any(not isinstance(label,str) or not label.strip() or len(label)>200 for label in labels):
+            raise ProviderUnavailable('Destination labels unavailable')
+        original = value.get('text',value.get('preview'))
+        if not isinstance(original,str) or not original.strip():
+            raise ProviderUnavailable('Pending original unavailable')
+        selected = value.get('entry_binding') if entry_binding is None else entry_binding
+        generation = value.get('binding') if binding is None else binding
+        import re
+        if (not isinstance(selected,list) or len(selected)!=4 or not isinstance(generation,str)
+                or not re.fullmatch('[a-f0-9]{64}',generation)):
+            raise ProviderUnavailable('Pending conversation generation unavailable')
+        excerpt = original[:240]+('…' if len(original)>240 else '')
+        text = f'Where should I send your message: “{excerpt}”?'
+        if labels:
+            text += (' Some available conversations are: ' if len(labels)>8 else ' Available conversations are: ')+', '.join(labels[:8])+'.'
+        text += ' You can name a conversation or discuss a different task.'
+        view = {'id':'input:'+ident,'kind':'route_clarification','label':'Destination needed',
+            'entry_binding':selected[:3]+[generation],
+            'pending_input':ident,'text':text,'current':True,'playback':'not_observed'}
+        view['revision'] = hashlib.sha256(json.dumps([view,choices],sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+        return view
+
+    @classmethod
+    def decorate_input(cls, value, choices=None, entry_binding=None, binding=None):
+        source = cls.clarification_source(value,choices,entry_binding,binding)
+        if source is not None:
+            value['clarification'] = {k:source[k] for k in ('id','revision','kind','label','current')}
+        return value
 
     def conversation_input_submit(self, body):
         if not isinstance(body, dict) or set(body) not in ({'binding', 'id', 'text'}, {'binding', 'id', 'text', 'reply'}):
@@ -236,7 +289,7 @@ class Provider:
                 or '\0' in body['text'] or len(body['text'].encode('utf-8')) > 32768):
             raise ValueError('A message must contain text and fit within 32 KiB')
         # The Rust journal owns idempotency and exact-source checks. No retry.
-        return self.presentation('input submit ' + json.dumps(body, ensure_ascii=False))
+        return self.decorate_input(self.presentation('input submit ' + json.dumps(body, ensure_ascii=False)))
 
     @classmethod
     def check_reply(cls, value):
@@ -247,8 +300,8 @@ class Provider:
                 or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:', 'request:'))
                 or not isinstance(value['revision'], str) or not re.fullmatch('[a-f0-9]{64}', value['revision'])):
             raise ValueError('Select one retained original or worker result')
-        if value.get('context_only') and not value['source'].startswith(('request:', 'delivery:')):
-            raise ValueError('Context must refer to a reported question or worker result')
+        if value.get('context_only') and not value['source'].startswith(('request:', 'delivery:', 'input:')):
+            raise ValueError('Context must refer to a reported conversation source')
         ident=value['source'].split(':', 1)[1]
         if value['source'].startswith('request:'):
             if not re.fullmatch('[a-f0-9]{32}',ident):
@@ -263,7 +316,7 @@ class Provider:
                 or not isinstance(body['binding'], str) or not re.fullmatch('[a-f0-9]{64}', body['binding'])
                 or not isinstance(body['selector'], str) or not 1 <= len(body['selector']) <= 128):
             raise ValueError('Select one destination for this original message')
-        return self.presentation('input route '+json.dumps({**body, 'id':ident}))
+        return self.decorate_input(self.presentation('input route '+json.dumps({**body, 'id':ident})))
 
     def conversation_voice_submit(self, metadata, data):
         import re
@@ -310,7 +363,7 @@ class Provider:
             temporary.unlink(missing_ok=True)
         # The controller reserves original order/authority before asynchronous ASR.
         # A retry names the same clip and only inspects existing capture state.
-        return self.presentation('input voice submit '+json.dumps(metadata))
+        return self.decorate_input(self.presentation('input voice submit '+json.dumps(metadata)))
 
     @staticmethod
     def request_id(ident):

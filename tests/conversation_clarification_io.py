@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import uuid
+from urllib.parse import urlencode
 from conversation_cold_entry_http_io import ColdEntry, Browser
 
 
@@ -18,6 +19,13 @@ def qualify(binary):
         assert 'pending_routes' in caps['operations'] and 'resolve_route' in caps['operations']
         text = '#Unknown Keep the exact original requirement13 and its authorship.'
         pending, result = b.text(text); assert result['phase'] == 'awaiting_target'
+        descriptor=result['clarification'];assert descriptor['kind']=='route_clarification'
+        selected_part={'source':descriptor['id'],'revision':descriptor['revision'],'offset':0}
+        spoken_part=b.get('/api/interaction/part?'+urlencode(selected_part))
+        assert text in spoken_part['text']and 'Alpha'in spoken_part['text']and 'Beta'in spoken_part['text']
+        listed=next(v for v in b.get('/api/interaction/inputs')['items']if v['id']==pending)
+        assert listed['clarification']==descriptor
+        context={'source':descriptor['id'],'revision':descriptor['revision'],'context_only':True}
         inventory = j.call('route-pending', 'pending_routes', {})
         assert [v['id'] for v in inventory['items']] == [pending]
         assert inventory['items'][0]['text_excerpt'] == text
@@ -26,7 +34,7 @@ def qualify(binary):
                           {'pending_input': original, 'input_ref': reference, 'selector': selector}, ok=ok)
         choose('old-input', pending, early, 'Alpha', False)
         choose('invented-input', pending, str(uuid.uuid4()), 'Alpha', False)
-        selected, _ = b.text('Use Alpha for that saved request, please.')
+        selected, _ = b.text('Use Alpha for that saved request, please.',context)
         j.wait(lambda: b.status(selected)['phase'] == 'accepted')
         choose('missing-target', pending, selected, 'Unknown', False)
         assert b.status(pending)['phase'] == 'awaiting_target' and not j.instructions(7)
@@ -35,6 +43,8 @@ def qualify(binary):
         assert resolved['routing']['selection'] == 'integrator_clarification'
         assert resolved['routing']['selection_input'] == selected
         assert b.status(pending)['text'] == text
+        assert 'clarification'not in b.status(pending)
+        assert b.client.get('/api/interaction/part',params=selected_part,headers=b.headers).status_code==409
         assert text in json.loads(j.instructions(7)[0][2])['text']
         packets = sum(map(len, j.worker_packets.values()))
         choose('same-choice', pending, selected, 'Alpha')
@@ -50,7 +60,8 @@ def qualify(binary):
         script.write_text(script.read_text().replace('Continue requirement17 in this selected work.',
                                                     'Use Beta for the previous saved message.'))
         second, _ = b.text('#Unknown Work independently on requirement23.')
-        spoken, _ = b.voice()
+        descriptor=b.status(second)['clarification']
+        spoken, _ = b.voice({'source':descriptor['id'],'revision':descriptor['revision'],'context_only':True})
         j.wait(lambda: b.status(spoken)['phase'] == 'accepted')
         assert b.status(spoken)['voice']['transcription']['capture_id'] == spoken
         choose('voice', second, spoken, 'Beta')
@@ -90,6 +101,7 @@ def qualify(binary):
             db.execute('UPDATE users SET allowed=0 WHERE tg_user_id=100')
             db.execute('UPDATE users SET allowed=1 WHERE tg_user_id=100')
         choose('retired-authority', fourth, last, 'Alpha', False)
+        assert b.status(fourth)['clarifiable']is False and 'clarification'not in b.status(fourth)
         assert len(j.instructions(7)) == 2 and not j.instructions(77)
         assert j.topic_calls == 0
         # Actual Telegram ingress may announce the existing selected conversation.

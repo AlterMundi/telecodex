@@ -318,3 +318,32 @@ rollback. Recover forward or retain the new decoder when reverting behavior;
 never restore an earlier input journal or reinterpret those originals as direct
 answers. An old dashboard's rejection is not permission to resend a clip under a
 new identity or mode.
+
+## Audible destination clarification
+
+An eligible `awaiting_target` original exposes a `route_clarification`
+presentation source named `input:UUID`. Its deterministic question quotes a
+bounded excerpt of the retained original and lists enrolled conversation labels.
+It does not require another inference call. The revision binds the current
+logical entry generation, original and complete available choices; initial
+native-context assignment alone does not invalidate it. Resolution, retirement,
+ineligibility or changed choices invalidate queued or rendered old questions.
+
+The companion discovers these descriptors through original receipts and paged
+history, using the existing source/part/audio and playback revalidation path. A
+later utterance carries `context:input:UUID`, with `context_only: true`. That hint
+never selects a destination. The integrator may inspect `pending_routes` and use
+`resolve_route` with the exact pending UUID and the new retained input reference.
+The existing immutable selection and capture-order checks still apply: the busy
+worker receives the original task, while the clarification remains attributed
+to its own original. An unrelated new task remains possible.
+
+The actual HTTP/native/SQLite clarification journey and GTK/XTest/TLS companion
+journey pass with synthetic native, ASR and speech peers and no model inference
+or physical sensors. The latter also covers a semantic native-question answer,
+a concurrent worker result and five selected capture stops with three voice
+submissions. Provider tests cover multipart questions, stale sources and choices
+changing during synthesis. These results qualify the mechanism, not real-model
+interpretation or audible-device acceptance. Deploy the supporting native
+controller before its matching dashboard and client. Older source decoders
+refuse this context form; never resend an original under another identity.
