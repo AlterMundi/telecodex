@@ -41,11 +41,14 @@ fn render_checked(
 pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) -> Result<bool> {
     if !args
         .first()
-        .is_some_and(|v| matches!(*v, "observe" | "summary" | "sources"))
+        .is_some_and(|v| matches!(*v, "observe" | "summary" | "sources" | "candidates"))
     {
         return Ok(false);
     }
     let shared = app.shared.clone();
+    if args[0] == "candidates" {
+        return candidates(shared, human, origin, &args[1..]);
+    }
     let usage = "Usage: /interaction observe #Topic [--retry] · /interaction summary #Topic · /interaction sources #Topic. Observation refreshes only this selected source; an unchanged source uses its retained summary.";
     let Some(selector) = args.get(1).and_then(|s| s.strip_prefix('#')) else {
         routing::notice(shared, origin, usage.into());
@@ -140,28 +143,194 @@ pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) 
         ),
     );
     tokio::spawn(async move {
-        let outcome:Result<String>=async {
-            let activity_cut=shared.store.observer_activity_cut(key,human,&native)?;
-            let mut source=shared.codex.merge_history(&native).await?;
-            source["observer_activity_cut"]=serde_json::json!(activity_cut);
-            source["observer_checked_at"]=serde_json::json!(Utc::now().to_rfc3339());
-            match shared.store.observer_prepare(key,human,&source,card.as_ref().map_or(0,|c|c.revision),retry)? {
-                ObserverPreparation::Unchanged(card)=>Ok(format!("Source unchanged; no synthesis call.\n\n{}",render_checked(&shared,key,human,&name,&card))),
-                ObserverPreparation::Retained(phase)=>Ok(format!("Observer attempt is {phase}; no model call was repeated. Inspect the retained /interaction summary #{name}. An uncertain attempt requires /interaction observe #{name} --retry.")),
-                ObserverPreparation::Ready(attempt)=>{
-                    let context=source["entries"].as_array().into_iter().flatten().chain(source["in_progress_entries"].as_array().into_iter().flatten()).map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();
-                    routing::notice(shared.clone(),origin.clone(),format!("Synthesizing #{name} from retained original evidence ({} changed entries). Attempt {}. A timeout remains uncertain and is not retried automatically.",attempt.source["delta_indices"].as_array().map_or(0,Vec::len),attempt.id));
-                    let result=async {
-                        let (summary,supports)=shared.codex.summarize_context(&session,&format!("Observer #{name}"),&context,POLICY).await?;
-                        let card=shared.store.observer_commit(key,human,&attempt,&summary,&supports)?;
-                        Ok::<_,anyhow::Error>(render_checked(&shared,key,human,&name,&card))
-                    }.await;
-                    if result.is_err(){shared.store.observer_uncertain(&attempt.id)?;}
-                    result
-                }
+        let outcome = refresh(shared.clone(), key, human, &name, retry, Some(&origin)).await;
+        routing::notice(shared.clone(), origin, match outcome {
+            Ok(Refresh::Unchanged(card)) => format!("Source unchanged; no synthesis call.\n\n{}",render_checked(&shared,key,human,&name,&card)),
+            Ok(Refresh::Updated(card)) => render_checked(&shared,key,human,&name,&card),
+            Ok(Refresh::Retained(phase)) => format!("Observer attempt is {phase}; no model call was repeated. Inspect the retained /interaction summary #{name}. An uncertain attempt requires /interaction observe #{name} --retry."),
+            Err(_) => "Observer refresh could not be confirmed. Retained cards/originals remain available; no worker was resumed and no synthesis is retried automatically.".into(),
+        });
+    });
+    Ok(true)
+}
+
+enum Refresh {
+    Unchanged(ObserverCard),
+    Updated(ObserverCard),
+    Retained(String),
+}
+
+/// Reusable source reconciliation for explicit inspection and router candidates.
+/// A racing source event is represented by freshness, never an unbounded retry.
+async fn refresh(
+    shared: Arc<AppShared>,
+    key: SessionKey,
+    human: i64,
+    name: &str,
+    retry: bool,
+    progress: Option<&ReturnRoute>,
+) -> Result<Refresh> {
+    let session = shared
+        .store
+        .get_session(key)?
+        .context("Missing observer session")?;
+    let native = session
+        .codex_thread_id
+        .as_deref()
+        .context("Unbound observer session")?;
+    let card = shared.store.observer_card(key, human, native)?;
+    let activity_cut = shared.store.observer_activity_cut(key, human, native)?;
+    let mut source = shared.codex.merge_history(native).await?;
+    source["observer_activity_cut"] = serde_json::json!(activity_cut);
+    source["observer_checked_at"] = serde_json::json!(Utc::now().to_rfc3339());
+    match shared.store.observer_prepare(
+        key,
+        human,
+        &source,
+        card.as_ref().map_or(0, |c| c.revision),
+        retry,
+    )? {
+        ObserverPreparation::Unchanged(card) => Ok(Refresh::Unchanged(card)),
+        ObserverPreparation::Retained(phase) => Ok(Refresh::Retained(phase)),
+        ObserverPreparation::Ready(attempt) => {
+            let context = source["entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .chain(
+                    source["in_progress_entries"]
+                        .as_array()
+                        .into_iter()
+                        .flatten(),
+                )
+                .map(|v| v.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            if let Some(origin) = progress {
+                routing::notice(
+                    shared.clone(),
+                    origin.clone(),
+                    format!(
+                        "Synthesizing #{name} from retained original evidence ({} changed entries). Attempt {}. A timeout remains uncertain and is not retried automatically.",
+                        attempt.source["delta_indices"]
+                            .as_array()
+                            .map_or(0, Vec::len),
+                        attempt.id
+                    ),
+                );
             }
-        }.await;
-        routing::notice(shared,origin,match outcome {Ok(text)=>text,Err(_)=>"Observer refresh could not be confirmed. Retained cards/originals remain available; no worker was resumed and no synthesis is retried automatically.".into()});
+            let result = async {
+                let (summary, supports) = shared
+                    .codex
+                    .summarize_context(&session, &format!("Observer #{name}"), &context, POLICY)
+                    .await?;
+                shared
+                    .store
+                    .observer_commit(key, human, &attempt, &summary, &supports)
+            }
+            .await;
+            if result.is_err() {
+                shared.store.observer_uncertain(&attempt.id)?;
+            }
+            result.map(Refresh::Updated)
+        }
+    }
+}
+
+/// At most one bounded reconciliation for each selected source. Current local
+/// cards can be reused for sixty seconds; external history remains sampled.
+async fn candidate(shared: Arc<AppShared>, key: SessionKey, human: i64, name: String) -> String {
+    let result: Result<String> = async {
+        let session = shared.store.get_session(key)?.context("Missing candidate session")?;
+        let native = session.codex_thread_id.as_deref().context("Unbound candidate session")?;
+        let card = shared.store.observer_card(key,human,native)?;
+        let needs_refresh = match card {
+            Some(ref card) => shared.store.observer_freshness(key,human,card)?.needs_refresh(Utc::now(),60),
+            None => true,
+        };
+        let reconciliation = if needs_refresh {
+            match refresh(shared.clone(),key,human,&name,false,None).await {
+                Ok(Refresh::Updated(_)) => "source reconciled; summary updated".to_owned(),
+                Ok(Refresh::Unchanged(_)) => "source reconciled; unchanged summary reused".to_owned(),
+                Ok(Refresh::Retained(phase)) => format!("refresh retained as {phase}; no synthesis repeated"),
+                Err(_) => "refresh unconfirmed; retained evidence only".to_owned(),
+            }
+        } else { "recent locally reconciled card reused; no native/model call".to_owned() };
+        // Re-read the actual current binding after asynchronous reconciliation.
+        let observed = shared.store.interaction_observation(key,human)?.context("Candidate unavailable")?;
+        let mut text = format!("Candidate #{name} (#t{})\nReconciliation: {reconciliation}\nPending human items: {} ({} actionable)\nPresentation gaps: {}",key.thread_id,observed.pending.pending_total,observed.pending.actionable_total,observed.presentation_gaps);
+        if let Some((card,_)) = observed.semantic {
+            text.push_str(&format!("\n{}",render_checked(&shared,key,human,&name,&card)));
+        } else { text.push_str("\nNo semantic card for the current native binding; destination suitability unknown."); }
+        Ok(text)
+    }.await;
+    result.unwrap_or_else(|_| {
+        format!(
+            "Candidate #{name} (#t{}) unavailable; destination suitability unknown.",
+            key.thread_id
+        )
+    })
+}
+
+fn candidates(
+    shared: Arc<AppShared>,
+    human: i64,
+    origin: ReturnRoute,
+    args: &[&str],
+) -> Result<bool> {
+    let offset = match args {
+        [] => 0,
+        [offset] if offset.parse::<usize>().is_ok() => offset.parse::<usize>()?,
+        _ => {
+            routing::notice(
+                shared,
+                origin,
+                "Usage: /interaction candidates [OFFSET]".into(),
+            );
+            return Ok(true);
+        }
+    };
+    let cfg = shared
+        .config
+        .interaction
+        .as_ref()
+        .context("Missing interaction profile")?;
+    let selected = cfg
+        .targets
+        .iter()
+        .skip(offset)
+        .take(5)
+        .map(|t| {
+            (
+                SessionKey::new(cfg.chat_id, Some(t.topic_id)),
+                t.name.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let more = (offset.saturating_add(5) < cfg.targets.len()).then_some(offset.saturating_add(5));
+    routing::notice(shared.clone(),origin.clone(),"Inspecting up to five authorized candidates; stale or missing cards receive one bounded source refresh. Worker execution continues independently.".into());
+    tokio::spawn(async move {
+        use futures_util::{StreamExt, stream};
+        // Bound simultaneous synthesis without delaying foreground ingress.
+        let mut cards = stream::iter(selected.into_iter().enumerate().map(|(n, (key, name))| {
+            let shared = shared.clone();
+            async move { (n, candidate(shared, key, human, name).await) }
+        }))
+        .buffer_unordered(2)
+        .collect::<Vec<_>>()
+        .await;
+        cards.sort_by_key(|(n, _)| *n);
+        let mut text = format!(
+            "Observer candidates\nThese are source interpretations, not routing decisions. External history remains sampled.\n\n{}",
+            cards
+                .into_iter()
+                .map(|(_, c)| c)
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        );
+        if let Some(next) = more {
+            text.push_str(&format!("\n\nMore: /interaction candidates {next}"));
+        }
+        routing::notice(shared, origin, text);
     });
     Ok(true)
 }

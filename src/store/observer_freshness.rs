@@ -3,11 +3,31 @@ use super::*;
 use crate::store::observer_cards::ObserverCard;
 
 pub struct ObserverFreshness {
+    pub locally_reconciled: bool,
     pub state: &'static str,
     pub observed_cut: Option<i64>,
     pub current_cut: i64,
     pub checked_at: Option<String>,
     pub unsettled_inputs: usize,
+}
+
+impl ObserverFreshness {
+    /// A local equality receipt has a bounded reuse age, never a promise that
+    /// external native writers cannot have advanced the sampled history.
+    pub fn needs_refresh(&self, now: chrono::DateTime<chrono::Utc>, max_age_seconds: i64) -> bool {
+        if !self.locally_reconciled {
+            return true;
+        }
+        let Some(checked) = self
+            .checked_at
+            .as_deref()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        else {
+            return true;
+        };
+        let age = now.signed_duration_since(checked);
+        age < chrono::Duration::zero() || age >= chrono::Duration::seconds(max_age_seconds.max(0))
+    }
 }
 
 pub(super) fn cut_on(conn: &Connection, session: i64, native: &str) -> Result<i64> {
@@ -42,14 +62,26 @@ pub(super) fn freshness_on(
 ) -> Result<ObserverFreshness> {
     let current_cut = cut_on(conn, session, native)?;
     let receipt:Option<(i64,String,String)>=conn.query_row("SELECT activity_cut,checked_at,instance_id FROM interaction_observer_checks WHERE session_id=?1 AND native_thread=?2 AND source_revision=?3",params![session,native,source],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    // An external-only native change may have been read without changing the
+    // local activity counter. A later unsettled source must not be hidden by
+    // the older card's recent local-equality receipt.
+    let newer_source_unsettled: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM interaction_observer_attempts a WHERE a.session_id=?1 AND a.native_thread=?2 AND a.source_revision!=?3 AND a.phase IN ('summarizing','uncertain') AND a.rowid>COALESCE((SELECT MAX(original.rowid) FROM interaction_observer_attempts original JOIN interaction_observer_cards c ON c.attempt_id=original.id WHERE c.session_id=?1 AND c.native_thread=?2 AND original.source_revision=?3),0))",
+        params![session,native,source], |r|r.get(0))?;
     let state = match &receipt {
         None => "not checked against local activity",
         Some((_, _, old)) if old != instance => "native reconciliation required after restart",
         Some((cut, _, _)) if *cut != current_cut => "new local activity since source read",
+        Some(_) if newer_source_unsettled => {
+            "newer native source synthesis is pending or uncertain"
+        }
         Some(_) => "no local change since source read; external history remains sampled",
     };
     let unsettled_inputs=conn.query_row("SELECT COUNT(*) FROM interaction_instructions WHERE session_id=?1 AND phase IN ('queued','submitting','steering','uncertain','retained_unsent') AND (json_extract(doc,'$.native_thread') IS ?2 OR json_extract(doc,'$.native_thread') IS NULL)",params![session,native],|r|r.get(0))?;
     Ok(ObserverFreshness {
+        locally_reconciled: receipt.as_ref().is_some_and(|(cut, _, old)| {
+            *cut == current_cut && old == instance && !newer_source_unsettled
+        }),
         state,
         observed_cut: receipt.as_ref().map(|r| r.0),
         current_cut,
@@ -203,6 +235,73 @@ mod tests {
     }
 
     #[test]
+    fn newer_external_source_is_not_hidden_by_a_recent_local_receipt() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let defaults = super::super::tests::defaults();
+        let store = Store::open(file.path(), &[100], &defaults).unwrap();
+        let key = SessionKey::new(100, Some(7));
+        store.ensure_session(key, 100, &defaults).unwrap();
+        store
+            .set_session_codex_thread(key, "native-source")
+            .unwrap();
+        let ObserverPreparation::Ready(first) = store
+            .observer_prepare(key, 100, &source(0, "one"), 0, false)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let card = store
+            .observer_commit(key, 100, &first, "First interpretation", &[0])
+            .unwrap();
+        let read_at = chrono::DateTime::parse_from_rfc3339(&card.observed_at)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(
+            !store
+                .observer_freshness(key, 100, &card)
+                .unwrap()
+                .needs_refresh(read_at, 60)
+        );
+        let mut changed = source(0, "two");
+        changed["entries"][0] = json!("An external native writer corrected the decision.");
+        let ObserverPreparation::Ready(second) = store
+            .observer_prepare(key, 100, &changed, 1, false)
+            .unwrap()
+        else {
+            panic!()
+        };
+        for uncertain in [false, true] {
+            if uncertain {
+                store.observer_uncertain(&second.id).unwrap();
+            }
+            let freshness = store.observer_freshness(key, 100, &card).unwrap();
+            assert_eq!(freshness.current_cut, 0);
+            assert!(freshness.state.contains("pending or uncertain"));
+            assert!(freshness.needs_refresh(read_at, 60));
+        }
+        assert!(
+            matches!(store.observer_prepare(key,100,&changed,1,false).unwrap(),ObserverPreparation::Retained(phase) if phase=="uncertain")
+        );
+        let mut superseding = source(0, "three");
+        superseding["entries"][0] = json!("A later source includes and resolves the correction.");
+        let ObserverPreparation::Ready(third) = store
+            .observer_prepare(key, 100, &superseding, 1, false)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let current = store
+            .observer_commit(key, 100, &third, "Later interpretation", &[0])
+            .unwrap();
+        assert!(
+            !store
+                .observer_freshness(key, 100, &current)
+                .unwrap()
+                .needs_refresh(read_at, 60)
+        );
+    }
+
+    #[test]
     fn activity_is_atomic_idempotent_and_remains_stale_during_synthesis() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let defaults = super::super::tests::defaults();
@@ -254,6 +353,13 @@ mod tests {
             .unwrap();
         assert_eq!(card.observed_at, "2026-10-16T01:02:03+00:00");
         assert_ne!(card.committed_at, card.observed_at);
+        let freshness = store.observer_freshness(key, 100, &card).unwrap();
+        let read_at = chrono::DateTime::parse_from_rfc3339(&card.observed_at)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(!freshness.needs_refresh(read_at + chrono::Duration::seconds(59), 60));
+        assert!(freshness.needs_refresh(read_at + chrono::Duration::seconds(60), 60));
+        assert!(freshness.needs_refresh(read_at - chrono::Duration::seconds(1), 60));
         assert_eq!(
             store
                 .observer_freshness(key, 100, &card)

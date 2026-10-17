@@ -160,7 +160,72 @@ def legacy_observer_session_links(binary):
         j.close()
 
 
+def candidate_reconciliation(binary):
+    import sqlite3
+    j = Observer(binary)
+    try:
+        j.prepare()
+        j.admit('Retain the second original Beta source perspective.',topic=8)
+        j.wait(lambda:len(j.histories['native-topic-8']) == 2)
+        j.idle()
+        before_turns = j.row('SELECT count(*) FROM turns')
+        j.admit('/interaction candidates',topic=1)
+        j.wait(lambda:j.row('SELECT count(*) FROM interaction_observer_cards') == [(2,)])
+        j.wait(lambda:j.has('Derived observer card for #Alpha',1) and j.has('Derived observer card for #Beta',1))
+        assert j.summaries == 2 and j.row('SELECT count(*) FROM turns') == before_turns
+        j.messages.clear()
+        before_rpc = len(j.rpc)
+        j.admit('/interaction candidates',topic=1)
+        j.wait(lambda:j.has('Derived observer card for #Beta',1))
+        assert j.has('recent locally reconciled card reused',1)
+        assert len(j.rpc) == before_rpc and j.summaries == 2, 'Unchanged candidates incurred a native/model call'
+        # Expired sampling is reconciled even without a local event; unchanged
+        # original history still must not incur another synthesis.
+        with sqlite3.connect(j.root / 'state.sqlite') as db:
+            db.execute("UPDATE interaction_observer_checks SET checked_at='2020-01-01T00:00:00Z' WHERE native_thread='native-topic-7'")
+        j.messages.clear()
+        j.admit('/interaction candidates',topic=1)
+        j.wait(lambda:j.has('source reconciled; unchanged summary reused',1))
+        assert j.summaries == 2
+        j.admit('A factual correction that changes Alpha evidence.',topic=7)
+        j.wait(lambda:len(j.histories['native-topic-7']) == 3)
+        j.idle()
+        before_turns = j.row('SELECT count(*) FROM turns')
+        j.messages.clear()
+        j.admit('/interaction candidates',topic=1)
+        j.wait(lambda:j.row('SELECT count(*) FROM interaction_observer_cards') == [(3,)])
+        j.wait(lambda:j.has('source reconciled; summary updated',1))
+        assert j.summaries == 3 and j.row('SELECT count(*) FROM turns') == before_turns
+        j.stop()
+        j.start()
+        j.messages.clear()
+        j.admit('/interaction candidates',topic=1)
+        j.wait(lambda:j.has('Derived observer card for #Beta',1))
+        assert j.summaries == 3
+        assert j.has('source reconciled; unchanged summary reused',1)
+        assert not j.has('native reconciliation required after restart',1)
+        # External native history changes have no local canonical event. A
+        # newer held observation must invalidate reuse of the recent old card.
+        j.histories['native-topic-7'][-1]['items'].append({'type':'agentMessage','text':'An external-only factual change.'})
+        j.block_summary = True
+        j.admit('/interaction observe #Alpha',topic=1)
+        j.wait(j.summary_held.is_set)
+        count = j.summaries
+        j.messages.clear()
+        j.admit('/interaction candidates',topic=1)
+        j.wait(lambda:j.has('refresh retained as summarizing',1))
+        assert j.has('newer native source synthesis is pending or uncertain',1)
+        assert j.summaries == count, 'A retained external source caused duplicate synthesis'
+        j.release_summary.set()
+        j.wait(lambda:j.row('SELECT count(*) FROM interaction_observer_cards') == [(4,)])
+        print('PASS candidate query seeds bounded cards, reuses recent unchanged sources without native calls, refreshes expired/event-stale/restarted sources without duplicate synthesis or worker execution')
+    finally:
+        j.release_summary.set()
+        j.close()
+
+
 if __name__ == '__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     revisions_and_originals(binary)
     legacy_observer_session_links(binary)
+    candidate_reconciliation(binary)

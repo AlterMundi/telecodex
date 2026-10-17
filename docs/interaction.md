@@ -247,8 +247,21 @@ provenance; derived activity/check metadata is removed. Startup migrates the
 previous session foreign keys transactionally, retaining original bytes. Current
 owner and native-binding checks still control access to retained cards.
 
-Source-driven refresh currently runs on explicit observation requests. Automatic
-candidate refresh and semantic routing integration remain continuing work.
+`/interaction candidates [OFFSET]` inspects five enrolled candidates per page.
+Missing, locally stale, post-restart or more-than-sixty-second-old source checks
+receive one bounded refresh; up to two run concurrently outside foreground
+ingress. Recent locally reconciled cards require no native or model call.
+Unchanged source history refreshes the check without synthesis, even if a local
+transport event invalidated the prior check. A newer retained synthesis from a
+different native source revision also invalidates recent-card reuse, including
+external changes not seen in the local event stream. Its pending/uncertain state
+stays visible until a later committed source supersedes it. Errors or uncertain attempts retain
+the old evidence and unknown/stale status, without a retry loop. Each card shows
+pending human items, presentation gaps and source provenance. Candidate inspection
+never selects a destination or dispatches worker input.
+
+Source-driven refresh currently runs on explicit observation/candidate queries.
+Semantic routing integration remains continuing work.
 Runtime quality qualification must check factual summaries separately from
 successful processing and support IDs.
 
