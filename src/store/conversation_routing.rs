@@ -26,6 +26,8 @@ pub struct ConversationRouting {
     pub label: String,
     pub session: i64,
     pub selection: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_input: Option<crate::interaction::InputReference>,
     pub instruction: Option<String>,
     pub phase: String,
 }
@@ -170,15 +172,80 @@ impl Store {
         profile: &crate::interaction::InteractionConfig,
         resolve: Option<&str>,
     ) -> Result<Option<ConversationRouteAction>> {
+        self.conversation_route_selected(human, id, profile, resolve, None)
+    }
+    pub fn conversation_route_clarified(
+        &self,
+        human: i64,
+        id: &str,
+        profile: &crate::interaction::InteractionConfig,
+        selector: &str,
+        clarification: (
+            &str,
+            &crate::interaction::InputReference,
+            &tokio_util::sync::CancellationToken,
+        ),
+    ) -> Result<Option<ConversationRouteAction>> {
+        self.conversation_route_selected(human, id, profile, Some(selector), Some(clarification))
+    }
+    fn conversation_route_selected(
+        &self,
+        human: i64,
+        id: &str,
+        profile: &crate::interaction::InteractionConfig,
+        resolve: Option<&str>,
+        clarification: Option<(
+            &str,
+            &crate::interaction::InputReference,
+            &tokio_util::sync::CancellationToken,
+        )>,
+    ) -> Result<Option<ConversationRouteAction>> {
         use crate::interaction::{RequestRelation, ReturnRoute, SourceInput};
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
+        if clarification.is_some_and(|(_, _, closed)| closed.is_cancelled()) {
+            bail!("Clarification request closed before admission");
+        }
         let mut input = super::conversation_inputs::read_on(&tx, id, human)?;
         super::conversation_inputs::eligible_on(&tx, &input)?;
         if input.entry != profile.entry() || profile.human_id != human {
             bail!("Routing profile mismatch");
         }
+        let selection_input = if let Some((native, reference, _)) = clarification {
+            // Resolve from a later actual human utterance, never model-authored
+            // replacement text or an earlier statement reused as fresh consent.
+            if input.native != native {
+                bail!("Pending input belongs to another entry generation");
+            }
+            let (source, _) = super::dialogue::original_on(
+                &tx,
+                input.entry,
+                human,
+                native,
+                reference,
+                "",
+                false,
+            )?;
+            let selected_order = super::dialogue::original_order_on(&tx, &source)?
+                .context("Clarification capture order unavailable")?;
+            let pending_order:i64 = tx.query_row("SELECT id FROM original_ingress_order WHERE channel='conversation' AND event_id=?1",[&input.id],|r|r.get(0))?;
+            if selected_order <= pending_order {
+                bail!("Clarification must follow the pending input");
+            }
+            Some(reference.clone())
+        } else {
+            None
+        };
         if matches!(input.phase.as_str(), "routed" | "interruption") {
+            if selection_input.is_some()
+                && input
+                    .routing
+                    .as_ref()
+                    .and_then(|r| r.selection_input.as_ref())
+                    != selection_input.as_ref()
+            {
+                bail!("A retained clarification cannot change");
+            }
             if let Some(selector) = resolve {
                 let selected = profile.resolve(selector.strip_prefix('#').unwrap_or(selector));
                 if selected.len() != 1
@@ -208,8 +275,14 @@ impl Store {
             return Ok(None);
         };
         if targets.len() != 1 {
+            if clarification.is_some() {
+                bail!("Select one unambiguous enrolled clarification destination");
+            }
             input.phase = "awaiting_target".into();
             save_on(&tx, &input)?;
+            if clarification.is_some_and(|(_, _, closed)| closed.is_cancelled()) {
+                bail!("Clarification request closed before commit");
+            }
             tx.commit()?;
             return Ok(None);
         }
@@ -255,7 +328,9 @@ impl Store {
                 target,
                 label,
                 session: target_session,
-                selection: if resolve.is_some() {
+                selection: if selection_input.is_some() {
+                    "integrator_clarification"
+                } else if resolve.is_some() {
                     "human_clarification"
                 } else if explicit.is_some() {
                     "explicit_selector"
@@ -263,10 +338,14 @@ impl Store {
                     "reply"
                 }
                 .into(),
+                selection_input,
                 instruction: None,
                 phase: "unconfirmed".into(),
             });
             save_on(&tx, &input)?;
+            if clarification.is_some_and(|(_, _, closed)| closed.is_cancelled()) {
+                bail!("Clarification request closed before commit");
+            }
             tx.commit()?;
             return Ok(Some(ConversationRouteAction::Interrupt(target)));
         }
@@ -294,7 +373,9 @@ impl Store {
             target,
             label,
             session: target_session,
-            selection: if resolve.is_some() {
+            selection: if selection_input.is_some() {
+                "integrator_clarification"
+            } else if resolve.is_some() {
                 "human_clarification"
             } else if explicit.is_some() {
                 "explicit_selector"
@@ -302,15 +383,49 @@ impl Store {
                 "reply"
             }
             .into(),
+            selection_input,
             instruction: Some(instruction.id.clone()),
             phase: instruction.phase.as_str().into(),
         });
         save_on(&tx, &input)?;
+        if clarification.is_some_and(|(_, _, closed)| closed.is_cancelled()) {
+            bail!("Clarification request closed before commit");
+        }
         tx.commit()?;
         Ok(Some(ConversationRouteAction::Worker(
             Box::new(instruction),
             fresh,
         )))
+    }
+    pub fn conversation_pending_routes(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        native: &str,
+    ) -> Result<Value> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (_, current) = super::presentation::entry_on(&conn, human, entry)?;
+        if current != native {
+            bail!("Entry native generation changed");
+        }
+        let epoch = super::stopping::admission_epoch_on(&conn, entry)?;
+        let mut query=conn.prepare("SELECT id FROM conversation_inputs WHERE human_id=?1 AND session_id=(SELECT id FROM sessions WHERE chat_id=?2 AND thread_id=?3) AND native_thread=?4 AND phase='awaiting_target' AND retired=0 AND json_extract(doc,'$.epoch')=?5 ORDER BY created_at DESC,id LIMIT 13")?;
+        let ids = query
+            .query_map(
+                params![human, entry.chat_id, entry.thread_id, native, epoch],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let more = ids.len() > 12;
+        let mut items = Vec::new();
+        for id in ids.into_iter().take(12) {
+            let input = super::conversation_inputs::read_on(&conn, &id, human)?;
+            super::conversation_inputs::eligible_on(&conn, &input)?;
+            items.push(json!({"id":input.id,"text_excerpt":input.text.chars().take(2000).collect::<String>(),"excerpt_bounded":true,"voice":input.voice,"phase":input.phase}));
+        }
+        Ok(
+            json!({"kind":"pending_route_selections","items":items,"more":more,"authority":"Retained original inputs awaiting a destination, not permission to choose without a later human clarification"}),
+        )
     }
     pub fn conversation_interruption_apply(
         &self,
@@ -393,6 +508,110 @@ mod tests {
             ConversationRouteAction::Worker(i, true) => *i,
             _ => panic!("Expected one new worker instruction"),
         }
+    }
+    #[test]
+    fn closed_clarification_waiting_for_store_lock_cannot_admit() {
+        let (_file, store, p, binding) = setup();
+        let pending = capture(
+            &store,
+            &p,
+            &binding,
+            "#Unknown Preserve this original",
+            None,
+        );
+        assert!(
+            store
+                .conversation_route(100, &pending, &p, None)
+                .unwrap()
+                .is_none()
+        );
+        let later = capture(
+            &store,
+            &p,
+            &binding,
+            "#Beta A later actual human input",
+            None,
+        );
+        worker(store.conversation_route(100, &later, &p, None).unwrap());
+        let reference = InputReference::Conversation(later);
+        let store = std::sync::Arc::new(store);
+        let closed = tokio_util::sync::CancellationToken::new();
+        let guard = store.conn.lock().unwrap();
+        let (send, ready) = std::sync::mpsc::channel();
+        let task_store = store.clone();
+        let task_profile = p.clone();
+        let task_id = pending.clone();
+        let task_closed = closed.clone();
+        let task = std::thread::spawn(move || {
+            send.send(()).unwrap();
+            task_store
+                .conversation_route_clarified(
+                    100,
+                    &task_id,
+                    &task_profile,
+                    "Alpha",
+                    ("native-1", &reference, &task_closed),
+                )
+                .err()
+                .unwrap()
+                .to_string()
+        });
+        ready.recv().unwrap();
+        closed.cancel();
+        drop(guard);
+        assert!(task.join().unwrap().contains("closed before admission"));
+        assert_eq!(
+            store
+                .conversation_input_read(100, p.entry(), &pending)
+                .unwrap()
+                .phase,
+            "awaiting_target"
+        );
+        assert_eq!(
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT count(*) FROM interaction_instructions", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn old_admission_epoch_does_not_hide_current_pending_routes() {
+        let (_file, store, p, binding) = setup();
+        let old = capture(
+            &store,
+            &p,
+            &binding,
+            "#Unknown Earlier pending original",
+            None,
+        );
+        store.conversation_route(100, &old, &p, None).unwrap();
+        store.conn.lock().unwrap().execute("INSERT INTO bot_state(key,value) VALUES('stop_admission_epoch:100','synthetic-new-epoch')",[]).unwrap();
+        let current = capture(
+            &store,
+            &p,
+            &binding,
+            "#Unknown Current pending original",
+            None,
+        );
+        store.conversation_route(100, &current, &p, None).unwrap();
+        let inventory = store
+            .conversation_pending_routes(100, p.entry(), "native-1")
+            .unwrap();
+        assert_eq!(inventory["items"].as_array().unwrap().len(), 1);
+        assert_eq!(inventory["items"][0]["id"], current);
+        assert_eq!(
+            store
+                .conversation_input_read(100, p.entry(), &old)
+                .unwrap()
+                .phase,
+            "awaiting_target"
+        );
     }
     #[test]
     fn explicit_original_and_reply_reuse_requests_without_entry_model_or_retargeting() {
