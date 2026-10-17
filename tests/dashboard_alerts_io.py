@@ -118,6 +118,18 @@ class Receiving(unittest.TestCase):
     def incident(self):
         return self.client.call('GET', '/v1/incidents/fixture/credit-1', 'Incident')
 
+    def test_storage_pressure_contract_and_receiving_projection(self):
+        value = dict(self.projection, incident_id='storage-1', phase='storage', problem_code='storage_pressure',
+                     resource_ref='fictional-host', severity='critical',
+                     summary='Root storage critical: 95% used; 4 GiB available.')
+        self.publish(value)
+        self.receiver.tick()
+        snapshot = self.receiver.snapshot()
+        item = next(row for row in snapshot['incidents'] if row['projection']['incident_id'] == value['incident_id'])
+        self.assertEqual(item['projection']['severity'], 'critical')
+        self.assertEqual(item['projection']['problem_code'], 'storage_pressure')
+        self.assertEqual(self.sender.calls[-1]['summary'], value['summary'])
+
     def test_closed_contract_and_credential_boundaries(self):
         for changed in [dict(self.projection, revision=True), dict(self.projection, summary='private\nraw'),
                         dict(self.projection, raw_provider_error='secret'), dict(self.projection, schema='other/v1')]:

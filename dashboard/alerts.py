@@ -210,6 +210,11 @@ class Receiver:
             self.scope, self.adapter, config['bot_id'], provider.human,
             provider.binding_bytes.hex(), getattr(self.sender, 'token', '')], sort_keys=True).encode()).hexdigest()
         root = private_directory(private_directory(config['state_dir']) / 'alerts')
+        from .menu_attention import MenuAttention
+        if type(settings.get('menu_attention', False)) is not bool:
+            raise ValueError('Invalid menu attention setting')
+        self.menu = (MenuAttention(self.sender, provider, root / 'menu-attention.json', self.binding)
+                     if settings.get('menu_attention', False) else None)
         self.db_path = root / 'delivery.sqlite3'
         if self.db_path.exists() or self.db_path.is_symlink():
             info = self.db_path.lstat()
@@ -318,6 +323,13 @@ class Receiver:
             with self.lock:
                 self.view = {**self.view, 'state': 'unavailable', 'error': code}
         finally:
+            if self.menu is not None:
+                try:
+                    state = self.menu.tick(self.snapshot()) if self.dispatch_ready() else 'deferred'
+                except (AlertsUnavailable, ProviderUnavailable, OSError, ValueError, KeyError):
+                    state = 'unconfirmed'
+                with self.lock:
+                    self.view['menu_attention_state'] = state
             self.tick_lock.release()
 
     def receipt(self, delivery_id, value):
