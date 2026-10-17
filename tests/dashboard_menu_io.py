@@ -78,6 +78,15 @@ class MenuTests(unittest.TestCase):
             menu.next_check = 0
             self.assertEqual(menu.tick(view('critical')), 'observed')
             self.assertEqual(len(writes), 1)
+            menu.next_check = 0
+            # A lost setter can be reconciled even if attention changes before retry.
+            with self.assertRaises(MenuUnavailable): menu.tick(view('warning'))
+            menu.next_check = 0
+            with self.assertRaises(MenuUnavailable): menu.tick(view())
+            self.assertEqual(current['text'], 'Apps')
+            menu.next_check = 0
+            self.assertEqual(menu.tick(view()), 'observed')
+            self.assertEqual(len(writes), 3)
 
 
 if __name__ == '__main__': unittest.main()

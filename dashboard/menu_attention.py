@@ -68,14 +68,17 @@ class MenuAttention:
         selected = {**record['original'], 'text':prefix+self.label}
         # Read before writing and refuse a third party's different label or destination.
         # After an ambiguous setter, the selected desired state is safe to observe/reconcile.
-        if current not in (record['original'], record['selected'], selected):
+        if current not in (record['original'], record['selected'], record.get('pending'), selected):
             raise MenuUnavailable('menu_changed_externally')
         if current != selected:
+            # Retain the desired setter before dispatch, including a lost response.
+            record = {**record, 'pending':selected}
+            write_json(self.path, record)
             if self.call('setChatMenuButton', {**payload, 'menu_button':selected}) is not True:
                 raise MenuUnavailable('menu_operation_unconfirmed')
             current = self.call('getChatMenuButton', payload)
             if current != selected:
                 raise MenuUnavailable('menu_operation_unconfirmed')
-        write_json(self.path, {**record, 'selected':selected, 'level':level, 'observed_at':int(time.time())})
+        write_json(self.path, {**record, 'selected':selected, 'pending':None, 'level':level, 'observed_at':int(time.time())})
         self.last_level = level
         return 'observed'
