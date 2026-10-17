@@ -152,10 +152,12 @@ impl Store {
         if prior.as_deref().is_some_and(|old| old != native) {
             bail!("Voice native generation changed");
         }
-        tx.execute(
-            "UPDATE interaction_voice_inputs SET native=?2 WHERE update_id=?1",
-            params![update, native],
-        )?;
+        if prior.is_none() {
+            // Initial establishment continues this entry generation. Carry its
+            // pending clips before the binding trigger runs; a human clear or
+            // rebind already retired those rows and cannot be revived here.
+            tx.execute("UPDATE interaction_voice_inputs SET native=?2 WHERE session_id=(SELECT session_id FROM interaction_voice_inputs WHERE update_id=?1) AND human_id=?3 AND instance_id=?4 AND native IS NULL AND phase IN ('preparing','committed')", params![update,native,human,self.instance_id])?;
+        }
         tx.execute("UPDATE sessions SET codex_thread_id=?3,force_fresh_thread=0,updated_at=?4 WHERE chat_id=?1 AND thread_id=?2", params![key.chat_id,key.thread_id,native,now_string()])?;
         tx.commit()?;
         Ok(true)
@@ -466,6 +468,49 @@ mod tests {
                         .codex_thread_id
                         .as_deref(),
                     Some("new-native")
+                );
+            }
+        }
+    }
+    #[test]
+    fn own_initial_native_carries_other_pending_clips_but_not_retired_inputs() {
+        for cleared in [false, true] {
+            let (_file, store, key, mut original) = setup();
+            store.clear_session_conversation(key).unwrap();
+            store.voice_begin(20, key, 100).unwrap();
+            original.update_id = 21;
+            original.message.as_mut().unwrap().message_id = 21;
+            store.admit_update(&original).unwrap();
+            store.begin_update(21).unwrap();
+            store.voice_begin(21, key, 100).unwrap();
+            store
+                .voice_commit(20, 100, "First voice", &proof())
+                .unwrap();
+            if cleared {
+                store.clear_session_conversation(key).unwrap();
+            }
+            if cleared {
+                assert!(
+                    store
+                        .voice_bind_native(Some(20), key, 100, "own-native")
+                        .is_err()
+                );
+                assert!(
+                    store
+                        .voice_commit(21, 100, "Later correction", &proof())
+                        .is_err()
+                );
+            } else {
+                store
+                    .voice_bind_native(Some(20), key, 100, "own-native")
+                    .unwrap();
+                store
+                    .voice_commit(21, 100, "Later correction", &proof())
+                    .unwrap();
+                store.voice_validate(Some(21), key, 100).unwrap();
+                assert_eq!(
+                    store.interaction_input_content(&original, 100).unwrap().0,
+                    "Later correction"
                 );
             }
         }

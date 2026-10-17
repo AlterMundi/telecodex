@@ -53,7 +53,8 @@ Later text/voice corrections retain their original ingress order even if ASR
 finishes late. A changed owner, entry native binding or Stop epoch prevents late
 preparation from admitting work. Queue, steer and native-submit boundaries recheck
 that authority after asynchronous waits; a first voice may atomically establish
-its own new native binding. Original voice records survive live-session deletion
+its own new native binding and carry other pending clips from that same entry
+generation. Human clear/rebind still retires them. Original voice records survive live-session deletion
 without becoming eligible for a replacement session. A restart retains interrupted preparation and
 uncertain ingress without rerunning transcription or replaying a native prompt.
 Playback interruption and selected worker cancellation remain separate concerns;

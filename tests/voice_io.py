@@ -206,6 +206,32 @@ def restart_reaps_owned_asr_group(binary):
     finally:j.close()
 
 
+
+def overlapping_first_voices_preserve_entry_generation(binary):
+    j=Voice(binary)
+    try:
+        j.prepare()
+        a=j.root/'first-voice';b=j.root/'later-voice'
+        first,_,first_digest=j.voice('NATURAL-ROUTE Start Alpha and Beta.',gate=a)
+        j.wait(lambda:first_digest in j.calls())
+        second,_,second_digest=j.voice('#Alpha Add the later voice correction.',gate=b)
+        j.wait(lambda:second_digest in j.calls())
+        assert j.row('SELECT native FROM interaction_voice_inputs ORDER BY update_id')==[(None,),(None,)]
+        a.touch()
+        j.wait(lambda:len(j.outputs)==5 and all(len(j.instructions(t))==1 and j.instructions(t)[0][1]=='accepted' for t in (7,8)))
+        b.touch()
+        j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
+        assert j.row('SELECT phase FROM interaction_voice_inputs ORDER BY update_id')==[('committed',),('committed',)]
+        assert 'later voice correction' in json.loads(j.instructions(7)[1][2])['text']
+        assert j.calls().count(first_digest)==j.calls().count(second_digest)==1
+        j.entry_send({'method':'turn/completed','params':{'threadId':j.entry,'turn':{'id':j.entry_turn,'status':'completed'}}})
+        j.answer(8,'Beta first-voice result.');j.answer(7,'Alpha received both first voices.')
+        j.wait(lambda:j.has('Beta first-voice result.',1) and j.has('Alpha received both first voices.',1))
+        j.idle()
+        print('PASS overlapping first voices share their own initial native binding and the later correction reaches its selected worker')
+    finally:j.close()
+
+
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     semantic_voice_and_responsive_corrections(binary)
@@ -213,3 +239,4 @@ if __name__=='__main__':
     late_interrupt_keeps_newer_execution(binary)
     post_commit_authority_change(binary)
     restart_reaps_owned_asr_group(binary)
+    overlapping_first_voices_preserve_entry_generation(binary)
