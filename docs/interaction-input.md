@@ -303,7 +303,9 @@ The stable `interaction_controller` envelope discovers two operations:
 
 New originals retain bounded opaque versions of up to 128 current canonical
 questions in the same capture transaction, before ASR. Bodies are not copied
-into originals. Versions bind the current proposal (including options), question
+into originals. The native input envelope reports how many question versions
+were retained and prompts current catalogue inspection when the utterance could
+answer work; it does not force an answer or claim hearing. Versions bind the current proposal (including options), question
 index and owned native scope, rather than a presentation timestamp. Reopening
 unchanged controls does not invalidate an original; even an identically worded
 next step is a different question version. An advanced question, including the next part of the same native

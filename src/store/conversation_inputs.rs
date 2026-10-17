@@ -63,6 +63,7 @@ impl ConversationVoice {
 impl ConversationInput {
     pub fn rendered(&self) -> String {
         let text = self.answer_text();
+        let questions = self.question_versions.as_ref().map(|v| v.len());
         if self.reply.as_ref().is_some_and(|r| r.context_only) {
             let guidance = if self
                 .reply
@@ -75,14 +76,20 @@ impl ConversationInput {
             };
             format!(
                 "[Device-reported conversational context]\n{}\nThis is contextual source metadata, not a human destination or answer selection and not proof of hearing. Interpret the original input below. {}\n\n{}",
-                serde_json::json!({"input_ref":self.id,"reply":self.reply,"focus":self.focus}),
+                serde_json::json!({"input_ref":self.id,"reply":self.reply,"focus":self.focus,"questions_at_capture":questions}),
                 guidance,
                 text
             )
         } else {
+            let guidance = if questions.is_some_and(|count| count > 0) {
+                " Owned native questions existed at capture. If this could answer work, inspect current interaction_controller capabilities/questions before selecting an answer. It may instead discuss or start another topic."
+            } else {
+                ""
+            };
             format!(
-                "[Original conversation input]\n{}\nController reference for this retained original; metadata is not human speech. Use this exact input_ref for its routing or creation, even when it is outside the recent-input window.\n\n{}",
-                serde_json::json!({"input_ref": self.id}),
+                "[Original conversation input]\n{}\nController reference for this retained original; metadata is not human speech. Use this exact input_ref for routing, creation or question interpretation, even outside the recent-input window.{}\n\n{}",
+                serde_json::json!({"input_ref": self.id,"questions_at_capture":questions}),
+                guidance,
                 text
             )
         }
