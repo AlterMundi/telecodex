@@ -13,6 +13,7 @@ let snapshot,
   controlIntent;
 const acknowledgmentRequests = new Map();
 let resolvedHistoryExpanded = false;
+let alertTrailOpened = false;
 const statuses = {
   active: "Working",
   idle: "Idle",
@@ -301,7 +302,8 @@ function alerts(data) {
   const unacknowledged = [...(data.incidents || []), ...(data.resolved_incidents || [])]
     .filter((i) => i.projection.processing_state === "open" && !i.acknowledgments.length).length;
   section.dataset.attention = String(unacknowledged > 0);
-  $("#operations-summary").textContent = `${unacknowledged ? "⚠ " : ""}Operational alerts · ${open} open`
+  if (!alertTrailOpened && unacknowledged > 0) { section.open = true; alertTrailOpened = true; }
+  $("#operations-summary").textContent = `${data.attention?.symbol ? data.attention.symbol + " " : unacknowledged ? "⚠ " : ""}Operational alerts · ${open} open`
     + (unacknowledged ? ` · ${unacknowledged} unacknowledged` : "");
   $("#alerts-state").textContent = data.state === "unavailable"
     ? "Alert service unavailable. Processing and delivery cannot be confirmed."
@@ -340,7 +342,8 @@ function alerts(data) {
       el("span", acknowledged ? "Acknowledged" : "Unacknowledged", "incident-badge"));
     // Legacy HMK producer IDs remain valid after the DMK project rename.
     const source = /^(hmk|dmk)-/.test(p.producer_id) ? "DMK (Memory)" : p.producer_id;
-    item.append(badges, el("h3", `${source} · ${p.phase}`),
+    const trailSymbol = !resolved && !acknowledged ? ({critical:"🔴",error:"🔴",warning:"🟠",info:"🔵"}[p.severity] || "") : "";
+    item.append(badges, el("h3", `${trailSymbol ? trailSymbol + " " : ""}${source} · ${p.phase}`),
       el("p", `Reported by: ${p.producer_id} · Resource: ${p.resource_ref || "Unspecified"}`, "note"),
       el("p", p.summary), el("p", p.processing_state === "resolved" ? `Previous action: ${p.action}` : p.action));
     const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";

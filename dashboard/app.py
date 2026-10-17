@@ -21,6 +21,8 @@ from init_data_py import errors, validate_by_signature
 from .provider import Provider, ProviderUnavailable
 from .alerts import Receiver as AlertsReceiver, AlertsUnavailable
 from .traffic import Traffic
+from .menu_attention import attention_projection
+from .operator import menu_selection
 
 
 def validate_launch(raw, bot_id):
@@ -50,6 +52,13 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     provider = provider or Provider(config)
     origin = config['origin']
     prefix = config.get('prefix', '/sessions')
+    launcher_origins = config.get('alerts', {}).get('launcher_origins', [])
+    if not isinstance(launcher_origins, list) or len(launcher_origins) > 8:
+        raise ValueError('Bounded exact launcher origins required')
+    for candidate in launcher_origins:
+        parsed = urlparse(candidate)
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
+            raise ValueError('Exact HTTPS launcher origin required')
     appearance = config.get('appearance_origin', '').rstrip('/')
     if appearance:
         u = urlparse(appearance)
@@ -116,7 +125,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     @app.middleware('http')
     async def boundaries(request, call_next):
         if request.method == 'POST':
-            if request.headers.get('origin') != origin:
+            allowed = launcher_origins if request.url.path == '/api/alerts/attention' else [origin]
+            if request.headers.get('origin') not in allowed:
                 return JSONResponse({'detail': 'Wrong request origin'}, status_code=403)
             # Bound chunked bodies as well as Content-Length before parsing them.
             data = bytearray()
@@ -242,6 +252,26 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         authorize(request)
         return result
 
+    @app.post('/api/alerts/attention')
+    async def launcher_attention(request: Request):
+        # Read-only signed-launch route. It mints no control/session credential.
+        try:
+            body = await request.json()
+            if not isinstance(body, dict) or set(body) != {'init_data'} or not isinstance(body['init_data'], str):
+                raise ValueError()
+            human = validator(body['init_data'], config['bot_id'])
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(401, 'Invalid or expired Telegram launch') from None
+        check_binding()
+        if not provider.authorized(human):
+            raise HTTPException(403, 'This account has no receiving alert grant')
+        view = alerts.snapshot() if alerts is not None else {'state':'not_configured'}
+        result = attention_projection(view)
+        check_binding()
+        if not provider.authorized(human):
+            raise HTTPException(403, 'Receiving grant unavailable')
+        return {**result, 'app_url':menu_selection(config)['web_app']['url']}
+
     @app.get('/api/alerts')
     def incidents(request: Request):
         session = authorize(request)
@@ -250,7 +280,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         except (OSError, sqlite3.Error, ValueError):
             raise HTTPException(503, 'Alerts receiving state unavailable') from None
         authorize(request)
-        return {**result, 'csrf': session['csrf']}
+        return {**result, 'attention':attention_projection(result), 'csrf': session['csrf']}
 
     @app.post('/api/alerts/acknowledge')
     async def acknowledge(request: Request):
