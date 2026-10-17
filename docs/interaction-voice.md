@@ -66,3 +66,6 @@ scripted ASR are fixtures, not speech-recognition or live Telegram evidence. Act
 Spanish/noise/hearing, accessible realtime comparison, TTS/playback/reconnect and
 one-button acceptance remain #118 and the linked Integrators tasks. The entire
 parent remains AlterMundi/daimon-matrix#313.
+
+The separate [speech rendering component](interaction-speech.md) provides a
+durable exact-text provider adapter. It is not yet wired to result playback.
