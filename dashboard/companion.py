@@ -21,9 +21,9 @@ def authority(config, provider):
 
 def permitted(method, path):
     if method == 'GET':
-        return re.fullmatch(r'/api/interaction(?:/(?:part|inputs(?:/[a-f0-9-]{36})?|requests(?:/[a-f0-9]{32}(?:/receipt)?)?))?', path) is not None
+        return re.fullmatch(r'/api/interaction(?:/(?:part|inputs(?:/[a-f0-9-]{36}(?:/image)?)?|requests(?:/[a-f0-9]{32}(?:/receipt)?)?))?', path) is not None
     if method == 'POST':
-        return path in ('/api/interaction/inputs', '/api/interaction/voice', '/api/interaction/audio') or re.fullmatch(r'/api/interaction/inputs/[a-f0-9-]{36}/route', path) is not None
+        return path in ('/api/interaction/inputs', '/api/interaction/voice', '/api/interaction/visual', '/api/interaction/audio') or re.fullmatch(r'/api/interaction/inputs/[a-f0-9-]{36}/route', path) is not None
     return False
 
 

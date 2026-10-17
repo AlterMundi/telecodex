@@ -11,12 +11,14 @@ struct Submit {
     id: String,
     text: String,
     #[serde(default)]
+    visual: Option<crate::visual::VisualReference>,
+    #[serde(default)]
     reply: Option<crate::store::ConversationReply>,
 }
 
 fn outcome(input: &ConversationInput, fresh: bool) -> Value {
     json!({"schema":"telecodex.conversation-input/v1","id":input.id,"phase":input.phase,
-        "new_input":fresh,"retired":input.retired,"text":input.text,"voice":input.voice,"routing":input.routing,
+        "new_input":fresh,"retired":input.retired,"text":input.text,"visual":input.visual,"voice":input.voice,"routing":input.routing,
         "entry_binding":[input.human,input.entry,input.session,input.native],"native_acceptance":if input.phase=="accepted" {"observed"}else{"unconfirmed"},
         "incorporation":"Not established by input retention or native acceptance"})
 }
@@ -170,13 +172,14 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     }
     let interruption_targets = super::voice::snapshot(app).await;
     let _ingress = app.shared.conversation_ingress.lock().await;
-    let (input, fresh) = app.shared.store.conversation_input_capture_reply(
+    let (input, fresh) = app.shared.store.conversation_input_capture_visual(
         human,
         cfg.entry(),
         &request.binding,
         &request.id,
         &request.text,
         request.reply,
+        request.visual,
     )?;
     if fresh && input.phase == "retained" {
         if let Err(error) = super::voice::INTERRUPT_TARGETS
@@ -328,6 +331,10 @@ async fn submit(app: App, input: ConversationInput) -> Result<()> {
     let id = input.id.clone();
     let human = input.human;
     let packet = CodexSteerRequest {
+        images: crate::visual::attachments(&app.shared.config.db_path, input.visual.as_ref())?
+            .into_iter()
+            .map(|a| a.path)
+            .collect(),
         admission_check: Some(Arc::new(move || {
             shared.store.conversation_input_validate(human, &id)
         })),
@@ -412,7 +419,10 @@ fn enqueue(
                 from_user_id: input.human,
                 prompt: input.rendered(),
                 runtime_instructions: None,
-                attachments: vec![],
+                attachments: crate::visual::attachments(
+                    &app.shared.config.db_path,
+                    input.visual.as_ref(),
+                )?,
                 review_mode: None,
                 override_search_mode: None,
             },
@@ -438,6 +448,8 @@ struct VoiceSubmit {
     id: String,
     audio_sha256: String,
     mime: String,
+    #[serde(default)]
+    visual: Option<crate::visual::VisualReference>,
     #[serde(default)]
     reply: Option<crate::store::ConversationReply>,
 }
@@ -507,6 +519,7 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
         voice,
         permit.is_some(),
         request.reply,
+        request.visual,
     )?;
     if fresh && input.phase == "preparing" {
         let worker = app.clone();

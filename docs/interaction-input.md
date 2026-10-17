@@ -391,3 +391,8 @@ approval exclusion, dispatch/creation exclusivity, exact answers and receipts
 after restart. Native/ASR peers are synthetic and no model inference or physical
 sensors are used; real interpretation quality is separate. Existing direct
 question-answer and finalized-voice journeys also pass this source.
+
+Selected still-image context uses the same original-input journal and native
+routing/steering path; see [selected visual context](interaction-visual.md).
+The optional browser selector captures a point in immutable evidence and does
+not open a camera or introduce another conversation owner.

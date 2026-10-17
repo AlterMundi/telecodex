@@ -13,6 +13,7 @@ mod store;
 mod telegram;
 mod transcribe;
 mod user_input;
+mod visual;
 mod voice;
 
 use anyhow::Result;

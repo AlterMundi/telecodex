@@ -50,9 +50,17 @@ if sys.argv[1:]!=['app-server','proxy']: sys.exit(7)"""))
         self.messages.clear();self.telegram_methods.clear()
 
 class Browser:
-    def __init__(self,j):
+    def __init__(self,j,companion=False):
         config={'receiver_config':str(j.config),'state_dir':str(j.root/'dashboard'),'origin':'https://example.test','bot_id':123}
-        self.client=TestClient(create_app(config,Provider(config),lambda raw,bot:int(raw)),base_url=config['origin'])
+        if companion:config['companion']={'enabled':True,'grants_dir':str(j.root/'companion-grants')}
+        self.provider=Provider(config)
+        self.client=TestClient(create_app(config,self.provider,lambda raw,bot:int(raw)),base_url=config['origin'])
+        if companion:
+            from dashboard.companion import Grants
+            destination=j.root/'device.json'
+            Grants(config,self.provider).enroll('Synthetic visual companion',destination,3600)
+            device=json.loads(destination.read_text())
+            self.device_headers={'origin':config['origin'],'authorization':device['authorization'],'x-dashboard-csrf':device['csrf']}
         self.headers={'origin':config['origin']}
         r=self.client.post('/api/session',json={'init_data':'100'},headers=self.headers);assert r.status_code==200,r.text
         self.headers['authorization']='Bearer '+r.json()['session_token']

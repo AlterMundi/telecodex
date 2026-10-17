@@ -203,6 +203,21 @@ impl Store {
         Ok(super::conversation_inputs::eligible_on(&conn, &input).is_ok())
     }
 
+    pub fn interaction_visual(
+        &self,
+        id: &str,
+        human: i64,
+    ) -> Result<Option<crate::visual::VisualReference>> {
+        let source = self.interaction_source(id, human)?;
+        if source.channel != "conversation" {
+            return Ok(None);
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let input = super::conversation_inputs::read_on(&conn, &source.event_id, human)?;
+        super::conversation_inputs::eligible_on(&conn, &input)?;
+        Ok(input.visual)
+    }
+
     pub fn interaction_source_order(&self, source: &SourceInput) -> Result<Option<i64>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         original_order_on(&conn, source)

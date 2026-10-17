@@ -186,6 +186,7 @@ pub type CodexSteerResponse = std::result::Result<Option<String>, CodexSteerErro
 pub type SteerAdmissionCheck = Arc<dyn Fn() -> Result<()> + Send + Sync>;
 
 pub struct CodexSteerRequest {
+    pub images: Vec<std::path::PathBuf>,
     /// Revalidate captured admission at the native write boundary, after any
     /// preparation or metadata wait. This callback is local, never wire input.
     pub admission_check: Option<SteerAdmissionCheck>,
@@ -1183,6 +1184,9 @@ where
                     .as_array_mut()
                     .context("native input array missing")?
                     .push(json!({"type":"text","text":text}));
+                for image in &steer.images {
+                    params["input"].as_array_mut().context("native input array missing")?.push(json!({"type":"localImage","path":sanitize_arg_path(image)}));
+                }
                 initial_steers.push(steer);
             } else {
                 queued_steers.push_back(steer);
@@ -1580,6 +1584,7 @@ async fn send_steer_request(
                 thread_id,
                 turn_id,
                 &steer.text,
+                &steer.images,
                 steer.client_message_id.as_deref(),
             ),
         )
@@ -1600,6 +1605,7 @@ fn build_turn_steer_params(
     thread_id: &str,
     turn_id: &str,
     text: &str,
+    images: &[std::path::PathBuf],
     client_id: Option<&str>,
 ) -> Value {
     let mut params = json!({
@@ -1607,6 +1613,12 @@ fn build_turn_steer_params(
         "input": [{"type": "text", "text": text}],
         "expectedTurnId": turn_id,
     });
+    for image in images {
+        params["input"]
+            .as_array_mut()
+            .expect("input array")
+            .push(json!({"type":"localImage","path":sanitize_arg_path(image)}));
+    }
     if let Some(id) = client_id {
         params["clientUserMessageId"] = json!(id);
     }
@@ -3087,6 +3099,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                images: vec![],
                 admission_check: None,
                 text: "Change the work while approval is pending".into(),
                 client_message_id: Some("correction-input".into()),
@@ -3174,6 +3187,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                images: vec![],
                 admission_check: None,
                 text: "Correct the request before starting".into(),
                 client_message_id: Some("prepared-correction".into()),
@@ -3656,7 +3670,7 @@ while True:
     #[test]
     fn builds_turn_steer_params_for_the_active_turn() {
         assert_eq!(
-            build_turn_steer_params("thread-1", "turn-7", "change direction", None),
+            build_turn_steer_params("thread-1", "turn-7", "change direction", &[], None),
             json!({
                 "threadId": "thread-1",
                 "input": [{"type": "text", "text": "change direction"}],
@@ -3667,8 +3681,13 @@ while True:
 
     #[test]
     fn steering_identity_does_not_change_expected_turn_or_user_text() {
-        let params =
-            build_turn_steer_params("thread-1", "turn-7", "correction", Some("telegram:1:100:6"));
+        let params = build_turn_steer_params(
+            "thread-1",
+            "turn-7",
+            "correction",
+            &[],
+            Some("telegram:1:100:6"),
+        );
         assert_eq!(params["clientUserMessageId"], "telegram:1:100:6");
         assert_eq!(params["expectedTurnId"], "turn-7");
         assert_eq!(params["input"][0]["text"], "correction");

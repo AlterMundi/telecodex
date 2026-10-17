@@ -13,6 +13,8 @@ pub struct ConversationInput {
     pub native: String,
     pub epoch: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual: Option<crate::visual::VisualReference>,
     /// Bounded owned question versions present before capture/ASR, not device hints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_versions: Option<std::collections::BTreeMap<String, String>>,
@@ -62,7 +64,14 @@ impl ConversationVoice {
 }
 impl ConversationInput {
     pub fn rendered(&self) -> String {
-        let text = self.answer_text();
+        let text = format!(
+            "{}{}",
+            self.visual
+                .as_ref()
+                .map(|v| v.rendered())
+                .unwrap_or_default(),
+            self.answer_text()
+        );
         let questions = self.question_versions.as_ref().map(|v| v.len());
         if self.reply.as_ref().is_some_and(|r| r.context_only) {
             let guidance = if self
@@ -94,6 +103,19 @@ impl ConversationInput {
             )
         }
     }
+    pub fn question_answer_text(&self, db: &std::path::Path) -> String {
+        let Some(visual) = self.visual.as_ref() else {
+            return self.answer_text();
+        };
+        format!(
+            "{}Retained image file: {}\nInspect these exact bytes with the image-reading tool before interpreting this answer; if unavailable, ask rather than substituting another view. This path is controller metadata, not human speech.\n\n{}",
+            visual.rendered(),
+            serde_json::to_string(&crate::visual::image_path(db, &visual.image_sha256))
+                .expect("image path"),
+            self.answer_text()
+        )
+    }
+
     /// Preserve original speech attribution without copying device focus into
     /// the native question's answer as if it were human speech.
     pub fn answer_text(&self) -> String {
@@ -156,6 +178,12 @@ pub(super) fn eligible_on(conn: &Connection, input: &ConversationInput) -> Resul
     {
         bail!("Original conversation input binding or admission generation retired");
     }
+    if let Some(visual) = input.visual.as_ref() {
+        crate::visual::attachments(
+            std::path::Path::new(conn.path().context("Image storage unavailable")?),
+            Some(visual),
+        )?;
+    }
     Ok(())
 }
 
@@ -205,6 +233,7 @@ impl Store {
         self.conversation_input_capture_reply(human, entry, binding, id, text, None)
     }
 
+    #[cfg(test)]
     pub fn conversation_input_capture_reply(
         &self,
         human: i64,
@@ -214,7 +243,7 @@ impl Store {
         text: &str,
         reply: Option<ConversationReply>,
     ) -> Result<(ConversationInput, bool)> {
-        self.capture_original(human, entry, binding, id, text, None, true, reply)
+        self.capture_original(human, entry, binding, id, text, None, true, reply, None)
     }
 
     #[cfg(test)]
@@ -240,6 +269,7 @@ impl Store {
             Some(voice),
             can_prepare,
             None,
+            None,
         )
     }
 
@@ -253,6 +283,7 @@ impl Store {
         voice: ConversationVoice,
         can_prepare: bool,
         reply: Option<ConversationReply>,
+        visual: Option<crate::visual::VisualReference>,
     ) -> Result<(ConversationInput, bool)> {
         voice.validate()?;
         if voice.transcription.is_some() {
@@ -267,7 +298,22 @@ impl Store {
             Some(voice),
             can_prepare,
             reply,
+            visual,
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn conversation_input_capture_visual(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        text: &str,
+        reply: Option<ConversationReply>,
+        visual: Option<crate::visual::VisualReference>,
+    ) -> Result<(ConversationInput, bool)> {
+        self.capture_original(human, entry, binding, id, text, None, true, reply, visual)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -281,6 +327,7 @@ impl Store {
         voice: Option<ConversationVoice>,
         can_prepare: bool,
         reply: Option<ConversationReply>,
+        visual: Option<crate::visual::VisualReference>,
     ) -> Result<(ConversationInput, bool)> {
         if Uuid::parse_str(id)
             .ok()
@@ -305,6 +352,7 @@ impl Store {
         if existing {
             let input = read_on(&tx, id, human)?;
             if input.entry != entry
+                || input.visual != visual
                 || input.reply != reply
                 || match (&input.voice, &voice) {
                     (None, None) => input.text != text,
@@ -315,6 +363,13 @@ impl Store {
                 bail!("Original conversation input identity is immutable");
             }
             return Ok((input, false));
+        }
+        if let Some(reference) = visual.as_ref() {
+            reference.validate(true)?;
+            crate::visual::attachments(
+                std::path::Path::new(tx.path().context("Image storage unavailable")?),
+                Some(reference),
+            )?;
         }
         let question_override = voice.is_none()
             && crate::interaction::explicit_selector(text).is_some()
@@ -342,6 +397,7 @@ impl Store {
             native,
             epoch: super::stopping::admission_epoch_on(&tx, entry)?,
             text: text.into(),
+            visual,
             question_versions: Some(super::conversation_requests::capture_questions_on(
                 &tx, human, entry,
             )?),
@@ -474,7 +530,7 @@ impl Store {
             let input = read_on(&conn, id, human)?;
             items.push(serde_json::json!({
                 "id":id,"sequence":sequence,"preview":input.text.chars().take(1000).collect::<String>(),
-                "phase":input.phase,"retired":input.retired,"voice":input.voice,"routing":input.routing,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
+                "phase":input.phase,"retired":input.retired,"visual":input.visual,"voice":input.voice,"routing":input.routing,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
                 "clarifiable":input.phase=="awaiting_target" && eligible_on(&conn,&input).is_ok(),
                 "native_binding_current":input.native==native,
             }));

@@ -279,10 +279,13 @@ class Provider:
         return value
 
     def conversation_input_submit(self, body):
-        if not isinstance(body, dict) or set(body) not in ({'binding', 'id', 'text'}, {'binding', 'id', 'text', 'reply'}):
+        if not isinstance(body, dict) or not {'binding','id','text'} <= set(body) or set(body)-{'binding','id','text','reply','visual'}:
             raise ValueError('Select the conversation and provide one original message')
         self.input_id(body['id'])
         self.check_reply(body.get('reply'))
+        from .visual import check_reference
+        check_reference(body.get('visual'))
+        self.check_visual_original(body.get('visual'),body['id'])
         import re
         if (not isinstance(body['binding'], str) or not re.fullmatch('[a-f0-9]{64}', body['binding'])
                 or not isinstance(body['text'], str) or not body['text'].strip()
@@ -290,6 +293,42 @@ class Provider:
             raise ValueError('A message must contain text and fit within 32 KiB')
         # The Rust journal owns idempotency and exact-source checks. No retry.
         return self.decorate_input(self.presentation('input submit ' + json.dumps(body, ensure_ascii=False)))
+
+    def check_visual_original(self,value,ident):
+        if value is None:return
+        self.assert_binding()
+        if not self.authorized(self.human):raise ProviderUnavailable('Conversation unavailable')
+        from .visual import check_reference,read_png,png_dimensions,VisualSelectionInvalid
+        with closing(readonly(self.receiver['db_path'])) as db:
+            existing=db.execute('SELECT 1 FROM conversation_inputs WHERE id=? AND human_id=?',(ident,self.human)).fetchone()
+        if not existing:
+            check_reference(value,fresh=True)
+            path=Path(str(self.receiver['db_path'])+'.visual')/value['image_sha256']
+            try:
+                data=read_png(path,value['image_sha256'])
+                if png_dimensions(data)!=(value['width'],value['height']):raise ValueError('Selected dimensions changed')
+            except (ValueError,OSError):raise VisualSelectionInvalid('Selected image unavailable. Select it again.') from None
+
+    def conversation_visual_upload(self, data, expected):
+        import re
+        if not isinstance(expected,str) or not re.fullmatch('[a-f0-9]{64}',expected):
+            raise ValueError('Select immutable image bytes')
+        self.assert_binding()
+        if not self.receiver.get('interaction') or not self.authorized(self.human):
+            raise ProviderUnavailable('Conversation unavailable')
+        from .visual import retain_png
+        result=retain_png(self.receiver['db_path'],data,expected)
+        self.assert_binding()
+        if not self.authorized(self.human):raise ProviderUnavailable('Conversation grant changed')
+        return result
+
+    def conversation_visual_image(self, ident):
+        self.input_id(ident)
+        original=self.conversation_input_status(ident)
+        ref=original.get('visual')
+        if not isinstance(ref,dict):raise ValueError('No selected image')
+        from .visual import read_png
+        return read_png(Path(str(self.receiver['db_path'])+'.visual')/ref['image_sha256'],ref['image_sha256'])
 
     @classmethod
     def check_reply(cls, value):
@@ -320,10 +359,13 @@ class Provider:
 
     def conversation_voice_submit(self, metadata, data):
         import re
-        if not isinstance(metadata, dict) or set(metadata) not in ({'binding', 'id', 'audio_sha256', 'mime'}, {'binding', 'id', 'audio_sha256', 'mime', 'reply'}):
+        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual'}:
             raise ValueError('Select one original voice recording')
         self.input_id(metadata['id'])
         self.check_reply(metadata.get('reply'))
+        from .visual import check_reference
+        check_reference(metadata.get('visual'))
+        self.check_visual_original(metadata.get('visual'),metadata['id'])
         if (not isinstance(data, bytes) or not 0 < len(data) <= 20*1024*1024
                 or any(not isinstance(metadata[k], str) or not re.fullmatch('[a-f0-9]{64}', metadata[k]) for k in ('binding', 'audio_sha256'))
                 or metadata['mime'] not in ('audio/webm', 'audio/webm;codecs=opus', 'audio/ogg', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/wav', 'audio/mpeg')
