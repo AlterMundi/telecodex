@@ -6,6 +6,8 @@ pub(super) struct PendingDialogue {
     pub local_turn_id: i64,
     pub request_id: NativeRequestId,
     session: SessionKey,
+    native_session: SessionKey,
+    return_parent: Option<i64>,
     requester: i64,
     request: UserInputRequest,
     index: usize,
@@ -89,8 +91,25 @@ async fn show_question(
                 inline_keyboard: rows.clone(),
             });
         }
-        // Controls must never fall back to a different Telegram topic.
-        let message = shared.telegram.send_message(outgoing).await?;
+        outgoing.reply_parameters =
+            pending
+                .return_parent
+                .map(|message_id| crate::telegram::ReplyParameters {
+                    message_id,
+                    allow_sending_without_reply: false,
+                });
+        // Controls must never fall back to another topic or open after retirement.
+        let message = shared
+            .telegram
+            .send_message_checked(pending.session.chat_id, || {
+                if pending.closed.is_cancelled() || pending.responder.is_closed() {
+                    return Ok(None);
+                }
+                Ok(Some((outgoing, ())))
+            })
+            .await?
+            .map(|(m, _)| m)
+            .context("Native question retired before publication")?;
         if message.chat.id != pending.session.chat_id
             || message.message_thread_id.unwrap_or(0) != pending.session.thread_id
         {
@@ -105,14 +124,72 @@ async fn show_question(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn begin_dialogue(
     shared: Arc<AppShared>,
-    session: SessionKey,
+    native_session: SessionKey,
     local_turn_id: i64,
     requester: i64,
     request_id: NativeRequestId,
     request: UserInputRequest,
     closed: CancellationToken,
+    return_route: Option<crate::interaction::ReturnRoute>,
+) -> Result<oneshot::Receiver<UserInputDecision>> {
+    request.validate()?;
+    let (tx, rx) = oneshot::channel();
+    // Telegram cooldown/delivery must not hold the native event pump.
+    tokio::spawn(async move {
+        let surface = return_route
+            .as_ref()
+            .map(|r| SessionKey::new(r.chat_id, Some(r.thread_id)))
+            .unwrap_or(native_session);
+        let closure = closed.clone();
+        match publish_dialogue(
+            shared.clone(),
+            native_session,
+            local_turn_id,
+            requester,
+            request_id,
+            request,
+            closed,
+            return_route.clone(),
+        )
+        .await
+        {
+            Ok(receiver) => {
+                if let Ok(decision) = receiver.await {
+                    let _ = tx.send(decision);
+                }
+            }
+            Err(_) => {
+                tracing::warn!("Native question publication could not be confirmed");
+                let retired = closure.is_cancelled();
+                let _ = tx.send(UserInputDecision::Cancel);
+                if !retired {
+                    let mut message = SendMessage::html(surface.chat_id,Some(surface.thread_id).filter(|id|*id!=0),"Native question delivery did not confirm its Telegram topic. No answer was sent; turn cancellation was requested.".into());
+                    message.reply_parameters =
+                        return_route.map(|r| crate::telegram::ReplyParameters {
+                            message_id: r.message_id,
+                            allow_sending_without_reply: false,
+                        });
+                    let _ = shared.telegram.send_message(message).await;
+                }
+            }
+        }
+    });
+    Ok(rx)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn publish_dialogue(
+    shared: Arc<AppShared>,
+    native_session: SessionKey,
+    local_turn_id: i64,
+    requester: i64,
+    request_id: NativeRequestId,
+    request: UserInputRequest,
+    closed: CancellationToken,
+    return_route: Option<crate::interaction::ReturnRoute>,
 ) -> Result<oneshot::Receiver<UserInputDecision>> {
     request.validate()?;
     let token = Uuid::now_v7().simple().to_string();
@@ -120,7 +197,12 @@ pub(super) async fn begin_dialogue(
     let mut pending = PendingDialogue {
         local_turn_id,
         request_id,
-        session,
+        session: return_route
+            .as_ref()
+            .map(|r| SessionKey::new(r.chat_id, Some(r.thread_id)))
+            .unwrap_or(native_session),
+        native_session,
+        return_parent: return_route.as_ref().map(|r| r.message_id),
         requester,
         request,
         index: 0,
@@ -132,7 +214,7 @@ pub(super) async fn begin_dialogue(
         closed,
     };
     let first = &pending.request.questions[0];
-    shared.store.save_interaction(session, &crate::store::HumanInteraction {
+    shared.store.save_interaction(native_session, &crate::store::HumanInteraction {
         id: token.clone(), kind: "native".into(), state: "pending".into(), requester,
         native_thread: pending.request.thread_id.clone(), local_turn: local_turn_id,
         title: first.header.clone(), action: first.question.clone(), blocking: pending.request.is_blocking,
@@ -193,7 +275,7 @@ async fn answer(
     pending.awaiting_text = false;
     if pending.index == pending.request.questions.len() {
         shared.store.transition_interaction(
-            pending.session,
+            pending.native_session,
             pending.requester,
             &token,
             "pending",
@@ -343,9 +425,13 @@ pub(super) async fn handle_callback(
     } else if action == "cancel" {
         let pending = guard.remove(token).expect("checked pending question");
         drop(guard);
-        shared
-            .store
-            .transition_interaction(key, user, token, "pending", "cancelled")?;
+        shared.store.transition_interaction(
+            pending.native_session,
+            user,
+            token,
+            "pending",
+            "cancelled",
+        )?;
         let _ = pending.responder.send(UserInputDecision::Cancel);
     } else {
         let value = guard.get(token).and_then(|p| {

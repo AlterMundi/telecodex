@@ -80,6 +80,7 @@ impl Drop for CodexHomeGuard {
 
 fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
     Config {
+        interaction: None,
         nexus: None,
         session_control: None,
         tribu: None,
@@ -148,6 +149,7 @@ fn sample_app() -> (App, NamedTempFile) {
         history_page_cache: Mutex::new(HistoryPageCache::default()),
         pending_approvals: Mutex::new(HashMap::new()),
         pending_questions: Mutex::new(HashMap::new()),
+        routing_runs: StdMutex::new(HashMap::new()),
         pending_task_text: Mutex::new(HashMap::new()),
         pending_icon_pickers: Mutex::new(HashMap::new()),
         pending_goal_controls: Mutex::new(HashMap::new()),
@@ -200,7 +202,7 @@ async fn maintenance_hold_blocks_queued_turn_and_public_admission() {
         )
         .unwrap();
     let result = turns::process_turn(
-        app.shared.clone(),
+        app.clone(),
         Arc::new(StdMutex::new(None)),
         Arc::new(StdMutex::new(None)),
         QueuedTurn {
@@ -210,10 +212,12 @@ async fn maintenance_hold_blocks_queued_turn_and_public_admission() {
             tribu_admission: Some("queued-before-hold".into()),
             goal: None,
             stop_resume: None,
+            interaction: None,
             admission_epoch: app.shared.store.stop_admission_epoch(key).unwrap(),
             nexus: None,
             merge: None,
         },
+        None,
     )
     .await
     .unwrap_err();
@@ -1954,6 +1958,7 @@ fn rebinds_stale_session_to_latest_active_thread_for_same_cwd() {
         history_page_cache: Mutex::new(HistoryPageCache::default()),
         pending_approvals: Mutex::new(HashMap::new()),
         pending_questions: Mutex::new(HashMap::new()),
+        routing_runs: StdMutex::new(HashMap::new()),
         pending_task_text: Mutex::new(HashMap::new()),
         pending_icon_pickers: Mutex::new(HashMap::new()),
         pending_goal_controls: Mutex::new(HashMap::new()),
@@ -2075,6 +2080,7 @@ fn keeps_truly_archived_session_unbound_when_no_active_replacement_exists() {
         history_page_cache: Mutex::new(HistoryPageCache::default()),
         pending_approvals: Mutex::new(HashMap::new()),
         pending_questions: Mutex::new(HashMap::new()),
+        routing_runs: StdMutex::new(HashMap::new()),
         pending_task_text: Mutex::new(HashMap::new()),
         pending_icon_pickers: Mutex::new(HashMap::new()),
         pending_goal_controls: Mutex::new(HashMap::new()),
@@ -2417,6 +2423,7 @@ async fn retired_queue_packet_never_runs_after_stop_release() {
         nexus: None,
         merge: None,
         stop_resume: None,
+        interaction: None,
         admission_epoch: app.shared.store.stop_admission_epoch(key).unwrap(),
     };
     let (mut op, _) = app.shared.store.stop_begin(100, "maintenance").unwrap();
@@ -2438,10 +2445,11 @@ async fn retired_queue_packet_never_runs_after_stop_release() {
         .await;
     // Dequeue after release. No HTTP/native fixture is available: any execution fails.
     process_turn(
-        app.shared.clone(),
+        app.clone(),
         Arc::new(StdMutex::new(None)),
         Arc::new(StdMutex::new(None)),
         packet,
+        None,
     )
     .await
     .unwrap();

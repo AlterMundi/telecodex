@@ -93,6 +93,10 @@ pub enum CodexEvent {
     ThreadStarted(String),
     NativeTurnStarted(String),
     NativeInputAccepted(String),
+    NativeSteerAccepted {
+        client_id: String,
+        turn_id: String,
+    },
     NativeInputRejected,
     NativeTurnSubmitting,
     NativeTurnTerminal {
@@ -147,7 +151,12 @@ pub enum CodexSteerError {
 pub type CodexSteerResponse = std::result::Result<Option<String>, CodexSteerError>;
 
 /// Plain-text input waiting to be appended to an active Codex turn.
+pub type SteerAdmissionCheck = Arc<dyn Fn() -> Result<()> + Send + Sync>;
+
 pub struct CodexSteerRequest {
+    /// Revalidate captured admission at the native write boundary, after any
+    /// preparation or metadata wait. This callback is local, never wire input.
+    pub admission_check: Option<SteerAdmissionCheck>,
     /// User text to append to the in-flight turn.
     pub text: String,
     pub client_message_id: Option<String>,
@@ -157,6 +166,7 @@ pub struct CodexSteerRequest {
 }
 
 struct PendingSteer {
+    client_id: Option<String>,
     expected_turn_id: String,
     response: oneshot::Sender<CodexSteerResponse>,
 }
@@ -925,7 +935,14 @@ where
     F: FnMut(CodexEvent) -> Fut,
     Fut: std::future::Future<Output = Result<CodexEventOutcome>>,
 {
+    let preparation_started = Instant::now();
+    tracing::debug!(stage = "proxy_start", "native turn preparation");
     let mut process = AppServerProcess::spawn(binary, shared_app_server).await?;
+    tracing::debug!(
+        stage = "initialize",
+        elapsed_ms = preparation_started.elapsed().as_millis(),
+        "native turn preparation"
+    );
     process.initialize().await?;
     if let Some(mode) = session.collaboration_mode {
         let id = process
@@ -949,9 +966,19 @@ where
             );
         }
     }
+    tracing::debug!(
+        stage = "thread_binding",
+        elapsed_ms = preparation_started.elapsed().as_millis(),
+        "native turn preparation"
+    );
     let (thread_id, native_model) = process
         .start_or_resume_thread(session, request, bounded.is_some())
         .await?;
+    tracing::debug!(
+        stage = "thread_bound",
+        elapsed_ms = preparation_started.elapsed().as_millis(),
+        "native turn preparation"
+    );
     let mut effective_session = session.clone();
     effective_session.model = session.model.clone().or(native_model);
     if session.collaboration_mode.is_some() && effective_session.model.is_none() {
@@ -1065,6 +1092,35 @@ where
             json!({"kind":"application","value":awareness});
     }
     let _ = on_event(CodexEvent::NativeTurnSubmitting).await?;
+    // Inputs already queued during preparation belong in the initial packet,
+    // before a fast model can finish the earlier request without seeing them.
+    let mut initial_steers = Vec::new();
+    let mut queued_steers = VecDeque::new();
+    if adopted_turn.is_none() {
+        while let Ok(steer) = steer_rx.try_recv() {
+            if let Some(check) = &steer.admission_check
+                && let Err(error) = check()
+            {
+                let _ = steer
+                    .response
+                    .send(Err(CodexSteerError::Rejected(error.to_string())));
+                continue;
+            }
+            if steer.goal.is_none() {
+                let text = match &steer.client_message_id {
+                    Some(id) => format!("Additional admitted input {id}:\n{}", steer.text),
+                    None => steer.text.clone(),
+                };
+                params["input"]
+                    .as_array_mut()
+                    .context("native input array missing")?
+                    .push(json!({"type":"text","text":text}));
+                initial_steers.push(steer);
+            } else {
+                queued_steers.push_back(steer);
+            }
+        }
+    }
     if cancel.is_cancelled() {
         bail!("cancelled before native submission");
     }
@@ -1082,7 +1138,6 @@ where
     }
     let mut active_turn_id: Option<String> = adopted_turn;
     let mut interrupt_request_id: Option<u64> = None;
-    let mut queued_steers = VecDeque::new();
     let mut pending_steers = HashMap::new();
     let mut steering_open = true;
     let mut cancel_deadline: Option<Instant> = None;
@@ -1198,7 +1253,10 @@ where
                     }
                 } else if Some(id)==turn_request_id{
                     if let Some(error)=error{
-                        let _=on_event(CodexEvent::NativeInputRejected).await?;
+                        if matches!(error.code,Some(-32602..=-32600)) { let _=on_event(CodexEvent::NativeInputRejected).await?; }
+                        for steer in initial_steers.drain(..) {
+                            let _=steer.response.send(steer_response("",None,Some(&error)));
+                        }
                         turn_error=Some(format_rpc_error(&error));
                         break;
                     }
@@ -1206,6 +1264,10 @@ where
                         active_turn_id=Some(turn_id.to_string());
                         let _=on_event(CodexEvent::NativeTurnStarted(turn_id.to_string())).await?;
                         let _=on_event(CodexEvent::NativeInputAccepted(turn_id.to_string())).await?;
+                        for steer in initial_steers.drain(..) {
+                            if let Some(client_id)=steer.client_message_id {let _=on_event(CodexEvent::NativeSteerAccepted {client_id,turn_id:turn_id.to_owned()}).await?;}
+                            let _=steer.response.send(Ok(Some(turn_id.to_owned())));
+                        }
                     }
                 } else if goal_activation_id == Some(id) {
                     goal_activation_pending=false;
@@ -1214,7 +1276,11 @@ where
                     goal_active=goal.status=="active";
                     let _=on_event(CodexEvent::Progress(format!("Goal {}", goal.status))).await?;
                 } else if let Some(pending)=pending_steers.remove(&id) {
-                    let _=pending.response.send(steer_response(&pending.expected_turn_id,result.as_ref(),error.as_ref()));
+                    let response=steer_response(&pending.expected_turn_id,result.as_ref(),error.as_ref());
+                    if let (Some(client_id),Ok(Some(turn_id)))=(&pending.client_id,&response) {
+                        let _=on_event(CodexEvent::NativeSteerAccepted {client_id:client_id.clone(),turn_id:turn_id.clone()}).await?;
+                    }
+                    let _=pending.response.send(response);
                 } else if interrupt_request_id==Some(id) {
                     if let Some(error)=error {
                         turn_error=Some(format!("turn/interrupt failed: {}",format_rpc_error(&error)));
@@ -1298,6 +1364,11 @@ where
         turn_error =
             Some("native event stream ended before the selected turn completed".to_string());
     }
+    for steer in initial_steers {
+        let _ = steer.response.send(Err(CodexSteerError::Undetermined(
+            "Initial packet admission was not confirmed".into(),
+        )));
+    }
     reject_outstanding_steers(queued_steers, pending_steers);
     for closed in open_inputs.into_values() {
         closed.cancel();
@@ -1366,6 +1437,14 @@ async fn send_steer_request(
     steer: CodexSteerRequest,
     pending_steers: &mut HashMap<u64, PendingSteer>,
 ) -> Result<()> {
+    if let Some(check) = &steer.admission_check
+        && let Err(error) = check()
+    {
+        let _ = steer
+            .response
+            .send(Err(CodexSteerError::Rejected(error.to_string())));
+        return Ok(());
+    }
     let request_id = process
         .send_request(
             "turn/steer",
@@ -1380,6 +1459,7 @@ async fn send_steer_request(
     pending_steers.insert(
         request_id,
         PendingSteer {
+            client_id: steer.client_message_id,
             expected_turn_id: turn_id.to_string(),
             response: steer.response,
         },
@@ -1698,7 +1778,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -2873,6 +2953,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                admission_check: None,
                 text: "Change the work while approval is pending".into(),
                 client_message_id: Some("correction-input".into()),
                 goal: None,
@@ -2899,6 +2980,106 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(2), approval_response.closed())
             .await
             .unwrap();
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prepared_correction_is_in_initial_packet_and_recorded_before_output() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let binary = proxy_fixture(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(message) = socket.next().await {
+                let message = message.unwrap();
+                if message.is_close() {
+                    break;
+                }
+                let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                let id = &request["id"];
+                let result = match request["method"].as_str() {
+                    Some("initialize") => json!({}),
+                    Some("initialized") => continue,
+                    Some("thread/start") => {
+                        json!({"thread":{"id":"prepared-thread"},"model":"synthetic-model"})
+                    }
+                    Some("thread/goal/get") => json!({"goal":null}),
+                    Some("turn/start") => {
+                        assert_eq!(request["params"]["input"].as_array().unwrap().len(), 2);
+                        assert!(
+                            request["params"]["input"][1]["text"]
+                                .as_str()
+                                .unwrap()
+                                .contains("prepared-correction")
+                        );
+                        socket
+                            .send(WsMessage::Text(
+                                json!({"id":id,"result":{"turn":{"id":"prepared-turn"}}})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .unwrap();
+                        socket.send(WsMessage::Text(json!({"method":"item/completed","params":{"threadId":"prepared-thread","turnId":"prepared-turn","item":{"type":"agentMessage","id":"answer","phase":"final_answer","text":"Corrected answer"}}}).to_string().into())).await.unwrap();
+                        socket.send(WsMessage::Text(json!({"method":"turn/completed","params":{"threadId":"prepared-thread","turn":{"id":"prepared-turn","status":"completed"}}}).to_string().into())).await.unwrap();
+                        break;
+                    }
+                    other => panic!("Unexpected request: {other:?}"),
+                };
+                socket
+                    .send(WsMessage::Text(
+                        json!({"id":id,"result":result}).to_string().into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let (steer, receiver) = mpsc::unbounded_channel();
+        let (response, received) = oneshot::channel();
+        steer
+            .send(CodexSteerRequest {
+                admission_check: None,
+                text: "Correct the request before starting".into(),
+                client_message_id: Some("prepared-correction".into()),
+                goal: None,
+                response,
+            })
+            .unwrap();
+        let runner = CodexRunner::new(binary).with_shared_app_server(true);
+        let mut request = review_request();
+        request.review_mode = None;
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events = observed.clone();
+        let summary = runner
+            .run_turn(
+                &session_with_sandbox("read-only"),
+                &request,
+                CancellationToken::new(),
+                receiver,
+                move |event| {
+                    let mut events = events.lock().unwrap();
+                    match event {
+                        CodexEvent::NativeSteerAccepted { client_id, turn_id } => {
+                            assert_eq!(client_id, "prepared-correction");
+                            assert_eq!(turn_id, "prepared-turn");
+                            events.push("accepted");
+                        }
+                        CodexEvent::NativeMessageCompleted { .. } => events.push("output"),
+                        _ => {}
+                    }
+                    async { Ok(CodexEventOutcome::None) }
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(summary.assistant_text, "Corrected answer");
+        assert_eq!(*observed.lock().unwrap(), vec!["accepted", "output"]);
+        assert_eq!(
+            received.await.unwrap().unwrap(),
+            Some("prepared-turn".into())
+        );
         server.await.unwrap();
     }
 

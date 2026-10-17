@@ -27,6 +27,7 @@ pub struct Config {
     pub tribu: Option<TribuConfig>,
     pub nexus: Option<crate::nexus::NexusConfig>,
     pub session_control: Option<SessionControlConfig>,
+    pub interaction: Option<crate::interaction::InteractionConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -183,6 +184,19 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
+        if let Some(interaction) = &self.interaction {
+            interaction.validate()?;
+            if !self.codex.shared_app_server {
+                bail!("Interaction requires the selected shared native App Server");
+            }
+            if self.tribu.as_ref().is_some_and(|p| {
+                p.key() == interaction.entry()
+                    || interaction.target(p.topic_id).is_some() && p.chat_id == interaction.chat_id
+            }) {
+                bail!("Interaction entry/targets cannot overlap the bounded I/O profile");
+            }
+        }
+
         if self.session_control.as_ref().is_some_and(|c| {
             !c.socket_path.is_absolute() || c.human_id <= 0 || !self.codex.shared_app_server
         }) {

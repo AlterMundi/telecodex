@@ -4,6 +4,7 @@ mod codex_history;
 mod commands;
 mod config;
 mod control_client;
+mod interaction;
 mod limits;
 mod models;
 mod nexus;

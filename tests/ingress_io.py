@@ -280,6 +280,7 @@ if sys.argv[1:]==['login','status']:
     print('Logged in using synthetic local auth'); sys.exit(0)
 if sys.argv[1:]!=['app-server','proxy']: sys.exit(7)
 s=socket.create_connection(('127.0.0.1',{native.server_address[1]}),timeout=20)
+s.settimeout(None)  # Startup is bounded; an idle persistent native stream is valid.
 def upload():
     while True:
         data=os.read(0,8192)
@@ -359,11 +360,18 @@ while True:
                         else:
                             started.wait(12)
                         if stalled_steer:
-                            deadline = time.monotonic() + 8
+                            # Local running rows precede native preparation. Wait
+                            # for all actual starts so input six exercises the
+                            # active steer RPC rather than the pre-start batch.
+                            deadline = time.monotonic() + 12
+                            all_started = False
                             while time.monotonic() < deadline:
-                                with sqlite3.connect(root / 'state.sqlite') as db:
-                                    if db.execute("select count(*) from turns where status='running'").fetchone()[0] == 5: break
+                                with rpc_lock:
+                                    all_started = sum(method == 'turn/start' for method, _ in rpc) == 5
+                                if all_started:
+                                    break
                                 time.sleep(.02)
+                            assert all_started, 'Active-steer precondition: five native starts were not observed'
                         result = [update(6 if stalled_steer else 2, 'second human input')]
                     elif poll == 3 and stalled_steer:
                         steered.wait(8)

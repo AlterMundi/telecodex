@@ -23,10 +23,12 @@ import time
 
 
 class Journey:
-    def __init__(self, binary, mode):
+    def __init__(self, binary, mode, *, state=None, resume=False):
         self.binary, self.mode = binary, mode
-        self.temporary = tempfile.TemporaryDirectory(prefix='telecodex-questions-')
-        self.root = pathlib.Path(self.temporary.name)
+        self.temporary = None if state else tempfile.TemporaryDirectory(prefix='telecodex-questions-')
+        self.root = pathlib.Path(state) if state else pathlib.Path(self.temporary.name)
+        if state:
+            self.root.mkdir(parents=True, mode=0o700, exist_ok=resume)
         self.lock = threading.RLock()
         self.updates = collections.deque()
         self.rpc, self.messages, self.answers, self.errors = [], [], [], []
@@ -83,9 +85,16 @@ class Journey:
                     result = True
                 if owner.mode == 'restart_gap' and method == 'sendMessage' and payload['text'].startswith('Codex question'):
                     owner.delivery_reply.wait(timeout=10)
+                if method == 'sendChatAction' and hasattr(owner, 'before_send_chat_action_reply'):
+                    owner.before_send_chat_action_reply(payload)
+                response = {'ok': True, 'result': result}
                 if method == 'sendMessage' and hasattr(owner, 'before_send_message_reply'):
-                    owner.before_send_message_reply(payload)
-                body = json.dumps({'ok': True, 'result': result}).encode()
+                    override = owner.before_send_message_reply(payload)
+                    if override is False:
+                        return  # Synthetic receipt lost after the request was observed.
+                    if isinstance(override, dict):
+                        response = override
+                body = json.dumps(response).encode()
                 self.send_response(200)
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
@@ -157,7 +166,8 @@ import_desktop_history=false
         self.stop()
         for server in (self.telegram, self.native):
             server.shutdown(); server.server_close()
-        self.temporary.cleanup()
+        if self.temporary is not None:
+            self.temporary.cleanup()
 
     def admit(self, text=None, *, topic=7, user=100, callback=None, reply=None):
         with self.lock:

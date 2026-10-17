@@ -532,6 +532,7 @@ pub(super) async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
                 tribu_admission: Some(id.clone()),
                 goal: None,
                 stop_resume: None,
+                interaction: None,
                 admission_epoch,
                 nexus: None,
                 merge: None,
