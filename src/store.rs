@@ -9,6 +9,7 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+mod interaction;
 mod interactions;
 mod merging;
 mod stopping;
@@ -76,6 +77,7 @@ impl Store {
         store.claim_instance_lock(&stale_cutoff)?;
         store.init_tribu()?;
         store.init_interactions()?;
+        store.init_interaction()?;
         store.init_nexus()?;
         store.init_merging()?;
         store.init_stopping()?;

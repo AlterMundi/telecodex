@@ -2450,6 +2450,8 @@ impl App {
         if active
             .sender
             .send(CodexSteerRequest {
+                client_message_id: update_id
+                    .map(|id| format!("telegram:{}:{from_user_id}:{id}", session_key.chat_id)),
                 text: contextual_text,
                 goal: None,
                 response: response_tx,

@@ -570,6 +570,7 @@ async fn steer(app: &App, id: &str, active: ActiveTurnSteerHandle) -> Result<()>
     if active
         .sender
         .send(CodexSteerRequest {
+            client_message_id: None,
             text: prompt(&doc)?,
             goal: None,
             response: tx,

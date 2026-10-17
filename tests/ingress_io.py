@@ -176,6 +176,7 @@ def scenario(mode):
                             send({'id': request_id, 'result': {'thread': {'id': 'synthetic-native-thread'}}})
                             send({'method': 'thread/started', 'params': {'thread': {'id': 'synthetic-native-thread'}}})
                     elif method == 'turn/start':
+                        assert value['params'].get('clientUserMessageId', '').startswith('telegram:'), value
                         if attachment:
                             files = list((root / '.telecodex/inbox').rglob('*.ogg'))
                             assert len(files) == 1, files
@@ -255,6 +256,7 @@ def scenario(mode):
                                 'id': 'synthetic-native-turn', 'status': 'failed',
                                 'error': {'message': 'synthetic later failure'}}}})
                     elif method == 'turn/steer':
+                        assert value['params'].get('clientUserMessageId', '').startswith('telegram:'), value
                         steered.set()
                         if stalled_steer:
                             continue

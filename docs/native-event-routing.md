@@ -64,3 +64,21 @@ Owning investigation: [Telecodex #8](https://github.com/AlterMundi/telecodex/iss
 The related activity indicator is tracked in #11. Runtime deployment preserves
 native thread bindings, the ingress journal and polling offsets. A binary rollback
 must preserve the database, and a cutover must not cancel active foreground work.
+
+## Stable input and canonical output identity
+
+Journaled human input carries a stable `clientUserMessageId` in native start and
+steer requests. The ID derives from the authorized chat, human and retained
+Telegram update, so a process restart does not invent another identity. Existing
+bounded admission retains its own selected client ID. A client ID correlates
+input; it is not permission to replay an uncertain operation or proof that a
+worker incorporated the instruction.
+
+When a completed native agent item supplies thread, turn and item IDs, the bridge
+persists that immutable identity, phase and text before the presentation callback.
+Several final items in one physical turn remain separate canonical records. Exact
+repeated observations are harmless; conflicting content for the same identity is
+an error. Legacy events without complete IDs retain their existing presentation
+behavior and cannot be used as exact-item evidence. This record alone does not
+establish request coverage or deduplicate external publication; the interaction
+controller owns those separate states.
