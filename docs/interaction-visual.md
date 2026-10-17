@@ -60,7 +60,9 @@ admits no original. A structured `visual_reselection` response certifies that
 this attempt did not reach original submission. The composer can request a new
 selection; an explicit recording retry can then freeze the same saved clip
 under a new original identity. A transport failure or unknown outcome never
-authorizes that replacement. Once retained, the frozen reference remains historical
+authorizes that replacement. A later refusal cannot settle an earlier uncertain
+attempt; once any submission is unconfirmed, its identity remains fixed until
+its original receipt is observed. Once retained, the frozen reference remains historical
 evidence while work progresses; elapsed worker/ASR time does not make it become
 a different scene. Reusing its original UUID cannot change pixels, selected point
 or original words and does not resubmit native work.

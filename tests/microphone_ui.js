@@ -5,6 +5,7 @@ const deferred=()=>{let resolve;return {promise:new Promise(yes=>{resolve=yes;})
 function boot(){
  const nodes=new Map(),events={},timers=[],uploads=[],originals=new Map(),received=[],devices=[];
  const document={hidden:false,addEventListener(name,fn){events[name]=fn;},querySelector(name){if(!nodes.has(name))nodes.set(name,{hidden:false,disabled:false,textContent:'',handlers:{},setAttribute(k,v){this[k]=v;},addEventListener(n,f){this.handlers[n]=f;}});return nodes.get(name);}};
+ let visual,visualFailure,mediaRequests=0;
  let selection, binding='original-binding',mode,permission,receiptHold,uploadHold,capturePhase='preparing',captureRetired=false,paused=0,unauthorized=0;
  class Recorder{
   static isTypeSupported(type){return type==='audio/webm;codecs=opus';}
@@ -14,12 +15,13 @@ function boot(){
   stop(){if(this.state==='inactive')return;this.state='inactive';queueMicrotask(()=>{this.events.dataavailable({data:new Blob(['synthetic finalized audio'])});this.events.stop();});}
  }
  const media=()=>({stopped:0,getTracks(){return [{stop:()=>this.stopped++}];}});
- const window={isSecureContext:true,MediaRecorder:Recorder,crypto,addEventListener(n,fn){events[n]=fn;},navigator:{mediaDevices:{async getUserMedia(){if(permission)return permission.promise;return media();}}}};
+ const window={isSecureContext:true,MediaRecorder:Recorder,crypto,addEventListener(n,fn){events[n]=fn;},navigator:{mediaDevices:{async getUserMedia(){mediaRequests++;if(permission)return permission.promise;return media();}}}};
  async function fetch(_route,options){
   uploads.push(options);const id=options.headers['X-Input-Id'];
   if(mode==='before'){mode=undefined;throw Error('Offline before capture');}
+  if(mode==='visual-refusal'){mode=undefined;return {ok:false,status:400,json:async()=>({code:'visual_reselection',submission_attempted:false})};}
   if(mode==='denied'){mode=undefined;return {ok:false,status:403,json:async()=>({})};}
-  const result={id,phase:capturePhase,retired:captureRetired,voice:{audio_sha256:options.headers['X-Audio-Sha256']}};originals.set(id,result);
+  const result={id,phase:capturePhase,retired:captureRetired,visual:options.headers['X-Visual-Reference']?JSON.parse(options.headers['X-Visual-Reference']):undefined,voice:{audio_sha256:options.headers['X-Audio-Sha256']}};originals.set(id,result);
   if(uploadHold)await uploadHold.promise;
   if(mode==='after'){mode=undefined;throw Error('Lost acknowledgement');}
   return {ok:true,json:async()=>result};
@@ -27,12 +29,12 @@ function boot(){
  const context=vm.createContext({window,document,Blob,Uint8Array,fetch,AbortController,
   setTimeout(fn,ms){const t={fn,ms};timers.push(t);return t;},clearTimeout(t){if(t)t.closed=true;}});
  vm.runInContext(fs.readFileSync('dashboard/web/microphone.js','utf8'),context);
- let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,pauseAudio(){paused++;},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
+ let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
  ui.configure(true);
  return {ui,nodes,uploads,originals,received,devices,events,timers,media,
   button:()=>nodes.get('#conversation-talk'),state:()=>nodes.get('#conversation-voice-state').textContent,
   click:()=>nodes.get('#conversation-talk').handlers.click(),cancel:()=>nodes.get('#conversation-voice-discard').handlers.click(),check:()=>nodes.get('#conversation-voice-check').handlers.click(),
-  select:value=>{selection=value;},captureState:(value,retired=false)=>{capturePhase=value;captureRetired=retired;},mode:value=>{mode=value;},permission:()=>{permission=deferred();return permission;},holdReceipt:()=>{receiptHold=deferred();return receiptHold;},holdUpload:()=>{uploadHold=deferred();return uploadHold;},bind:value=>{binding=value;},paused:()=>paused,unauthorized:()=>unauthorized,
+  visual:value=>{visual=value;visualFailure=false;},failVisual:()=>{visualFailure=true;},mediaRequests:()=>mediaRequests,select:value=>{selection=value;},captureState:(value,retired=false)=>{capturePhase=value;captureRetired=retired;},mode:value=>{mode=value;},permission:()=>{permission=deferred();return permission;},holdReceipt:()=>{receiptHold=deferred();return receiptHold;},holdUpload:()=>{uploadHold=deferred();return uploadHold;},bind:value=>{binding=value;},paused:()=>paused,unauthorized:()=>unauthorized,
  };
 }
 (async()=>{
@@ -72,5 +74,17 @@ function boot(){
  assert.equal(focused.uploads[0].headers['X-Reply-Source'],reference.source);
  assert.equal(focused.uploads[0].headers['X-Reply-Revision'],reference.revision);
  assert.deepEqual(focused.uploads[0].headers,focused.uploads[1].headers,'Permission delays, duration review and retries must retain the original reply focus');
+ const missingVisual=boot();missingVisual.failVisual();await missingVisual.click();
+ assert.equal(missingVisual.mediaRequests(),0,'Unready visual context cannot silently acquire a microphone');assert.equal(missingVisual.uploads.length,0);assert.match(missingVisual.state(),/Selected image unavailable/);
+ const oldVisual={source_id:'original-view',point:{x:20,y:30}},newVisual={source_id:'later-view',point:{x:80,y:40}};
+ const refused=boot();refused.visual(oldVisual);refused.mode('visual-refusal');await refused.click();refused.click();await until(()=>refused.state().startsWith('This attempt did not submit'));
+ refused.visual(newVisual);await refused.click();await until(()=>refused.received.length===1);
+ assert.notEqual(refused.uploads[0].headers['X-Input-Id'],refused.uploads[1].headers['X-Input-Id'],'Explicit fresh-selection retry after only definite refusal creates an attributable new original');
+ assert.equal(refused.uploads[0].body,refused.uploads[1].body);assert.deepEqual(JSON.parse(refused.uploads[1].headers['X-Visual-Reference']),newVisual);
+ const unknownVisual=boot();unknownVisual.visual(oldVisual);unknownVisual.mode('before');await unknownVisual.click();unknownVisual.click();await until(()=>unknownVisual.state().startsWith('Recording unconfirmed'));
+ unknownVisual.visual(newVisual);unknownVisual.mode('visual-refusal');await unknownVisual.click();await until(()=>unknownVisual.state().startsWith('An earlier submission is still unconfirmed'));
+ await unknownVisual.click();await until(()=>unknownVisual.received.length===1);
+ assert.equal(new Set(unknownVisual.uploads.map(v=>v.headers['X-Input-Id'])).size,1,'A later pre-submission refusal cannot settle an earlier unknown attempt or replace its UUID');
+ assert(unknownVisual.uploads.every(v=>JSON.stringify(JSON.parse(v.headers['X-Visual-Reference']))===JSON.stringify(oldVisual)),'Uncertain retry cannot adopt a newly selected image');
  console.log('Microphone UI: finalized one-button capture, playback pause, source hashing, explicit identical retry, receipt-only recovery, hidden/cancel/late permission cleanup, duration-limit review and binding reset passed; zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

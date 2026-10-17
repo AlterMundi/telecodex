@@ -54,8 +54,8 @@ window.VoiceInput = (() => {
     }
     async function upload() {
       if(!pending || uploading || pending.binding!==getBinding())return;
-      if(pending.needsVisualSelection){
-        try{const original=pending,visual=await getVisual();if(pending!==original||original.binding!==getBinding())return;pending={...original,id:crypto.randomUUID(),visual,needsVisualSelection:false};}
+      if(pending.needsVisualSelection&&!pending.uncertainSubmission){
+        try{const original=pending,visual=await getVisual();if(pending!==original||original.binding!==getBinding())return;pending={...original,id:window.crypto.randomUUID(),visual,needsVisualSelection:false};}
         catch(_){state.textContent='Point again or remove the image before retrying this recording.';return;}
       }
       const frozen=pending;uploading=true;controller=new AbortController();const active=controller;
@@ -68,7 +68,11 @@ window.VoiceInput = (() => {
         await confirmed(value,frozen);
       } catch(e) {
         if(pending!==frozen)return;
-        if(e.visualReselection){pending={...frozen,needsVisualSelection:true};state.textContent='This attempt did not submit the recording. Point again or remove the image, then retry this recording.';return;}
+        if(e.visualReselection){
+          if(frozen.uncertainSubmission){pending={...frozen,needsVisualSelection:false};state.textContent='An earlier submission is still unconfirmed. Keep this recording identity and check its status before starting another attempt.';return;}
+          pending={...frozen,needsVisualSelection:true};state.textContent='This attempt did not submit the recording. Point again or remove the image, then retry this recording.';return;
+        }
+        pending={...frozen,uncertainSubmission:true};
         state.textContent='Recording unconfirmed. Check its status or retry this same recording. Nothing is resent automatically.';
         if(e.status===401 || e.status===403)unauthorized(e);
       } finally {clearTimeout(deadline);if(controller===active){controller=undefined;uploading=false;controls();}}
@@ -92,8 +96,9 @@ window.VoiceInput = (() => {
       const owned=++generation,binding=getBinding(),selection=getReply();latestSaved=undefined;phase='permission';commit=false;parts=[];bytes=0;
       state.textContent='Allow microphone access to begin.';pauseAudio();controls();
       try {
-        const candidate=getVisual();
-        const selectedVisual=candidate?.then?await candidate:candidate;
+        let selectedVisual;
+        try {const candidate=getVisual();selectedVisual=candidate?.then?await candidate:candidate;}
+        catch(_){if(owned===generation)cancelRecording('Selected image unavailable. Choose another image or remove it before recording.');return;}
         if(owned!==generation||binding!==getBinding()||document.hidden)return;
         const frozenSelection={...selection,visual:selectedVisual};
         const media=await window.navigator.mediaDevices.getUserMedia({audio:true,video:false});

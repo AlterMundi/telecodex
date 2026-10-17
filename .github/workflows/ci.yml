@@ -244,3 +244,4 @@ jobs:
       - run: node tests/conversation_ui.js
       - run: node tests/conversation_requests_ui.js
       - run: node tests/microphone_ui.js
+      - run: node tests/visual_ui.js
