@@ -151,7 +151,12 @@ pub enum CodexSteerError {
 pub type CodexSteerResponse = std::result::Result<Option<String>, CodexSteerError>;
 
 /// Plain-text input waiting to be appended to an active Codex turn.
+pub type SteerAdmissionCheck = Arc<dyn Fn() -> Result<()> + Send + Sync>;
+
 pub struct CodexSteerRequest {
+    /// Revalidate captured admission at the native write boundary, after any
+    /// preparation or metadata wait. This callback is local, never wire input.
+    pub admission_check: Option<SteerAdmissionCheck>,
     /// User text to append to the in-flight turn.
     pub text: String,
     pub client_message_id: Option<String>,
@@ -1093,6 +1098,14 @@ where
     let mut queued_steers = VecDeque::new();
     if adopted_turn.is_none() {
         while let Ok(steer) = steer_rx.try_recv() {
+            if let Some(check) = &steer.admission_check
+                && let Err(error) = check()
+            {
+                let _ = steer
+                    .response
+                    .send(Err(CodexSteerError::Rejected(error.to_string())));
+                continue;
+            }
             if steer.goal.is_none() {
                 let text = match &steer.client_message_id {
                     Some(id) => format!("Additional admitted input {id}:\n{}", steer.text),
@@ -1424,6 +1437,14 @@ async fn send_steer_request(
     steer: CodexSteerRequest,
     pending_steers: &mut HashMap<u64, PendingSteer>,
 ) -> Result<()> {
+    if let Some(check) = &steer.admission_check
+        && let Err(error) = check()
+    {
+        let _ = steer
+            .response
+            .send(Err(CodexSteerError::Rejected(error.to_string())));
+        return Ok(());
+    }
     let request_id = process
         .send_request(
             "turn/steer",
@@ -2932,6 +2953,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                admission_check: None,
                 text: "Change the work while approval is pending".into(),
                 client_message_id: Some("correction-input".into()),
                 goal: None,
@@ -3018,6 +3040,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                admission_check: None,
                 text: "Correct the request before starting".into(),
                 client_message_id: Some("prepared-correction".into()),
                 goal: None,

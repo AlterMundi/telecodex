@@ -4,6 +4,49 @@
 //! worker incorporated. Request coverage and publication are separate states.
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_native_message_on(
+    conn: &Connection,
+    local_turn: i64,
+    thread: &str,
+    turn: &str,
+    item: &str,
+    phase: Option<&str>,
+    text: &str,
+) -> Result<bool> {
+    if thread.is_empty() || turn.is_empty() || item.is_empty() {
+        return Err(anyhow!("native output identity is incomplete"));
+    }
+    let bound: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND native_thread_id=?2)",
+        params![local_turn, thread],
+        |r| r.get(0),
+    )?;
+    if !bound {
+        return Err(anyhow!("native output does not match the owning execution"));
+    }
+    let inserted = conn.execute(
+        "INSERT OR IGNORE INTO interaction_native_messages
+             (native_thread,native_turn,item_id,local_turn,phase,text,observed_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![thread, turn, item, local_turn, phase, text, now_string()],
+    )? == 1;
+    if !inserted {
+        let matches: bool = conn.query_row(
+            "SELECT phase IS ?4 AND text=?5 FROM interaction_native_messages
+                 WHERE native_thread=?1 AND native_turn=?2 AND item_id=?3",
+            params![thread, turn, item, phase, text],
+            |r| r.get(0),
+        )?;
+        if !matches {
+            return Err(anyhow!(
+                "completed native item identity was reused with different content"
+            ));
+        }
+    }
+    Ok(inserted)
+}
+
 impl Store {
     pub(super) fn init_interaction(&self) -> Result<()> {
         self.conn
@@ -63,38 +106,9 @@ impl Store {
         phase: Option<&str>,
         text: &str,
     ) -> Result<bool> {
-        if thread.is_empty() || turn.is_empty() || item.is_empty() {
-            return Err(anyhow!("native output identity is incomplete"));
-        }
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let bound: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND native_thread_id=?2)",
-            params![local_turn, thread],
-            |r| r.get(0),
-        )?;
-        if !bound {
-            return Err(anyhow!("native output does not match the owning execution"));
-        }
-        let inserted = tx.execute(
-            "INSERT OR IGNORE INTO interaction_native_messages
-             (native_thread,native_turn,item_id,local_turn,phase,text,observed_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            params![thread, turn, item, local_turn, phase, text, now_string()],
-        )? == 1;
-        if !inserted {
-            let matches: bool = tx.query_row(
-                "SELECT phase IS ?4 AND text=?5 FROM interaction_native_messages
-                 WHERE native_thread=?1 AND native_turn=?2 AND item_id=?3",
-                params![thread, turn, item, phase, text],
-                |r| r.get(0),
-            )?;
-            if !matches {
-                return Err(anyhow!(
-                    "completed native item identity was reused with different content"
-                ));
-            }
-        }
+        let inserted = record_native_message_on(&tx, local_turn, thread, turn, item, phase, text)?;
         tx.commit()?;
         Ok(inserted)
     }
@@ -217,6 +231,7 @@ impl Store {
             text: source.text.clone(),
             origin: source.origin.clone(),
             phase: crate::interaction::TransportPhase::Queued,
+            admission_epoch: None,
             local_turn: None,
             native_thread: native,
             native_turn: None,
@@ -249,6 +264,31 @@ impl Store {
             Ok(instruction)
         })
         .transpose()
+    }
+
+    /// Instructions associated with this actual owner execution, including
+    /// routed input attached after a native goal/merge/Nexus launch.
+    pub fn interaction_turn_inputs(
+        &self,
+        local: i64,
+        human: i64,
+    ) -> Result<Vec<crate::interaction::Instruction>> {
+        let mut ids = {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let mut stmt = conn.prepare("SELECT i.id FROM interaction_instructions i
+                JOIN interaction_sources s ON s.id=i.input_id JOIN turns t ON t.session_id=i.session_id
+                WHERE t.id=?1 AND t.from_user_id=?2 AND s.human_id=?2
+                AND json_extract(i.doc,'$.local_turn')=?1 ORDER BY i.sequence DESC LIMIT 256")?;
+            stmt.query_map(params![local, human], |r| r.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        ids.reverse();
+        ids.into_iter()
+            .map(|id| {
+                self.interaction_instruction(&id, human)?
+                    .context("Execution instruction missing")
+            })
+            .collect()
     }
 
     #[cfg(test)]
@@ -405,12 +445,38 @@ impl Store {
         instruction.phase = TransportPhase::Queued;
         instruction.local_turn = None;
         instruction.native_turn = None;
+        instruction.admission_epoch = None;
         tx.execute(
             "UPDATE interaction_instructions SET phase='queued',doc=?2,instance_id=?3 WHERE id=?1",
             params![id, serde_json::to_string(&instruction)?, self.instance_id],
         )?;
         tx.commit()?;
         Ok(true)
+    }
+
+    /// Bind a queued dispatch to its captured ingress generation. Automatic
+    /// continuations keep this binding; explicit known-unsent recovery clears it.
+    pub fn interaction_bind_epoch(&self, id: &str, human: i64, epoch: &str) -> Result<()> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let raw: String = tx.query_row(
+            "SELECT i.doc FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id
+             WHERE i.id=?1 AND s.human_id=?2 AND i.phase='queued'",
+            params![id, human], |r| r.get(0),
+        )?;
+        let mut i: crate::interaction::Instruction = serde_json::from_str(&raw)?;
+        if i.admission_epoch.as_deref().is_some_and(|old| old != epoch) {
+            return Err(anyhow!(
+                "Queued input cannot adopt a later admission generation"
+            ));
+        }
+        i.admission_epoch = Some(epoch.to_owned());
+        tx.execute(
+            "UPDATE interaction_instructions SET doc=?2 WHERE id=?1",
+            params![id, serde_json::to_string(&i)?],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn interaction_recent(

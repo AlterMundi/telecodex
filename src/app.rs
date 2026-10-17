@@ -2462,6 +2462,7 @@ impl App {
         if active
             .sender
             .send(CodexSteerRequest {
+                admission_check: None,
                 client_message_id: update_id
                     .map(|id| format!("telegram:{}:{from_user_id}:{id}", session_key.chat_id)),
                 text: contextual_text,
@@ -2543,19 +2544,36 @@ impl App {
                     shared: shared.clone(),
                     workers,
                 };
-                let interaction = turn.interaction.clone();
                 let requester = turn.request.from_user_id;
                 let target = turn.request.session_key;
                 let update_id = turn.update_id;
                 let admission = turn.tribu_admission.clone();
                 let nexus_id = turn.nexus.clone();
                 let merge_id = turn.merge.clone();
-                let result = process_turn(app, cancel.clone(), steer.clone(), turn).await;
-                if let Some(id) = interaction {
-                    routing::finished(&shared, target, &id, requester);
-                    if let Err(error) = &result {
-                        routing::failure(shared.clone(), &id, requester, &error.to_string());
+                let (registration, result) = match routing::begin(&shared, &turn) {
+                    Ok(registration) => {
+                        let result = process_turn(
+                            app.clone(),
+                            cancel.clone(),
+                            steer.clone(),
+                            turn,
+                            registration.clone(),
+                        )
+                        .await;
+                        (registration, result)
                     }
+                    Err(error) => (None, Err(error)),
+                };
+                if let Some(id) = registration {
+                    let failure_message = result.as_ref().err().map(ToString::to_string);
+                    routing::finish_execution(
+                        &app,
+                        target,
+                        &id,
+                        requester,
+                        failure_message.as_deref(),
+                        &tx,
+                    );
                 }
                 if let Some(id) = merge_id {
                     let _ = shared.store.merge_finish(&id);

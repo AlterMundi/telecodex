@@ -74,6 +74,7 @@ impl Store {
 
     /// Reserve a canonical result before any external publication. The worker can
     /// report request coverage, but cannot supply a different recipient or scope.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn interaction_reserve_result(
         &self,
@@ -85,12 +86,67 @@ impl Store {
         item: &str,
         text: &str,
     ) -> Result<Vec<Delivery>> {
+        self.interaction_result(
+            root_id, human, local_turn, thread, turn, item, text, false, true,
+        )
+    }
+
+    /// Commit the canonical final and all return reservations together.
+    #[allow(clippy::too_many_arguments)]
+    pub fn interaction_record_result(
+        &self,
+        root_id: &str,
+        human: i64,
+        local_turn: i64,
+        thread: &str,
+        turn: &str,
+        item: &str,
+        text: &str,
+        allow_unreported: bool,
+    ) -> Result<Vec<Delivery>> {
+        self.interaction_result(
+            root_id,
+            human,
+            local_turn,
+            thread,
+            turn,
+            item,
+            text,
+            true,
+            allow_unreported,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn interaction_result(
+        &self,
+        root_id: &str,
+        human: i64,
+        local_turn: i64,
+        thread: &str,
+        turn: &str,
+        item: &str,
+        text: &str,
+        capture: bool,
+        allow_unreported: bool,
+    ) -> Result<Vec<Delivery>> {
         let root = self
             .interaction_instruction(root_id, human)?
             .context("Interaction root missing")?;
         let (body, claim) = worker_result(text);
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
+        if capture {
+            super::interaction::record_native_message_on(
+                &tx,
+                local_turn,
+                thread,
+                turn,
+                item,
+                Some("final_answer"),
+                text,
+            )?;
+        }
         let bound:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn WHERE m.native_thread=?1 AND m.native_turn=?2 AND m.item_id=?3 AND m.local_turn=?4 AND m.text=?5 AND t.session_id=?6 AND t.from_user_id=?7)",params![thread,turn,item,local_turn,text,root.target_session,human],|r|r.get(0))?;
         if !bound {
             return Err(anyhow!(
@@ -109,6 +165,12 @@ impl Store {
             }
         }
         let claim = claim.filter(|_| valid_claim);
+        if claim.is_none() && !allow_unreported {
+            // Preserve the actual native item without pretending a legacy
+            // answer addressed an instruction attached while it was running.
+            tx.commit()?;
+            return Ok(vec![]);
+        }
         let requests = claim
             .as_ref()
             .map(|c| c.requests.clone())
@@ -585,6 +647,175 @@ mod tests {
                 .is_empty()
         );
         deliveries.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn interaction_dispatch_epoch_changes_only_after_explicit_unsent_recovery() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let t = target(&s, 7);
+        let i = admit(&s, &t, 1, R::New);
+        s.interaction_bind_epoch(&i.id, 100, "original").unwrap();
+        assert!(s.interaction_bind_epoch(&i.id, 100, "later").is_err());
+        s.interaction_unfinished(&i.id, 100).unwrap();
+        assert_eq!(
+            s.interaction_instruction(&i.id, 100)
+                .unwrap()
+                .unwrap()
+                .admission_epoch
+                .as_deref(),
+            Some("original")
+        );
+        assert!(s.interaction_recover(&i.id, 100).unwrap());
+        s.interaction_bind_epoch(&i.id, 100, "later").unwrap();
+        assert_eq!(
+            s.interaction_instruction(&i.id, 100)
+                .unwrap()
+                .unwrap()
+                .admission_epoch
+                .as_deref(),
+            Some("later")
+        );
+        assert_eq!(s.interaction_recent(100, t.key).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn interaction_attached_input_requires_worker_coverage_before_routing_a_legacy_answer() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let t = target(&s, 7);
+        let i = admit(&s, &t, 1, R::New);
+        let local = accept(&s, &t, &i);
+        let thread = t.codex_thread_id.as_deref().unwrap();
+        assert_eq!(s.interaction_turn_inputs(local, 100).unwrap().len(), 1);
+        assert!(s.interaction_turn_inputs(local, 101).unwrap().is_empty());
+        assert!(
+            s.interaction_record_result(
+                &i.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "legacy",
+                "Earlier unrelated work",
+                false
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(
+            s.interaction_recent_deliveries(100, t.key)
+                .unwrap()
+                .is_empty()
+        );
+        let retained: i64 = s
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM interaction_native_messages WHERE item_id='legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained, 1);
+        let text = format!(
+            "Corrected work\n<daimon-result>{}</daimon-result>",
+            serde_json::json!({"requests":i.requests,"covered":[i.id],"completed":i.requests})
+        );
+        let deliveries = s
+            .interaction_record_result(
+                &i.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "covered",
+                &text,
+                false,
+            )
+            .unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert!(deliveries[0].declared && deliveries[0].current);
+        assert_eq!(deliveries[0].origin, i.origin);
+    }
+
+    #[test]
+    fn interaction_native_capture_and_return_reservation_commit_together() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let t = target(&s, 7);
+        let i = admit(&s, &t, 1, R::New);
+        let local = accept(&s, &t, &i);
+        let thread = t.codex_thread_id.as_deref().unwrap();
+        s.conn.lock().unwrap().execute_batch("CREATE TRIGGER fail_reservation BEFORE INSERT ON interaction_deliveries BEGIN SELECT RAISE(ABORT,'fixture reservation failure'); END;").unwrap();
+        assert!(
+            s.interaction_record_result(
+                &i.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "atomic",
+                "Actual native answer",
+                true
+            )
+            .is_err()
+        );
+        let count: i64 = s
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM interaction_native_messages WHERE item_id='atomic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "A failed reservation must not commit an orphan canonical final"
+        );
+        s.conn
+            .lock()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_reservation")
+            .unwrap();
+        let deliveries = s
+            .interaction_record_result(
+                &i.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "atomic",
+                "Actual native answer",
+                true,
+            )
+            .unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert!(
+            s.interaction_record_result(
+                &i.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "atomic",
+                "Actual native answer",
+                true
+            )
+            .unwrap()
+            .is_empty()
+        );
+        let id = deliveries[0].id.clone();
+        drop(s);
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        assert_eq!(
+            s.interaction_delivery(&id, 100).unwrap().unwrap().phase,
+            "reserved"
+        );
+        assert!(s.interaction_begin_delivery(&id, 100).unwrap().is_some());
     }
 
     #[test]

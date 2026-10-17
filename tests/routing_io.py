@@ -5,6 +5,7 @@ Every human, token, model, conversation and peer here is synthetic.
 import json
 import pathlib
 import re
+import sqlite3
 import sys
 import threading
 from goals_io import Goals
@@ -22,9 +23,17 @@ class Routing(Goals):
         self.cooldown_once = False
         self.cooldown_seen = threading.Event()
         self.reject_next = False
+        self.retire_on_reject = False
         self.rejected_turn = None
         self.routed = False
         self.block_binding = False
+        self.allow_native_launch = False
+        self.block_legacy_progress = False
+        self.legacy_progress_held = threading.Event()
+        self.release_legacy_progress = threading.Event()
+        self.block_goal_pause = False
+        self.goal_pause_held = threading.Event()
+        self.release_goal_pause = threading.Event()
         self.binding_held = threading.Event()
         self.release_binding = threading.Event()
         self.packets = {}
@@ -55,9 +64,21 @@ topic_id=8
         self.start()
 
     def handle_extra_rpc(self, m, send):
+        if self.block_goal_pause and m.get('method') == 'thread/goal/set' and m.get('params',{}).get('status') == 'paused' and any(active_send is send for _,active_send in list(self.clients.values())):
+            self.goal_pause_held.set()
+            self.release_goal_pause.wait(timeout=30)
         if self.routed and self.block_binding and m.get('method') == 'thread/resume':
             self.binding_held.set()
             self.release_binding.wait(timeout=30)
+        if self.routed and self.allow_native_launch and m.get('method') == 'turn/start' and m['params'].get('clientUserMessageId','').startswith('telegram:'):
+            p = m['params']
+            thread = p['threadId']
+            turn = 'legacy-'+str(len(self.runs)+1)
+            self.runs[thread] = turn
+            self.packets.setdefault(thread, []).append(p)
+            send({'id':m['id'],'result':{'turn':{'id':turn}}})
+            self.broadcast(thread,'turn/started',{'turn':{'id':turn,'status':'inProgress'}})
+            return True
         if self.routed and m.get('id') == 900 and not m.get('method'):
             self.answers.append(m)
             return True
@@ -95,6 +116,10 @@ topic_id=8
                 self.reject_next = False
                 self.rejected_turn = self.runs[thread]
             if self.rejected_turn == self.runs[thread]:
+                if self.retire_on_reject:
+                    self.retire_on_reject = False
+                    with sqlite3.connect(self.root / 'state.sqlite') as db:
+                        db.execute("INSERT OR REPLACE INTO bot_state(key,value) VALUES('stop_admission_epoch:100','fixture-retired-generation')")
                 send({'id': m['id'], 'error': {'code': -32600, 'message': 'Synthetic finished generation'}})
             else:
                 send({'id': m['id'], 'result': {'turnId': self.runs[thread]}})
@@ -106,6 +131,9 @@ topic_id=8
             self.release_typing.wait(timeout=10)
 
     def before_send_message_reply(self, payload):
+        if self.block_legacy_progress and 'Legacy work progress' in payload['text']:
+            self.legacy_progress_held.set()
+            self.release_legacy_progress.wait(timeout=30)
         if self.drop_result and 'Lost receipt result' in payload['text']:
             self.drop_result = False
             return False
@@ -406,6 +434,135 @@ def preparation_wait_is_visible(binary):
         j.close()
 
 
+def retired_admission_and_writer_hold(binary):
+    j = Routing(binary)
+    try:
+        j.prepare()
+        original = j.admit('#Alpha Initial work', topic=1)
+        j.wait(lambda: len(j.instructions(7)) == 1 and j.instructions(7)[0][1] == 'accepted')
+        with sqlite3.connect(j.root / 'state.sqlite') as db:
+            db.execute("INSERT OR REPLACE INTO bot_state(key,value) VALUES('native_writer_hold:100:7','synthetic-maintenance')")
+        j.admit('Correction during a held writer', topic=1, reply=original)
+        j.wait(lambda: len(j.instructions(7)) == 2 and j.instructions(7)[1][1] == 'retained_unsent')
+        held = j.instructions(7)[1][0]
+        assert len(j.packets['native-topic-7']) == 1
+        with sqlite3.connect(j.root / 'state.sqlite') as db:
+            db.execute("DELETE FROM bot_state WHERE key='native_writer_hold:100:7'")
+        j.admit('/interaction retry '+held, topic=1)
+        j.wait(lambda: j.instructions(7)[1][1] == 'accepted')
+        assert len(j.packets['native-topic-7']) == 2
+        j.reject_next = j.retire_on_reject = True
+        j.admit('Correction whose generation is retired after definite rejection', topic=1, reply=original)
+        j.wait(lambda: len(j.instructions(7)) == 3 and j.instructions(7)[2][1] == 'retained_unsent')
+        retired = j.instructions(7)[2][0]
+        assert len(j.packets['native-topic-7']) == 3
+        assert len(j.runs) == 1, 'Retired async fallback must not start another native turn'
+        j.answer(7, 'Earlier effects remain; retired correction is not covered', covered=[r[0] for r in j.instructions(7)[:2]])
+        j.idle()
+        j.admit('/interaction retry '+retired, topic=1)
+        j.wait(lambda: j.instructions(7)[2][1] == 'accepted')
+        assert len(j.packets['native-topic-7']) == 4
+        assert json.loads(j.instructions(7)[2][2])['admission_epoch'] == 'fixture-retired-generation'
+        j.answer(7, 'Explicit recovery incorporated the retained correction', item='recovered')
+        j.wait(lambda: j.has('Explicit recovery incorporated',1))
+        j.idle()
+        print('PASS writer hold and retired async generation retain input; only explicit recovery adopts fresh admission')
+    finally:
+        j.close()
+
+
+def native_launch_joins_routing(binary, *, preparing=False):
+    j = Routing(binary)
+    try:
+        j.prepare()
+        j.allow_native_launch = True
+        j.release_question.set()
+        j.block_binding = preparing
+        j.admit('/goal Complete isolated existing native work', topic=7)
+        if preparing:
+            j.wait(j.binding_held.is_set)
+        else:
+            j.wait(lambda: 'native-topic-7' in j.runs)
+            j.block_legacy_progress = True
+            j.broadcast('native-topic-7','item/completed',{'turnId':j.runs['native-topic-7'],'item':{'id':'legacy-progress','type':'agentMessage','phase':'commentary','text':'Legacy work progress'}})
+            j.wait(j.legacy_progress_held.is_set)
+        original = j.admit('#Alpha Correct the work already running: retain the rate 17 requirement', topic=1)
+        j.wait(lambda: len(j.instructions(7)) == 1)
+        if preparing:
+            j.wait(lambda: j.instructions(7)[0][1] == 'steering')
+            j.release_binding.set()
+        j.wait(lambda: j.instructions(7)[0][1] == 'accepted')
+        assert not j.release_legacy_progress.is_set()
+        inputs = j.instructions(7)
+        doc = json.loads(inputs[0][2])
+        assert j.row('SELECT s.thread_id FROM turns t JOIN sessions s ON s.id=t.session_id WHERE t.id=?',(doc['local_turn'],)) == [(7,)]
+        assert len([r for r in j.rpc if r.get('method') == 'turn/start' and r['params'].get('clientUserMessageId') == doc['id']]) == 0
+        native = j.runs['native-topic-7']
+        j.broadcast('native-topic-7','item/completed',{'turnId':native,'item':{'id':'legacy-earlier','type':'agentMessage','phase':'final_answer','text':'Legacy earlier answer without new input coverage'}})
+        j.wait(lambda: j.row("SELECT count(*) FROM interaction_native_messages WHERE item_id='legacy-earlier'") == [(1,)])
+        assert j.row('SELECT count(*) FROM interaction_deliveries') == [(0,)]
+        j.wait(lambda: j.has('remains unresolved',1))
+        assert not j.has('Legacy earlier answer',1)
+        for selected,send in list(j.clients.values()):
+            if selected == 'native-topic-7':
+                send({'id':900,'method':'item/tool/requestUserInput','params':{'threadId':selected,'turnId':native,'itemId':'mixed-question','isBlocking':True,'questions':[{'id':'scope','header':'Scope','question':'Confirm the new refinement?','isOther':True,'isSecret':False,'options':[{'label':'Small','description':'One step'}]}]}})
+        j.wait(lambda: j.row('SELECT count(*) FROM question_messages') == [(1,)])
+        j.wait(lambda: j.controls(1,topic=1) is not None)
+        question = j.controls(1,topic=1)
+        j.admit(callback=j.button(question,':0'),topic=1)
+        j.wait(lambda: len(j.answers) == 1)
+        j.broadcast('native-topic-7','serverRequest/resolved',{'requestId':900})
+        j.release_legacy_progress.set()
+        j.goals['native-topic-7'].update(status='complete')
+        j.broadcast('native-topic-7','thread/goal/updated',{'goal':j.goals['native-topic-7']})
+        j.answer(7,'Mixed native work incorporated the routed correction')
+        j.wait(lambda: j.has('Mixed native work incorporated',1) and j.has('Mixed native work incorporated',7))
+        j.idle()
+        assert len(j.instructions(7)) == 1
+        assert j.row('SELECT count(*) FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.thread_id=7') == [(2,)]
+        returned = [(m,p) for m,p in j.messages if 'Mixed native work incorporated' in m['text'] and m.get('message_thread_id') == 1]
+        assert len(returned) == 1 and returned[0][1]['reply_parameters']['message_id'] == original
+        assert not any('daimon-result' in m['text'] for m,_ in j.messages)
+        print('PASS existing native goal joins routing '+('during preparation' if preparing else 'while its original presentation is stalled')+'; exact return, explicit coverage and question destination preserved')
+    finally:
+        j.release_binding.set()
+        j.release_legacy_progress.set()
+        j.close()
+
+
+def admission_is_checked_at_native_write(binary):
+    j = Routing(binary)
+    try:
+        j.prepare()
+        j.allow_native_launch = True
+        j.admit('/goal Keep existing work separate from later input',topic=7)
+        j.wait(lambda: 'native-topic-7' in j.runs and j.goals.get('native-topic-7',{}).get('status') == 'active')
+        j.block_goal_pause = True
+        j.admit('/goal pause',topic=7)
+        j.wait(j.goal_pause_held.is_set)
+        j.admit('#Alpha Input admitted before a later writer hold',topic=1)
+        j.wait(lambda: len(j.instructions(7)) == 1 and j.instructions(7)[0][1] == 'steering')
+        assert len(j.packets['native-topic-7']) == 1
+        with sqlite3.connect(j.root / 'state.sqlite') as db:
+            db.execute("INSERT OR REPLACE INTO bot_state(key,value) VALUES('native_writer_hold:100:7','synthetic-late-hold')")
+        j.release_goal_pause.set()
+        j.wait(lambda: j.instructions(7)[0][1] == 'retained_unsent')
+        assert len(j.packets['native-topic-7']) == 1, 'A queued steer crossed its retired native write boundary'
+        with sqlite3.connect(j.root / 'state.sqlite') as db:
+            db.execute("DELETE FROM bot_state WHERE key='native_writer_hold:100:7'")
+        j.goals['native-topic-7'].update(status='complete')
+        j.broadcast('native-topic-7','thread/goal/updated',{'goal':j.goals['native-topic-7']})
+        native = j.runs['native-topic-7']
+        j.broadcast('native-topic-7','item/completed',{'turnId':native,'item':{'id':'legacy-untouched','type':'agentMessage','phase':'final_answer','text':'Original work remained separate'}})
+        j.broadcast('native-topic-7','turn/completed',{'turn':{'id':native,'status':'completed'}})
+        j.idle()
+        assert j.instructions(7)[0][1] == 'retained_unsent'
+        print('PASS late native writer hold rejects a queued steer before RPC without interrupting original work')
+    finally:
+        j.release_goal_pause.set()
+        j.close()
+
+
 if __name__ == '__main__':
     binary = str(pathlib.Path(sys.argv[1]).resolve())
     parallel_and_corrections(binary)
@@ -415,3 +572,7 @@ if __name__ == '__main__':
     cosmetic_wait_does_not_delay_next_turn(binary)
     routed_human_declaration(binary)
     preparation_wait_is_visible(binary)
+    retired_admission_and_writer_hold(binary)
+    native_launch_joins_routing(binary)
+    native_launch_joins_routing(binary,preparing=True)
+    admission_is_checked_at_native_write(binary)

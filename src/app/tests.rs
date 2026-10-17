@@ -217,6 +217,7 @@ async fn maintenance_hold_blocks_queued_turn_and_public_admission() {
             nexus: None,
             merge: None,
         },
+        None,
     )
     .await
     .unwrap_err();
@@ -2448,6 +2449,7 @@ async fn retired_queue_packet_never_runs_after_stop_release() {
         Arc::new(StdMutex::new(None)),
         Arc::new(StdMutex::new(None)),
         packet,
+        None,
     )
     .await
     .unwrap();

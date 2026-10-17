@@ -149,6 +149,10 @@ pub struct Instruction {
     pub text: String,
     pub origin: ReturnRoute,
     pub phase: TransportPhase,
+    /// Captured for this dispatch attempt; async continuations must not adopt a
+    /// later admission generation. Only explicit known-unsent recovery clears it.
+    #[serde(default)]
+    pub admission_epoch: Option<String>,
     pub local_turn: Option<i64>,
     pub native_thread: Option<String>,
     pub native_turn: Option<String>,

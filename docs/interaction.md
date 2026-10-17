@@ -114,6 +114,39 @@ known-unsent input; `/interaction retry ID` selects retained known-unsent input
 for recovery. Other native controls remain available in their own conversation.
 These operations do not initiate coordinated global Stop.
 
+All enrolled owner executions reserve the same worker registry before native
+preparation, including starts through goal, merge and Nexus controls. A routed
+instruction joins that actual local execution; it does not wait behind an
+unregistered native start. Native acceptance is matched to the individual
+instruction, while a start acknowledgement accepts only its initiating input.
+Definite steer rejection waits for the next physical native turn, or continues
+on the same serialized worker after that execution ends. Unconfirmed acceptance
+never takes this path.
+
+Each dispatch attempt retains its captured admission generation. Preparation,
+queued drainage, definite-rejection continuation and the native write boundary
+recheck that generation and the existing owner/maintenance fences. Only explicit
+known-unsent recovery can bind a later generation. A local admission rejection
+does not interrupt the original native work. Routed steering uses the existing
+frozen Nexus input perspective and revalidates its target rather than sampling
+a later view or silently dropping its context.
+
+A native control keeps its original conversation return. If routing joins that
+execution later, its canonical answers need explicit valid worker coverage before
+being associated with the newly routed request. Earlier answers remain in native
+history; missing coverage leaves the routed input unresolved. Normal conversation
+presentation identifies the separate follow-up status and strips controller
+metadata only when routing actually participates. Questions and retained-file or
+human-action notices use the actual participating source, without inventing an
+original human message for the native execution.
+
+Enrolled native presentation drains through a bounded queue outside the native
+event pump. Backlog or connection loss does not imply delivery: canonical items
+remain retained, and a local presentation-gap marker records a dropped queued
+presentation. Control admission does not wait for that HTTP presentation. The
+observer must preserve that incomplete state until reconciled from original
+evidence.
+
 A newly queued instruction that has not reached native submission after ten
 seconds gets a source-linked preparation notice. The notice rechecks the
 instruction phase after Telegram cooldown; an already submitted or withdrawn
@@ -135,6 +168,9 @@ an attempted transmission remains uncertain. Delivered or uncertain output is
 never replayed by the recovery command. A failed output attempt produces a
 separate status notice, subject to the same recipient and transport constraints.
 
+Canonical native finals and their per-request return reservations commit in one
+SQLite transaction. A failure between capture and reservation leaves neither
+committed alone; repeated observations reuse their exact immutable identity.
 Canonical outputs reserve per-request deliveries independently from task
 completion. Each part rechecks corrections after Telegram cooldown and retains
 its exact payload before the HTTP attempt. An obsolete answer is withheld and replaced with

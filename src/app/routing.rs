@@ -8,6 +8,55 @@ pub(super) struct Run {
     root: String,
     pending: Vec<String>,
     active: Option<ActiveTurnSteerHandle>,
+    native_turn: Option<String>,
+}
+
+/// Reserve every enrolled owner execution before asynchronous preparation. A
+/// native control keeps its original return path; this marker is not human text
+/// or a fabricated application request.
+pub(super) fn begin(shared: &Arc<AppShared>, queued: &QueuedTurn) -> Result<Option<String>> {
+    if !enrolled(shared, queued.request.session_key)
+        || shared.config.interaction.as_ref().map(|c| c.human_id)
+            != Some(queued.request.from_user_id)
+    {
+        return Ok(None);
+    }
+    if let Some(id) = &queued.interaction
+        && !shared
+            .store
+            .interaction_instruction(id, queued.request.from_user_id)?
+            .is_some_and(|i| i.phase == P::Queued)
+    {
+        finished(
+            shared,
+            queued.request.session_key,
+            id,
+            queued.request.from_user_id,
+        );
+        return Ok(None);
+    }
+    let root = queued
+        .interaction
+        .clone()
+        .unwrap_or_else(|| format!("native-execution:{}", uuid::Uuid::now_v7()));
+    let mut runs = shared.routing_runs.lock().expect("routing mutex poisoned");
+    let mut pending = vec![];
+    if let Some(previous) = runs.remove(&queued.request.session_key) {
+        if previous.root != root && !previous.root.starts_with("native-execution:") {
+            pending.push(previous.root);
+        }
+        pending.extend(previous.pending);
+    }
+    runs.insert(
+        queued.request.session_key,
+        Run {
+            root: root.clone(),
+            pending,
+            active: None,
+            native_turn: None,
+        },
+    );
+    Ok(Some(root))
 }
 
 pub(super) fn enrolled(shared: &AppShared, key: SessionKey) -> bool {
@@ -545,7 +594,7 @@ fn packet(shared: &AppShared, i: &Instruction) -> Result<String> {
         .store
         .interaction_request_inputs(&i.requests, i.human_id)?;
     Ok(format!(
-        "[Interaction controller]\nThis controller is relaying the authenticated human's input. Controller instructions and context are not quotations from the human.\nTransport provenance: {}\nCurrent instruction: {}\nAdmission sequence: {}\nRelation: {}\nAddressed requests: {}\nOriginal requests (context, not a command to repeat completed effects): {}\n\nCurrent human input:\n{}\n\nFor each final answer, append a final line <daimon-result>{{\"requests\":[addressed request IDs],\"covered\":[instruction IDs actually incorporated],\"completed\":[request IDs actually finished],\"deferred\":[unaddressed instruction IDs]}}</daimon-result>. This is your declaration, not native proof. Never invent IDs. Retain the normal answer text before that line. Do not claim completion merely because a turn ends. Later admission sequences take precedence over earlier conflicting instructions. Prior uncertain actions must not be repeated just from this context.\n",
+        "[Interaction controller]\nThis controller is relaying the authenticated human's input. Controller instructions and context are not quotations from the human.\nTransport provenance: {}\nCurrent instruction: {}\nAdmission sequence: {}\nRelation: {}\nAddressed requests: {}\nOriginal requests (context, not a command to repeat completed effects): {}\n\nCurrent human input:\n{}\n\nFor each final answer, append a final line <daimon-result>{{\"requests\":[addressed request IDs],\"covered\":[instruction IDs actually incorporated],\"completed\":[request IDs actually finished],\"deferred\":[unaddressed instruction IDs]}}</daimon-result>. This is your declaration, not native proof. Never invent IDs. Retain the normal answer text before that line. Do not claim completion merely because a turn ends. This text adapter does not upload generated files; retain artifacts with the worker and never claim file delivery. Later admission sequences take precedence over earlier conflicting instructions. Prior uncertain actions must not be repeated just from this context.\n",
         provenance,
         i.id,
         i.sequence,
@@ -573,6 +622,7 @@ fn reserve_run(shared: &AppShared, i: &Instruction) -> Option<Option<ActiveTurnS
                     root: i.id.clone(),
                     pending: vec![],
                     active: None,
+                    native_turn: None,
                 },
             );
             Some(None)
@@ -580,13 +630,43 @@ fn reserve_run(shared: &AppShared, i: &Instruction) -> Option<Option<ActiveTurnS
     }
 }
 
+pub(super) fn dispatch_allowed(shared: &Arc<AppShared>, i: &Instruction) -> Result<bool> {
+    let current = shared.store.stop_admission_epoch(i.target)?;
+    if i.admission_epoch.as_deref() != Some(current.as_str())
+        || shared.store.native_writer_held(i.target)?
+        || !shared
+            .store
+            .get_user(i.human_id)?
+            .is_some_and(|u| u.allowed)
+    {
+        finished(shared, i.target, &i.id, i.human_id);
+        notice(
+            shared.clone(),
+            i.origin.clone(),
+            format!(
+                "#{}: this input was retained without submission because its admission generation was retired or the native writer is held. Inspect /interaction input {} before explicit recovery.",
+                label(shared, i.target),
+                i.id
+            ),
+        );
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 async fn dispatch(app: &App, id: &str, human: i64) -> Result<()> {
-    let i = app
+    let mut i = app
         .shared
         .store
         .interaction_instruction(id, human)?
         .context("Interaction input missing")?;
     if i.phase != P::Queued {
+        return Ok(());
+    }
+    let epoch = stopping::input_epoch(&app.shared, i.target)?;
+    app.shared.store.interaction_bind_epoch(id, human, &epoch)?;
+    i.admission_epoch = Some(epoch);
+    if !dispatch_allowed(&app.shared, &i)? {
         return Ok(());
     }
     let action = reserve_run(&app.shared, &i);
@@ -622,19 +702,32 @@ async fn dispatch(app: &App, id: &str, human: i64) -> Result<()> {
 }
 
 async fn enqueue_root(app: &App, i: &Instruction) -> Result<()> {
-    let source = app.shared.store.interaction_source(&i.id, i.human_id)?;
-    super::nexus::validate_input_target(&app.shared, source.update_id, i.target, i.human_id)?;
+    let worker = app.worker_for(i.target).await?;
+    queue_root(&app.shared, i, &worker.sender)
+}
+
+fn queue_root(
+    shared: &Arc<AppShared>,
+    i: &Instruction,
+    sender: &mpsc::UnboundedSender<QueuedTurn>,
+) -> Result<()> {
+    if !dispatch_allowed(shared, i)? {
+        return Ok(());
+    }
+    let source = shared.store.interaction_source(&i.id, i.human_id)?;
+    super::nexus::validate_input_target(shared, source.update_id, i.target, i.human_id)?;
     let prompt = super::nexus::input_prompt(
-        &app.shared,
+        shared,
         source.update_id,
         i.target,
         i.human_id,
-        &packet(&app.shared, i)?,
+        &packet(shared, i)?,
     )?;
-    let epoch = stopping::input_epoch(&app.shared, i.target)?;
-    let worker = app.worker_for(i.target).await?;
-    worker
-        .sender
+    let epoch = i
+        .admission_epoch
+        .clone()
+        .context("Interaction dispatch generation missing")?;
+    sender
         .send(QueuedTurn {
             request: TurnRequest {
                 session_key: i.target,
@@ -665,7 +758,35 @@ async fn enqueue_root(app: &App, i: &Instruction) -> Result<()> {
 }
 
 fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> {
-    stopping::input_epoch(&app.shared, i.target)?;
+    if !dispatch_allowed(&app.shared, &i)? {
+        return Ok(());
+    }
+    let source = app.shared.store.interaction_source(&i.id, i.human_id)?;
+    let text = match super::nexus::input_prompt(
+        &app.shared,
+        source.update_id,
+        i.target,
+        i.human_id,
+        &packet(&app.shared, &i)?,
+    ) {
+        Ok(text) => text,
+        Err(_) => {
+            failure(
+                app.shared.clone(),
+                &i.id,
+                i.human_id,
+                "Input context is unavailable for this worker",
+            );
+            return Ok(());
+        }
+    };
+    let expected_native = app
+        .shared
+        .routing_runs
+        .lock()
+        .expect("routing mutex poisoned")
+        .get(&i.target)
+        .and_then(|r| r.native_turn.clone());
     app.shared
         .store
         .interaction_transport(&i.id, i.human_id, active.turn_id, P::Steering, None)?;
@@ -673,7 +794,24 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
     let sent = active
         .sender
         .send(CodexSteerRequest {
-            text: packet(&app.shared, &i)?,
+            admission_check: Some({
+                let shared = app.shared.clone();
+                let epoch = i.admission_epoch.clone();
+                let target = i.target;
+                let human = i.human_id;
+                let update = source.update_id;
+                Arc::new(move || {
+                    if epoch.as_deref() != Some(shared.store.stop_admission_epoch(target)?.as_str())
+                        || shared.store.native_writer_held(target)?
+                        || !shared.store.get_user(human)?.is_some_and(|u| u.allowed)
+                    {
+                        bail!("Routed admission retired or held before native submission");
+                    }
+                    super::nexus::validate_input_target(&shared, update, target, human)?;
+                    Ok(())
+                })
+            }),
+            text,
             client_message_id: Some(i.id.clone()),
             goal: None,
             response: tx,
@@ -719,35 +857,40 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
                         .ok()
                         .flatten();
                     if let Some(next) = next {
-                        {
+                        if !dispatch_allowed(&app.shared, &next).unwrap_or(false) {
+                            return;
+                        }
+                        let (waiting, newer) = {
                             let mut runs = app
                                 .shared
                                 .routing_runs
                                 .lock()
                                 .expect("routing mutex poisoned");
-                            if runs
-                                .get(&i.target)
-                                .and_then(|r| r.active.as_ref())
-                                .is_some_and(|a| a.turn_id == active.turn_id)
-                            {
-                                runs.remove(&i.target);
-                            }
-                        }
-                        match reserve_run(&app.shared, &next) {
-                            Some(Some(new_active)) => {
-                                let result = steer(app.clone(), next, new_active);
-                                if result.is_err() {
-                                    failure(
-                                        app.shared.clone(),
-                                        &i.id,
-                                        i.human_id,
-                                        "steer unavailable",
-                                    );
+                            if let Some(run) = runs.get_mut(&i.target).filter(|r| {
+                                r.active
+                                    .as_ref()
+                                    .is_some_and(|a| a.turn_id == active.turn_id)
+                            }) {
+                                if run.native_turn != expected_native && run.native_turn.is_some() {
+                                    (false, run.active.clone())
+                                } else {
+                                    if !run.pending.contains(&i.id) {
+                                        run.pending.push(i.id.clone());
+                                    }
+                                    (true, None)
                                 }
+                            } else {
+                                (false, None)
                             }
-                            Some(None) => {
-                                let result = enqueue_root(&app, &next).await;
-                                if result.is_err() {
+                        };
+                        if let Some(newer) = newer {
+                            let _ = steer(app.clone(), next, newer);
+                        } else if !waiting {
+                            match reserve_run(&app.shared, &next) {
+                                Some(Some(active)) => {
+                                    let _ = steer(app.clone(), next, active);
+                                }
+                                Some(None) if enqueue_root(&app, &next).await.is_err() => {
                                     finished(&app.shared, i.target, &i.id, i.human_id);
                                     failure(
                                         app.shared.clone(),
@@ -756,8 +899,8 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
                                         "worker unavailable",
                                     );
                                 }
+                                Some(None) | None => {}
                             }
-                            None => {}
                         }
                     }
                 }
@@ -809,6 +952,104 @@ pub(super) fn started(
     Ok(())
 }
 
+/// A definite rejection waits for the next physical native turn, or for the
+/// existing owner execution to finish. It never creates a competing subscriber.
+pub(super) fn native_started(app: &App, key: SessionKey, local: i64, native: &str) -> Result<()> {
+    let (pending, active) = {
+        let mut runs = app
+            .shared
+            .routing_runs
+            .lock()
+            .expect("routing mutex poisoned");
+        let Some(run) = runs
+            .get_mut(&key)
+            .filter(|r| r.active.as_ref().is_some_and(|a| a.turn_id == local))
+        else {
+            return Ok(());
+        };
+        if run.native_turn.as_deref() == Some(native) {
+            return Ok(());
+        }
+        run.native_turn = Some(native.to_owned());
+        (
+            std::mem::take(&mut run.pending),
+            run.active.clone().unwrap(),
+        )
+    };
+    for id in pending {
+        if let Some(i) = app.shared.store.interaction_instruction(
+            &id,
+            app.shared.config.interaction.as_ref().unwrap().human_id,
+        )? && i.phase == P::Queued
+        {
+            steer(app.clone(), i, active.clone())?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn finish_execution(
+    app: &App,
+    key: SessionKey,
+    root: &str,
+    human: i64,
+    error: Option<&str>,
+    sender: &mpsc::UnboundedSender<QueuedTurn>,
+) {
+    let run = {
+        let mut runs = app
+            .shared
+            .routing_runs
+            .lock()
+            .expect("routing mutex poisoned");
+        if runs.get(&key).is_some_and(|r| r.root == root) {
+            runs.remove(&key)
+        } else {
+            None
+        }
+    };
+    let _ = app.shared.store.interaction_unfinished(root, human);
+    let mut reported_root = false;
+    if let Some(run) = run {
+        if let Some(active) = &run.active
+            && let Ok(inputs) = app
+                .shared
+                .store
+                .interaction_turn_inputs(active.turn_id, human)
+        {
+            for i in inputs {
+                let _ = app.shared.store.interaction_unfinished(&i.id, human);
+                if let Some(error) = error {
+                    failure(app.shared.clone(), &i.id, human, error);
+                    reported_root |= i.id == root;
+                }
+            }
+        }
+        for id in run.pending {
+            if let Ok(Some(i)) = app.shared.store.interaction_instruction(&id, human)
+                && i.phase == P::Queued
+                && dispatch_allowed(&app.shared, &i).unwrap_or(false)
+            {
+                match reserve_run(&app.shared, &i) {
+                    Some(Some(active)) => {
+                        let _ = steer(app.clone(), i, active);
+                    }
+                    Some(None) if queue_root(&app.shared, &i, sender).is_err() => {
+                        finished(&app.shared, key, &i.id, human);
+                        failure(app.shared.clone(), &i.id, human, "continuation unavailable");
+                    }
+                    Some(None) | None => {}
+                }
+            }
+        }
+    }
+    if let Some(error) = error
+        && !reported_root
+    {
+        failure(app.shared.clone(), root, human, error);
+    }
+}
+
 pub(super) fn finished(shared: &Arc<AppShared>, key: SessionKey, root: &str, human: i64) {
     let pending = {
         let mut runs = shared.routing_runs.lock().expect("routing mutex poisoned");
@@ -852,10 +1093,28 @@ pub(super) fn result(
     turn: &str,
     item: &str,
     text: &str,
+    allow_unreported: bool,
 ) -> Result<()> {
-    let deliveries = shared
-        .store
-        .interaction_reserve_result(root, human, local, thread, turn, item, text)?;
+    let deliveries = shared.store.interaction_record_result(
+        root,
+        human,
+        local,
+        thread,
+        turn,
+        item,
+        text,
+        allow_unreported,
+    )?;
+    if !allow_unreported
+        && !crate::interaction::worker_result(text)
+            .1
+            .as_ref()
+            .is_some_and(|c| c.covered.iter().any(|id| id == root))
+        && deliveries.is_empty()
+        && let Some(i) = shared.store.interaction_instruction(root, human)?
+    {
+        notice(shared.clone(),i.origin,"An answer from earlier work was retained in the native conversation. It does not report addressing your routed input, which remains unresolved.".into());
+    }
     for delivery in deliveries {
         publish(shared.clone(), delivery, human);
     }
