@@ -479,6 +479,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn interaction_recent(
         &self,
         human: i64,

@@ -146,6 +146,116 @@ fn notice_when(
     });
 }
 
+async fn session_card(
+    shared: Arc<AppShared>,
+    name: String,
+    target: SessionKey,
+    human: i64,
+) -> String {
+    let heading = format!("#{} (#t{})", name, target.thread_id);
+    let observed = match shared.store.interaction_observation(target, human) {
+        Ok(Some(value)) => value,
+        Ok(None) => return format!("{heading}\nUnavailable owned session."),
+        Err(_) => return format!("{heading}\nLocal observation unavailable; state unknown."),
+    };
+    let mut card = format!(
+        "{heading}\nObserved: {}\nLocal source cut: session {}, input sequence {}",
+        observed.sampled_at, observed.session_id, observed.input_cut
+    );
+    card.push_str(&format!(
+        "\nNative source binding: {}",
+        observed.native_thread.as_deref().unwrap_or("unbound")
+    ));
+    let activity = match observed.native_thread.as_deref() {
+        Some(thread) => shared.codex.native_activity(thread).await.ok(),
+        None => None,
+    };
+    let binding_unchanged = shared
+        .store
+        .get_session(target)
+        .ok()
+        .flatten()
+        .is_some_and(|s| s.codex_thread_id == observed.native_thread);
+    let activity = if binding_unchanged { activity } else { None };
+    card.push_str(&format!(
+        "\nNative activity: {} (sampled {})",
+        match activity.as_deref() {
+            Some("active") => "active",
+            Some("idle") => "idle",
+            Some("notLoaded") => "not loaded; execution unknown",
+            Some("systemError") => "native error; execution unknown",
+            _ => "unknown; unavailable or changed source",
+        },
+        chrono::Utc::now().to_rfc3339()
+    ));
+    if let Some((id, state, at)) = &observed.local_turn {
+        card.push_str(&format!("\nLocal execution {id}: {state} (recorded {at})"));
+    }
+    if let Some((turn, item, at)) = &observed.native_item {
+        card.push_str(&format!(
+            "\nLast retained native item: {turn}/{item} (observed {at})"
+        ));
+    } else {
+        card.push_str("\nNo retained native item for this binding.");
+    }
+    if let Some(i) = &observed.latest_input {
+        let binding = match i.native_thread.as_deref() {
+            Some(thread) if Some(thread) == observed.native_thread.as_deref() => "current binding",
+            Some(_) => "prior binding",
+            None => "native binding not established",
+        };
+        card.push_str(&format!(
+            "\nInput: {} ({binding}; native {}/{})\n`{}`",
+            i.phase.as_str(),
+            i.native_thread.as_deref().unwrap_or("unknown"),
+            i.native_turn.as_deref().unwrap_or("not observed"),
+            i.id
+        ));
+    } else {
+        card.push_str("\nNo admitted input.");
+    }
+    if let Some(result) = &observed.latest_delivery {
+        let d = &result.value;
+        let current_binding =
+            Some(result.native_thread.as_str()) == observed.native_thread.as_deref();
+        let coverage = if current_binding {
+            relevance(d)
+        } else {
+            "historical worker coverage for prior binding; not current native work"
+        };
+        card.push_str(&format!(
+            "\nResult: {} — {}\nSource: {}/{}/{}\n`{}`",
+            d.phase, coverage, result.native_thread, result.native_turn, result.item_id, d.id
+        ));
+    } else if observed.latest_input.is_some() {
+        card.push_str("\nWorker result/coverage not yet observed.");
+    }
+    card.push_str(&format!(
+        "\nNeeds attention: {} ({} pending); earlier records: {}",
+        observed.pending.actionable_total,
+        observed.pending.pending_total,
+        observed.pending.history_total
+    ));
+    for item in observed.pending.items.iter().take(3) {
+        let title: String = item.title.chars().take(120).collect();
+        card.push_str(&format!(
+            "\n{}: {} — {} [source turn {}, ID {}]",
+            item.kind, item.state, title, item.local_turn, item.id
+        ));
+    }
+    if observed.pending.actionable_total > 0 {
+        card.push_str(&format!(
+            "\nOpen #t{} /pending to inspect and answer in its owning conversation.",
+            target.thread_id
+        ));
+    }
+    if observed.presentation_gaps > 0 {
+        card.push_str("\nPresentation incomplete: queued activity was dropped; retained native items remain available.");
+    }
+    card.push_str("\nCoverage: bounded local evidence; native history has not been reconciled. Activity is not task completion.");
+    card
+}
+
 pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str) -> Result<bool> {
     let Some(cfg) = app.shared.config.interaction.as_ref() else {
         return Ok(false);
@@ -269,36 +379,36 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
         }
         .unwrap_or(0)
         .min(cfg.targets.len());
-        let mut status = String::from("Interaction status");
-        for t in cfg.targets.iter().skip(offset).take(5) {
-            let target = SessionKey::new(cfg.chat_id, Some(t.topic_id));
-            let recent = app.shared.store.interaction_recent(human, target)?;
-            status.push_str(&format!("\n\n#{} (#t{})", t.name, t.topic_id));
-            if let Some(i) = recent.first() {
-                status.push_str(&format!("\nInput: {}\n`{}`", i.phase.as_str(), i.id));
-            } else {
-                status.push_str("\nNo admitted input.");
+        let targets = cfg
+            .targets
+            .iter()
+            .skip(offset)
+            .take(5)
+            .map(|t| {
+                (
+                    t.name.clone(),
+                    SessionKey::new(cfg.chat_id, Some(t.topic_id)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let more = (offset + 5 < cfg.targets.len()).then_some(offset + 5);
+        let shared = app.shared.clone();
+        // Native status is read asynchronously; an unavailable daemon must not
+        // block subsequent human input or be reported as an idle worker.
+        tokio::spawn(async move {
+            let cards = futures_util::future::join_all(
+                targets
+                    .into_iter()
+                    .map(|(name, target)| session_card(shared.clone(), name, target, human)),
+            )
+            .await;
+            let mut status = format!("Interaction status\n\n{}", cards.join("\n\n"));
+            if let Some(next) = more {
+                status.push_str(&format!("\n\nMore: /interaction status {next}"));
             }
-            let results = app
-                .shared
-                .store
-                .interaction_recent_deliveries(human, target)?;
-            if let Some(d) = results.first() {
-                status.push_str(&format!(
-                    "\nResult: {} — {}\n`{}`",
-                    d.phase,
-                    relevance(d),
-                    d.id
-                ));
-            } else if !recent.is_empty() {
-                status.push_str("\nWorker result/coverage not yet observed.");
-            }
-        }
-        if offset + 5 < cfg.targets.len() {
-            status.push_str(&format!("\n\nMore: /interaction status {}", offset + 5));
-        }
-        status.push_str("\n\nInspect: /interaction result ID. Recover a known-unsent result: /interaction deliver ID.");
-        notice(app.shared.clone(), origin, status);
+            status.push_str("\n\nInspect: /interaction input ID or /interaction result ID. Recover a known-unsent result: /interaction deliver ID.");
+            notice(shared, origin, status);
+        });
         return Ok(true);
     }
     let inherited = if let Some(reply) = &message.reply_to_message {

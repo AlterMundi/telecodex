@@ -47,6 +47,53 @@ fn projected(
     item
 }
 
+// Reused by the observer so pending state and source cuts share its read snapshot.
+pub(super) fn interaction_page_on(
+    conn: &Connection,
+    key: SessionKey,
+    user: i64,
+    offset: usize,
+    history: bool,
+) -> Result<InteractionPage> {
+    let active =
+        "h.state IN ('pending','answering','unknown') AND h.native_thread=s.codex_thread_id";
+    let scope = "FROM human_interactions h JOIN sessions s ON s.id=h.session_id JOIN users u ON u.tg_user_id=h.requester WHERE s.chat_id=?1 AND s.thread_id=?2 AND h.requester=?3 AND u.allowed=1";
+    let (actionable_total,pending_total,total):(usize,usize,usize)=conn.query_row(&format!("SELECT COALESCE(SUM(CASE WHEN {active} THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.state='pending' AND h.native_thread=s.codex_thread_id THEN 1 ELSE 0 END),0),COUNT(*) {scope}"),params![key.chat_id,key.thread_id,user],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    let items = {
+        let query = format!(
+            "SELECT h.payload_json,h.state,s.codex_thread_id {scope} AND (CASE WHEN {active} THEN 1 ELSE 0 END)=?5 ORDER BY CASE WHEN h.state='pending' THEN 0 ELSE 1 END,h.created_at DESC,h.id DESC LIMIT 51 OFFSET ?4"
+        );
+        let mut stmt = conn.prepare(&query)?;
+        stmt.query_map(
+            params![
+                key.chat_id,
+                key.thread_id,
+                user,
+                offset as i64,
+                i64::from(!history)
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?
+        .map(|row| {
+            let (raw, state, current) = row?;
+            Ok(projected(serde_json::from_str(&raw)?, state, current))
+        })
+        .collect::<Result<Vec<_>>>()?
+    };
+    Ok(InteractionPage {
+        items,
+        actionable_total,
+        pending_total,
+        history_total: total - actionable_total,
+    })
+}
+
 impl Store {
     pub(super) fn init_interactions(&self) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
@@ -121,44 +168,9 @@ impl Store {
         // Counts and page share a read snapshot, including concurrent owner-local maintenance.
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let active =
-            "h.state IN ('pending','answering','unknown') AND h.native_thread=s.codex_thread_id";
-        let scope = "FROM human_interactions h JOIN sessions s ON s.id=h.session_id JOIN users u ON u.tg_user_id=h.requester WHERE s.chat_id=?1 AND s.thread_id=?2 AND h.requester=?3 AND u.allowed=1";
-        let (actionable_total,pending_total,total):(usize,usize,usize)=tx.query_row(&format!("SELECT COALESCE(SUM(CASE WHEN {active} THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN h.state='pending' AND h.native_thread=s.codex_thread_id THEN 1 ELSE 0 END),0),COUNT(*) {scope}"),params![key.chat_id,key.thread_id,user],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-        let items = {
-            let query = format!(
-                "SELECT h.payload_json,h.state,s.codex_thread_id {scope} AND (CASE WHEN {active} THEN 1 ELSE 0 END)=?5 ORDER BY CASE WHEN h.state='pending' THEN 0 ELSE 1 END,h.created_at DESC,h.id DESC LIMIT 51 OFFSET ?4"
-            );
-            let mut stmt = tx.prepare(&query)?;
-            stmt.query_map(
-                params![
-                    key.chat_id,
-                    key.thread_id,
-                    user,
-                    offset as i64,
-                    i64::from(!history)
-                ],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, Option<String>>(2)?,
-                    ))
-                },
-            )?
-            .map(|row| {
-                let (raw, state, current) = row?;
-                Ok(projected(serde_json::from_str(&raw)?, state, current))
-            })
-            .collect::<Result<Vec<_>>>()?
-        };
+        let page = interaction_page_on(&tx, key, user, offset, history)?;
         tx.commit()?;
-        Ok(InteractionPage {
-            items,
-            actionable_total,
-            pending_total,
-            history_total: total - actionable_total,
-        })
+        Ok(page)
     }
 
     pub fn interaction(

@@ -16,6 +16,7 @@ mod routing;
 mod stopping;
 pub use stopping::{StopOperation, StopTarget};
 mod nexus;
+mod observer;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};
 pub use tribu::TribuAdmission;
