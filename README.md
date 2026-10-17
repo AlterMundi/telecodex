@@ -44,6 +44,8 @@ The opt-in [Nexus Mini App adapter](docs/nexus-conversation.md) brings selected
 human contributions into an existing native topic, retaining source references,
 observed replies and receipt-only recovery without resetting the conversation.
 
+Operator-enrolled [conversation devices](docs/interaction-companion.md) can use the same input/audio APIs with revocable interaction-only credentials. Local button/capture implementation and physical acceptance remain separate.
+
 The opt-in [voice input adapter](docs/interaction-voice.md) commits attributed
 file transcriptions in the integrating conversation while text controls remain
 responsive.
