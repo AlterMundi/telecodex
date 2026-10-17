@@ -38,13 +38,39 @@ with the original input status; explicit retry preserves the same blob/hash/UUID
 and existing captures never start ASR again. Browser memory holds an unconfirmed
 recording, never localStorage. Original audio remains receiving-local.
 
-`telecodex --control CONFIG input submit JSON` accepts only `binding`, `id` and
-`text`. The binding comes from the authenticated presentation list, `id` is a
+`telecodex --control CONFIG input submit JSON` accepts `binding`, `id`,
+`text` and optional `reply: {source, revision}`. The binding comes from the authenticated presentation list, `id` is a
 canonical UUID and text is bounded to 32 KiB. The receiving configuration selects
 the human and integrating entry. The existing owner UID/socket protections apply.
 The exact text is committed before transport. Reusing an ID inspects its original
 outcome; changed text is rejected. A lost response is inspected with
 `telecodex --control CONFIG input status UUID`, without automatic resubmission.
+
+An explicit leading `#Topic` or `/self#Topic` routes text or a finalized voice
+transcript directly to an enrolled work session, without an integrator model call.
+A literal hashtag elsewhere remains ordinary conversation. Reply to this session
+on a worker result or routed original freezes an owner-scoped source/revision;
+the server derives the request lineage and destination. The next message amends
+that work. An explicit selector overrides reply focus; a different session starts
+independent work. Focus is consumed by one retained message. Microphone focus is
+frozen when capture starts and survives permission delays, duration review and
+explicit retries. Pending replies retire on target deletion, owner changes or a
+replaced native binding; initial native establishment remains supported. Fresh
+inputs can select the logical session's current generation after renewal.
+
+Unknown or ambiguous selectors retain the exact original as `awaiting_target`.
+The human chooses an enrolled destination through
+`POST /api/interaction/inputs/{id}/route` with `{binding, selector}`. There is no
+preselected destination. The first route is immutable; identical retry inspects
+its outcome, and another target cannot reuse the same original. Queued transport
+and native acceptance remain distinct, and stale status reads cannot reopen a
+confirmed route. Browser destination choices are presentation, never authority.
+
+A scoped `#Topic /interrupt` uses only the cancellation token selected at input
+arrival, including while voice transcription is pending. It never selects a newer
+execution or invokes global Stop. Clarification after that original token scope
+has become unavailable records `scope_unavailable`, not a claim of inactivity;
+no interruption is made or replayed. A fresh explicit control selects current work.
 
 The existing Telegram-signed dashboard session exposes `GET /api/interaction/inputs`
 with `before` and `direction=before|after` cursors, `GET /api/interaction/inputs/UUID`

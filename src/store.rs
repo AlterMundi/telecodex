@@ -10,6 +10,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
 mod conversation_inputs;
+mod conversation_routing;
+pub use conversation_routing::{
+    ConversationFocus, ConversationReply, ConversationRouteAction, ConversationRouting,
+};
 mod conversation_requests;
 pub use conversation_requests::ConversationRequest;
 mod creation;

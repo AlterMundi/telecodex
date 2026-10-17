@@ -469,3 +469,6 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-voice { flex-shrink: 0; padding-block: 8px; }
 #conversation-talk { min-width: 112px; font-weight: 600; }
 #conversation-talk[aria-pressed="true"] { border: 3px solid var(--accent); }
+
+#conversation-focus { margin-bottom: 8px; padding: 8px; border-inline-start: 3px solid var(--accent); }
+.reply-route select { width: 100%; min-height: 44px; margin-block: 8px; font: inherit; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }

@@ -5,7 +5,7 @@ const deferred=()=>{let resolve;return {promise:new Promise(yes=>{resolve=yes;})
 function boot(){
  const nodes=new Map(),events={},timers=[],uploads=[],originals=new Map(),received=[],devices=[];
  const document={hidden:false,addEventListener(name,fn){events[name]=fn;},querySelector(name){if(!nodes.has(name))nodes.set(name,{hidden:false,disabled:false,textContent:'',handlers:{},setAttribute(k,v){this[k]=v;},addEventListener(n,f){this.handlers[n]=f;}});return nodes.get(name);}};
- let binding='original-binding',mode,permission,receiptHold,uploadHold,capturePhase='preparing',captureRetired=false,paused=0,unauthorized=0;
+ let selection, binding='original-binding',mode,permission,receiptHold,uploadHold,capturePhase='preparing',captureRetired=false,paused=0,unauthorized=0;
  class Recorder{
   static isTypeSupported(type){return type==='audio/webm;codecs=opus';}
   constructor(stream){this.stream=stream;this.events={};this.state='inactive';devices.push(this);}
@@ -27,12 +27,12 @@ function boot(){
  const context=vm.createContext({window,document,Blob,Uint8Array,fetch,AbortController,
   setTimeout(fn,ms){const t={fn,ms};timers.push(t);return t;},clearTimeout(t){if(t)t.closed=true;}});
  vm.runInContext(fs.readFileSync('dashboard/web/microphone.js','utf8'),context);
- let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,pauseAudio(){paused++;},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
+ let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,pauseAudio(){paused++;},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
  ui.configure(true);
  return {ui,nodes,uploads,originals,received,devices,events,timers,media,
   button:()=>nodes.get('#conversation-talk'),state:()=>nodes.get('#conversation-voice-state').textContent,
   click:()=>nodes.get('#conversation-talk').handlers.click(),cancel:()=>nodes.get('#conversation-voice-discard').handlers.click(),check:()=>nodes.get('#conversation-voice-check').handlers.click(),
-  captureState:(value,retired=false)=>{capturePhase=value;captureRetired=retired;},mode:value=>{mode=value;},permission:()=>{permission=deferred();return permission;},holdReceipt:()=>{receiptHold=deferred();return receiptHold;},holdUpload:()=>{uploadHold=deferred();return uploadHold;},bind:value=>{binding=value;},paused:()=>paused,unauthorized:()=>unauthorized,
+  select:value=>{selection=value;},captureState:(value,retired=false)=>{capturePhase=value;captureRetired=retired;},mode:value=>{mode=value;},permission:()=>{permission=deferred();return permission;},holdReceipt:()=>{receiptHold=deferred();return receiptHold;},holdUpload:()=>{uploadHold=deferred();return uploadHold;},bind:value=>{binding=value;},paused:()=>paused,unauthorized:()=>unauthorized,
  };
 }
 (async()=>{
@@ -56,5 +56,14 @@ function boot(){
  const race=boot();race.mode('before');await race.click();race.click();await until(()=>race.state().startsWith('Recording unconfirmed'));
  const hold=race.holdReceipt(),checking=race.check();race.ui.reset();race.bind('new-binding');race.ui.configure(true);await race.click();const uploading=race.holdUpload();race.click();await until(()=>race.uploads.length===2);hold.resolve();await checking;
  assert(race.button().disabled,'An old receipt read must not unlock a newer upload');assert.equal(race.received.length,0);uploading.resolve();await until(()=>race.received.length===1);
+ const focused=boot(),reference={source:'input:original',revision:'a'.repeat(64)};
+ focused.select({reference,version:1});const focusPermission=focused.permission(),focusStart=focused.click();
+ focused.select({reference:{source:'input:newer',revision:'b'.repeat(64)},version:2});
+ focusPermission.resolve(focused.media());await focusStart;focused.timers.find(t=>t.ms===120000).fn();
+ await until(()=>focused.button().textContent==='Send recording');focused.mode('before');focused.click();
+ await until(()=>focused.state().startsWith('Recording unconfirmed'));await focused.click();await until(()=>focused.received.length===1);
+ assert.equal(focused.uploads[0].headers['X-Reply-Source'],reference.source);
+ assert.equal(focused.uploads[0].headers['X-Reply-Revision'],reference.revision);
+ assert.deepEqual(focused.uploads[0].headers,focused.uploads[1].headers,'Permission delays, duration review and retries must retain the original reply focus');
  console.log('Microphone UI: finalized one-button capture, playback pause, source hashing, explicit identical retry, receipt-only recovery, hidden/cancel/late permission cleanup, duration-limit review and binding reset passed; zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

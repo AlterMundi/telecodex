@@ -161,7 +161,12 @@ fn preview(source: &mut Value) {
         .remove("text");
 }
 
-fn source_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Result<Option<Value>> {
+pub(super) fn source_on(
+    conn: &Connection,
+    human: i64,
+    entry: SessionKey,
+    id: &str,
+) -> Result<Option<Value>> {
     let (entry_session, entry_native) = entry_on(conn, human, entry)?;
     let mut source = if let Some(id) = id.strip_prefix("delivery:") {
         let row:Option<(String,String,Option<String>,String,bool)>=conn.query_row(
