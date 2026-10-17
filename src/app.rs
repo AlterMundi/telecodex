@@ -39,6 +39,7 @@ mod stopping;
 mod support;
 mod tribu;
 mod turns;
+mod voice;
 
 use crate::{
     codex::{
@@ -94,6 +95,8 @@ struct AppShared {
     bot_has_topics: bool,
     service_user_id: i64,
     handy_model_dir: Option<PathBuf>,
+    voice_preparations: Arc<tokio::sync::Semaphore>,
+    voice_shutdown: CancellationToken,
     session_defaults: SessionDefaults,
     limits_cache: Mutex<Option<CachedLimitsSnapshot>>,
     history_page_cache: Mutex<HistoryPageCache>,
@@ -314,6 +317,8 @@ impl App {
                 bot_has_topics: me.has_topics_enabled.unwrap_or(false),
                 service_user_id,
                 handy_model_dir,
+                voice_preparations: Arc::new(tokio::sync::Semaphore::new(2)),
+                voice_shutdown: CancellationToken::new(),
                 session_defaults,
                 limits_cache: Mutex::new(None),
                 history_page_cache: Mutex::new(HistoryPageCache::default()),
@@ -611,6 +616,9 @@ impl App {
             .maintenance_writer_held(&message, from.id, Some(text))
             .await?
         {
+            return Ok(());
+        }
+        if voice::handle(self, &message, from.id).await? {
             return Ok(());
         }
         if tribu::handle_topic_control(self, &message, from.id, text).await? {
@@ -1767,6 +1775,14 @@ impl App {
                     let shared = self.shared.clone();
                     tokio::spawn(async move {
                         sleep(Duration::from_millis(750)).await;
+                        // Hard exit bypasses Rust destructors. Cancel only owned voice
+                        // preparations and wait for their process-group cleanup first.
+                        shared.voice_shutdown.cancel();
+                        let _voice_drained = shared
+                            .voice_preparations
+                            .clone()
+                            .acquire_many_owned(2)
+                            .await;
                         if let Err(error) = shared.store.release_instance_lock() {
                             tracing::warn!(
                                 "failed to release database instance lock before restart: {error:#}"
@@ -2398,6 +2414,9 @@ impl App {
         } else {
             HUMAN_UPDATE_ID.try_with(|id| *id).ok()
         };
+        self.shared
+            .store
+            .voice_validate(update_id, request.session_key, request.from_user_id)?;
         request.prompt = nexus::input_prompt(
             &self.shared,
             update_id,
@@ -2466,6 +2485,9 @@ impl App {
             }
             return Ok(true);
         }
+        self.shared
+            .store
+            .voice_validate(update_id, session_key, from_user_id)?;
         let contextual_text =
             nexus::input_prompt(&self.shared, update_id, session_key, from_user_id, text)?;
         if let Some(id) = update_id {
@@ -2475,7 +2497,14 @@ impl App {
         if active
             .sender
             .send(CodexSteerRequest {
-                admission_check: None,
+                admission_check: Some({
+                    let shared = self.shared.clone();
+                    Arc::new(move || {
+                        shared
+                            .store
+                            .voice_validate(update_id, session_key, from_user_id)
+                    })
+                }),
                 client_message_id: update_id
                     .map(|id| format!("telegram:{}:{from_user_id}:{id}", session_key.chat_id)),
                 text: contextual_text,

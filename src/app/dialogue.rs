@@ -79,7 +79,7 @@ pub(super) fn tool_call(
             if request.tool=="interaction_inputs" {
                 if request.arguments!=json!({}) {bail!("Unexpected input query arguments");}
                 let inputs=shared.store.interaction_entry_inputs(key,human,&request.thread_id,None)?;
-                return Ok(json!({"kind":"original_integrating_inputs","bounded":true,"inputs":inputs.into_iter().filter_map(|u|{let m=u.message?;let text=m.text?;Some(json!({"input_update":u.update_id,"human":human,"origin":{"chat_id":m.chat.id,"thread_id":m.message_thread_id,"message_id":m.message_id},"text_excerpt":text.chars().take(2000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Vec<_>>()}));
+                return Ok(json!({"kind":"original_integrating_inputs","bounded":true,"inputs":inputs.into_iter().filter_map(|u|{let (text,transcription)=shared.store.interaction_input_content(&u,human).ok()?;let m=u.message?;Some(json!({"input_update":u.update_id,"human":human,"origin":{"chat_id":m.chat.id,"thread_id":m.message_thread_id,"message_id":m.message_id},"transcription":transcription,"text_excerpt":text.chars().take(2000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Vec<_>>()}));
             }
             if request.tool=="interaction_create" {
                 return super::creation::create(&app,key,human,&request.thread_id,request.arguments,&closed).await;
@@ -97,9 +97,10 @@ pub(super) fn tool_call(
             let args:DispatchArgs=serde_json::from_value(request.arguments)?;
             if args.input_update<0 || args.destinations.is_empty() || args.destinations.len()>5 {bail!("Invalid routing selection");}
             let original=shared.store.interaction_entry_inputs(key,human,&request.thread_id,Some(args.input_update))?.pop().context("Original input unavailable or retired")?;
+            let (content,transcription)=shared.store.interaction_input_content(&original,human)?;
             let message=original.message.context("Original human message missing")?;
-            let text=message.text.as_deref().context("Committed text missing")?;
-            if text.trim().is_empty() || text.starts_with('/') || !is_text_only_steer_candidate(&message,text) {bail!("This adapter requires original committed text");}
+            let text=content.as_str();
+            if text.trim().is_empty() || text.starts_with('/') || !(is_text_only_steer_candidate(&message,text) || transcription.is_some()) {bail!("This adapter requires original committed text");}
             let cfg=super::routing::profile(shared)?;
             let mut plan=vec![];
             for d in args.destinations {
@@ -117,7 +118,7 @@ pub(super) fn tool_call(
                 plan.push((target,observed.session_id,relation));
             }
             plan.sort_by_key(|(key,_,_)|(key.chat_id,key.thread_id));
-            let source=SourceInput{channel:format!("telegram:{}",shared.bot_id),event_id:args.input_update.to_string(),update_id:Some(args.input_update),human_id:human,target_sessions:plan.iter().map(|(_,id,_)|*id).collect(),origin:ReturnRoute{chat_id:message.chat.id,thread_id:message.message_thread_id.unwrap_or(0),message_id:message.message_id},text:text.to_owned()};
+            let source=SourceInput{ transcription,channel:format!("telegram:{}",shared.bot_id),event_id:args.input_update.to_string(),update_id:Some(args.input_update),human_id:human,target_sessions:plan.iter().map(|(_,id,_)|*id).collect(),origin:ReturnRoute{chat_id:message.chat.id,thread_id:message.message_thread_id.unwrap_or(0),message_id:message.message_id},text:text.to_owned()};
             if closed.is_cancelled() {bail!("Tool request closed before admission");}
             let selected=plan.into_iter().map(|(key,_,relation)|(key,relation)).collect::<Vec<_>>();
             let admitted=shared.store.interaction_admit_entry_plan(key,human,&request.thread_id,&source,&selected,&closed)?;

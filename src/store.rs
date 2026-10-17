@@ -17,6 +17,7 @@ mod merging;
 mod routing;
 mod session_requests;
 mod stopping;
+mod voice;
 pub use stopping::{StopOperation, StopTarget};
 mod nexus;
 mod observer;
@@ -87,6 +88,7 @@ impl Store {
         store.init_tribu()?;
         store.init_interactions()?;
         store.init_interaction()?;
+        store.init_voice()?;
         store.init_interaction_creation()?;
         store.init_routing()?;
         store.init_session_requests()?;
@@ -356,7 +358,7 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute(
             "UPDATE incoming_updates SET status=?2,updated_at=?3
-             WHERE update_id=?1 AND instance_id=?4 AND status='processing'",
+             WHERE update_id=?1 AND instance_id=?4 AND status='processing' AND NOT EXISTS(SELECT 1 FROM interaction_voice_inputs v WHERE v.update_id=?1 AND v.phase IN ('preparing','committed'))",
             params![
                 update_id,
                 if success { "handled" } else { "undetermined" },

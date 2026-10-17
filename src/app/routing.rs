@@ -594,6 +594,11 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
     };
     if targets.len() != 1 {
         let source = SourceInput {
+            transcription: app
+                .shared
+                .store
+                .voice_content_for_message(update, message, human)?
+                .map(|(_, source)| source),
             channel: format!("telegram:{}", app.shared.bot_id),
             event_id: update.to_string(),
             update_id: Some(update),
@@ -628,7 +633,16 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
         return Ok(true);
     }
     if body == "/interrupt" {
-        let requested = app.stop_session(target).await;
+        app.shared
+            .store
+            .voice_validate(Some(update), cfg.entry(), human)?;
+        let requested = if let Some(requested) = super::voice::interrupt_snapshot(target) {
+            // Voice selected the execution present when the clip entered. It must
+            // never withdraw dependencies or cancel work begun during ASR.
+            requested
+        } else {
+            app.stop_session(target).await
+        };
         notice(
             app.shared.clone(),
             origin,
@@ -685,7 +699,15 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
         });
         return Ok(true);
     }
-    if !is_text_only_steer_candidate(message, text) {
+    let voice = app
+        .shared
+        .store
+        .voice_content_for_message(update, message, human)?;
+    if !is_text_only_steer_candidate(message, text)
+        && voice
+            .as_ref()
+            .is_none_or(|(committed, _)| committed != text)
+    {
         notice(app.shared.clone(),origin,"This router currently accepts committed text. The input was retained without dispatch.".into());
         return Ok(true);
     }
@@ -749,6 +771,15 @@ async fn admit_message(
         .get_session(target)?
         .context("Selected interaction session missing")?;
     let source = SourceInput {
+        transcription: app
+            .shared
+            .store
+            .voice_content_for_message(
+                update,
+                message,
+                message.from.as_ref().context("Missing voice author")?.id,
+            )?
+            .map(|(_, source)| source),
         channel: format!("telegram:{}", app.shared.bot_id),
         event_id: update.to_string(),
         update_id: Some(update),
@@ -774,7 +805,7 @@ async fn admit_message(
 fn packet(shared: &AppShared, i: &Instruction) -> Result<String> {
     let source = shared.store.interaction_source(&i.id, i.human_id)?;
     let author = shared.store.interaction_author(&i.id, i.human_id)?;
-    let provenance = serde_json::json!({"via":"interaction-controller","original_human_author":if author.is_none(){Some(i.human_id)}else{None},"authorized_human":i.human_id,"author":author,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id});
+    let provenance = serde_json::json!({"via":"interaction-controller","original_human_author":if author.is_none(){Some(i.human_id)}else{None},"authorized_human":i.human_id,"author":author,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id,"transcription":source.transcription});
     let context = shared
         .store
         .interaction_request_inputs(&i.requests, i.human_id)?;

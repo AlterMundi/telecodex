@@ -119,6 +119,8 @@ pub struct ReturnRoute {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcription: Option<crate::voice::TranscriptSource>,
     pub channel: String,
     pub event_id: String,
     pub update_id: Option<i64>,

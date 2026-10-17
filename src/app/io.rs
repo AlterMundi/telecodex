@@ -197,6 +197,19 @@ impl App {
         kind: AttachmentKind,
         target_dir: &Path,
     ) -> Result<LocalAttachment> {
+        self.download_attachment_bounded(file_id, file_name, mime_type, kind, target_dir, None)
+            .await
+    }
+
+    pub(super) async fn download_attachment_bounded(
+        &self,
+        file_id: &str,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        kind: AttachmentKind,
+        target_dir: &Path,
+        max_bytes: Option<u64>,
+    ) -> Result<LocalAttachment> {
         let file = self
             .shared
             .telegram
@@ -222,11 +235,18 @@ impl App {
             extension,
         );
         let path = target_dir.join(format!("{}_{}", Uuid::now_v7(), file_name));
-        self.shared
-            .telegram
-            .download_file(&file_path, &path, file.file_size)
-            .await
-            .context("failed to save Telegram attachment")?;
+        if let Some(limit) = max_bytes {
+            self.shared
+                .telegram
+                .download_file_limited(&file_path, &path, file.file_size, limit)
+                .await
+        } else {
+            self.shared
+                .telegram
+                .download_file(&file_path, &path, file.file_size)
+                .await
+        }
+        .context("failed to save Telegram attachment")?;
         Ok(LocalAttachment {
             path,
             file_name,

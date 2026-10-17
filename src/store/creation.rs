@@ -67,8 +67,8 @@ impl Store {
         let original = super::dialogue::entry_inputs_on(&tx, key, human, native, Some(update))?
             .pop()
             .context("Original input unavailable")?;
+        let (text, transcription) = super::voice::content_on(&tx, &original, human)?;
         let source = original.message.context("Original message missing")?;
-        let text = source.text.context("Original text missing")?;
         if text.trim().is_empty()
             || text.trim_start().starts_with('/')
             || context.to_string().len() > 48000
@@ -84,7 +84,10 @@ impl Store {
             .as_bytes(),
         )
         .to_string();
-        let doc = json!({"id":id,"human":human,"entry":key,"entry_native":native,"input_update":update,"name":name,"reason":reason,"context":context,"original_text":text,"origin":{"chat_id":source.chat.id,"thread_id":source.message_thread_id.unwrap_or(0),"message_id":source.message_id}});
+        let mut doc = json!({"id":id,"human":human,"entry":key,"entry_native":native,"input_update":update,"name":name,"reason":reason,"context":context,"original_text":text,"origin":{"chat_id":source.chat.id,"thread_id":source.message_thread_id.unwrap_or(0),"message_id":source.message_id}});
+        if let Some(transcription) = transcription {
+            doc["transcription"] = serde_json::to_value(transcription)?;
+        }
         if let Some(existing) = tx
             .query_row(
                 "SELECT doc FROM interaction_creations WHERE id=?1",
@@ -192,6 +195,9 @@ impl Store {
         let topic = operation["topic"].as_i64().context("Missing topic")?;
         let session:i64=tx.query_row("SELECT id FROM sessions WHERE chat_id=?1 AND thread_id=?2 AND creator_user_id=?3 AND codex_thread_id IS NULL AND force_fresh_thread=1",params![entry.chat_id,topic,human],|r|r.get(0))?;
         let source = SourceInput {
+            transcription: serde_json::from_value(
+                d.get("transcription").cloned().unwrap_or(Value::Null),
+            )?,
             channel: channel.into(),
             event_id: d["input_update"].to_string(),
             update_id: d["input_update"].as_i64(),
@@ -273,7 +279,14 @@ fn eligible(conn: &Connection, operation: &Value) -> Result<()> {
         .as_ref()
         .context("Original message missing")?;
     let origin: ReturnRoute = serde_json::from_value(d["origin"].clone())?;
-    if message.text.as_deref() != d["original_text"].as_str()
+    let (content, transcription) = super::voice::content_on(
+        conn,
+        &original[0],
+        d["human"].as_i64().context("Missing human")?,
+    )?;
+    if Some(content.as_str()) != d["original_text"].as_str()
+        || serde_json::to_value(transcription)?
+            != d.get("transcription").cloned().unwrap_or(Value::Null)
         || message.chat.id != origin.chat_id
         || message.message_thread_id.unwrap_or(0) != origin.thread_id
         || message.message_id != origin.message_id
@@ -343,6 +356,7 @@ mod tests {
         let oldrow = store.ensure_session(old, 100, &defaults).unwrap();
         store.set_session_codex_thread(old, "old-native").unwrap();
         let input = SourceInput {
+            transcription: None,
             channel: "telegram:fixture".into(),
             event_id: "20".into(),
             update_id: Some(20),

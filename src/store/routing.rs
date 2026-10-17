@@ -583,6 +583,7 @@ mod tests {
     fn admit(s: &Store, target: &SessionRecord, event: i64, relation: R) -> Instruction {
         s.interaction_admit(
             &SourceInput {
+                transcription: None,
                 channel: "fixture".into(),
                 event_id: event.to_string(),
                 update_id: Some(event),

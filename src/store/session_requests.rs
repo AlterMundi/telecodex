@@ -139,6 +139,7 @@ impl Store {
         )
         .to_string();
         let source = SourceInput {
+            transcription: None,
             channel: "local-session".into(),
             event_id: id.clone(),
             update_id: None,
@@ -375,6 +376,7 @@ impl Store {
             d.body.chars().take(16000).collect::<String>()
         );
         let source = SourceInput {
+            transcription: None,
             channel: "local-session-result".into(),
             event_id: call.id.clone(),
             update_id: None,
@@ -459,6 +461,7 @@ mod tests {
         let i = s
             .interaction_admit(
                 &SourceInput {
+                    transcription: None,
                     channel: "fixture".into(),
                     event_id: "human-parent".into(),
                     update_id: None,

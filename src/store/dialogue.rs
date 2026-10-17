@@ -29,7 +29,7 @@ fn entry_inputs_query(
     selected: Option<i64>,
     committed: bool,
 ) -> Result<Vec<crate::telegram::Update>> {
-    let mut query=conn.prepare("SELECT i.payload_json FROM incoming_updates i JOIN turns t ON t.id=i.turn_id JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN bot_state captured ON captured.key='stop_input_epoch:'||i.update_id LEFT JOIN bot_state current ON current.key='stop_admission_epoch:'||s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND t.from_user_id=?3 AND s.codex_thread_id=?4 AND t.native_thread_id=?4 AND (i.status IN ('started','settled','steering') OR (?6=1 AND i.status='undetermined' AND EXISTS(SELECT 1 FROM interaction_creations c WHERE c.human_id=?3 AND c.entry_chat=?1 AND c.entry_topic=?2 AND c.input_update=i.update_id))) AND json_extract(i.payload_json,'$.message.from.id')=?3 AND json_extract(i.payload_json,'$.message.chat.id')=?1 AND json_extract(i.payload_json,'$.message.message_thread_id')=?2 AND json_type(i.payload_json,'$.message.text')='text' AND captured.value=COALESCE(current.value,'initial') AND (?5 IS NULL OR i.update_id=?5) ORDER BY i.update_id DESC LIMIT 12")?;
+    let mut query=conn.prepare("SELECT i.payload_json FROM incoming_updates i JOIN turns t ON t.id=i.turn_id JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN bot_state captured ON captured.key='stop_input_epoch:'||i.update_id LEFT JOIN bot_state current ON current.key='stop_admission_epoch:'||s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND t.from_user_id=?3 AND s.codex_thread_id=?4 AND t.native_thread_id=?4 AND (i.status IN ('started','settled','steering') OR (?6=1 AND i.status='undetermined' AND EXISTS(SELECT 1 FROM interaction_creations c WHERE c.human_id=?3 AND c.entry_chat=?1 AND c.entry_topic=?2 AND c.input_update=i.update_id))) AND json_extract(i.payload_json,'$.message.from.id')=?3 AND json_extract(i.payload_json,'$.message.chat.id')=?1 AND json_extract(i.payload_json,'$.message.message_thread_id')=?2 AND (json_type(i.payload_json,'$.message.text')='text' OR EXISTS(SELECT 1 FROM interaction_voice_inputs v WHERE v.update_id=i.update_id AND v.human_id=?3 AND v.phase='committed')) AND captured.value=COALESCE(current.value,'initial') AND (?5 IS NULL OR i.update_id=?5) ORDER BY i.update_id DESC LIMIT 12")?;
     let rows = query.query_map(
         params![
             key.chat_id,
@@ -77,10 +77,12 @@ impl Store {
         let original = entry_inputs_on(&tx, key, human, native, Some(update))?
             .pop()
             .context("Original entry input no longer eligible")?;
+        let (content, transcription) = super::voice::content_on(&tx, &original, human)?;
         let message = original.message.context("Missing original message")?;
         if source.human_id != human
             || source.event_id != update.to_string()
-            || message.text.as_deref() != Some(source.text.as_str())
+            || content != source.text
+            || transcription != source.transcription
             || source.origin.chat_id != message.chat.id
             || source.origin.thread_id != message.message_thread_id.unwrap_or(0)
             || source.origin.message_id != message.message_id
@@ -128,7 +130,7 @@ impl Store {
                 r.get::<_, String>(2)?,
             ))
         })?;
-        rows.map(|row|{let(doc,phase,source)=row?;let i:crate::interaction::Instruction=serde_json::from_str(&doc)?;let source:crate::interaction::SourceInput=serde_json::from_str(&source)?;let author=super::session_requests::author_on(&conn,&i.input_id)?;Ok(json!({"author":author,"instruction":i.id,"requests":i.requests,"relation":i.relation,"transport_phase":phase,"source_channel":source.channel,"original_ingress_update":source.update_id,"source_message":source.origin,"human_text_excerpt":if author.is_none(){Some(i.text.chars().take(4000).collect::<String>())}else{None},"attributed_text_excerpt":i.text.chars().take(4000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Result<Vec<Value>>>()
+        rows.map(|row|{let(doc,phase,source)=row?;let i:crate::interaction::Instruction=serde_json::from_str(&doc)?;let source:crate::interaction::SourceInput=serde_json::from_str(&source)?;let author=super::session_requests::author_on(&conn,&i.input_id)?;Ok(json!({"author":author,"instruction":i.id,"requests":i.requests,"relation":i.relation,"transport_phase":phase,"source_channel":source.channel,"transcription":source.transcription,"original_ingress_update":source.update_id,"source_message":source.origin,"human_text_excerpt":if author.is_none() && source.transcription.is_none(){Some(i.text.chars().take(4000).collect::<String>())}else{None},"attributed_text_excerpt":i.text.chars().take(4000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Result<Vec<Value>>>()
     }
 }
 
@@ -200,6 +202,7 @@ mod tests {
         );
         let closed = tokio_util::sync::CancellationToken::new();
         let mut source = SourceInput {
+            transcription: None,
             channel: "telegram:fixture".into(),
             event_id: "20".into(),
             update_id: Some(20),

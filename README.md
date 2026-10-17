@@ -44,6 +44,10 @@ The opt-in [Nexus Mini App adapter](docs/nexus-conversation.md) brings selected
 human contributions into an existing native topic, retaining source references,
 observed replies and receipt-only recovery without resetting the conversation.
 
+The opt-in [voice input adapter](docs/interaction-voice.md) commits attributed
+file transcriptions in the integrating conversation while text controls remain
+responsive.
+
 ## ✨ What it is
 
 **Telecodex** is a Rust bridge that connects a local `codex` CLI instance to Telegram.

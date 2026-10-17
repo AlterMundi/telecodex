@@ -80,6 +80,7 @@ impl Drop for CodexHomeGuard {
 
 fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
     Config {
+        voice: None,
         interaction: None,
         nexus: None,
         session_control: None,
@@ -144,6 +145,8 @@ fn sample_app() -> (App, NamedTempFile) {
         bot_has_topics: false,
         service_user_id: 0,
         handy_model_dir: None,
+        voice_preparations: Arc::new(tokio::sync::Semaphore::new(2)),
+        voice_shutdown: CancellationToken::new(),
         session_defaults: sample_defaults(),
         limits_cache: Mutex::new(None),
         history_page_cache: Mutex::new(HistoryPageCache::default()),
@@ -1954,6 +1957,8 @@ fn rebinds_stale_session_to_latest_active_thread_for_same_cwd() {
         bot_has_topics: false,
         service_user_id: 0,
         handy_model_dir: None,
+        voice_preparations: Arc::new(tokio::sync::Semaphore::new(2)),
+        voice_shutdown: CancellationToken::new(),
         session_defaults: sample_defaults(),
         limits_cache: Mutex::new(None),
         history_page_cache: Mutex::new(HistoryPageCache::default()),
@@ -2077,6 +2082,8 @@ fn keeps_truly_archived_session_unbound_when_no_active_replacement_exists() {
         bot_has_topics: false,
         service_user_id: 0,
         handy_model_dir: None,
+        voice_preparations: Arc::new(tokio::sync::Semaphore::new(2)),
+        voice_shutdown: CancellationToken::new(),
         session_defaults: sample_defaults(),
         limits_cache: Mutex::new(None),
         history_page_cache: Mutex::new(HistoryPageCache::default()),

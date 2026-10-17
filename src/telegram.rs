@@ -511,7 +511,40 @@ impl TelegramClient {
         expected_size: Option<u64>,
         timeout: Duration,
     ) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
+        self.download_file_bounded(file_path, destination, expected_size, timeout, None)
+            .await
+    }
+
+    /// Bound transfer itself, including chunked responses and growing local files.
+    pub async fn download_file_limited(
+        &self,
+        file_path: &str,
+        destination: &std::path::Path,
+        expected_size: Option<u64>,
+        max_bytes: u64,
+    ) -> Result<()> {
+        self.download_file_bounded(
+            file_path,
+            destination,
+            expected_size,
+            TELEGRAM_DOWNLOAD_TIMEOUT,
+            Some(max_bytes),
+        )
+        .await
+    }
+
+    async fn download_file_bounded(
+        &self,
+        file_path: &str,
+        destination: &std::path::Path,
+        expected_size: Option<u64>,
+        timeout: Duration,
+        max_bytes: Option<u64>,
+    ) -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        if max_bytes.is_some_and(|limit| expected_size.is_some_and(|size| size > limit)) {
+            bail!("Telegram attachment exceeds transfer limit");
+        }
 
         if file_path.starts_with('/') {
             let root = self.local_file_root.as_deref().context(
@@ -528,9 +561,25 @@ impl TelegramClient {
             if expected_size.is_some_and(|size| size != expected) {
                 bail!("local Telegram attachment size differs from getFile");
             }
-            let received = tokio::time::timeout(timeout, tokio::io::copy(&mut source, &mut output))
+            if max_bytes.is_some_and(|limit| expected > limit) {
+                bail!("Telegram attachment exceeds transfer limit");
+            }
+            let received = if let Some(limit) = max_bytes {
+                tokio::time::timeout(
+                    timeout,
+                    tokio::io::copy(
+                        &mut (&mut source).take(limit.saturating_add(1)),
+                        &mut output,
+                    ),
+                )
                 .await
-                .context("local attachment copy timed out")??;
+            } else {
+                tokio::time::timeout(timeout, tokio::io::copy(&mut source, &mut output)).await
+            }
+            .context("local attachment copy timed out")??;
+            if max_bytes.is_some_and(|limit| received > limit) {
+                bail!("Telegram attachment exceeds transfer limit");
+            }
             if received != expected || source.metadata().await?.len() != expected {
                 bail!("incomplete local Telegram file copy");
             }
@@ -573,14 +622,22 @@ impl TelegramClient {
         let temporary = tempfile::NamedTempFile::new_in(directory)?;
         let mut output = tokio::fs::File::from_std(temporary.reopen()?);
         let expected = response.content_length();
+        if max_bytes.is_some_and(|limit| expected.is_some_and(|size| size > limit)) {
+            bail!("Telegram attachment exceeds transfer limit");
+        }
         let mut received = 0u64;
         while let Some(chunk) = response
             .chunk()
             .await
             .map_err(reqwest::Error::without_url)?
         {
+            received = received
+                .checked_add(chunk.len() as u64)
+                .context("Telegram attachment size overflow")?;
+            if max_bytes.is_some_and(|limit| received > limit) {
+                bail!("Telegram attachment exceeds transfer limit");
+            }
             output.write_all(&chunk).await?;
-            received += chunk.len() as u64;
         }
         if expected.is_some_and(|length| length != received)
             || expected_size.is_some_and(|length| length != received)
@@ -1586,6 +1643,54 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn bounded_transfer_rejects_metadata_and_chunked_overflow_without_publication() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for response in [
+                "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabcdef",
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n",
+            ] {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut header = vec![];
+                while !header.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    socket.read_exact(&mut byte).unwrap();
+                    header.push(byte[0]);
+                }
+                socket.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("never-published");
+        let client = TelegramClient::new("synthetic-token".into(), base);
+        for _ in 0..2 {
+            let error = client
+                .download_file_limited("voice/clip", &target, None, 4)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("transfer limit"));
+            assert!(!format!("{error:?}").contains("synthetic-token"));
+            assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        }
+        server.join().unwrap();
+        let unavailable =
+            TelegramClient::new("synthetic-token".into(), "http://127.0.0.1:1".into());
+        assert!(
+            unavailable
+                .download_file_limited("voice/clip", &target, Some(5), 4)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("transfer limit")
+        );
+    }
+
+    #[tokio::test]
     async fn timed_out_download_never_publishes_partial_file() {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1641,6 +1746,15 @@ pub(crate) mod tests {
                 .is_err()
         );
         let failed = root.join("failed");
+        assert!(
+            client
+                .download_file_limited(source.to_str().unwrap(), &failed, None, 20 * 1024 * 1024)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("transfer limit")
+        );
+        assert!(!failed.exists());
         assert!(
             client
                 .download_file(source.to_str().unwrap(), &failed, Some(1))

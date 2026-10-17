@@ -3,6 +3,7 @@
 //! Native completion records describe observed items, not which instructions a
 //! worker incorporated. Request coverage and publication are separate states.
 use super::*;
+use anyhow::bail;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_native_message_on(
@@ -88,6 +89,24 @@ pub(super) fn admit_on(
             {
                 return Err(anyhow!("Original input has an immutable creation plan"));
             }
+        }
+    }
+    if let Some(transcription) = &source.transcription {
+        let update = source
+            .update_id
+            .context("Voice source lacks original ingress")?;
+        let raw: String = tx.query_row(
+            "SELECT payload_json FROM incoming_updates WHERE update_id=?1",
+            [update],
+            |r| r.get(0),
+        )?;
+        let original: crate::telegram::Update = serde_json::from_str(&raw)?;
+        let (content, proof) = super::voice::content_on(tx, &original, source.human_id)?;
+        let body = crate::interaction::explicit_selector(&content).map(|(_, body)| body);
+        if proof.as_ref() != Some(transcription)
+            || (source.text != content && body != Some(source.text.as_str()))
+        {
+            bail!("Voice input does not match committed interpretation");
         }
     }
     let id = Uuid::new_v5(
@@ -719,6 +738,7 @@ mod tests {
     }
     fn input(event: i64, targets: &[i64]) -> crate::interaction::SourceInput {
         crate::interaction::SourceInput {
+            transcription: None,
             channel: "telegram:test-bot".into(),
             event_id: event.to_string(),
             update_id: Some(event),
