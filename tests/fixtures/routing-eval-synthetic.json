@@ -1,0 +1,442 @@
+{
+  "schema": "telecodex.routing-eval/v1",
+  "cards": [
+    {
+      "id": "nexus",
+      "name": "Nexus",
+      "summary": "Explore recordings and shared research. Research publication sources interviews navigation mapa grabaciones investigación colectiva fuentes informes."
+    },
+    {
+      "id": "field",
+      "name": "Field",
+      "summary": "Daimon Field Wiggle Control. Camera frames gestures hand pointing coordinates video referencia visual manos gestos cámara selección objetos."
+    },
+    {
+      "id": "beacon",
+      "name": "Beacon",
+      "summary": "Harmonic Beacon instrument. N20 motor tines strings harmonic tuning MIDI cuerda afinación motor instrumento armónicos."
+    }
+  ],
+  "cases": [
+    {
+      "id": "explicit",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "#Nexus Agregá las fuentes al informe.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "nexus"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quoted",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "La cadena `#Field` aparece en un ejemplo. ¿Qué significa un selector?",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "local",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "recording",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "¿Podés buscar en las grabaciones dónde discutimos las fuentes del informe?",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "nexus"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gesture",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "La mano apunta al objeto de la izquierda; revisá las coordenadas de esa selección.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "field"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "motor",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "El motor N20 sigue vibrando cuando afinamos las cuerdas.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ambiguous",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Seguí con eso.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "clarify",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "local",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Antes de mandar trabajo quiero conversar sobre las ventajas de tener un integrador.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "local",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "new",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Quiero comenzar un trabajo nuevo de catalogación de semillas autóctonas, sin relación con los otros proyectos.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "new",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "reply",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Cambiá ese valor a 12.",
+      "context": {
+        "reply_target": "beacon",
+        "prior_request": "synthetic-motor-rate"
+      },
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multi",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Comparen el gesto de selección de Field con la navegación por grabaciones de Nexus, cada sesión desde su proyecto.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "field",
+            "nexus"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "busy",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "#Beacon Seguí afinando las cuerdas cuando haya lugar. No abras otro contexto.",
+      "context": {
+        "busy": [
+          "beacon"
+        ]
+      },
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "correction",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "No era para Field: ese informe es de Nexus.",
+      "context": {
+        "prior_proposed_target": "field",
+        "human_correction": true
+      },
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "nexus"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "english",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "The camera reference frame changed after the pointing gesture; recheck the selected object.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "field"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "subject-switch",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Dejemos el informe. Ahora revisemos la afinación armónica de las cuerdas del Beacon.",
+      "context": {
+        "previous_focus": "nexus"
+      },
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quote-other",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "#Nexus El título del informe debe ser “#Beacon y sus armónicos”.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "nexus"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "status",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "¿Qué sesiones están trabajando ahora?",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "local",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "two-possible",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Revisá la publicación del video de la cámara.",
+      "context": {
+        "plausible_targets": [
+          "nexus",
+          "field"
+        ]
+      },
+      "acceptable": [
+        {
+          "action": "clarify",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "context",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Para la investigación de Nexus, tené en cuenta esta lista de fuentes.",
+      "context": {
+        "relation": "context",
+        "prior_request": "synthetic-research"
+      },
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "nexus"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cancel-playback",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Dejá de leerme esa respuesta en voz alta, pero que el trabajo siga.",
+      "context": {
+        "presentation": "playing_audio",
+        "worker": "field"
+      },
+      "acceptable": [
+        {
+          "action": "local",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "no-new-busy",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "La investigación de Nexus tarda. ¿En qué va?",
+      "context": {
+        "busy": [
+          "nexus"
+        ],
+        "intent": "read_only_status"
+      },
+      "acceptable": [
+        {
+          "action": "local",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "typo",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Revisemos la afinasión de las cuerdas del instrumento.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "beacon"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "new-discussion",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "¿Te parece que convendría comenzar una investigación sobre semillas? Todavía no la arranques.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "local",
+          "targets": []
+        }
+      ]
+    },
+    {
+      "id": "reply-conflict",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "#Field revisá esa cámara.",
+      "context": {
+        "reply_target": "beacon",
+        "selector_reply_conflict": true
+      },
+      "acceptable": [
+        {
+          "action": "route",
+          "targets": [
+            "field"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "no-task",
+      "source": {
+        "kind": "synthetic",
+        "reference": "authored routing contrast set; no private conversation"
+      },
+      "text": "Gracias, seguimos después.",
+      "context": {},
+      "acceptable": [
+        {
+          "action": "local",
+          "targets": []
+        }
+      ]
+    }
+  ]
+}
