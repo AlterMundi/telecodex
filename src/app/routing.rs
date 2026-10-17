@@ -972,6 +972,7 @@ fn queue_root(
             }
             .into(),
             update_id: None,
+            conversation_input: None,
             tribu_admission: None,
             goal: None,
             nexus: None,

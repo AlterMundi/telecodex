@@ -9,6 +9,7 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+mod conversation_inputs;
 mod creation;
 mod dialogue;
 mod interaction;
@@ -18,6 +19,7 @@ mod routing;
 mod session_requests;
 mod stopping;
 mod voice;
+pub use conversation_inputs::{ConversationInput, ConversationInputEvent};
 pub use stopping::{StopOperation, StopTarget};
 mod nexus;
 mod observer;
@@ -43,6 +45,17 @@ pub const INSTANCE_LOCK_LOST_ERROR: &str = "Telecodex database instance lock was
 pub struct Store {
     conn: Mutex<Connection>,
     instance_id: String,
+}
+
+fn maintenance_writer_held_on(conn: &Connection, key: SessionKey) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM bot_state WHERE key=?1)",
+        [format!(
+            "native_writer_hold:{}:{}",
+            key.chat_id, key.thread_id
+        )],
+        |r| r.get(0),
+    )?)
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +109,7 @@ impl Store {
         store.init_nexus()?;
         store.init_merging()?;
         store.init_stopping()?;
+        store.init_conversation_inputs()?;
         store.init_observer_cards()?;
         store.init_observer_freshness()?;
         // A restarted process cannot continue a previous command's activity lease.
@@ -466,12 +480,7 @@ impl Store {
     }
 
     pub fn maintenance_writer_held(&self, key: SessionKey) -> Result<bool> {
-        Ok(self
-            .bot_state_value(&format!(
-                "native_writer_hold:{}:{}",
-                key.chat_id, key.thread_id
-            ))?
-            .is_some())
+        maintenance_writer_held_on(&self.conn.lock().expect("store mutex poisoned"), key)
     }
 
     pub fn bot_state_value(&self, key: &str) -> Result<Option<String>> {

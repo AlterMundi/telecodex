@@ -28,6 +28,14 @@ pub struct StopOperation {
     pub phase: String,
     pub targets: Vec<StopTarget>,
 }
+
+pub(super) fn admission_epoch_on(conn: &Connection, key: SessionKey) -> Result<String> {
+    Ok(conn.query_row("SELECT COALESCE(b.value,'initial') FROM sessions s LEFT JOIN bot_state b ON b.key='stop_admission_epoch:'||s.creator_user_id WHERE s.chat_id=? AND s.thread_id=?",params![key.chat_id,key.thread_id],|r|r.get(0))?)
+}
+
+pub(super) fn fenced_on(conn: &Connection, key: SessionKey) -> Result<bool> {
+    Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM sessions s JOIN stop_operations o ON o.human=s.creator_user_id WHERE s.chat_id=? AND s.thread_id=? AND o.phase NOT IN ('resumed','resumed_with_failures','released','superseded'))",params![key.chat_id,key.thread_id],|r|r.get(0))?)
+}
 impl Store {
     pub(super) fn init_stopping(&self) -> Result<()> {
         self.conn.lock().expect("store mutex poisoned").execute_batch("CREATE TABLE IF NOT EXISTS stop_operations(id TEXT PRIMARY KEY,human INTEGER NOT NULL,nonce TEXT NOT NULL,phase TEXT NOT NULL,document TEXT NOT NULL,UNIQUE(human,nonce));")?;
@@ -172,11 +180,11 @@ impl Store {
     /// Admission epochs survive release and restart: old queue entries never revive.
     pub fn stop_admission_epoch(&self, key: SessionKey) -> Result<String> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        Ok(conn.query_row("SELECT COALESCE(b.value,'initial') FROM sessions s LEFT JOIN bot_state b ON b.key='stop_admission_epoch:'||s.creator_user_id WHERE s.chat_id=? AND s.thread_id=?",params![key.chat_id,key.thread_id],|r|r.get(0))?)
+        admission_epoch_on(&conn, key)
     }
     pub fn stop_fenced(&self, key: SessionKey) -> Result<bool> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM sessions s JOIN stop_operations o ON o.human=s.creator_user_id WHERE s.chat_id=? AND s.thread_id=? AND o.phase NOT IN ('resumed','resumed_with_failures','released','superseded'))",params![key.chat_id,key.thread_id],|r|r.get(0))?)
+        fenced_on(&conn, key)
     }
     pub fn stop_validate_resume(&self, id: &str, key: SessionKey, human: i64) -> Result<()> {
         let op = self.stop_read(human, id)?;

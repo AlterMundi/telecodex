@@ -35,6 +35,17 @@ use tokio_util::sync::CancellationToken;
 mod goals;
 pub use goals::{GoalActivation, GoalControl, GoalStopSnapshot, NativeGoal};
 
+/// The provider observed cancellation before it attempted the initial native
+/// write. This is distinct from a lost acknowledgment after transmission.
+#[derive(Debug)]
+pub struct NativeInputNotSubmitted;
+impl std::fmt::Display for NativeInputNotSubmitted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("native input was not submitted")
+    }
+}
+impl std::error::Error for NativeInputNotSubmitted {}
+
 #[derive(Clone)]
 pub struct CodexRunner {
     binary: PathBuf,
@@ -965,6 +976,9 @@ where
     F: FnMut(CodexEvent) -> Fut,
     Fut: std::future::Future<Output = Result<CodexEventOutcome>>,
 {
+    let mut initial_write_possible = false;
+    let mut collecting_existing = goal_activation.is_some_and(|a| a.attach_turn.is_some());
+    let result: Result<RunSummary> = async {
     // Close every unadmitted tool on all returns, transport failures and future
     // abortion, including exits that bypass the explicit event-loop cleanup.
     let tool_run = CancellationToken::new();
@@ -1077,6 +1091,7 @@ where
                 .and_then(Value::as_str)
                 .map(str::to_string);
         }
+        collecting_existing |= adopted_turn.is_some();
         if let Some(expected_turn) = &activation.attach_turn {
             if activation.objective.is_some()
                 || activation.replace
@@ -1175,11 +1190,15 @@ where
         }
     }
     if cancel.is_cancelled() {
-        bail!("cancelled before native submission");
+        if adopted_turn.is_none() {
+            return Err(anyhow::Error::new(NativeInputNotSubmitted));
+        }
+        bail!("cancelled before native collection");
     }
     let turn_request_id = if adopted_turn.is_some() {
         None
     } else {
+        initial_write_possible = true;
         Some(process.send_request("turn/start", params).await?)
     };
     let mut goal_activation_id = None;
@@ -1478,6 +1497,12 @@ where
         bail!("codex turn cancelled");
     }
     Ok(summary)
+    }.await;
+    if !initial_write_possible && !collecting_existing {
+        result.map_err(|error| error.context(NativeInputNotSubmitted))
+    } else {
+        result
+    }
 }
 
 fn goal_definitions_match(current: Option<&NativeGoal>, expected: Option<&NativeGoal>) -> bool {
@@ -2020,7 +2045,7 @@ fn build_turn_start_params(
     request: &TurnRequest,
 ) -> Value {
     let effective_search_mode = request.override_search_mode.unwrap_or(session.search_mode);
-    let prompt = request.prompt.trim();
+    let prompt = request.prompt.as_str();
     let mut input = vec![json!({"type":"text","text":prompt,"text_elements":[]})];
     for image in request.image_paths() {
         input.push(json!({"type":"localImage","path":sanitize_arg_path(&image)}));
@@ -3180,6 +3205,65 @@ mod tests {
         assert_eq!(
             received.await.unwrap().unwrap(),
             Some("prepared-turn".into())
+        );
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_after_admission_proves_no_initial_native_write() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let binary = proxy_fixture(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(message)) = socket.next().await {
+                if message.is_close() {
+                    break;
+                }
+                let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                let result = match request["method"].as_str() {
+                    Some("initialize") => json!({}),
+                    Some("initialized") => continue,
+                    Some("thread/start") => {
+                        json!({"thread":{"id":"cancel-before-write"},"model":"synthetic"})
+                    }
+                    Some("thread/goal/get") => json!({"goal":null}),
+                    other => panic!("No native input RPC should be written: {other:?}"),
+                };
+                socket
+                    .send(WsMessage::Text(
+                        json!({"id":request["id"],"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let mut session = session_with_sandbox("read-only");
+        session.codex_thread_id = None;
+        session.force_fresh_thread = true;
+        let mut request = review_request();
+        request.review_mode = None;
+        let (_, receive) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let on_admission = cancel.clone();
+        let result = CodexRunner::new(binary)
+            .with_shared_app_server(true)
+            .run_turn(&session, &request, cancel, receive, move |event| {
+                if matches!(event, CodexEvent::NativeTurnSubmitting) {
+                    on_admission.cancel();
+                }
+                async { Ok(CodexEventOutcome::None) }
+            })
+            .await;
+        assert!(
+            result
+                .err()
+                .expect("Cancellation must stop submission")
+                .is::<NativeInputNotSubmitted>()
         );
         server.await.unwrap();
     }
