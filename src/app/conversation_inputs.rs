@@ -167,11 +167,62 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
 
 async fn deliver(app: &App, input: ConversationInput, resolve: Option<&str>) -> Result<()> {
     let profile = super::routing::profile(&app.shared)?;
-    match app
+    let action = app
         .shared
         .store
-        .conversation_route(input.human, &input.id, &profile, resolve)?
-    {
+        .conversation_route(input.human, &input.id, &profile, resolve)?;
+    apply_route(app, input, action).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Clarification {
+    pending_input: String,
+    input_ref: crate::interaction::InputReference,
+    selector: String,
+}
+pub(super) async fn clarify(
+    app: &App,
+    human: i64,
+    native: &str,
+    args: Value,
+    closed: &CancellationToken,
+) -> Result<Value> {
+    let selected: Clarification = serde_json::from_value(args)?;
+    let profile = super::routing::profile(&app.shared)?;
+    if closed.is_cancelled() {
+        bail!("Clarification request closed");
+    }
+    let action = app.shared.store.conversation_route_clarified(
+        human,
+        &selected.pending_input,
+        &profile,
+        &selected.selector,
+        (native, &selected.input_ref, closed),
+    )?;
+    let input = app.shared.store.conversation_input_read(
+        human,
+        profile.entry(),
+        &selected.pending_input,
+    )?;
+    apply_route(app, input, action).await?;
+    response(
+        app,
+        &app.shared.store.conversation_input_read(
+            human,
+            profile.entry(),
+            &selected.pending_input,
+        )?,
+        false,
+    )
+}
+
+async fn apply_route(
+    app: &App,
+    input: ConversationInput,
+    action: Option<crate::store::ConversationRouteAction>,
+) -> Result<()> {
+    match action {
         Some(crate::store::ConversationRouteAction::Worker(instruction, fresh)) => {
             if fresh
                 && super::dialogue::dispatch_original(

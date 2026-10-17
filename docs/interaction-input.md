@@ -68,6 +68,26 @@ its outcome, and another target cannot reuse the same original. Queued transport
 and native acceptance remain distinct, and stale status reads cannot reopen a
 confirmed route. Browser destination choices are presentation, never authority.
 
+The conversational controller can also read `pending_routes` and call
+`resolve_route` with `pending_input` (the saved UUID), `input_ref` (a later
+retained human utterance) and one enrolled `selector`. A finalized voice
+transcript is eligible through the same original-input reference. The controller
+routes the saved original text, not a model-authored replacement or the short
+clarification as a new work task. `routing.selection = integrator_clarification`
+and `routing.selection_input` retain the interpreter's selected destination and
+the actual human clarification separately. When the intended saved message or
+destination is unclear, the integrator must ask; this operation does not infer
+that a busy worker needs a new conversation.
+
+Capture order, rather than transcript completion time, must put the clarification
+after its saved original. Ownership, native generation, input retirement and the
+original first-selection checks run together in the admission transaction.
+A repeated identical selection only inspects the retained result; another target
+or clarification cannot replace it. This uses the existing writer, native steer,
+return correlation and scoped interruption behavior. No automatic approval,
+publication or global Stop is introduced. Native question/approval decisions
+remain the separate request controls described below.
+
 A scoped `#Topic /interrupt` uses only the cancellation token selected at input
 arrival, including while voice transcription is pending. It never selects a newer
 execution or invokes global Stop. Clarification after that original token scope
