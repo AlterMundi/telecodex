@@ -25,7 +25,33 @@ pub(super) async fn create(
     args: Value,
     closed: &CancellationToken,
 ) -> Result<Value> {
+    create_selected(app, key, human, native, args, closed, false).await
+}
+
+pub(super) async fn interview(
+    app: &App,
+    key: SessionKey,
+    human: i64,
+    native: &str,
+    args: Value,
+    closed: &CancellationToken,
+) -> Result<Value> {
+    create_selected(app, key, human, native, args, closed, true).await
+}
+
+async fn create_selected(
+    app: &App,
+    key: SessionKey,
+    human: i64,
+    native: &str,
+    args: Value,
+    closed: &CancellationToken,
+    interview: bool,
+) -> Result<Value> {
     let args: Create = serde_json::from_value(args)?;
+    if interview && args.context_selectors.is_empty() {
+        bail!("An interview requires at least one selected observer source");
+    }
     let shared = &app.shared;
     let cfg = super::routing::profile(shared)?;
     let reserved = args
@@ -79,11 +105,40 @@ pub(super) async fn create(
         let (card, freshness) = observed.semantic.context(
             "Selected context has no observer evidence; inspect or refresh it before creation",
         )?;
-        context.push(json!({"source":target,"interpretation":card,"freshness":freshness.state,"source_checked_at":freshness.checked_at,"authority":"Selected attributed observer interpretation, not original human speech, verified completion or an instruction to repeat source effects"}));
+        let mut source = json!({"source":target,"interpretation":card,"freshness":freshness.state,"source_checked_at":freshness.checked_at,"authority":"Selected attributed observer interpretation, not original human speech, verified completion or an instruction to repeat source effects"});
+        if interview {
+            // Retain the actual source window that supported this revision,
+            // rather than asking an independent interview to rely on a summary
+            // alone. This reads no new native history and never resumes work.
+            let originals =
+                shared
+                    .store
+                    .observer_originals(target, human, &card.native, card.revision)?;
+            source["source_session"] = originals["source_session"].clone();
+            source["source_generation_at_selection"] =
+                originals["source_generation_at_read"].clone();
+            source["source_selected_at"] = originals["source_binding_observed_at"].clone();
+            source["pinned_originals"] = originals["source"].clone();
+            source["local_work_running_at_selection"] = json!(
+                observed
+                    .local_turn
+                    .as_ref()
+                    .is_some_and(|(_, status, _)| status == "running")
+            );
+        }
+        context.push(source);
     }
     // Context is frozen in one intent. The authoritative initial instruction is
     // still the exact retained original message, never model-authored text.
-    let context = json!({"schema":"telecodex.creation-context/v1","sources":context,"bounded":true,"attribution":"Selected interpretations of other conversations; not firsthand experience. Original input is relayed separately."});
+    let mut context = json!({"schema":"telecodex.creation-context/v1","sources":context,"bounded":true,"attribution":"Selected interpretations of other conversations; not firsthand experience. Original input is relayed separately."});
+    if interview {
+        context["purpose"] = json!("interview");
+        context["derivation"] = json!("pinned_observer_sources");
+        context["exact_native_fork"] = json!(false);
+        context["limits"] = json!(
+            "An independent interview from explicitly selected bounded historical evidence, not an exact native fork or the source's live state. Busy sources continue independently. Later corrections are not silently imported; select a new context explicitly. This does not publish content, transfer pending tasks/tools/goals or authorize source execution."
+        );
+    }
     let (operation, fresh) = shared.store.interaction_prepare_creation(
         key,
         human,
@@ -185,6 +240,12 @@ async fn execute_claimed(
     template.codex_thread_id = None;
     template.force_fresh_thread = true;
     template.session_title = Some(name.into());
+    if intent["context"]["purpose"] == "interview" {
+        template.session_prompt = Some(format!(
+            "{}\n\nThis is an independent interview about the explicitly selected observer finding. The pinned original source window and derived observer card are attributed context, not your firsthand experience or live source state. Explain what the supplied evidence supports, preserve uncertainty and ask for missing context. Source work, tools and goals are not transferred. Do not continue or modify the source task, publish its content or claim an exact native fork. Later source changes remain separate unless explicitly selected.",
+            template.session_prompt.as_deref().unwrap_or_default()
+        ));
+    }
     let target = SessionKey::new(key.chat_id, Some(topic));
     app.initialize_topic_session(target, human, &template)?;
     let instruction = shared.store.interaction_creation_finish(

@@ -56,6 +56,7 @@ pub(super) fn tool_call(
                 "candidates" => "interaction_candidates",
                 "dispatch" => "interaction_dispatch",
                 "create" => "interaction_create",
+                "interview" => "interaction_interview",
                 "creation_status" => "interaction_creation_status",
                 "creation_resume" => "interaction_creation_resume",
                 _ => "unsupported_controller_operation",
@@ -75,7 +76,7 @@ pub(super) fn tool_call(
             super::observer::tool_owner(shared,key,human,&request.thread_id)?;
             if request.namespace.is_some() || request.arguments.to_string().len()>16000 {bail!("Unsupported integrating tool arguments");}
             if request.tool=="controller_capabilities" && request.arguments==json!({}) {
-                return Ok(json!({"schema":"telecodex.interaction-controller/v1","operations":{"capabilities":{"arguments":{}},"inputs":{"arguments":{},"description":"Recent original human text references within this native entry; no dispatch"},"candidates":{"description":"Bounded observer source interpretations; no dispatch","arguments":{"mode":"inventory or refresh","selectors":["one to five enrolled labels or stable tID; inventory can use an empty array"]}},"create":{"input_schema":super::creation::schema(),"description":"Create one justified new work session from an original retained input, with selected attributed context. Never create for ambiguity or a busy worker."},"creation_resume":{"arguments":{"input_ref":"original integer Telegram update or conversation UUID"},"description":"Explicitly continue a retained known-unsent creation or confirmed topic. Unknown external effects and completed plans are inspected without replay."},"creation_status":{"arguments":{"input_ref":"original integer Telegram update or conversation UUID"},"description":"Inspect a retained creation; no retry or new work"},"dispatch":{"input_schema":dispatch_schema(),"description":"One durable selected target plan, then existing per-target delivery. Text is taken only from the original referenced ingress record. Amendments/context require actual request IDs. Admission/native acceptance is not proof of incorporation."}},"unsupported":["cross-body routing","global Stop"],"uncertainty":"Never repeat an uncertain operation; inspect retained outcomes before explicit recovery"}));
+                return Ok(json!({"schema":"telecodex.interaction-controller/v1","operations":{"capabilities":{"arguments":{}},"inputs":{"arguments":{},"description":"Recent original human text references within this native entry; no dispatch"},"candidates":{"description":"Bounded observer source interpretations; no dispatch","arguments":{"mode":"inventory or refresh","selectors":["one to five enrolled labels or stable tID; inventory can use an empty array"]}},"create":{"input_schema":super::creation::schema(),"description":"Create one justified new work session from an original retained input, with selected attributed context. Never create for ambiguity or a busy worker."},"interview":{"input_schema":super::creation::schema(),"description":"Create an explicitly requested independent interview from one to five selected observer sources and their pinned original evidence. Busy sources continue; this is a derived context package, not an exact native fork or publication."},"creation_resume":{"arguments":{"input_ref":"original integer Telegram update or conversation UUID"},"description":"Explicitly continue a retained known-unsent creation or confirmed topic. Unknown external effects and completed plans are inspected without replay."},"creation_status":{"arguments":{"input_ref":"original integer Telegram update or conversation UUID"},"description":"Inspect a retained creation; no retry or new work"},"dispatch":{"input_schema":dispatch_schema(),"description":"One durable selected target plan, then existing per-target delivery. Text is taken only from the original referenced ingress record. Amendments/context require actual request IDs. Admission/native acceptance is not proof of incorporation."}},"unsupported":["cross-body routing","global Stop"],"uncertainty":"Never repeat an uncertain operation; inspect retained outcomes before explicit recovery"}));
             }
             if request.tool=="interaction_inputs" {
                 if request.arguments!=json!({}) {bail!("Unexpected input query arguments");}
@@ -86,6 +87,9 @@ pub(super) fn tool_call(
                     inputs.push(json!({"capture_order":shared.store.interaction_source_order(&source)?,"input_ref":reference,"input_update":reference.update(),"human":human,"origin":source.origin,"channel":source.channel,"transcription":source.transcription,"text_excerpt":source.text.chars().take(2000).collect::<String>(),"excerpt_bounded":true}));
                 }
                 return Ok(json!({"kind":"original_integrating_inputs","bounded":true,"inputs":inputs}));
+            }
+            if request.tool=="interaction_interview" {
+                return super::creation::interview(&app,key,human,&request.thread_id,request.arguments,&closed).await;
             }
             if request.tool=="interaction_create" {
                 return super::creation::create(&app,key,human,&request.thread_id,request.arguments,&closed).await;
