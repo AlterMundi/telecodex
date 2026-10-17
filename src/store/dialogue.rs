@@ -1,7 +1,7 @@
 //! Original committed entry inputs, not model-authored messages or new authority.
 use super::*;
 
-fn entry_inputs_on(
+pub(super) fn entry_inputs_on(
     conn: &Connection,
     key: SessionKey,
     human: i64,

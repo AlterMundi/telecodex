@@ -78,6 +78,18 @@ pub(super) fn admit_on(
     {
         return Err(anyhow!("Invalid interaction input"));
     }
+    if let Some(update) = source.update_id {
+        let reserved:Option<(String,Option<i64>,i64)>=tx.query_row("SELECT phase,topic,entry_chat FROM interaction_creations WHERE human_id=?1 AND input_update=?2",params![source.human_id,update],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        if let Some((phase, topic, chat)) = reserved {
+            if !matches!(phase.as_str(), "topic_known" | "ready")
+                || topic != Some(target.thread_id)
+                || chat != target.chat_id
+                || source.target_sessions.len() != 1
+            {
+                return Err(anyhow!("Original input has an immutable creation plan"));
+            }
+        }
+    }
     let id = Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
         format!(

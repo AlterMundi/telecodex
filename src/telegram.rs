@@ -348,18 +348,34 @@ impl TelegramClient {
     }
 
     pub async fn create_forum_topic(&self, chat_id: i64, name: &str) -> Result<ForumTopic> {
+        self.create_forum_topic_checked(chat_id, name, || Ok(()))
+            .await
+    }
+
+    /// Revalidate and reserve one topic mutation after the shared outbound wait.
+    pub async fn create_forum_topic_checked<F>(
+        &self,
+        chat_id: i64,
+        name: &str,
+        prepare: F,
+    ) -> Result<ForumTopic>
+    where
+        F: FnOnce() -> Result<()>,
+    {
         #[derive(Serialize)]
         struct Payload<'a> {
             chat_id: i64,
             name: &'a str,
         }
-
-        self.post_outbound(
-            chat_id,
-            "createForumTopic",
-            Some(&Payload { chat_id, name }),
-        )
-        .await
+        self.outbound.wait(chat_id).await;
+        prepare()?;
+        let result = self
+            .post("createForumTopic", Some(&Payload { chat_id, name }))
+            .await;
+        if let Err(error) = &result {
+            self.outbound.note_retry_after(chat_id, error).await;
+        }
+        result
     }
 
     pub async fn close_forum_topic(&self, chat_id: i64, message_thread_id: i64) -> Result<bool> {
