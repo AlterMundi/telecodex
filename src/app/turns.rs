@@ -339,27 +339,27 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::ApprovalRequest(request) => {
-                                if let Err(error) = sink
-                                    .lock()
-                                    .await
-                                    .set_progress(approval_waiting_text(request.kind))
-                                    .await
-                                {
-                                    tracing::debug!(
-                                        "failed to update approval progress for {:?}: {error:#}",
-                                        session_key
+                                let (mut response, receiver) = oneshot::channel();
+                                let approval_cancel = cancel.child_token();
+                                tokio::spawn(async move {
+                                    if response.is_closed() { return; }
+                                    let approval = request_telegram_approval(
+                                        shared, session_key.chat_id,
+                                        Some(session_key.thread_id).filter(|value| *value != 0),
+                                        requester_user_id, request, approval_cancel.clone(),
                                     );
-                                }
-                                let decision = request_telegram_approval(
-                                    shared,
-                                    session_key.chat_id,
-                                    Some(session_key.thread_id).filter(|value| *value != 0),
-                                    requester_user_id,
-                                    request,
-                                    cancel,
-                                )
-                                .await?;
-                                Ok(CodexEventOutcome::Approval(decision))
+                                    tokio::pin!(approval);
+                                    let result = tokio::select! {
+                                        result = &mut approval => result,
+                                        _ = response.closed() => {
+                                            approval_cancel.cancel();
+                                            let _ = approval.await;
+                                            return;
+                                        }
+                                    };
+                                    let _ = response.send(result.unwrap_or(CodexApprovalDecision::Cancel));
+                                });
+                                Ok(CodexEventOutcome::Approval(receiver))
                             }
                             CodexEvent::NativeInputRejected => {
                                 if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,"resume_rejected",Some(turn_id),None)?;}

@@ -82,3 +82,11 @@ an error. Legacy events without complete IDs retain their existing presentation
 behavior and cannot be used as exact-item evidence. This record alone does not
 establish request coverage or deduplicate external publication; the interaction
 controller owns those separate states.
+
+Native approval decisions are deferred through response channels while the owning
+control pump continues receiving events and servicing steer/interrupt. Resolving
+a request or ending its native turn retires the channel and cancels its pending
+Telegram interaction. Approval publication and expiry notices cannot hold the
+native response path; a late UI interaction cannot answer an already retired
+native request. The pending-approval fixture submits a correlated steer, verifies
+its acceptance, then interrupts that exact turn before any approval is supplied.
