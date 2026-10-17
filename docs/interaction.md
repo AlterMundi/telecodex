@@ -265,6 +265,35 @@ Semantic routing integration remains continuing work.
 Runtime quality qualification must check factual summaries separately from
 successful processing and support IDs.
 
+## Observer evidence inside the integrating dialogue
+
+A newly created native entry thread advertises `interaction_candidates`, a
+client-executed tool. The conversational model can request a bounded inventory
+of all enrolled labels/current retained cards, then refresh one to five selected
+sources through the same observer reconciliation path. Inventory performs no
+native/model calls; source summary excerpts retain attribution, bounds, revision,
+freshness and missing evidence. Refresh does not dispatch input, create a work
+session or interrupt a worker. This is the observer input to later semantic
+selection, not completed semantic dispatch.
+
+The client validates the current native thread and active turn for each request,
+suppresses duplicate request/call identities, and returns deferred results while
+continuing to process events, steering and interruption. Entry ownership, allowed
+human and native binding are checked before and after asynchronous source reads.
+Other conversations, namespaces, unknown selectors or unsupported arguments get
+a failed tool result. A late result is not sent to a different active turn.
+
+The installed experimental protocol declares tools only on `thread/start`.
+Native rollout metadata restores the tools on `thread/resume`; the client does
+not replace an existing binding or send an unsupported resume override. An entry
+created before this registration may lack the tool; explicit observer commands
+remain available. The receiving pilot must qualify a newly created entry with
+actual native tool invocation before claiming this conversational path works.
+See [official App Server documentation](https://learn.chatgpt.com/docs/app-server).
+Finite observer reconciliations already started by a tool can finish separately
+from the integrating native turn; closing that turn does not resume or cancel
+source workers or authorize another query.
+
 ## Verification and remaining scope
 
 The native identity and deferred-approval foundations are merged in #121/#123.
