@@ -71,9 +71,44 @@ Native questions retain their existing response channel and full request in the
 scoped human-interaction store. Approvals likewise retain the exact proposal,
 allowed choices and pending responder. Selecting canonical presentation neither
 publishes these requests to Telegram nor grants an approval. Canonical request
-controls still need their authenticated client integration. Retirement and restart
+controls now have authenticated owner/HTTP endpoints; visible Mini App controls
+are still being integrated. Retirement and restart
 never resurrect a response channel. Generated files remain retained with their
 native turn when automatic Telegram presentation is not selected.
+
+`requests list CURSOR`, `requests detail ID OFFSET [REVISION]`,
+`requests decide JSON` and `requests receipt ID REVISION` extend the existing
+owner-local controller. Authenticated HTTP exposes the same operations at
+`/api/interaction/requests`, `/api/interaction/requests/ID` and
+`/api/interaction/requests/ID/receipt?revision=REVISION`. A decision POST requires
+exact `binding`, `revision` and typed `action`, plus the existing live owner,
+Origin and CSRF checks. Only offered approval choices are accepted. Questions
+retain their original native question IDs and accumulate answers on that same
+response channel. They never become new turns or fake Telegram updates.
+
+Request discovery is scoped to currently owned native contexts whose canonical
+return is attributed to the configured integrating entry, including derived
+session-request helpers. Proposal text is returned in 4,000-character parts;
+continuation reads must name the same revision. Lists return bounded previews,
+not full proposals or ready-to-click approval controls. A revision binds exact
+proposal/choices/question index to the owner, entry/source native bindings,
+physical execution, process instance and admission generations. Native event
+processing and additional steer input continue while requests wait.
+
+Each exact revision/action commits an immutable receipt before consuming the
+live responder. The independent `conversation_decisions` table retains the full
+frozen proposal, question ID/index, resolved answer or approval choice and source
+scope without foreign keys to deletable sessions or turns. Repeated identical
+POSTs inspect that receipt; replacement decisions are rejected. Receipt reads
+require the current owned entry and never recreate a response channel. Recording
+an answer/approval does not establish native incorporation or execution.
+
+Binding/owner changes, grant revocation and entry deletion retire pending native
+request authority monotonically, including derived helpers selected through the
+same lineage used for admission. Restoring the old values cannot reactivate a
+proposal. Existing Telegram question/approval controls consult the same pending
+state. Restart expires outstanding response channels while retaining decisions;
+there is no automatic replay or approval.
 
 `tests/conversation_input_control_io.py` uses the actual owner socket, listener,
 SQLite and synthetic native/Telegram peers to qualify original-text preservation,

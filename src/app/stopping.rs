@@ -24,6 +24,9 @@ pub(super) async fn command(
     if let Some(selected) = args.strip_prefix("presentation ") {
         return presentation::owner_read(app, human, selected);
     }
+    if let Some(selected) = args.strip_prefix("requests ") {
+        return conversation_requests::command(app, human, selected).await;
+    }
     if let Some(selected) = args.strip_prefix("input ") {
         return conversation_inputs::command(app, human, selected).await;
     }

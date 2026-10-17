@@ -1058,6 +1058,9 @@ mod tests {
                     "origin_message INTEGER,",
                     "origin_message INTEGER NOT NULL,",
                 );
+            // This fixture constructs the historical schema, before native
+            // request retirement triggers referenced interaction_sources.
+            conn.execute_batch("DROP TRIGGER IF EXISTS native_request_binding_retired; DROP TRIGGER IF EXISTS native_request_entry_deleted; DROP TRIGGER IF EXISTS native_request_grant_retired;").unwrap();
             conn.pragma_update(None, "foreign_keys", false).unwrap();
             conn.execute_batch(&format!("BEGIN IMMEDIATE; {old}; INSERT INTO interaction_sources_old SELECT * FROM interaction_sources; DROP TABLE interaction_sources; ALTER TABLE interaction_sources_old RENAME TO interaction_sources; CREATE INDEX interaction_sources_reply ON interaction_sources(human_id,origin_chat,origin_thread,origin_message); COMMIT;")).unwrap();
             conn.pragma_update(None, "foreign_keys", true).unwrap();

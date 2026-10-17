@@ -10,6 +10,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
 mod conversation_inputs;
+mod conversation_requests;
+pub use conversation_requests::ConversationRequest;
 mod creation;
 mod dialogue;
 mod interaction;
@@ -110,6 +112,7 @@ impl Store {
         store.init_merging()?;
         store.init_stopping()?;
         store.init_conversation_inputs()?;
+        store.init_conversation_requests()?;
         store.init_observer_cards()?;
         store.init_observer_freshness()?;
         // A restarted process cannot continue a previous command's activity lease.
