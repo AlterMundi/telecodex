@@ -15,7 +15,7 @@ window.RequestControls = (() => {
         unknown:"Earlier response remains unconfirmed.", cancelled:"Cancellation requested.",
         expired:"This request is closed.", source_changed:"This request is no longer current."})[value.state]
       || "This request has no live response channel.";
-  function mount({api, getBinding, setCsrf, unauthorized, onReply}) {
+  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false}) {
     const cards = new Map(), section = $("#conversation-requests"), container = $("#conversation-request-cards");
     const state = $("#conversation-request-state"), more = $("#conversation-requests-more");
     let generation = 0, observation = 0, cursor = 0, reading = false, probeCursor = 0;
@@ -29,6 +29,8 @@ window.RequestControls = (() => {
         && !card.reviewRequired && !card.closed && !card.busy && !card.loading && !card.pending && !card.unavailable && card.view.binding === getBinding();
       for (const button of card.choices.children) button.disabled = !allowed;
       card.reply.disabled = !allowed;
+      card.listen.hidden = card.view?.kind!=="question" || typeof onListen!=="function" || !getCanListen();
+      card.listen.disabled = !card.view?.actionable || card.closed || card.busy || card.loading || !!card.pending || card.unavailable || card.view?.binding!==getBinding();
       card.text.disabled = !allowed;
       card.submit.disabled = !allowed;
       card.cancel.disabled = !allowed;
@@ -99,6 +101,7 @@ window.RequestControls = (() => {
       const submit = node("button", "Send answer"); submit.type = "submit";
       form.append(label, text, submit); form.hidden = true;
       const reply = node("button", "Answer in conversation"); reply.type = "button"; reply.hidden = true; form.append(reply);
+      const listen = node("button", "Listen to question"); listen.type = "button"; listen.hidden = true; form.append(listen);
       const cancel = node("button", "Cancel this turn"); cancel.type = "button"; cancel.hidden = true;
       const check = node("button", "Check decision"), retry = node("button", "Retry this same decision");
       const dismiss = node("button", "Dismiss");
@@ -108,7 +111,7 @@ window.RequestControls = (() => {
       const saved = node("details"); saved.hidden = true; saved.append(node("summary", "Previous drafts"));
       box.append(title,status,preview,read,body,choices,form,cancel,actions,note,saved);
       container.append(box);
-      const card = {id:value.id,box,title,status,preview,body,read,choices,form,text,submit,reply,cancel,check,retry,dismiss,note,saved,
+      const card = {id:value.id,box,title,status,preview,body,read,choices,form,text,submit,reply,listen,cancel,check,retry,dismiss,note,saved,
         observed:0,readVersion:0,complete:false,expanded:false,busy:false,loading:false,closed:false};
       cards.set(value.id,card);
       read.addEventListener("click", () => readRequest(card,false,true));
@@ -120,6 +123,11 @@ window.RequestControls = (() => {
         const view=card.view;
         if(typeof onReply!=="function" || view?.kind!=="question" || !view.actionable || !card.complete || card.reviewRequired || card.closed || card.busy || card.loading || card.pending || card.unavailable || view.binding!==getBinding())return;
         onReply({source:`request:${card.id}`,revision:view.revision},`${view.label || "Conversation"} · ${view.title || "Question"}`);
+      });
+      listen.addEventListener("click", () => {
+        const view=card.view;
+        if(typeof onListen!=="function" || !getCanListen() || view?.kind!=="question" || !view.actionable || card.closed || card.busy || card.loading || card.pending || card.unavailable || view.binding!==getBinding())return;
+        return onListen({id:`request:${card.id}`,revision:view.revision,kind:"native_question",label:`${view.label || "Conversation"} · ${view.title || "Question"}`});
       });
       text.addEventListener("input", () => {card.answerRevision = card.view?.revision;});
       dismiss.addEventListener("click", () => {

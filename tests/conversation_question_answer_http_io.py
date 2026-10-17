@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import uuid
+from urllib.parse import urlencode
 from conversation_cold_entry_http_io import ColdEntry, Browser
 from conversation_voice_http_io import audio
 
@@ -37,6 +38,9 @@ def qualify(binary):
             return body, b.client.post('/api/interaction/inputs', json=body, headers=b.headers)
         question = emit(7, 'canonical-selected-question')
         frozen = reference(question)
+        spoken = b.get('/api/interaction/part?' + urlencode({**frozen,'offset':0}))
+        assert spoken['kind'] == 'native_question' and spoken['playback'] == 'not_observed'
+        assert spoken['text'] == '#Alpha. ' + question['body'] and spoken['next_offset'] is None
         turns = j.row('SELECT count(*) FROM turns')
         text = '  Use only the selected scope.  '
         original, result = post(text, frozen); assert result.status_code == 200, result.text
@@ -48,6 +52,7 @@ def qualify(binary):
         assert post('Different answer under the same source identity', frozen, original['id'])[1].status_code == 503
         second = b.get('/api/interaction/requests/' + question['id'])
         assert second['question_index'] == 1 and second['revision'] != question['revision']
+        assert b.client.get('/api/interaction/part',params={**frozen,'offset':0},headers=b.headers).status_code == 409
         assert post('An old selected question is not the next one.', frozen)[1].status_code == 503
         voice, _ = b.voice(reference(second))
         j.wait(lambda: b.status(voice)['phase'] == 'answered')
