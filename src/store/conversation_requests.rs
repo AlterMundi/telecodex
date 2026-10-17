@@ -80,6 +80,12 @@ impl Store {
             human_id INTEGER NOT NULL,entry_session INTEGER NOT NULL,entry_chat INTEGER NOT NULL,entry_topic INTEGER NOT NULL,
             request_id TEXT NOT NULL,revision TEXT NOT NULL,doc TEXT NOT NULL,created_at TEXT NOT NULL,
             PRIMARY KEY(human_id,entry_session,request_id,revision));
+            CREATE TABLE IF NOT EXISTS conversation_request_order(
+              sequence INTEGER PRIMARY KEY AUTOINCREMENT,request_id TEXT NOT NULL UNIQUE);
+            INSERT INTO conversation_request_order(request_id) SELECT h.id FROM human_interactions h
+              WHERE h.kind='native' AND NOT EXISTS(SELECT 1 FROM conversation_request_order o WHERE o.request_id=h.id) ORDER BY h.rowid;
+            CREATE TRIGGER IF NOT EXISTS native_request_discovery_order AFTER INSERT ON human_interactions WHEN NEW.kind='native'
+            BEGIN INSERT INTO conversation_request_order(request_id) VALUES(NEW.id); END;
             CREATE TRIGGER IF NOT EXISTS native_request_binding_retired AFTER UPDATE OF codex_thread_id,force_fresh_thread,creator_user_id ON sessions
             WHEN OLD.codex_thread_id IS NOT NEW.codex_thread_id OR OLD.creator_user_id!=NEW.creator_user_id OR NEW.force_fresh_thread=1
             BEGIN UPDATE human_interactions SET state=CASE WHEN state='pending' THEN 'expired' ELSE 'unknown' END
@@ -144,15 +150,15 @@ impl Store {
         super::presentation::entry_on(&conn, human, entry)?;
         // The outer query bounds candidates to canonical owned contexts from
         // this entry; detail/decision revalidate the complete source binding.
-        let mut statement=conn.prepare(&format!("SELECT h.rowid,h.id FROM human_interactions h
+        let mut statement=conn.prepare(&format!("SELECT o.sequence,h.id FROM human_interactions h JOIN conversation_request_order o ON o.request_id=h.id
             JOIN sessions s ON s.id=h.session_id JOIN users u ON u.tg_user_id=h.requester
             JOIN turns t ON t.id=h.local_turn
-            WHERE h.rowid>?1 AND h.kind='native' AND h.requester=?2 AND u.allowed=1
+            WHERE o.sequence>?1 AND h.kind='native' AND h.requester=?2 AND u.allowed=1
             AND s.creator_user_id=?2 AND s.codex_thread_id=h.native_thread AND s.force_fresh_thread=0
             AND t.session_id=s.id AND t.from_user_id=?2 AND t.native_thread_id=h.native_thread
             AND h.state IN ('pending','answering','unknown')
             {CANONICAL_SCOPE}
-            ORDER BY h.rowid LIMIT 9"))?;
+            ORDER BY o.sequence LIMIT 9"))?;
         let mut rows = statement
             .query_map(params![after, human, entry.chat_id, entry.thread_id], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -476,6 +482,79 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn request_discovery_cursors_survive_deleted_rowid_reuse_and_restart() {
+        let (file, store, entry, _, _) = fixture();
+        let base = store
+            .conversation_request(100, entry, "request-7")
+            .unwrap()
+            .item;
+        for n in 0..10 {
+            let mut item = base.clone();
+            item.id = format!("extra-{n}");
+            store
+                .save_interaction(SessionKey::new(100, Some(7)), &item, None)
+                .unwrap();
+        }
+        let first = store.conversation_request_ids(100, entry, 0).unwrap();
+        assert_eq!(first.0.len(), 8);
+        assert!(first.1);
+        let rest = store
+            .conversation_request_ids(100, entry, first.0.last().unwrap().0)
+            .unwrap();
+        assert_eq!(rest.0.len(), 3);
+        let cursor = rest.0.last().unwrap().0;
+        let old_rowid: i64 = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT max(rowid) FROM human_interactions", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM human_interactions WHERE id LIKE 'extra-%'", [])
+            .unwrap();
+        let mut item = base.clone();
+        item.id = "new-after-deletion".into();
+        store
+            .save_interaction(SessionKey::new(100, Some(7)), &item, None)
+            .unwrap();
+        let new_rowid: i64 = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT rowid FROM human_interactions WHERE id=?1",
+                [&item.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            new_rowid <= old_rowid,
+            "Fixture did not reuse deleted rowids"
+        );
+        let new = store.conversation_request_ids(100, entry, cursor).unwrap();
+        assert_eq!(new.0.len(), 1);
+        assert_eq!(new.0[0].1, item.id);
+        assert!(new.0[0].0 > cursor);
+        let highest = new.0[0].0;
+        drop(store);
+        let reopened =
+            Store::open(file.path(), &[100, 200], &super::super::tests::defaults()).unwrap();
+        item.id = "new-after-restart".into();
+        reopened
+            .save_interaction(SessionKey::new(100, Some(7)), &item, None)
+            .unwrap();
+        let new = reopened
+            .conversation_request_ids(100, entry, highest)
+            .unwrap();
+        assert_eq!(new.0.len(), 1);
+        assert_eq!(new.0[0].1, item.id);
     }
     #[test]
     fn derived_helper_retirement_uses_the_same_lineage_as_request_admission() {

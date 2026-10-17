@@ -188,7 +188,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     @app.get('/')
     def shell():
         body = (public / 'index.html').read_text()
-        for name in ('app.js', 'conversation.js', 'style.css'):
+        for name in ('app.js', 'requests.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         if appearance:
@@ -200,7 +200,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/assets/{name}')
     def asset(name: str, request: Request):
-        if name not in ('app.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('app.js', 'requests.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]

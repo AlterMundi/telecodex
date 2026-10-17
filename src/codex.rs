@@ -1234,9 +1234,9 @@ where
         >,
     >;
     let mut pending_approvals = FuturesUnordered::<PendingApproval>::new();
-    let mut open_approvals = HashMap::<NativeRequestId, CancellationToken>::new();
+    let mut open_approvals = HashMap::<NativeRequestId, (String,CancellationToken)>::new();
     let mut pending_inputs = FuturesUnordered::<PendingInput>::new();
-    let mut open_inputs = HashMap::<NativeRequestId, CancellationToken>::new();
+    let mut open_inputs = HashMap::<NativeRequestId, (String,CancellationToken)>::new();
     let mut submitted_inputs = HashSet::new();
     type PendingTool =
         Pin<Box<dyn std::future::Future<Output = (NativeRequestId, String, Value)> + Send>>;
@@ -1266,7 +1266,7 @@ where
           }
           _=async{if let Some(bound)=bounded{sleep_until(bound.deadline).await;}}, if bounded.is_some() && !cancel.is_cancelled() => { cancel.cancel(); }
           Some((id, decision)) = pending_approvals.next(), if !pending_approvals.is_empty() => {
-            if open_approvals.remove(&id).is_some() && !cancelled && !cancel.is_cancelled() {
+            if open_approvals.remove(&id).is_some_and(|(turn,closed)|!closed.is_cancelled() && active_turn_id.as_deref()==Some(turn.as_str())) && !cancelled && !cancel.is_cancelled() {
                 if let Some(decision) = decision {
                     process.send_result(&id, json!({"decision":approval_decision_value(decision)})).await?;
                 }
@@ -1278,7 +1278,7 @@ where
               }
           }
           Some((id, decision)) = pending_inputs.next(), if !pending_inputs.is_empty() => {
-            if open_inputs.remove(&id).is_some() && !cancelled && !cancel.is_cancelled() {
+            if open_inputs.remove(&id).is_some_and(|(turn,closed)|!closed.is_cancelled() && active_turn_id.as_deref()==Some(turn.as_str())) && !cancelled && !cancel.is_cancelled() {
                 match decision {
                     Ok(UserInputDecision::Answers(answers)) => {
                         process.send_result(&id, serde_json::to_value(answers)?).await?;
@@ -1382,11 +1382,11 @@ where
                     if let Some(id) = params.get("requestId") {
                         let id: NativeRequestId = serde_json::from_value(id.clone())?;
                         if let Some((_,closed))=open_tools.remove(&id) {closed.cancel();}
-                        if let Some(closed) = open_approvals.remove(&id) { closed.cancel(); }
+                        if let Some((_,closed)) = open_approvals.remove(&id) { closed.cancel(); }
                         if submitted_inputs.remove(&id) && !cancelled {
                             let _=on_event(CodexEvent::UserInputAnswered(id.clone())).await?;
                         }
-                        if let Some(closed) = open_inputs.remove(&id) {
+                        if let Some((_,closed)) = open_inputs.remove(&id) {
                             closed.cancel();
                             let _ = on_event(CodexEvent::UserInputClosed(id)).await?;
                         }
@@ -1394,6 +1394,14 @@ where
                 } else {
                     handle_notification(&method,&params,&mut summary,&mut active_turn_id,&mut turn_error,&mut turn_completed,&mut assistant_message_completed,on_event).await?;
                     for (turn,closed) in open_tools.values() {if active_turn_id.as_deref()!=Some(turn.as_str()) {closed.cancel();}}
+                    let retired:Vec<_>=open_inputs.iter().filter(|(_, (turn,_))|active_turn_id.as_deref()!=Some(turn.as_str())).map(|(id,_)|id.clone()).collect();
+                    for id in retired {
+                        if let Some((_,closed))=open_inputs.remove(&id) {closed.cancel();}
+                        let _=on_event(CodexEvent::UserInputClosed(id)).await?;
+                    }
+                    open_approvals.retain(|_,(turn,closed)| {
+                        if active_turn_id.as_deref()==Some(turn.as_str()) {true}else{closed.cancel();false}
+                    });
                 }
               }
               RpcMessage::ServerRequest{id,method,params}=>{
@@ -1428,7 +1436,7 @@ where
                     input.validate()?;
                     if input.thread_id != thread_id || active_turn_id.as_deref() != Some(input.turn_id.as_str()) { bail!("native question does not match the active turn"); }
                     let closed=CancellationToken::new();
-                    open_inputs.insert(id.clone(),closed.clone());
+                    open_inputs.insert(id.clone(),(input.turn_id.clone(),closed.clone()));
                     match on_event(CodexEvent::UserInputRequest{id:id.clone(), request:input,closed:closed.clone()}).await? {
                         CodexEventOutcome::UserInput(receiver) => pending_inputs.push(Box::pin(async move {
                             let decision=tokio::select! {
@@ -1441,7 +1449,7 @@ where
                     }
                 } else if let Some((id, receiver)) = handle_server_request(&mut process,id,&method,&params,on_event).await? {
                     let closed = CancellationToken::new();
-                    open_approvals.insert(id.clone(), closed.clone());
+                    open_approvals.insert(id.clone(), (active_turn_id.clone().context("Approval has no active native turn")?,closed.clone()));
                     pending_approvals.push(Box::pin(async move {
                         let decision = tokio::select! {
                             result = receiver => Some(result.unwrap_or(CodexApprovalDecision::Cancel)),
@@ -1484,7 +1492,7 @@ where
         closed.cancel();
     }
     reject_outstanding_steers(queued_steers, pending_steers);
-    for closed in open_inputs.into_values() {
+    for (_,closed) in open_inputs.into_values() {
         closed.cancel();
     }
     // Dropping deferred receivers tells the presentation task to retire its UI.

@@ -34,10 +34,15 @@ function boot() {
   let count = 8, arriveDuringRecent = false, heldValidation;
   const source = n => ({id:`native:${n}`, kind:"integrator_answer", sequence:n,
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`});
-  const originals = new Map();
+  const originals = new Map(), nativeRequests = new Map(), nativePosts = [];
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus;
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
+    if (url.pathname === "/interaction/requests") return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
+    if (url.pathname.startsWith("/interaction/requests/")) {
+      if (body) {nativePosts.push(JSON.parse(JSON.stringify(body)));throw new TypeError("Lost decision acknowledgement");}
+      return {...nativeRequests.get(url.pathname.split("/").at(-1)),offset:0,next_offset:null};
+    }
     if (url.pathname === "/interaction/inputs" && body) {
       if (offlinePost) {offlinePost=false;throw new TypeError("Offline before HTTP delivery");}
       const value = {...body,sequence:originals.size+1,phase:"accepted",new_input:!originals.has(body.id)};
@@ -82,10 +87,14 @@ function boot() {
       options.signal.addEventListener("abort", () => reject(new Error("Aborted")), {once:true});
     }),
   });
+  vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   const ui = context.window.Conversation.mount({api,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals,
+  return {ui, nodes, requests, originals, nativePosts,
+    nativeRequest() {
+      nativeRequests.set("native-request",{id:"native-request",binding:"fixture",revision:"native-revision",state:"pending",actionable:true,kind:"question",title:"Scope",label:"Conversation",body:"Choose scope",choices:[{label:"Selected scope",action:{kind:"option",index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:1,recorded_revisions:[]});
+    },
     lose() {losePost=true;},
     offline() {offlinePost=true;},
     holdStatus(fail=false) {
@@ -189,5 +198,17 @@ function boot() {
   const failure=races.holdStatus(true);const failing=raceCard.children[2].children[0].handlers.click();await failure.entered;
   await races.ui.refresh();const confirmed=raceCard.children[1].textContent;failure.release();await failing;
   assert.equal(raceCard.children[1].textContent,confirmed,"Late errors cannot overwrite a newer confirmed status");
-  console.log("Conversation history, terminal evidence ordering, stale playback, lost/offline POST recovery with frozen identity, and concurrent draft regressions passed (zero model calls).");
+  const integrated=boot();integrated.nativeRequest();await integrated.ui.refresh();
+  const requestBox=integrated.nodes.get("#conversation-request-cards").children[0];
+  await requestBox.children[3].handlers.click();
+  const answer=requestBox.children[6].children[1];answer.value="Keep this draft during conversation refresh";answer.handlers.input();
+  await requestBox.children[5].children[0].handlers.click();
+  const retry=requestBox.children[8].children[1];assert(!retry.hidden);
+  await integrated.ui.refresh();
+  assert.equal(integrated.nodes.get("#conversation-request-cards").children[0],requestBox,
+    "Refreshing input metadata must not reset native request cards under an unchanged binding");
+  assert.equal(answer.value,"Keep this draft during conversation refresh");assert(!retry.hidden);
+  await retry.handlers.click();
+  assert.deepEqual(integrated.nativePosts[0],integrated.nativePosts[1],"Conversation refresh must preserve the frozen unresolved decision");
+  console.log("Conversation history, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });
