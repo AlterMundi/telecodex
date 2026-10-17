@@ -67,8 +67,10 @@ SQLite reuses deleted space; these limits bound retained rows, not an exact
 filesystem quota. The loopback `/healthz` reports collector health and dropped
 journal writes; the local report includes the last persisted count. A final loss
 count can itself be lost if storage stays unwritable through process termination;
-service warnings are independent evidence. Health exposes no traffic data or token. Disk-write failure does not
-replay or block delivery; dropped records mean incomplete coverage.
+service warnings are independent evidence. Health exposes no traffic data or token.
+Observation-only journal loss never replays a request; dropped records mean
+incomplete coverage. With rate control enabled, unavailable admission storage
+explicitly refuses forwarding rather than forgetting a cooldown.
 
 ## Adoption and rollback
 
