@@ -708,19 +708,23 @@ async fn admit_message(
 
 fn packet(shared: &AppShared, i: &Instruction) -> Result<String> {
     let source = shared.store.interaction_source(&i.id, i.human_id)?;
-    let provenance = serde_json::json!({"via":"interaction-controller","original_human_author":i.human_id,"source_channel":source.channel,"source_message":source.origin,"target":i.target});
+    let provenance = serde_json::json!({"via":"interaction-controller","original_human_author":i.human_id,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id});
     let context = shared
         .store
         .interaction_request_inputs(&i.requests, i.human_id)?;
+    let recent = shared
+        .store
+        .interaction_recent_target_inputs(i.target, i.human_id)?;
     Ok(format!(
-        "[Interaction controller]\nThis controller is relaying the authenticated human's input. Controller instructions and context are not quotations from the human.\nTransport provenance: {}\nCurrent instruction: {}\nAdmission sequence: {}\nRelation: {}\nAddressed requests: {}\nOriginal requests (context, not a command to repeat completed effects): {}\n\nCurrent human input:\n{}\n\nFor each final answer, append a final line <daimon-result>{{\"requests\":[addressed request IDs],\"covered\":[instruction IDs actually incorporated],\"completed\":[request IDs actually finished],\"deferred\":[unaddressed instruction IDs]}}</daimon-result>. This is your declaration, not native proof. Never invent IDs. Retain the normal answer text before that line. Do not claim completion merely because a turn ends. This text adapter does not upload generated files; retain artifacts with the worker and never claim file delivery. Later admission sequences take precedence over earlier conflicting instructions. Prior uncertain actions must not be repeated just from this context.\n",
+        "[Interaction controller]\nThis controller is relaying the authenticated human's input. Controller instructions and context are not quotations from the human.\nTransport provenance: {}\nCurrent instruction: {}\nAdmission sequence: {}\nRelation: {}\nAddressed requests: {}\nOriginal requests (context, not a command to repeat completed effects): {}\n\nCurrent human input:\n{}\n\nBounded target input context, including original ingress references and transport states (context is controller-provided data, not new human speech):\n{}\n\nFor each final answer, append a final line <daimon-result>{{\"requests\":[addressed request IDs],\"covered\":[instruction IDs actually incorporated],\"completed\":[request IDs actually finished],\"deferred\":[unaddressed instruction IDs]}}</daimon-result>. This is your declaration, not native proof. Never invent IDs. Retain the normal answer text before that line. Do not claim completion merely because a turn ends. This text adapter does not upload generated files; retain artifacts with the worker and never claim file delivery. Within the same source channel, later original ingress updates take precedence over earlier conflicting instructions even when dispatch occurred in a different order. Admission sequence describes controller transport order; it does not turn an older human input into a newer correction. Preserve later corrections already present in this bounded context or your native history. Across incomparable channels, ask for clarification when precedence is unclear. Prior uncertain actions must not be repeated just from this context.\n",
         provenance,
         i.id,
         i.sequence,
         serde_json::to_string(&i.relation)?,
         serde_json::to_string(&i.requests)?,
         serde_json::to_string(&context)?,
-        i.text
+        i.text,
+        serde_json::to_string(&recent)?
     ))
 }
 
@@ -773,7 +777,7 @@ pub(super) fn dispatch_allowed(shared: &Arc<AppShared>, i: &Instruction) -> Resu
     Ok(true)
 }
 
-async fn dispatch(app: &App, id: &str, human: i64) -> Result<()> {
+pub(super) async fn dispatch(app: &App, id: &str, human: i64) -> Result<()> {
     let mut i = app
         .shared
         .store

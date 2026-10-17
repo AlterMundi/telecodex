@@ -350,7 +350,12 @@ struct CandidateToolArgs {
     selectors: Vec<String>,
 }
 
-fn tool_owner(shared: &AppShared, key: SessionKey, human: i64, native: &str) -> Result<()> {
+pub(super) fn tool_owner(
+    shared: &AppShared,
+    key: SessionKey,
+    human: i64,
+    native: &str,
+) -> Result<()> {
     let cfg = shared
         .config
         .interaction

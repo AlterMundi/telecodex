@@ -112,6 +112,7 @@ pub enum CodexEvent {
     },
     DynamicToolRequest {
         request: DynamicToolRequest,
+        closed: CancellationToken,
     },
     UserInputClosed(NativeRequestId),
     UserInputAnswered(NativeRequestId),
@@ -964,6 +965,10 @@ where
     F: FnMut(CodexEvent) -> Fut,
     Fut: std::future::Future<Output = Result<CodexEventOutcome>>,
 {
+    // Close every unadmitted tool on all returns, transport failures and future
+    // abortion, including exits that bypass the explicit event-loop cleanup.
+    let tool_run = CancellationToken::new();
+    let _tool_run_guard = tool_run.clone().drop_guard();
     let preparation_started = Instant::now();
     tracing::debug!(stage = "proxy_start", "native turn preparation");
     let mut process = AppServerProcess::spawn(binary, shared_app_server).await?;
@@ -1198,7 +1203,7 @@ where
     type PendingTool =
         Pin<Box<dyn std::future::Future<Output = (NativeRequestId, String, Value)> + Send>>;
     let mut pending_tools = FuturesUnordered::<PendingTool>::new();
-    let mut open_tools = HashSet::new();
+    let mut open_tools = HashMap::<NativeRequestId, (String, CancellationToken)>::new();
     let mut seen_tool_requests = HashSet::new();
     let mut seen_tool_calls = HashSet::new();
     loop {
@@ -1230,7 +1235,7 @@ where
             }
           }
           Some((id, turn, result)) = pending_tools.next(), if !pending_tools.is_empty() => {
-              if open_tools.remove(&id) && !cancelled && !cancel.is_cancelled() && active_turn_id.as_deref()==Some(turn.as_str()) {
+              if open_tools.remove(&id).is_some_and(|(_,closed)|!closed.is_cancelled()) && !cancelled && !cancel.is_cancelled() && active_turn_id.as_deref()==Some(turn.as_str()) {
                   process.send_result(&id,result).await?;
               }
           }
@@ -1252,6 +1257,7 @@ where
             }
           }
           _=cancel.cancelled(), if interrupt_request_id.is_none() => {
+            for (_,closed) in open_tools.values() {closed.cancel();}
             if let Some(turn_id)=active_turn_id.as_deref(){interrupt_request_id=Some(process.send_request("turn/interrupt",json!({"threadId":thread_id,"turnId":turn_id})).await?); cancelled=true; cancel_deadline=Some(Instant::now()+Duration::from_secs(5)); let _ = on_event(CodexEvent::Progress("Interrupt requested.".to_string())).await?;} else {cancelled=true; break;}
           }
           _=async{if let Some(deadline)=cancel_deadline{sleep_until(deadline).await;}}, if cancel_deadline.is_some() => {cancelled=true; break;}
@@ -1337,7 +1343,7 @@ where
                 } else if method == "serverRequest/resolved" {
                     if let Some(id) = params.get("requestId") {
                         let id: NativeRequestId = serde_json::from_value(id.clone())?;
-                        open_tools.remove(&id);
+                        if let Some((_,closed))=open_tools.remove(&id) {closed.cancel();}
                         if let Some(closed) = open_approvals.remove(&id) { closed.cancel(); }
                         if submitted_inputs.remove(&id) && !cancelled {
                             let _=on_event(CodexEvent::UserInputAnswered(id.clone())).await?;
@@ -1347,13 +1353,16 @@ where
                             let _ = on_event(CodexEvent::UserInputClosed(id)).await?;
                         }
                     }
-                } else {handle_notification(&method,&params,&mut summary,&mut active_turn_id,&mut turn_error,&mut turn_completed,&mut assistant_message_completed,on_event).await?;}
+                } else {
+                    handle_notification(&method,&params,&mut summary,&mut active_turn_id,&mut turn_error,&mut turn_completed,&mut assistant_message_completed,on_event).await?;
+                    for (turn,closed) in open_tools.values() {if active_turn_id.as_deref()!=Some(turn.as_str()) {closed.cancel();}}
+                }
               }
               RpcMessage::ServerRequest{id,method,params}=>{
                 if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
                 if method == "item/tool/call" {
-                    // A duplicate server request must not run another observer
-                    // read. Different RPC IDs for an existing call get a retained
+                    // A duplicate server request must not repeat a controller
+                    // operation. Different RPC IDs for an existing call get a retained
                     // status instead of starting another operation.
                     if !seen_tool_requests.insert(id.clone()) {continue;}
                     let request: DynamicToolRequest = serde_json::from_value(params)?;
@@ -1363,9 +1372,10 @@ where
                         continue;
                     }
                     let turn=request.turn_id.clone();
-                    match on_event(CodexEvent::DynamicToolRequest{request}).await? {
+                    let closed=tool_run.child_token();
+                    match on_event(CodexEvent::DynamicToolRequest{request,closed:closed.clone()}).await? {
                         CodexEventOutcome::DynamicTool(receiver) => {
-                            open_tools.insert(id.clone());
+                            open_tools.insert(id.clone(),(turn.clone(),closed));
                             pending_tools.push(Box::pin(async move {
                                 let result=receiver.await.unwrap_or_else(|_|dynamic_tool_result(false,"Tool result unavailable; no automatic retry.".into()));
                                 (id,turn,result)
@@ -1431,6 +1441,9 @@ where
         let _ = steer.response.send(Err(CodexSteerError::Undetermined(
             "Initial packet admission was not confirmed".into(),
         )));
+    }
+    for (_, closed) in open_tools.into_values() {
+        closed.cancel();
     }
     reject_outstanding_steers(queued_steers, pending_steers);
     for closed in open_inputs.into_values() {

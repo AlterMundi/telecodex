@@ -9,6 +9,7 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+mod dialogue;
 mod interaction;
 mod interactions;
 mod merging;
