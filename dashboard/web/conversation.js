@@ -124,6 +124,7 @@ window.Conversation = (() => {
         card.value.retired = !!card.value.retired || !!value.retired;
         if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
         card.status.textContent = phaseText(card.value);
+        microphone?.observe(card.value,phaseText(card.value));
         card.retry.hidden = !!card.value.phase || !card.value.binding;
         if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
         renderRoute(card);return card;
@@ -144,6 +145,7 @@ window.Conversation = (() => {
       card.value = {...card.value, ...value};
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
+      microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
       if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
       card.retry.hidden = !!card.value.phase || !card.value.binding;

@@ -4,7 +4,7 @@ window.VoiceInput = (() => {
     const box=document.querySelector('#conversation-voice'), button=document.querySelector('#conversation-talk');
     const discard=document.querySelector('#conversation-voice-discard'), check=document.querySelector('#conversation-voice-check');
     const state=document.querySelector('#conversation-voice-state');
-    let available=false, generation=0, recorder, stream, parts=[], bytes=0, timer, pending, uploading=false, controller;
+    let available=false, generation=0, recorder, stream, parts=[], bytes=0, timer, pending, latestSaved, uploading=false, controller;
     let phase='idle', commit=false, readySelection;
     const supported=()=>!!(window.isSecureContext && window.MediaRecorder && typeof window.MediaRecorder.isTypeSupported==='function' && window.navigator?.mediaDevices?.getUserMedia && window.crypto?.subtle);
     function controls() {
@@ -17,7 +17,7 @@ window.VoiceInput = (() => {
     }
     function stopTracks() {if(stream)for(const track of stream.getTracks())track.stop();stream=undefined;clearTimeout(timer);}
     function cancelRecording(message='Recording discarded. Nothing was sent.') {
-      generation++;commit=false;const old=recorder;recorder=undefined;
+      generation++;commit=false;latestSaved=undefined;const old=recorder;recorder=undefined;
       if(old && old.state!=='inactive')old.stop();stopTracks();parts=[];bytes=0;phase='idle';state.textContent=message;controls();
     }
     function reset() {
@@ -37,6 +37,7 @@ window.VoiceInput = (() => {
     async function confirmed(value,frozen) {
       if(pending!==frozen || frozen.binding!==getBinding())return;
       if(value.id!==frozen.id || value.voice?.audio_sha256!==frozen.audio_sha256)throw Error('Voice capture does not match this recording.');
+      latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256};
       onInput(value,frozen.focusVersion);pending=undefined;phase='idle';
       state.textContent=value.retired?'This saved recording is no longer eligible to start work.':
         value.phase==='retained_unsent'?'Recording saved; no work was submitted. You can keep writing.':
@@ -44,6 +45,11 @@ window.VoiceInput = (() => {
         value.phase==='preparing'?'Recording saved; preparing its automatic transcript.':
         'Recording and automatic transcript saved. Work may continue.';
       controls();
+    }
+    function observe(value,message) {
+      if(!latestSaved || pending || phase!=='idle' || latestSaved.binding!==getBinding()
+        || latestSaved.id!==value.id || latestSaved.audio_sha256!==value.voice?.audio_sha256)return;
+      state.textContent='Recording saved. '+message;
     }
     async function upload() {
       if(!pending || uploading || pending.binding!==getBinding())return;
@@ -77,7 +83,7 @@ window.VoiceInput = (() => {
     }
     async function start() {
       if(!available || !getBinding() || !supported() || document.hidden)return;
-      const owned=++generation,binding=getBinding(),selection=getReply();phase='permission';commit=false;parts=[];bytes=0;
+      const owned=++generation,binding=getBinding(),selection=getReply();latestSaved=undefined;phase='permission';commit=false;parts=[];bytes=0;
       state.textContent='Allow microphone access to begin.';pauseAudio();controls();
       try {
         const media=await window.navigator.mediaDevices.getUserMedia({audio:true,video:false});
@@ -112,7 +118,7 @@ window.VoiceInput = (() => {
     });
     document.addEventListener('visibilitychange',()=>{if(document.hidden)deactivate();});
     window.addEventListener('pagehide',deactivate);telegram?.onEvent?.('deactivated',deactivate);
-    controls();return {configure,reset,deactivate};
+    controls();return {configure,reset,deactivate,observe};
   }
   return {mount};
 })();

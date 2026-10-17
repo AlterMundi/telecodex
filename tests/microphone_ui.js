@@ -56,6 +56,13 @@ function boot(){
  const race=boot();race.mode('before');await race.click();race.click();await until(()=>race.state().startsWith('Recording unconfirmed'));
  const hold=race.holdReceipt(),checking=race.check();race.ui.reset();race.bind('new-binding');race.ui.configure(true);await race.click();const uploading=race.holdUpload();race.click();await until(()=>race.uploads.length===2);hold.resolve();await checking;
  assert(race.button().disabled,'An old receipt read must not unlock a newer upload');assert.equal(race.received.length,0);uploading.resolve();await until(()=>race.received.length===1);
+ const progress=boot();await progress.click();progress.click();await until(()=>progress.received.length===1);
+ const saved=progress.received[0];progress.ui.observe({...saved,phase:'routed'},'#Alpha: sent to this session. Work may continue.');
+ assert.equal(progress.state(),'Recording saved. #Alpha: sent to this session. Work may continue.','Later canonical metadata must replace stale ASR preparation feedback');
+ await progress.click();const recordingState=progress.state();
+ progress.ui.observe(saved,'Old receipt');assert.equal(progress.state(),recordingState,'An earlier receipt cannot overwrite a new recording');
+ progress.cancel();const discardedState=progress.state();progress.ui.observe(saved,'Old receipt');
+ assert.equal(progress.state(),discardedState,'A discarded recording must not revive prior capture feedback');
  const focused=boot(),reference={source:'input:original',revision:'a'.repeat(64)};
  focused.select({reference,version:1});const focusPermission=focused.permission(),focusStart=focused.click();
  focused.select({reference:{source:'input:newer',revision:'b'.repeat(64)},version:2});
