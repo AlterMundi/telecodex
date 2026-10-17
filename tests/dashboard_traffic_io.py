@@ -126,6 +126,22 @@ class TrafficHTTP(fixture.Receiving):
         with self.assertRaises(ValueError):self.journal.bind_bot('wrong-bot')
         self.journal.db.execute("UPDATE settings SET value='other' WHERE key='bot_fingerprint'");self.journal.db.commit()
         self.traffic.tick();self.assertEqual(self.traffic.snapshot()['state'],'unavailable')
+
+    def test_shared_edit_cooldown_defers_alert_claim_without_false_local_incident(self):
+        until=time.time()+120
+        self.journal.db.execute("INSERT INTO outbound_control VALUES('cooldown:writes',?)",(until,))
+        self.journal.db.commit()
+        self.traffic.tick();self.assertFalse(self.traffic.notification_ready())
+        ident=self.journal.start('activity',123,'sendMessage')
+        self.journal.finish(ident,{},json.dumps({'ok':False,'error_code':429,'parameters':{'retry_after':1}}).encode(),
+                            (10,20),429,1,'deferred_local',True)
+        self.traffic.tick();view=self.traffic.snapshot()
+        self.assertEqual(view['totals']['deferred_local'],1)
+        self.assertEqual(view['totals']['rate_limited'],0)
+        self.assertEqual(view['cooldown']['state'],'none')
+        self.assertEqual(self.own_incidents(),[])
+        self.journal.db.execute("DELETE FROM outbound_control");self.journal.db.commit()
+        self.traffic.tick();self.assertTrue(self.traffic.notification_ready())
     def test_prior_state_without_transport_map_reopens(self):
         from dashboard.private_state import write_json
         self.traffic.state.pop('transport_failed');write_json(self.traffic.state_path,self.traffic.state)

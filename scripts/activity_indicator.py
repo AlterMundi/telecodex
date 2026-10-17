@@ -5,6 +5,7 @@ import base64
 import collections
 import datetime as dt
 import fcntl
+import hashlib
 import html
 import json
 import math
@@ -628,7 +629,7 @@ class Telegram:
         self.next_chat = {}
         self.schedule_lock = threading.Lock()
 
-    def call(self, method, payload):
+    def call(self, method, payload, *, background=False):
         if method not in ('sendMessage', 'editMessageText', 'deleteMessage'):
             raise ValueError('observer Telegram method forbidden')
         chat = payload['chat_id']
@@ -639,7 +640,8 @@ class Telegram:
         time.sleep(max(0, scheduled - time.monotonic()))
         request = urllib.request.Request(f'{self.base}/bot{self.token}/{method}',
                                          data=json.dumps(payload).encode(),
-                                         headers={'Content-Type': 'application/json'})
+                                         headers={'Content-Type': 'application/json',
+                                                  'X-Telecodex-Priority': 'background' if background else 'foreground'})
         try:
             with urllib.request.urlopen(request, timeout=8) as response:
                 value = json.load(response)
@@ -678,7 +680,7 @@ class Publisher:
         entry = self.entries.get(key)
         if entry and entry.get('turn') != turn and entry.get('message_id'):
             # Repost once for a new human request, rather than editing above it.
-            self.retire(key, entry)
+            self.retire(key, entry, background=not requested)
             entry = self.entries.get(key)
             if entry:
                 return  # Cleanup must finish before another message is sent.
@@ -687,7 +689,7 @@ class Publisher:
         if entry and entry.get('message_id') and position is not None and entry.get('position') != position:
             # Telegram edits do not move a card below later messages. Retire it
             # on a new exchange; automatic replacement still honors quiet grace.
-            self.retire(key, entry)
+            self.retire(key, entry, background=not requested)
             entry = self.entries.get(key)
             if entry:
                 return
@@ -717,11 +719,17 @@ class Publisher:
         entry['next_update'] = now + 30
         payload = {'chat_id': chat, 'text': html.escape(text), 'parse_mode': 'HTML',
                    'reply_markup': markup or {'inline_keyboard':[]}}
+        signature = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
         message_id = entry.get('message_id')
         if message_id:
+            # Persist only a digest, never another copy of the conversation.
+            # Explicit /status may relocate a card, but need not edit identical text.
+            if signature in (entry.get('accepted_payload'), entry.get('rejected_payload')):
+                self.save()
+                return
             entry['turn'] = turn
             payload['message_id'] = message_id
-            result = self.telegram.call('editMessageText', payload)
+            result = self.telegram.call('editMessageText', payload, background=not requested)
         elif not entry['attempted']:
             entry['attempted'] = True
             self.save()  # Persist before crossing the Telegram boundary.
@@ -730,7 +738,7 @@ class Publisher:
                 payload['reply_parameters'] = {'message_id': reply_to}
             if topic:
                 payload['message_thread_id'] = topic
-            result = self.telegram.call('sendMessage', payload)
+            result = self.telegram.call('sendMessage', payload, background=not requested)
             if result and result.get('ok'):
                 message = result.get('result', {})
                 if message.get('chat', {}).get('id') == chat and message.get('message_thread_id', 0) == topic:
@@ -740,6 +748,9 @@ class Publisher:
                     entry['binding_error'] = True
         else:
             return  # An ambiguous send is never automatically duplicated.
+        if result and result.get('ok'):
+            entry['accepted_payload'] = signature
+            entry.pop('rejected_payload', None)
         if result and not result.get('ok'):
             code = result.get('error_code')
             if code == 429:
@@ -750,16 +761,23 @@ class Publisher:
             elif message_id and code == 400 and 'message to edit not found' in result.get('description', '').lower():
                 entry.pop('message_id')
                 entry['attempted'] = False
+                entry.pop('accepted_payload', None)
+            elif message_id and code == 400 and 'message is not modified' in result.get('description', '').lower():
+                entry['accepted_payload'] = signature
+            elif code in (400, 403):
+                # A changed payload may be attempted; an identical rejected edit
+                # cannot repair a non-transient error by repeating every 30s.
+                entry['rejected_payload'] = signature
         self.save()
 
-    def retire(self, key, entry):
+    def retire(self, key, entry, *, background=True):
         with self.lock:
             current = self.entries.get(key)
             if current and current.get('turn') == entry.get('turn'):
-                self._retire(key, current)
+                self._retire(key, current, background=background)
 
-    def _retire(self, key, entry):
-        if time.time() < entry.get('cleanup_retry', 0):
+    def _retire(self, key, entry, *, background):
+        if time.time() < max(entry.get('cleanup_retry', 0), entry.get('retry_after_until', 0)):
             return
         entry['cleanup_retry'] = time.time() + 30
         self.save()
@@ -767,13 +785,17 @@ class Publisher:
         outcome = 'no_receipt'
         if message_id:
             payload = {'chat_id': entry['chat_id'], 'message_id': message_id}
-            result = self.telegram.call('deleteMessage', payload)
+            result = self.telegram.call('deleteMessage', payload, background=background)
+            if result and result.get('error_code') == 429:
+                entry['cleanup_retry'] = time.time() + max(30, result.get('parameters', {}).get('retry_after', 30))
+                self.save()
+                return  # An edit fallback shares the same known cooldown.
             absent = result and result.get('error_code') == 400 and 'message to delete not found' in result.get('description', '').lower()
             outcome = 'already_absent' if absent else 'deleted'
             if not (result and result.get('ok') and result.get('result') is True) and not absent:
                 # Keep failed cleanup tracked across restart; never leave "Working".
                 payload.update(text='◻️ Activity monitoring ended', parse_mode='HTML')
-                result = self.telegram.call('editMessageText', payload)
+                result = self.telegram.call('editMessageText', payload, background=background)
                 if not result or not result.get('ok'):
                     return
                 outcome = 'marked_inactive'

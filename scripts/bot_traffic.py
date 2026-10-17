@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -25,7 +26,8 @@ setChatMenuButton createForumTopic editForumTopic deleteForumTopic closeForumTop
 forwardMessage forwardMessages copyMessage copyMessages pinChatMessage unpinChatMessage unpinAllChatMessages
 sendLocation sendContact sendPoll sendVenue stopPoll logOut close'''.split()}
 HOP = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
-       'te', 'trailer', 'transfer-encoding', 'upgrade', 'host'}
+       'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'x-telecodex-priority'}
+MESSAGE_WRITES = {name for name in METHODS.values() if name.startswith(('send', 'editMessage', 'deleteMessage', 'copyMessage', 'forwardMessage'))} - {'sendChatAction'}
 
 
 def safe_directory(path):
@@ -113,6 +115,7 @@ class Journal:
             CREATE TABLE IF NOT EXISTS ingress(request_id TEXT REFERENCES requests(id) ON DELETE CASCADE,topic_id INTEGER,kind TEXT,count INTEGER);
             CREATE INDEX IF NOT EXISTS ingress_request ON ingress(request_id);
             CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+            CREATE TABLE IF NOT EXISTS outbound_control(key TEXT PRIMARY KEY,until REAL NOT NULL);
         ''')
         self.db.execute("UPDATE requests SET outcome='collector_restarted_unknown',finished=? WHERE outcome='in_flight'", (time.time(),))
         self.db.execute("INSERT OR IGNORE INTO settings VALUES('capture_started',?)", (str(time.time()),))
@@ -237,6 +240,76 @@ class Journal:
         self.db.close()
 
 
+class Governor:
+    """One bot's durable admission budget. Never retry a transmitted request."""
+    def __init__(self, journal):
+        self.journal = journal
+        # Adopt an already observed cooldown when upgrading the observer. Local
+        # deferrals must never extend Telegram's deadline or create incidents.
+        rows = journal.db.execute('''SELECT method,MAX(finished+retry_after) FROM requests
+            WHERE outcome='response' AND (api_error=429 OR http_status=429)
+            AND retry_after>0 GROUP BY method''').fetchall()
+        for method, until in rows:
+            self.extend(self.cooldown_key(method), until + 1)
+
+    @staticmethod
+    def cooldown_key(method):
+        # Telegram does not specify the exact scope of a 429. Conservatively
+        # share message-write cooldowns across this bot, including all topics.
+        return 'cooldown:writes' if method in MESSAGE_WRITES else 'cooldown:' + method
+
+    def extend(self, key, until):
+        with self.journal.db:
+            self.journal.db.execute('''INSERT INTO outbound_control VALUES(?,?)
+                ON CONFLICT(key) DO UPDATE SET until=MAX(until,excluded.until)''', (key, until))
+
+    def until(self, key):
+        row = self.journal.db.execute('SELECT until FROM outbound_control WHERE key=?', (key,)).fetchone()
+        return row[0] if row else 0
+
+    def observe(self, method, response, complete):
+        if not complete:
+            return
+        try:
+            value = json.loads(response)
+            retry = number(value.get('parameters', {}).get('retry_after'))
+            if value.get('error_code') == 429 and retry and retry > 0:
+                self.extend(self.cooldown_key(method), time.time() + retry + 1)
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    async def admit(self, method, route, background):
+        if method not in MESSAGE_WRITES and method != 'sendChatAction':
+            # Method-specific cooldowns also apply to controls, never ingress.
+            if method in ('getUpdates', 'fileDownload'):
+                return 0
+            return max(0, math.ceil(self.until(self.cooldown_key(method)) - time.time()))
+        now = time.time()
+        cooldown = self.until(self.cooldown_key(method))
+        if cooldown > now:
+            return math.ceil(cooldown - now)
+        chat, topic = route.get('chat_id'), route.get('message_thread_id', 0)
+        if method == 'sendChatAction':
+            # Coalesce duplicate typing producers within Telegram's 5s display
+            # lifetime, per topic. Typing never consumes the reply budget.
+            keys = [(f'typing:{chat}:{topic}', 4)]
+            background = True
+        else:
+            keys = [('budget:global', .04), (f'budget:chat:{chat}', 3.5 if chat is not None and chat < 0 else 1)]
+        due = max(self.until(key) for key, _ in keys)
+        if background and due > now:
+            return max(1, math.ceil(due - now))
+        # Foreground clients already pace their own requests. Do not introduce
+        # a second queue timeout: native final delivery cannot yet durably replay
+        # a locally rejected completed answer. Reserve the quiet period for
+        # optional work, without rejecting a human reply for ordinary contention.
+        with self.journal.db:
+            self.journal.db.execute('DELETE FROM outbound_control WHERE until<?', (now,))
+            for key, spacing in keys:
+                self.journal.db.execute('INSERT OR REPLACE INTO outbound_control VALUES(?,?)', (key, now + spacing))
+        return 0
+
+
 def source_for(port, listen_port, sources):
     """Linux socket ownership; unknown remains unknown. Never record command lines."""
     try:
@@ -280,6 +353,9 @@ def create_app(config):
     fingerprint = private_token(config['token_file'])
     journal = Journal(config['state_dir'], config.get('retention_days', 7), config.get('max_events', 250000))
     journal.bind_bot(fingerprint.hex())
+    if type(config.get('rate_control', True)) is not bool:
+        raise ValueError('rate_control must be a boolean')
+    governor = Governor(journal) if config.get('rate_control', True) else None
     if config.get('activity_receipts'):
         journal.seed(config['activity_receipts'])
 
@@ -316,16 +392,58 @@ def create_app(config):
             finalized = True
             if incoming[0] <= CAPTURE_LIMIT or 'multipart/form-data' in request.headers.get('content-type', ''):
                 route.update({k: v for k, v in metadata(bytes(request_prefix), request.headers.get('content-type', '')).items() if v is not None})
+            complete = outgoing[0] <= CAPTURE_LIMIT and len(response_prefix) == outgoing[0]
+            if tracked and governor and outcome == 'response':
+                try:
+                    governor.observe(method, bytes(response_prefix), complete)
+                except sqlite3.Error:
+                    journal.loss()
             journal.finish(ident, route, bytes(response_prefix), (incoming[0], outgoing[0]), status,
-                           (time.monotonic() - began) * 1000, outcome, outgoing[0] <= CAPTURE_LIMIT and len(response_prefix) == outgoing[0],
+                           (time.monotonic() - began) * 1000, outcome, complete,
                            incoming[0] <= CAPTURE_LIMIT and 'multipart/form-data' not in request.headers.get('content-type', '') and outcome == 'response')
 
+        stream = request.stream().__aiter__()
+        buffered = []
         async def body():
-            async for chunk in request.stream():
+            for chunk in buffered:
+                yield chunk
+            async for chunk in stream:
                 incoming[0] += len(chunk)
                 if tracked and len(request_prefix) < CAPTURE_LIMIT:
                     request_prefix.extend(chunk[:CAPTURE_LIMIT - len(request_prefix)])
                 yield chunk
+        if tracked and governor:
+            try:
+                # Read only a bounded prefix for routing. Uploads remain streamed;
+                # no message/file bytes enter persistent admission state.
+                async for chunk in stream:
+                    incoming[0] += len(chunk)
+                    request_prefix.extend(chunk[:max(0, CAPTURE_LIMIT - len(request_prefix))])
+                    buffered.append(chunk)
+                    if incoming[0] >= CAPTURE_LIMIT:
+                        break
+                route.update({k: v for k, v in metadata(bytes(request_prefix), request.headers.get('content-type', '')).items() if v is not None})
+            except asyncio.CancelledError:
+                finish(None, 'cancelled_not_forwarded')
+                raise
+            except Exception:
+                finish(None, 'not_forwarded')
+                return JSONResponse({'ok': False, 'description': 'Input interrupted before forwarding. No retry was made.'}, status_code=503)
+            try:
+                retry = await governor.admit(method, route, request.headers.get('x-telecodex-priority') == 'background')
+            except sqlite3.Error:
+                journal.loss()
+                retry = None
+            if retry is None or retry:
+                value = {'ok': False, 'error_code': 503 if retry is None else 429,
+                         'description': 'Local outbound admission unavailable; request was not forwarded.' if retry is None else 'Local outbound deferral; request was not forwarded.',
+                         'telecodex_local': True}
+                if retry:
+                    value['parameters'] = {'retry_after': retry}
+                encoded = json.dumps(value).encode()
+                response_prefix.extend(encoded);outgoing[0] = len(encoded)
+                finish(value['error_code'], 'admission_unavailable' if retry is None else 'deferred_local')
+                return JSONResponse(value, status_code=value['error_code'])
         try:
             target = config['upstream'].rstrip('/') + request.scope.get('raw_path', path.encode()).decode('ascii')
             if request.url.query:
@@ -385,12 +503,13 @@ def report(directory, hours=24):
             'failures': ['source', 'method', 'http_status', 'api_error', 'outcome', 'requests']},
         'dropped_records_checkpoint': db.execute("SELECT value FROM settings WHERE key='dropped_records'").fetchone(),
         'loss_accounting': 'Checkpointed on successful writes; an unwritable database followed by process loss can lose the final count. Check service warnings and health.',
-        'totals': rows('SELECT COUNT(*),SUM(request_bytes),SUM(response_bytes),SUM(CASE WHEN api_error=429 OR http_status=429 THEN 1 ELSE 0 END),SUM(outcome="in_flight") FROM requests WHERE started>=?')[0],
-        'by_source_method': rows('SELECT source,method,COUNT(*),SUM(CASE WHEN api_error=429 OR http_status=429 THEN 1 ELSE 0 END),MAX(retry_after) FROM requests WHERE started>=? GROUP BY source,method ORDER BY COUNT(*) DESC'),
-        'by_topic': rows('SELECT chat_id,topic_id,COUNT(*),SUM(CASE WHEN api_error=429 OR http_status=429 THEN 1 ELSE 0 END) FROM requests WHERE started>=? GROUP BY chat_id,topic_id ORDER BY COUNT(*) DESC'),
+        'totals': rows('SELECT COUNT(*),SUM(request_bytes),SUM(response_bytes),SUM(CASE WHEN outcome="response" AND (api_error=429 OR http_status=429) THEN 1 ELSE 0 END),SUM(outcome="in_flight") FROM requests WHERE started>=?')[0],
+        'by_source_method': rows('SELECT source,method,COUNT(*),SUM(CASE WHEN outcome="response" AND (api_error=429 OR http_status=429) THEN 1 ELSE 0 END),MAX(CASE WHEN outcome="response" THEN retry_after END) FROM requests WHERE started>=? GROUP BY source,method ORDER BY COUNT(*) DESC'),
+        'by_topic': rows('SELECT chat_id,topic_id,COUNT(*),SUM(CASE WHEN outcome="response" AND (api_error=429 OR http_status=429) THEN 1 ELSE 0 END) FROM requests WHERE started>=? GROUP BY chat_id,topic_id ORDER BY COUNT(*) DESC'),
         'unattributed_requests': rows('SELECT SUM(source="unknown"),SUM(topic_id IS NULL),SUM(metadata_complete=0) FROM requests WHERE started>=?')[0],
-        'known_backoff_until': rows('SELECT MAX(finished+retry_after) FROM requests WHERE started>=? AND retry_after>0')[0][0],
-        'per_minute': rows('SELECT CAST(started/60 AS INTEGER)*60,source,method,COUNT(*),SUM(CASE WHEN api_error=429 OR http_status=429 THEN 1 ELSE 0 END) FROM requests WHERE started>=? GROUP BY CAST(started/60 AS INTEGER),source,method ORDER BY 1'),
+        'known_backoff_until': rows('SELECT MAX(finished+retry_after) FROM requests WHERE started>=? AND outcome="response" AND retry_after>0')[0][0],
+        'deferred_local': rows('SELECT COUNT(*) FROM requests WHERE started>=? AND outcome="deferred_local"')[0][0],
+        'per_minute': rows('SELECT CAST(started/60 AS INTEGER)*60,source,method,COUNT(*),SUM(CASE WHEN outcome="response" AND (api_error=429 OR http_status=429) THEN 1 ELSE 0 END) FROM requests WHERE started>=? GROUP BY CAST(started/60 AS INTEGER),source,method ORDER BY 1'),
         'peak_requests_per_minute': rows('SELECT CAST(started/60 AS INTEGER)*60,COUNT(*) FROM requests WHERE started>=? GROUP BY CAST(started/60 AS INTEGER) ORDER BY COUNT(*) DESC LIMIT 10'),
         'ingress': rows('SELECT i.topic_id,i.kind,SUM(i.count) FROM ingress i JOIN requests r ON r.id=i.request_id WHERE r.started>=? GROUP BY i.topic_id,i.kind'),
         'failures': rows('SELECT source,method,http_status,api_error,outcome,COUNT(*) FROM requests WHERE started>=? AND (api_error IS NOT NULL OR outcome NOT IN ("response","in_flight")) GROUP BY source,method,http_status,api_error,outcome'),
