@@ -195,5 +195,40 @@ def canonical_routes(binary):
         journey.close()
 
 
+def original_references_beyond_recent_window(binary):
+    """Each native input must keep its identity when the recent list rolls over."""
+    journey = CanonicalRouting(binary)
+    try:
+        journey.start()
+        for topic in (7, 8, 1):
+            journey.admit('Seed synthetic owned native context', topic=topic)
+            journey.wait(lambda: journey.has('Initial goal turn delivered.', topic)); journey.idle()
+        journey.stop(); journey.config.write_text(journey.config.read_text() + journey.target_config)
+        journey.start(); journey.wait_control_socket(journey.socket); journey.routing = True
+        binding = journey.read('presentation', 'list', '0', '0')['result']['binding']
+        originals = [journey.submit(binding, f'Independent retained requirement {number}.')[0] for number in range(20)]
+        journey.wait(lambda: journey.row("SELECT count(*) FROM conversation_inputs WHERE phase='accepted'") == [(20,)])
+        assert journey.packets and all(method in ('turn/start', 'turn/steer') for method, _ in journey.packets)
+        rendered = '\n'.join(part.get('text', '') for _, packet in journey.packets for part in packet['input'])
+        for original in originals:
+            assert original['id'] in rendered, 'Native input omitted its retained original UUID'
+            assert original['text'] in rendered
+        recent = [item for item in journey.call('route-window', 'inputs', {})['inputs'] if item['channel'] == 'conversation']
+        assert len(recent) == 12 and originals[0]['id'] not in [item['input_ref'] for item in recent]
+        journey.call('route-oldest', 'dispatch', {'input_ref': originals[0]['id'], 'destinations': [
+            {'selector': 'Alpha', 'relation': 'new', 'requests': []}]})
+        journey.wait(lambda: len(journey.instructions(7)) == 1 and journey.instructions(7)[0][1] == 'accepted')
+        instruction = json.loads(journey.instructions(7)[0][2])
+        assert instruction['text'] == originals[0]['text'], 'Controller metadata became human task text'
+        assert journey.read('input', 'status', originals[0]['id'])['result']['text'] == originals[0]['text']
+        journey.answer_worker(7, 'Synthetic result for the oldest original outside the recent window.')
+        journey.wait(lambda: journey.row('SELECT count(*) FROM interaction_deliveries') == [(1,)])
+        journey.finish(journey.web_thread, journey.web_turn); journey.idle()
+        print('PASS twenty original references survive native start/steer and recent-twelve rollover; oldest exact original still routes without fabricated task text; zero models.')
+    finally:
+        journey.close()
+
+
 if __name__ == '__main__':
     canonical_routes(str(Path(sys.argv[1]).resolve()))
+    original_references_beyond_recent_window(str(Path(sys.argv[1]).resolve()))
