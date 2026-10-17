@@ -59,11 +59,7 @@ pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) 
         routing::notice(shared, origin, usage.into());
         return Ok(true);
     }
-    let cfg = shared
-        .config
-        .interaction
-        .as_ref()
-        .context("Interaction configuration missing")?;
+    let cfg = routing::profile(&shared)?;
     let targets = cfg.resolve(selector);
     if targets.len() != 1 {
         routing::notice(
@@ -289,11 +285,7 @@ fn candidates(
             return Ok(true);
         }
     };
-    let cfg = shared
-        .config
-        .interaction
-        .as_ref()
-        .context("Missing interaction profile")?;
+    let cfg = routing::profile(&shared)?;
     let selected = cfg
         .targets
         .iter()
@@ -356,11 +348,7 @@ pub(super) fn tool_owner(
     human: i64,
     native: &str,
 ) -> Result<()> {
-    let cfg = shared
-        .config
-        .interaction
-        .as_ref()
-        .context("Missing interaction profile")?;
+    let cfg = routing::profile(shared)?;
     if cfg.entry() != key || cfg.human_id != human {
         bail!("Tool is outside the integrating conversation");
     }
@@ -386,7 +374,7 @@ pub(super) fn tool_call(
             tool_owner(&shared,key,human,&request.thread_id)?;
             if request.tool!="interaction_candidates" || request.namespace.is_some() || request.arguments.to_string().len()>4096 {bail!("Unsupported integrating tool");}
             let args: CandidateToolArgs = serde_json::from_value(request.arguments)?;
-            let cfg = shared.config.interaction.as_ref().context("Missing interaction profile")?;
+            let cfg=routing::profile(&shared)?;
             if args.selectors.len()>5 {bail!("Too many selected candidates");}
             let mut selected = vec![];
             for selector in &args.selectors {

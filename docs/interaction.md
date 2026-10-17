@@ -403,3 +403,37 @@ bindings and completed reports. It does not qualify semantic dispatch or real
 Telegram. Its narrowly guarded `--resume` continues only the pending second
 entry turn after the recorded reader-method failure; completed turns are never
 replayed.
+
+## Creating a distinct work session
+
+The stable integrating controller exposes `create` for a clearly distinct task,
+after inspecting existing candidates. Its arguments select a retained original
+input, a single-token topic name, a reason and up to five enrolled observer
+context sources. Ambiguity and a busy worker call for clarification; neither
+justifies a new session. Context interpretations retain their source, revision,
+support indices, freshness and boundedness, separately from the exact original
+human input. Selected context does not authorize repeating source effects.
+
+An interaction profile may start with no enrolled targets; an empty inventory
+is not by itself a reason to create a session. One immutable creation intent
+reserves the original input before any topic RPC.
+The existing Telegram topic adapter waits for outbound capacity, revalidates
+original ownership, native binding and ingress generation, and marks the one
+mutation immediately before HTTP. A failed pre-send check is known unsent. A
+lost or invalid topic receipt is uncertain and is never retried automatically.
+`creation_status` takes the original `input_update` reference to inspect the
+retained operation even when the original tool response was lost. A confirmed
+topic is retained if later initialization or admission fails; inspection is not
+a request to create another topic. Automated recovery of such incomplete
+creation operations is not yet implemented.
+
+The existing empty-session initializer copies the selected entry settings into
+a fresh owned destination. Final admission atomically enrolls that destination
+and retains the original instruction, then uses the same independent worker
+delivery and return path. Enrolled created destinations appear in observer
+inventory, explicit selectors and status without modifying the static config,
+and remain available across restarts. Creation cannot change an existing input's
+selected target plan or grant access to another human's sessions. Configured and
+created contexts share the existing 64-target bound; pending uncertain creation
+intents reserve capacity. A new topic or native acceptance is not proof of
+incorporation or task completion.

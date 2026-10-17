@@ -51,6 +51,8 @@ pub(super) fn tool_call(
                 "inputs" => "interaction_inputs",
                 "candidates" => "interaction_candidates",
                 "dispatch" => "interaction_dispatch",
+                "create" => "interaction_create",
+                "creation_status" => "interaction_creation_status",
                 _ => "unsupported_controller_operation",
             }
             .into();
@@ -68,12 +70,21 @@ pub(super) fn tool_call(
             super::observer::tool_owner(shared,key,human,&request.thread_id)?;
             if request.namespace.is_some() || request.arguments.to_string().len()>16000 {bail!("Unsupported integrating tool arguments");}
             if request.tool=="controller_capabilities" && request.arguments==json!({}) {
-                return Ok(json!({"schema":"telecodex.interaction-controller/v1","operations":{"capabilities":{"arguments":{}},"inputs":{"arguments":{},"description":"Recent original human text references within this native entry; no dispatch"},"candidates":{"description":"Bounded observer source interpretations; no dispatch","arguments":{"mode":"inventory or refresh","selectors":["one to five enrolled labels or stable tID; inventory can use an empty array"]}},"dispatch":{"input_schema":dispatch_schema(),"description":"One durable selected target plan, then existing per-target delivery. Text is taken only from the original referenced ingress record. Amendments/context require actual request IDs. Admission/native acceptance is not proof of incorporation."}},"unsupported":["new-session creation","cross-body routing","global Stop"],"uncertainty":"Never repeat an uncertain operation; inspect retained outcomes before explicit recovery"}));
+                return Ok(json!({"schema":"telecodex.interaction-controller/v1","operations":{"capabilities":{"arguments":{}},"inputs":{"arguments":{},"description":"Recent original human text references within this native entry; no dispatch"},"candidates":{"description":"Bounded observer source interpretations; no dispatch","arguments":{"mode":"inventory or refresh","selectors":["one to five enrolled labels or stable tID; inventory can use an empty array"]}},"create":{"input_schema":super::creation::schema(),"description":"Create one justified new work session from an original retained input, with selected attributed context. Never create for ambiguity or a busy worker."},"creation_status":{"arguments":{"input_update":"original input reference"},"description":"Inspect a retained creation; no retry or new work"},"dispatch":{"input_schema":dispatch_schema(),"description":"One durable selected target plan, then existing per-target delivery. Text is taken only from the original referenced ingress record. Amendments/context require actual request IDs. Admission/native acceptance is not proof of incorporation."}},"unsupported":["cross-body routing","global Stop"],"uncertainty":"Never repeat an uncertain operation; inspect retained outcomes before explicit recovery"}));
             }
             if request.tool=="interaction_inputs" {
                 if request.arguments!=json!({}) {bail!("Unexpected input query arguments");}
                 let inputs=shared.store.interaction_entry_inputs(key,human,&request.thread_id,None)?;
                 return Ok(json!({"kind":"original_integrating_inputs","bounded":true,"inputs":inputs.into_iter().filter_map(|u|{let m=u.message?;let text=m.text?;Some(json!({"input_update":u.update_id,"human":human,"origin":{"chat_id":m.chat.id,"thread_id":m.message_thread_id,"message_id":m.message_id},"text_excerpt":text.chars().take(2000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Vec<_>>()}));
+            }
+            if request.tool=="interaction_create" {
+                return super::creation::create(&app,key,human,&request.thread_id,request.arguments,&closed).await;
+            }
+            if request.tool=="interaction_creation_status" {
+                if request.arguments.as_object().is_none_or(|a|a.len()!=1) {bail!("Unexpected creation status arguments");}
+                let update=request.arguments["input_update"].as_i64().context("Missing original input reference")?;
+                let operation=shared.store.interaction_creation_for_input(key,human,update)?;
+                return Ok(operation);
             }
             if request.tool!="interaction_dispatch" {bail!("Unknown integrating tool");}
             let args:DispatchArgs=serde_json::from_value(request.arguments)?;
@@ -82,7 +93,7 @@ pub(super) fn tool_call(
             let message=original.message.context("Original human message missing")?;
             let text=message.text.as_deref().context("Committed text missing")?;
             if text.trim().is_empty() || text.starts_with('/') || !is_text_only_steer_candidate(&message,text) {bail!("This adapter requires original committed text");}
-            let cfg=shared.config.interaction.as_ref().context("Missing profile")?;
+            let cfg=super::routing::profile(shared)?;
             let mut plan=vec![];
             for d in args.destinations {
                 let matches=cfg.resolve(d.selector.strip_prefix('#').unwrap_or(&d.selector));

@@ -10,6 +10,7 @@ pub struct InteractionConfig {
     pub human_id: i64,
     pub chat_id: i64,
     pub topic_id: i64,
+    #[serde(default)]
     pub targets: Vec<Target>,
 }
 
@@ -26,11 +27,7 @@ impl InteractionConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.human_id <= 0
-            || self.chat_id == 0
-            || self.topic_id <= 0
-            || self.targets.is_empty()
-            || self.targets.len() > 64
+        if self.human_id <= 0 || self.chat_id == 0 || self.topic_id <= 0 || self.targets.len() > 64
         {
             bail!("Invalid interaction owner, entry or target count");
         }
