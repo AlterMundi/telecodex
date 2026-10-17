@@ -13,6 +13,22 @@ pub(super) async fn process_turn(
     registration: Option<String>,
 ) -> Result<()> {
     let shared = app.shared.clone();
+    let mut conversation_native = None;
+    if let Some(id) = queued.conversation_input.as_deref() {
+        shared
+            .store
+            .conversation_input_validate(queued.request.from_user_id, id)?;
+        conversation_native = Some(
+            shared
+                .store
+                .conversation_input_read(
+                    queued.request.from_user_id,
+                    queued.request.session_key,
+                    id,
+                )?
+                .native,
+        );
+    }
     shared.store.voice_validate(
         queued.update_id,
         queued.request.session_key,
@@ -267,12 +283,16 @@ pub(super) async fn process_turn(
             super::routing::started(&app, session.key, id, active)?;
         }
     }
-    let mut chat_action_task = Some(spawn_chat_action_task(
-        shared.telegram.clone(),
-        session.key.chat_id,
-        Some(session.key.thread_id).filter(|value| *value != 0),
-        cancel.clone(),
-    ));
+    let mut chat_action_task = if queued.conversation_input.is_some() {
+        None
+    } else {
+        Some(spawn_chat_action_task(
+            shared.telegram.clone(),
+            session.key.chat_id,
+            Some(session.key.thread_id).filter(|value| *value != 0),
+            cancel.clone(),
+        ))
+    };
     let limits_inline = latest_limits_snapshot_from_shared(&shared)
         .await
         .map_err(|error| {
@@ -286,7 +306,7 @@ pub(super) async fn process_turn(
     let placeholder_text = render_placeholder_html(thinking_text, turn_banner.as_deref());
     let thread_id = Some(session.key.thread_id).filter(|value| *value != 0);
     let draft_id = turn_id;
-    let routed = execution_root.is_some();
+    let routed = execution_root.is_some() || queued.conversation_input.is_some();
     let sink = if routed || !shared.config.telegram.show_unfinished_messages {
         Arc::new(Mutex::new(LiveTurnSink::new_preview(
             shared.clone(),
@@ -466,14 +486,21 @@ pub(super) async fn process_turn(
     } else {
         runner
     };
-    let runner = runner.with_client_message_id(queued.interaction.clone().or_else(|| {
-        queued.update_id.map(|id| {
-            format!(
-                "telegram:{}:{}:{id}",
-                session.key.chat_id, queued.request.from_user_id
-            )
-        })
-    }));
+    let runner = runner.with_client_message_id(
+        queued
+            .conversation_input
+            .as_ref()
+            .map(|id| format!("conversation:{id}"))
+            .or_else(|| queued.interaction.clone())
+            .or_else(|| {
+                queued.update_id.map(|id| {
+                    format!(
+                        "telegram:{}:{}:{id}",
+                        session.key.chat_id, queued.request.from_user_id
+                    )
+                })
+            }),
+    );
     let physical_turn = Arc::new(StdMutex::new(None::<String>));
     let run =
         runner
@@ -490,6 +517,8 @@ pub(super) async fn process_turn(
                 let stop_resume=queued.stop_resume.clone();
                 let admission_epoch=queued.admission_epoch.clone();
                 let interaction=queued.interaction.clone();
+                let conversation_input=queued.conversation_input.clone();
+                let conversation_native=conversation_native.clone();
                 let result_root=execution_root.clone();
                 let attach_native=queued.goal.as_ref().filter(|g|g.attach_turn.is_some()).and_then(|g|g.native_thread.clone());
                 let routing_app=app.clone();
@@ -504,12 +533,16 @@ pub(super) async fn process_turn(
                     let stop_resume=stop_resume.clone();
                     let admission_epoch=admission_epoch.clone();
                     let interaction=interaction.clone();
+                    let conversation_input=conversation_input.clone();
+                    let conversation_native=conversation_native.clone();
                     let result_root=result_root.clone();
                     let routing_app=routing_app.clone();
                     let presentation_tx=presentation_tx.clone();
                     async move {
                         match event {
                             CodexEvent::ThreadStarted(thread_id) => {
+                                if conversation_native.as_deref().is_some_and(|native|native!=thread_id) {bail!("Conversation input returned another native binding; original retained");}
+                                if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_validate(requester_user_id,id)?;}
                                 if let Some(native)=attach_native.as_deref() {
                                     if native!=thread_id {bail!("Attachment returned a different native thread");}
                                     shared.store.validate_owned_binding(session_key,requester_user_id,native)?;
@@ -519,7 +552,7 @@ pub(super) async fn process_turn(
                                 super::nexus::thread(&shared,turn_id,&thread_id)?;
                                 if let Some(id)=admission.as_deref() {shared.store.tribu_native_thread(session_key,id,&thread_id)?;}
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
-                                if preserve_thread_binding && attach_native.is_none() {
+                                if preserve_thread_binding && attach_native.is_none() && conversation_input.is_none() {
                                     if !voice_bound {
                                         shared.store.set_session_codex_thread(session_key, &thread_id)?;
                                     }
@@ -563,6 +596,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::Approval(receiver))
                             }
                             CodexEvent::NativeInputRejected => {
+                                if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Rejected{local_turn:turn_id})?;}
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_transport(id,requester_user_id,turn_id,crate::interaction::TransportPhase::Rejected,None)?;}
                                 if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,"resume_rejected",Some(turn_id),None)?;}
 
@@ -575,12 +609,14 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeSteerAccepted {client_id,turn_id:native_id} => {
+                                if let Some(id)=client_id.strip_prefix("conversation:") {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Accepted{local_turn:turn_id})?;}
                                 if shared.store.interaction_instruction(&client_id,requester_user_id)?.is_some() {
                                     shared.store.interaction_transport(&client_id,requester_user_id,turn_id,crate::interaction::TransportPhase::Accepted,Some(&native_id))?;
                                 }
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeInputAccepted(native_id) => {
+                                if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Accepted{local_turn:turn_id})?;}
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_transport(id,requester_user_id,turn_id,crate::interaction::TransportPhase::Accepted,Some(&native_id))?;}
                                 if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,"resume_accepted",Some(turn_id),Some(&native_id))?;}
 
@@ -641,6 +677,7 @@ pub(super) async fn process_turn(
                                 if shared.store.maintenance_writer_held(session_key)? {
                                     bail!("Native writer held during controlled maintenance; input retained without submission");
                                 }
+                                if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Begin{local_turn:turn_id,steer:false})?;}
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnTerminal {id:native_id,status} => {
@@ -1727,7 +1764,7 @@ pub(super) fn prepare_runtime_request(
             .all(has_preferred_audio_transcript);
 
     if !request.prompt.trim().is_empty() && !omit_default_attachment_prompt {
-        user_prompt_sections.push(request.prompt.trim().to_string());
+        user_prompt_sections.push(request.prompt.clone());
     }
 
     for transcript_text in transcript_texts {

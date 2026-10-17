@@ -529,6 +529,7 @@ pub(super) async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
                 request,
                 chat_kind: "private".into(),
                 update_id: None,
+                conversation_input: None,
                 tribu_admission: Some(id.clone()),
                 goal: None,
                 stop_resume: None,

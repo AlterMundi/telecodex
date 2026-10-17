@@ -2020,7 +2020,7 @@ fn build_turn_start_params(
     request: &TurnRequest,
 ) -> Value {
     let effective_search_mode = request.override_search_mode.unwrap_or(session.search_mode);
-    let prompt = request.prompt.trim();
+    let prompt = request.prompt.as_str();
     let mut input = vec![json!({"type":"text","text":prompt,"text_elements":[]})];
     for image in request.image_paths() {
         input.push(json!({"type":"localImage","path":sanitize_arg_path(&image)}));

@@ -24,6 +24,9 @@ pub(super) async fn command(
     if let Some(selected) = args.strip_prefix("presentation ") {
         return presentation::owner_read(app, human, selected);
     }
+    if let Some(selected) = args.strip_prefix("input ") {
+        return conversation_inputs::command(app, human, selected).await;
+    }
     if let Some(selected) = args.strip_prefix("attach-active ") {
         return goals::attach_active(app, human, selected).await;
     }
@@ -604,7 +607,7 @@ pub(super) async fn start_control_socket(app: App) -> Result<()> {
             tokio::spawn(async move {
                 let _permit = permit;
                 let (read, mut write) = stream.into_split();
-                let mut reader = BufReader::new(read.take(4097));
+                let mut reader = BufReader::new(read.take(65537));
                 let mut raw = Vec::new();
                 let reply = match tokio::time::timeout(
                     Duration::from_secs(5),
@@ -612,7 +615,7 @@ pub(super) async fn start_control_socket(app: App) -> Result<()> {
                 )
                 .await
                 {
-                    Ok(Ok(n)) if n > 0 && n <= 4096 => {
+                    Ok(Ok(n)) if n > 0 && n <= 65536 => {
                         match serde_json::from_slice::<Value>(&raw) {
                             Ok(v) => match command(
                                 &app,

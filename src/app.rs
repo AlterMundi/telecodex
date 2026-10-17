@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 mod attention;
 mod auth;
+mod conversation_inputs;
 mod creation;
 mod dialogue;
 mod forum;
@@ -103,6 +104,7 @@ struct AppShared {
     pending_approvals: Mutex<HashMap<String, PendingApproval>>,
     pending_questions: Mutex<HashMap<String, questions::PendingDialogue>>,
     pending_task_text: Mutex<HashMap<(SessionKey, i64), String>>,
+    conversation_ingress: Mutex<()>,
     pending_goal_controls: Mutex<HashMap<String, goals::PendingGoalControl>>,
     pending_icon_pickers: Mutex<HashMap<String, icons::PendingIconPicker>>,
     pending_codex_login: Mutex<Option<PendingCodexLogin>>,
@@ -172,6 +174,7 @@ struct QueuedTurn {
     request: TurnRequest,
     chat_kind: String,
     update_id: Option<i64>,
+    conversation_input: Option<String>,
     tribu_admission: Option<String>,
     goal: Option<crate::codex::GoalActivation>,
     nexus: Option<String>,
@@ -325,6 +328,7 @@ impl App {
                 pending_approvals: Mutex::new(HashMap::new()),
                 pending_questions: Mutex::new(HashMap::new()),
                 pending_task_text: Mutex::new(HashMap::new()),
+                conversation_ingress: Mutex::new(()),
                 pending_goal_controls: Mutex::new(HashMap::new()),
                 pending_icon_pickers: Mutex::new(HashMap::new()),
                 pending_codex_login: Mutex::new(None),
@@ -2439,6 +2443,7 @@ impl App {
                 request,
                 chat_kind: chat_kind.to_string(),
                 update_id,
+                conversation_input: None,
                 tribu_admission: admission.map(|a| a.id),
                 goal,
                 nexus,
@@ -2592,6 +2597,7 @@ impl App {
                 let admission = turn.tribu_admission.clone();
                 let nexus_id = turn.nexus.clone();
                 let merge_id = turn.merge.clone();
+                let conversation_input_id = turn.conversation_input.clone();
                 let (registration, result) = match routing::begin(&shared, &turn) {
                     Ok(registration) => {
                         let result = process_turn(
@@ -2621,6 +2627,17 @@ impl App {
                 }
                 if let Some(id) = merge_id {
                     let _ = shared.store.merge_finish(&id);
+                }
+                if let Some(id) = conversation_input_id {
+                    if shared
+                        .store
+                        .conversation_input_finish(requester, &id)
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            "Conversation input execution outcome could not be retained"
+                        );
+                    }
                 }
                 if let Some(id) = nexus_id {
                     if shared.store.nexus_finish(&id).is_err() {
