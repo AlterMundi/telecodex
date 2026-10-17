@@ -42,3 +42,9 @@ Development = "/your-development-mount"
 # producer_id = "your-bot-traffic"
 # observer_id = "your-bot-traffic-observer"
 # receiving_scope = "your-receiving-scope"
+
+# Optional operator-enrolled interaction-only physical clients. No enrollment,
+# recording or device activity is started by enabling the receiving route.
+# [companion]
+# enabled = true
+# grants_dir = "/private/receiving/companion-grants"

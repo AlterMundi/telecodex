@@ -232,6 +232,7 @@ jobs:
         env:
           ALERTS_CORE_SOURCE: .alerts-core
       - run: python -B tests/dashboard_io.py
+      - run: python -B tests/dashboard_companion_io.py
       - run: python -B tests/presentation_io.py
       - run: node --check dashboard/web/app.js
       - run: node --check dashboard/web/requests.js

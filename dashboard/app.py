@@ -24,6 +24,7 @@ from .traffic import Traffic
 from .menu_attention import attention_projection
 from .operator import menu_selection
 from .speech import Speech, SpeechUnavailable
+from .companion import Grants as CompanionGrants, permitted as companion_permitted
 from scripts.speech_render import RenderError
 
 
@@ -52,6 +53,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     if config is None:
         config = tomllib.loads(Path(os.environ['TELECODEX_DASHBOARD_CONFIG']).read_text())
     provider = provider or Provider(config)
+    companions = CompanionGrants(config, provider)
     speech = Speech(config['speech']) if config.get('speech') else None
     origin = config['origin']
     prefix = config.get('prefix', '/sessions')
@@ -127,6 +129,13 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.middleware('http')
     async def boundaries(request, call_next):
+        # A device credential never acquires the ambient Telegram session or
+        # administrative routes, even when a browser also carries a valid cookie.
+        if any(value.lower().startswith('companion') for value in request.headers.getlist('authorization')):
+            try:
+                authorize(request)
+            except HTTPException as exc:
+                return JSONResponse({'detail':exc.detail}, status_code=exc.status_code)
         if request.method == 'POST':
             allowed = launcher_origins if request.url.path == '/api/alerts/attention' else [origin]
             if request.headers.get('origin') not in allowed:
@@ -167,6 +176,13 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         token = request.cookies.get('telecodex_dashboard', '')
         headers = request.headers.getlist('authorization')
         if headers:
+            if len(headers) == 1 and (device := re.fullmatch(r'Companion ([A-Za-z0-9_-]{43})', headers[0], re.IGNORECASE)):
+                grant = companions.authenticate(device.group(1))
+                if grant is None:
+                    raise HTTPException(401, 'Companion access is unavailable; operator enrollment required')
+                if not companion_permitted(request.method, request.url.path):
+                    raise HTTPException(403, 'Companion access is limited to the integrating conversation')
+                return grant
             # A restricted WebView may omit cookies. Never downgrade an invalid
             # explicit credential to a different ambient cookie session.
             if len(headers) != 1 or not (match := re.fullmatch(
