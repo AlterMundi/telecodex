@@ -61,9 +61,19 @@ impl ConversationInput {
     pub fn rendered(&self) -> String {
         let text = self.answer_text();
         if self.reply.as_ref().is_some_and(|r| r.context_only) {
+            let guidance = if self
+                .reply
+                .as_ref()
+                .is_some_and(|r| r.source.starts_with("input:"))
+            {
+                "The reported input:UUID identifies a device-reported destination question for that retained original, which may be stale. If this utterance clearly clarifies its destination, inspect pending_routes and use resolve_route with that exact pending UUID and this new input_ref. Never guess a newer pending original. If the human changes topic or the intent is unclear, discuss or route normally; context alone selects nothing."
+            } else {
+                "Use interaction_controller capabilities to inspect questions or answer the selected question from this original input only when its intent is clear; otherwise discuss or route normally. A stale source must not prevent a new topic."
+            };
             format!(
-                "[Device-reported conversational context]\n{}\nThis is contextual source metadata, not a human destination or answer selection and not proof of hearing. Interpret the original input below. Use interaction_controller capabilities to inspect questions or answer the selected question from this original input only when its intent is clear; otherwise discuss or route normally. A stale source must not prevent a new topic.\n\n{}",
+                "[Device-reported conversational context]\n{}\nThis is contextual source metadata, not a human destination or answer selection and not proof of hearing. Interpret the original input below. {}\n\n{}",
                 serde_json::json!({"input_ref":self.id,"reply":self.reply,"focus":self.focus}),
+                guidance,
                 text
             )
         } else {
@@ -448,6 +458,7 @@ impl Store {
             items.push(serde_json::json!({
                 "id":id,"sequence":sequence,"preview":input.text.chars().take(1000).collect::<String>(),
                 "phase":input.phase,"retired":input.retired,"voice":input.voice,"routing":input.routing,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
+                "clarifiable":input.phase=="awaiting_target" && eligible_on(&conn,&input).is_ok(),
                 "native_binding_current":input.native==native,
             }));
         }
@@ -469,6 +480,12 @@ impl Store {
             bail!("Conversation input is not eligible for native submission");
         }
         Ok(())
+    }
+
+    pub fn conversation_input_can_clarify(&self, human: i64, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let input = read_on(&conn, id, human)?;
+        Ok(input.phase == "awaiting_target" && eligible_on(&conn, &input).is_ok())
     }
 
     pub fn conversation_input_finish(&self, human: i64, id: &str) -> Result<()> {

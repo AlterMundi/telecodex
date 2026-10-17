@@ -21,6 +21,7 @@ class Receiver:
         self.changed = False
         self.parts = 0
         self.question = None
+        self.pending = None
         self.source = {'schema':'telecodex.presentation-part/v1',
             'id':'delivery:11111111-1111-1111-1111-111111111111', 'revision':'a'*64,
             'kind':'worker_result', 'label':'#Alfa', 'entry_binding':[100, {'chat_id':100,'thread_id':1},1,'entry-native'],
@@ -35,11 +36,24 @@ class Receiver:
         return {'schema':'telecodex.presentation-list/v1','items':[result]}
     def presentation_part(self, source, revision, offset):
         self.parts += 1
+        if source.startswith('input:'):
+            return Provider.presentation_part(self, source, revision, offset)
         if source.startswith('request:'):
             return Provider.presentation_part(self, source, revision, offset)
         if self.changed or source != self.source['id'] or revision != self.source['revision'] or offset != 0:
             raise ProviderUnavailable('Source changed')
         return copy.deepcopy(self.source)
+
+    input_id = staticmethod(Provider.input_id)
+    clarification_source = staticmethod(Provider.clarification_source)
+
+    def presentation(self, command):
+        assert command=='input status '+self.pending['id']
+        return copy.deepcopy(self.pending)
+
+    def conversation_input_status(self, ident):
+        assert ident==self.pending['id']
+        return Provider.decorate_input(copy.deepcopy(self.pending))
 
     def conversation_request_detail(self, ident, offset, revision):
         view = copy.deepcopy(self.question)
@@ -158,6 +172,59 @@ class Presentation(unittest.TestCase):
             response=pending.result(timeout=8)
         self.assertEqual(response.status_code,401)
         self.assertNotEqual(response.content,self.fixture.data)
+        self.assertEqual(len(self.fixture.calls),1)
+
+    def destination_question(self):
+        self.provider.pending={'id':'11111111-1111-4111-8111-111111111111',
+            'entry_binding':copy.deepcopy(self.provider.source['entry_binding']),'binding':'b'*64,
+            'phase':'awaiting_target','clarifiable':True,'retired':False,'routing':None,
+            'text':'#Unknown Preserve the exact original 🦉. '*100,
+            'routing_choices':[{'selector':'t7','label':'Alpha'},{'selector':'t8','label':'Beta'}]}
+        source=Provider.clarification_source(self.provider.pending)
+        self.body={'source':source['id'],'revision':source['revision'],'offset':0}
+        return source
+
+    def test_destination_question_reuses_parts_cache_and_logical_entry_generation(self):
+        source=self.destination_question();self.login()
+        # Enough valid bounded labels to exercise multipart speech, without
+        # reading the entire long original aloud or inventing a destination.
+        self.provider.pending['routing_choices']=[{'selector':'t'+str(i),'label':str(i)+'🦉'*195}for i in range(9)]
+        source=Provider.clarification_source(self.provider.pending)
+        self.body['revision']=source['revision']
+        original=self.provider.pending['text'];parts=[];offset=0
+        while offset is not None:
+            selected={**self.body,'offset':offset}
+            response=self.client.get('/api/interaction/part',params=selected,headers=self.headers)
+            self.assertEqual(response.status_code,200,response.text)
+            part=response.json();self.assertEqual(part['kind'],'route_clarification')
+            parts.append(part['text']);self.assertLessEqual(len(part['text']),1600)
+            audio=self.audio(selected);self.assertEqual(audio.status_code,200,audio.text)
+            self.assertEqual(self.audio(selected).content,audio.content)
+            offset=part['next_offset']
+        self.assertEqual(''.join(parts),source['text'])
+        self.assertEqual(self.provider.pending['text'],original)
+        self.assertEqual(len(self.fixture.calls),len(parts))
+        self.provider.pending['entry_binding'][3]='newly-established-native'
+        latest=Provider.clarification_source(self.provider.pending)
+        self.assertEqual(latest['revision'],source['revision'])
+        self.assertEqual(latest['entry_binding'],source['entry_binding'])
+
+    def test_resolved_or_retired_destination_never_synthesizes(self):
+        self.destination_question();self.login()
+        for changes in ({'clarifiable':False},{'phase':'routed'},{'retired':True}):
+            prior=copy.deepcopy(self.provider.pending);self.provider.pending.update(changes)
+            self.assertEqual(self.audio().status_code,409)
+            self.provider.pending=prior
+        self.assertEqual(len(self.fixture.calls),0)
+
+    def test_destination_or_choice_change_during_synthesis_refuses_old_audio(self):
+        self.destination_question();self.login();self.fixture.hold=True
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1)as pool:
+            pending=pool.submit(self.audio)
+            self.assertTrue(self.fixture.entered.wait(timeout=4))
+            self.provider.pending['routing_choices'][0]['label']='Changed destination'
+            self.fixture.release.set()
+            self.assertEqual(pending.result(timeout=8).status_code,409)
         self.assertEqual(len(self.fixture.calls),1)
 
     def question(self):

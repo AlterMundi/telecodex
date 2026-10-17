@@ -23,6 +23,21 @@ fn outcome(input: &ConversationInput, fresh: bool) -> Value {
 
 fn response(app: &App, input: &ConversationInput, fresh: bool) -> Result<Value> {
     let mut value = outcome(input, fresh);
+    value["clarifiable"] = json!(
+        input.phase == "awaiting_target"
+            && app
+                .shared
+                .store
+                .conversation_input_can_clarify(input.human, &input.id)?
+    );
+    if value["clarifiable"] == true {
+        value["routing_choices"] = choices(app)?;
+        value["binding"] = app
+            .shared
+            .store
+            .conversation_request_binding(input.human, input.entry)?["binding"]
+            .clone();
+    }
     if let Some(reply) = &input.reply
         && let Some(id) = reply.source.strip_prefix("request:")
     {
