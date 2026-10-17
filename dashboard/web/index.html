@@ -7,6 +7,7 @@
     <title>Sessions · Telecodex</title>
     <link rel="stylesheet" href="assets/style.css" />
     <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script src="assets/requests.js" defer></script>
     <script src="assets/conversation.js" defer></script>
     <script src="assets/app.js" defer></script>
   </head>
@@ -36,6 +37,12 @@
       <section id="conversation" hidden aria-label="Integrating conversation">
         <div class="conversation-tools"><button id="conversation-back" type="button">← Sessions</button><button id="conversation-refresh" type="button">Refresh replies</button></div>
         <p id="conversation-state" role="status" aria-live="polite">Connecting to your conversation…</p>
+        <section id="conversation-requests" hidden aria-labelledby="conversation-requests-title">
+          <h2 id="conversation-requests-title">Requests from your sessions</h2>
+          <p id="conversation-request-state" class="note" role="status" aria-live="polite"></p>
+          <div id="conversation-request-cards"></div>
+          <button id="conversation-requests-more" type="button" hidden>More requests</button>
+        </section>
         <form id="conversation-compose" aria-label="Message your conversation">
           <label for="conversation-message">Your message</label>
           <textarea id="conversation-message" rows="3" placeholder="Continue a topic, add a correction, or start something new…" disabled></textarea>

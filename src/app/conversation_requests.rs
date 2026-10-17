@@ -35,7 +35,7 @@ fn question_payload(p: &questions::PendingDialogue) -> Value {
         ));
         choices.push(json!({"action":{"kind":"option","index":index},"label":option.label.chars().take(200).collect::<String>()}));
     }
-    json!({"kind":"question","question_id":q.id,"body":body,"choices":choices,"allows_text":true,
+    json!({"kind":"question","question_id":q.id,"source_turn":p.request.turn_id,"body":body,"choices":choices,"allows_text":true,
         "can_cancel":true,"question_index":p.index,"question_total":p.request.questions.len(),"blocking":p.request.is_blocking})
 }
 fn approval_payload(p: &PendingApproval) -> Value {

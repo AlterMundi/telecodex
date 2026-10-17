@@ -4,8 +4,8 @@ The owner-local controller accepts non-Telegram text into the configured native
 integrating entry. It reuses the existing queue, native writer and active steer;
 there is no second model session or fabricated Telegram update. The entry must
 already have an owned native binding. The Mini App includes authenticated text
-input and retained-message inspection. Microphone and native question/approval
-controls are still being integrated. Receiving deployment requires the new
+input, retained-message inspection and native question/approval controls.
+Microphone input is still being integrated. Receiving deployment requires the new
 canonical-return policy in every relevant active collector before exposing input.
 
 `telecodex --control CONFIG input submit JSON` accepts only `binding`, `id` and
@@ -71,8 +71,8 @@ Native questions retain their existing response channel and full request in the
 scoped human-interaction store. Approvals likewise retain the exact proposal,
 allowed choices and pending responder. Selecting canonical presentation neither
 publishes these requests to Telegram nor grants an approval. Canonical request
-controls now have authenticated owner/HTTP endpoints; visible Mini App controls
-are still being integrated. Retirement and restart
+controls have authenticated owner/HTTP endpoints and visible Mini App cards.
+Retirement and restart
 never resurrect a response channel. Generated files remain retained with their
 native turn when automatic Telegram presentation is not selected.
 
@@ -95,6 +95,22 @@ proposal/choices/question index to the owner, entry/source native bindings,
 physical execution, process instance and admission generations. Native event
 processing and additional steer input continue while requests wait.
 
+The Mini App discovers bounded pages of requests and shows their source session.
+A permanent discovery sequence survives native-row deletion and SQLite rowid reuse;
+its order describes discovery, not original human chronology. Choice controls stay
+disabled until the full proposal has been read. Changed proposals require another
+explicit review, and unsent drafts remain available under previous drafts. Request
+cards survive ordinary reply refreshes. Pending requests do not prevent new text
+input or steering to the integrating conversation and its workers.
+
+A lost decision acknowledgment retains the exact revision and action in memory.
+Check decision reads the immutable receipt without another POST. Explicit retry
+uses the same frozen decision; no automatic retry, approval or replay occurs.
+Expired requests display closure even when the live responder and its question
+index no longer exist. Native question and approval response channels are bound
+to their physical turn and close when that turn ends or changes. An earlier
+question's cancellation cannot interrupt a later goal-continuation turn.
+
 Each exact revision/action commits an immutable receipt before consuming the
 live responder. The independent `conversation_decisions` table retains the full
 frozen proposal, question ID/index, resolved answer or approval choice and source
@@ -109,6 +125,12 @@ same lineage used for admission. Restoring the old values cannot reactivate a
 proposal. Existing Telegram question/approval controls consult the same pending
 state. Restart expires outstanding response channels while retaining decisions;
 there is no automatic replay or approval.
+
+`tests/conversation_requests_ui.js` and the host conversation integration tests
+qualify full-source gating, source changes, saved drafts, frozen retries,
+receipt-only recovery, terminal closure and overlapping scope changes.
+`tests/request_turn_lifetime_io.py` qualifies an earlier question and approval
+expiring while a native goal advances, without interrupting the later turn.
 
 `tests/conversation_input_control_io.py` uses the actual owner socket, listener,
 SQLite and synthetic native/Telegram peers to qualify original-text preservation,

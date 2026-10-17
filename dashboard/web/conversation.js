@@ -8,6 +8,7 @@ window.Conversation = (() => {
     return value;
   };
   function mount({api, headers, setCsrf, modeChanged, telegram}) {
+    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed});
     const cards = new Map();
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
@@ -95,7 +96,7 @@ window.Conversation = (() => {
       const result = await api(`interaction/inputs?before=${before}&direction=${direction}`);
       if (owned !== inputGeneration) return;
       if (result.binding !== binding) throw new Error("Conversation changed. Refresh before sending.");
-      if (inputBinding && inputBinding !== result.binding) resetInputs();
+      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset();}
       inputBinding = result.binding;
       setCsrf(result.csrf);
       for (const value of result.items) inputCard(value, observation);
@@ -195,7 +196,7 @@ window.Conversation = (() => {
     }
     function failed(error) {
       if (error.status === 401 || error.status === 403) {
-        stop(); cards.clear(); initialized = false; resetInputs();
+        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else pause();
@@ -260,7 +261,7 @@ window.Conversation = (() => {
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        stop(); cards.clear(); initialized = false; resetInputs();
+        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset();
         newest = {delivery:0,native:0}; oldest = {delivery:0,native:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
@@ -317,6 +318,7 @@ window.Conversation = (() => {
           }
           await inputPage(0,"before",false);
         }
+        await requestControls.refresh();
       } catch (e) { failed(e); }
       finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false; }
     }
