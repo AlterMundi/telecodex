@@ -115,6 +115,20 @@ impl Store {
                 "Local request has no current accepted human parent"
             ));
         }
+        // An interview receives historical evidence, not authority to resume or
+        // steer the work it is explaining. Enforce this at durable admission,
+        // independently of the interview model's output or role prompt.
+        let source_protected:bool=tx.query_row("SELECT EXISTS(
+            SELECT 1 FROM interaction_enrollments e JOIN interaction_creations c ON c.id=e.creation_id
+            JOIN json_each(c.doc,'$.context.sources') source
+            WHERE e.session_id=?1 AND e.human_id=?2 AND json_extract(c.doc,'$.context.purpose')='interview'
+            AND json_extract(source.value,'$.source_session')=(SELECT id FROM sessions WHERE chat_id=?3 AND thread_id=?4))",
+            params![p.target_session,human,target.chat_id,target.thread_id],|r|r.get(0))?;
+        if source_protected {
+            return Err(anyhow!(
+                "An interview cannot activate its pinned source work"
+            ));
+        }
         let epoch = p
             .admission_epoch
             .as_deref()

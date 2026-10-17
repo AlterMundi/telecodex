@@ -341,7 +341,10 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let session = binding(&conn, key, human, native)?;
         let raw:String=conn.query_row("SELECT a.source_doc FROM interaction_observer_cards c JOIN interaction_observer_attempts a ON a.id=c.attempt_id WHERE c.session_id=?1 AND c.native_thread=?2 AND c.revision=?3",params![session,native,revision],|r|r.get(0))?;
-        Ok(json!({"source":serde_json::from_str::<Value>(&raw)?}))
+        Ok(json!({"source_session":session,
+            "source_generation_at_read":super::presentation::entry_binding(&conn,human,key,session)?,
+            "source_binding_observed_at":now_string(),
+            "source":serde_json::from_str::<Value>(&raw)?}))
     }
 }
 
