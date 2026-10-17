@@ -969,6 +969,14 @@ where
     // abortion, including exits that bypass the explicit event-loop cleanup.
     let tool_run = CancellationToken::new();
     let _tool_run_guard = tool_run.clone().drop_guard();
+    if let Some(activation) = goal_activation.filter(|a| a.attach_turn.is_some()) {
+        if activation.native_thread.is_none()
+            || activation.native_thread != session.codex_thread_id
+            || session.force_fresh_thread
+        {
+            bail!("Selected attachment binding changed; no native thread started");
+        }
+    }
     let preparation_started = Instant::now();
     tracing::debug!(stage = "proxy_start", "native turn preparation");
     let mut process = AppServerProcess::spawn(binary, shared_app_server).await?;
@@ -1044,7 +1052,8 @@ where
                 "goal changed since this operation was requested; inspect /goal before continuing"
             );
         }
-        if activation.objective.is_none()
+        if activation.attach_turn.is_none()
+            && activation.objective.is_none()
             && current
                 .as_ref()
                 .is_some_and(|g| matches!(g.status.as_str(), "complete" | "budgetLimited"))
@@ -1068,7 +1077,17 @@ where
                 .and_then(Value::as_str)
                 .map(str::to_string);
         }
-        if adopted_turn.is_some() {
+        if let Some(expected_turn) = &activation.attach_turn {
+            if activation.objective.is_some()
+                || activation.replace
+                || adopted_turn.as_ref() != Some(expected_turn)
+            {
+                bail!("Selected native writer changed or completed; no turn started");
+            }
+            // Metadata is observed, never reactivated: paused/blocked goals keep
+            // their exact state and ordinary work does not acquire a goal.
+            goal_active = current.as_ref().is_some_and(|g| g.status == "active");
+        } else if adopted_turn.is_some() {
             let goal = goals::mutate_live_goal(&mut process, &thread_id, activation).await?;
             goal_active = goal.status == "active";
         } else {

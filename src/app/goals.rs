@@ -7,6 +7,83 @@ const USAGE: &str = "Usage: /goal [<objective>|clear|edit [<objective>]|pause|re
 const EDIT_TITLE: &str = "Edit native goal";
 const TTL: Duration = Duration::from_secs(15 * 60);
 
+/// Owner-local subscription to one existing physical writer. This is not Resume:
+/// there is no kickoff, goal mutation or replay if the selected turn has ended.
+pub(super) async fn attach_active(app: &App, human: i64, args: &str) -> Result<serde_json::Value> {
+    let fields: Vec<_> = args.split_whitespace().collect();
+    if fields.len() != 4 || !app.shared.config.codex.shared_app_server {
+        bail!(
+            "Usage: attach-active CHAT TOPIC NATIVE_THREAD NATIVE_TURN (shared native server required)"
+        );
+    }
+    let key = SessionKey::new(fields[0].parse()?, Some(fields[1].parse()?));
+    let native = fields[2];
+    let physical = fields[3];
+    app.shared
+        .store
+        .validate_owned_binding(key, human, native)?;
+    if app.shared.store.stop_fenced(key)? || app.shared.store.maintenance_writer_held(key)? {
+        bail!("Selected writer is held; attachment does not release maintenance or Stop");
+    }
+    if app
+        .shared
+        .config
+        .tribu
+        .as_ref()
+        .is_some_and(|p| p.key() == key)
+    {
+        bail!("Bounded I/O work requires its retained deadline/reconciliation route");
+    }
+    if app
+        .workers
+        .lock()
+        .await
+        .get(&key)
+        .is_some_and(|w| w.cancel.lock().expect("cancel mutex poisoned").is_some())
+    {
+        bail!("This receiving process already has a worker for the selected session");
+    }
+    let expected = app.shared.codex.get_goal(native).await?;
+    if app.shared.codex.live_native_turn(native).await?.as_deref() != Some(physical) {
+        bail!("Selected native writer changed or completed; no turn started");
+    }
+    app.shared
+        .store
+        .validate_owned_binding(key, human, native)?;
+    let intent = Uuid::now_v7().to_string();
+    app.shared.store.save_bot_state(&intent_key(key), &intent)?;
+    let activation = GoalActivation {
+        intent,
+        native_thread: Some(native.to_string()),
+        expected,
+        objective: None,
+        replace: false,
+        attach_turn: Some(physical.to_string()),
+    };
+    app.enqueue_goal_turn(
+        TurnRequest {
+            session_key: key,
+            from_user_id: human,
+            prompt: "Owner-local collector attachment; no new native input.".into(),
+            runtime_instructions: None,
+            attachments: vec![],
+            review_mode: None,
+            override_search_mode: None,
+        },
+        if key.chat_id < 0 {
+            "supergroup"
+        } else {
+            "private"
+        },
+        Some(activation),
+    )
+    .await?;
+    Ok(
+        json!({"state":"attachment_queued","native_thread":native,"native_turn":physical,
+        "detail":"Admission is not attachment or result delivery; inspect the retained native execution. No kickoff or goal mutation is permitted."}),
+    )
+}
+
 #[derive(Clone)]
 pub(super) struct PendingGoalControl {
     key: SessionKey,
@@ -381,9 +458,10 @@ async fn activate(
             expected,
             objective,
             replace,
+            attach_turn: None,
         };
         let (response, ack) = oneshot::channel();
-        attached.sender.send(CodexSteerRequest{ admission_check: None,client_message_id:None,text:String::new(),goal:Some(GoalControl::Activate(activation)),response})
+        attached.sender.send(CodexSteerRequest{ admission_check: None,client_message_id:None,text:String::new(),goal:Some(GoalControl::Activate(Box::new(activation))),response})
             .map_err(|_|anyhow!("The goal subscriber just finished. Inspect /goal and request the change again; it was not queued."))?;
         match tokio::time::timeout(Duration::from_secs(12), ack).await {
             Ok(Ok(Ok(_))) => {}
@@ -428,6 +506,7 @@ async fn activate(
             expected,
             objective,
             replace,
+            attach_turn: None,
         };
         let prompt="Continue the native goal requested by the human. Use its native state and account for progress there.".to_string();
         app.enqueue_goal_turn(

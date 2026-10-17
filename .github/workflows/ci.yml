@@ -73,10 +73,32 @@ jobs:
         with:
           toolchain: 1.95.0
           components: rustfmt, clippy
+      - name: Restore text Rust build cache
+        id: text-rust-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-text-rust195-v1-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}-${{ hashFiles('src/**/*.rs', 'build.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-text-rust195-v1-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml') }}-
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
       - run: cargo test --locked --no-default-features
       - run: cargo build --locked --release --no-default-features
+      # Retain successful compilation even if a later process fixture fails.
+      # Cached artifacts never skip fmt, clippy, Rust tests or the build command.
+      - name: Save qualified text Rust build cache
+        if: steps.text-rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.text-rust-cache.outputs.cache-primary-key }}
       - name: Qualify independent foreground ingress and native-question journeys
         run: |
           python3 - <<'PYTHON'
@@ -116,17 +138,26 @@ jobs:
                   failed |= result.returncode != 0
           sys.exit(1 if failed else 0)
           PYTHON
-      - run: python3 -B tests/pending_io.py target/release/telecodex
-      - run: python3 -B tests/merge_io.py target/release/telecodex
-      - run: python3 -B tests/stopping_io.py target/release/telecodex
-      - run: python3 -B tests/goals_io.py target/release/telecodex
-      - run: python3 -B tests/nexus_io.py target/release/telecodex
-      - run: python3 -B tests/nexus_context_io.py target/release/telecodex
-      - run: python3 -B tests/icons_io.py target/release/telecodex
-      - run: python3 -B tests/stickers_io.py target/release/telecodex
-      - run: python3 -B tests/reactions_io.py target/release/telecodex
-      - run: python3 -B tests/fork_io.py target/release/telecodex
-      - run: python3 -B tests/tribu_io.py target/release/telecodex
+      - name: Qualify independent lifecycle and presentation journeys
+        run: |
+          python3 - <<'PYTHON'
+          import concurrent.futures, subprocess, sys
+          def qualify(suite):
+              result = subprocess.run([sys.executable, '-B', 'tests/'+suite, 'target/release/telecodex'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+              return suite, result
+          failed = False
+          # Every suite owns its temporary native/HTTP peers, sockets and store.
+          # Keep all existing gates and logs, with the same two-process bound.
+          suites = ('pending_io.py', 'merge_io.py', 'stopping_io.py', 'attachment_io.py', 'goals_io.py', 'nexus_io.py', 'nexus_context_io.py', 'icons_io.py', 'stickers_io.py', 'reactions_io.py', 'fork_io.py', 'tribu_io.py')
+          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+              jobs = [pool.submit(qualify, suite) for suite in suites]
+              for job in concurrent.futures.as_completed(jobs):
+                  suite, result = job.result()
+                  print(f'{suite}: exit {result.returncode}', flush=True)
+                  print(result.stdout, end='', flush=True)
+                  failed |= result.returncode != 0
+          sys.exit(1 if failed else 0)
+          PYTHON
   audio:
     needs: scope
     if: needs.scope.outputs.audio == 'true'

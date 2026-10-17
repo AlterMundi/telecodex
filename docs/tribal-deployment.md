@@ -61,6 +61,40 @@ Rollback replaces the binary and any explicitly changed configuration with their
 
 Live bot acceptance requires its dedicated local token and a human-originated message. Unit/loopback/native proxy checks qualify code and harness attachment separately; they do not claim a real Telegram exchange.
 
+### Reattach an existing native writer
+
+For a qualified shared-daemon handoff, the successor can attach its collector
+through the existing owner-only `session_control` socket:
+
+```text
+telecodex --control CONFIG attach-active CHAT TOPIC NATIVE_THREAD NATIVE_TURN
+```
+
+Select exact native references from retained state and fresh native observation.
+The configured control human must still own the allowed session and exact native
+binding. This operation subscribes only to the selected live physical turn; it
+does not submit another prompt, change goal metadata, release a maintenance hold
+or authorize Stop. Active goals can continue under their existing native state;
+paused and blocked goals retain their state. If the physical turn completes or
+changes before attachment, no kickoff is permitted. Inspect the retained native
+result rather than repeating its input. Dedicated bounded I/O uses its existing
+deadline/reconciliation route.
+
+`attachment_queued` acknowledges only admission. Confirm native execution
+correlation and the returned result separately. Uncertain original ingress stays
+retained; attachment does not mark it settled or rewind the polling offset.
+For routed work, the original local execution, explicit presentation mode and
+immutable input/return associations are retained. Legacy accepted executions
+without retained mode evidence reject attachment; inspect their canonical native
+results through the existing reconciliation surfaces without replay. Existing
+native collectors subscribe immediately even above the successor's worker limit;
+new enrolled kickoffs wait until that observed count is below the limit.
+There is no automatic startup attachment or resumption. The operator must
+qualify the old-to-new native lifecycle and exact candidate artifact before
+using this route on an active receiving listener. The opt-in
+`tests/handoff_native.py` retains that native evidence; `tests/attachment_io.py`
+checks the simulated restart, owner, goal and changed-writer boundaries.
+
 ## Keep completed messages in Telegram history
 
 A native turn may contain several completed commentary messages before its final

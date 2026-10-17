@@ -599,6 +599,22 @@ impl Store {
             .ok_or_else(|| anyhow!("failed to reload newly created session"))
     }
 
+    /// Exact owner/native binding for owner-local lifecycle operations.
+    pub fn validate_owned_binding(&self, key: SessionKey, human: i64, native: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let valid: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
+             WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1
+             AND s.codex_thread_id=?4 AND s.force_fresh_thread=0)",
+            params![key.chat_id, key.thread_id, human, native],
+            |r| r.get(0),
+        )?;
+        if !valid {
+            anyhow::bail!("Selected session owner or native binding changed");
+        }
+        Ok(())
+    }
+
     pub fn get_session(&self, key: SessionKey) -> Result<Option<SessionRecord>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.query_row(
@@ -1017,16 +1033,60 @@ impl Store {
         Ok(history)
     }
 
+    #[cfg(test)]
     pub fn record_turn_started(&self, session_id: i64, request: &TurnRequest) -> Result<i64> {
+        self.record_turn_started_mode(session_id, request, None)
+    }
+    /// Restore local collection only after observing the selected native writer.
+    /// This changes no goal, ingress acceptance or immutable instruction binding.
+    pub fn record_collector_attachment(
+        &self,
+        local: i64,
+        key: SessionKey,
+        human: i64,
+        native: &str,
+        physical: &str,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let updated=tx.execute("UPDATE turns SET status='running',completed_at=NULL
+            WHERE id=?1 AND from_user_id=?2 AND native_thread_id=?3 AND status IN ('running','failed')
+            AND session_id IN (SELECT s.id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
+              WHERE s.chat_id=?4 AND s.thread_id=?5 AND s.creator_user_id=?2 AND u.allowed=1
+              AND s.codex_thread_id=?3 AND s.force_fresh_thread=0)",params![local,human,native,key.chat_id,key.thread_id])?;
+        if updated != 1 {
+            anyhow::bail!("Collector execution or owner binding changed");
+        }
+        tx.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![format!("collector_attachment:{local}"),serde_json::to_string(&serde_json::json!({"native_thread":native,"native_turn":physical,"observed_at":now_string()}))?])?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub fn record_turn_started_mode(
+        &self,
+        session_id: i64,
+        request: &TurnRequest,
+        root: Option<&str>,
+    ) -> Result<i64> {
         let review_json = serde_json::to_string(&request.review_mode)?;
         let now = now_string();
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute(
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO turns(session_id, from_user_id, prompt, review_json, status, started_at, completed_at, assistant_text)
              VALUES (?1, ?2, ?3, ?4, 'running', ?5, NULL, NULL)",
             params![session_id, request.from_user_id, request.prompt, review_json, now],
         )?;
-        Ok(conn.last_insert_rowid())
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO bot_state(key,value) VALUES(?1,?2)",
+            params![
+                format!("execution_root:{id}"),
+                serde_json::to_string(&root)?
+            ],
+        )?;
+        tx.commit()?;
+        Ok(id)
     }
 
     pub fn record_turn_finished(

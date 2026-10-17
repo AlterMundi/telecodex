@@ -22,11 +22,18 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--control") {
-        if args.len() < 5 || args[3] != "stop" {
-            anyhow::bail!("Usage: telecodex --control CONFIG stop all|status ID|resume ID");
+        if args.len() < 5 || !matches!(args[3].as_str(), "stop" | "attach-active") {
+            anyhow::bail!(
+                "Usage: telecodex --control CONFIG stop all|status ID|resume ID; or --control CONFIG attach-active CHAT TOPIC NATIVE_THREAD NATIVE_TURN"
+            );
         }
         let config = config::Config::load(args[2].clone().into())?;
-        return control_client::run(&config, &args[4..].join(" ")).await;
+        let command = if args[3] == "attach-active" {
+            args[3..].join(" ")
+        } else {
+            args[4..].join(" ")
+        };
+        return control_client::run(&config, &command).await;
     }
     if args.get(1).map(String::as_str) == Some("--probe-native") {
         if !(args.len() == 4 || (args.len() == 5 && args[4] == "--create-thread-probes")) {

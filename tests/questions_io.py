@@ -13,6 +13,7 @@ import json
 import pathlib
 import signal
 import socketserver
+import socket
 import sqlite3
 import struct
 import subprocess
@@ -154,6 +155,17 @@ import_desktop_history=false
                'LANG': 'C.UTF-8', 'RUST_LOG': 'warn'}
         self.process = subprocess.Popen([self.binary, str(self.config)], cwd=self.root, env=env,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def wait_control_socket(self, path):
+        """A stale socket pathname is not a live receiving process."""
+        def ready():
+            try:
+                with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+                    client.connect(str(path))
+                    return not hasattr(socket,'SO_PEERCRED') or int.from_bytes(client.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12)[:4],sys.byteorder)==self.process.pid
+            except OSError:
+                return False
+        self.wait(ready)
 
     def stop(self):
         if self.process:
