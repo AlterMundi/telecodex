@@ -4,6 +4,18 @@ use crate::{codex::CodexApprovalRequest, codex_history::read_thread_runtime};
 use html_escape::encode_safe;
 use uuid::Uuid;
 
+/// Scope all automatic native presentation, including cooldown/fallback paths.
+pub(super) fn turn_telegram(shared: &Arc<AppShared>, local: Option<i64>) -> TelegramClient {
+    let Some(local) = local else {
+        return shared.telegram.clone();
+    };
+    let owner = shared.clone();
+    shared
+        .telegram
+        .clone()
+        .with_publication_guard(move || Ok(!owner.store.conversation_turn_return(local)?))
+}
+
 /// Read-only receiver presentation; no native/model/Telegram operation.
 pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json::Value> {
     let cfg = app
@@ -201,6 +213,7 @@ pub(super) async fn send_markdown_message(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn request_telegram_approval(
     shared: Arc<AppShared>,
     chat_id: i64,
@@ -208,11 +221,26 @@ pub(super) async fn request_telegram_approval(
     requester_user_id: i64,
     request: CodexApprovalRequest,
     cancel: CancellationToken,
+    local_turn: Option<i64>,
 ) -> Result<CodexApprovalDecision> {
     if cancel.is_cancelled() {
         return Ok(CodexApprovalDecision::Cancel);
     }
     let token = Uuid::now_v7().simple().to_string();
+    let header = match request.kind {
+        CodexApprovalKind::CommandExecution => "Approval required: command execution",
+        CodexApprovalKind::FileChange => "Approval required: file change",
+    };
+    if let Some(local) = local_turn {
+        let (source, native) = shared
+            .store
+            .native_interaction_source(local, requester_user_id)?;
+        shared.store.save_interaction(source,&crate::store::HumanInteraction{
+            id:token.clone(),kind:"native".into(),state:"pending".into(),requester:requester_user_id,
+            native_thread:native,local_turn:local,title:header.into(),action:request.prompt.clone(),blocking:true,
+            source:serde_json::json!({"kind":"approval","options":request.options.iter().map(|choice|serde_json::json!({"code":approval_button_code(*choice),"label":approval_button_text(*choice)})).collect::<Vec<_>>()}),
+        },None)?;
+    }
     let keyboard = approval_keyboard(&token, &request.options);
     let (sender, receiver) = oneshot::channel();
     shared.pending_approvals.lock().await.insert(
@@ -223,20 +251,33 @@ pub(super) async fn request_telegram_approval(
         },
     );
 
-    let header = match request.kind {
-        CodexApprovalKind::CommandExecution => "Approval required: command execution",
-        CodexApprovalKind::FileChange => "Approval required: file change",
-    };
+    let telegram = turn_telegram(&shared, local_turn);
     let message_text = format!("{header}\n\n{}", request.prompt);
-    let publication = tokio::select! {
-        result = send_markdown_message(&shared.telegram, chat_id, thread_id, &message_text, keyboard) => result,
-        _ = cancel.cancelled() => {
-            shared.pending_approvals.lock().await.remove(&token);
-            return Ok(CodexApprovalDecision::Cancel);
+    let canonical = local_turn
+        .map(|local| shared.store.conversation_turn_return(local))
+        .transpose()?
+        .unwrap_or(false);
+    let publication = if canonical {
+        Ok(())
+    } else {
+        tokio::select! {
+            result = send_markdown_message(&telegram, chat_id, thread_id, &message_text, keyboard) => result.map(|_|()),
+            _ = cancel.cancelled() => {
+                shared.pending_approvals.lock().await.remove(&token);
+                if let Some(local)=local_turn {shared.store.settle_native_projection(&token,local,"expired")?;}
+                return Ok(CodexApprovalDecision::Cancel);
+            }
         }
     };
-    if let Err(error) = publication {
+    if let Err(error) = publication
+        && !error.is::<crate::telegram::PublicationRetired>()
+    {
         shared.pending_approvals.lock().await.remove(&token);
+        if let Some(local) = local_turn {
+            shared
+                .store
+                .settle_native_projection(&token, local, "expired")?;
+        }
         return Err(error);
     }
 
@@ -253,12 +294,24 @@ pub(super) async fn request_telegram_approval(
     };
 
     shared.pending_approvals.lock().await.remove(&token);
+    if let Some(local) = local_turn {
+        shared.store.settle_native_projection(
+            &token,
+            local,
+            if send_status { "expired" } else { "answering" },
+        )?;
+    }
 
-    if send_status {
+    if send_status
+        && !local_turn
+            .map(|local| shared.store.conversation_turn_return(local))
+            .transpose()?
+            .unwrap_or(false)
+    {
         let status = format!("Approval {}", approval_decision_status(decision));
         tokio::spawn(async move {
             if let Err(error) =
-                send_markdown_message(&shared.telegram, chat_id, thread_id, &status, None).await
+                send_markdown_message(&telegram, chat_id, thread_id, &status, None).await
             {
                 tracing::debug!("failed to send approval status: {error:#}");
             }

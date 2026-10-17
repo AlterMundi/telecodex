@@ -20,7 +20,7 @@ pub(super) struct PendingDialogue {
 }
 
 async fn show_question(
-    shared: &AppShared,
+    shared: &Arc<AppShared>,
     token: &str,
     pending: &mut PendingDialogue,
 ) -> Result<()> {
@@ -28,6 +28,17 @@ async fn show_question(
     shared
         .store
         .update_native_interaction(token, &question.header, &question.question)?;
+    if shared
+        .store
+        .conversation_turn_return(pending.local_turn_id)?
+    {
+        pending.message_id = 0;
+        pending.message_ids.clear();
+        pending.awaiting_text = false;
+        // Keep the same pending native responder and durable human interaction.
+        // Retain its response channel for the canonical owner interface.
+        return Ok(());
+    }
     let mut text = format!(
         "Codex question {}/{}: {}\n\n{}",
         pending.index + 1,
@@ -99,17 +110,40 @@ async fn show_question(
                     allow_sending_without_reply: false,
                 });
         // Controls must never fall back to another topic or open after retirement.
-        let message = shared
-            .telegram
+        let message = super::presentation::turn_telegram(shared, Some(pending.local_turn_id))
             .send_message_checked(pending.session.chat_id, || {
-                if pending.closed.is_cancelled() || pending.responder.is_closed() {
+                if shared
+                    .store
+                    .conversation_turn_return(pending.local_turn_id)?
+                    || pending.closed.is_cancelled()
+                    || pending.responder.is_closed()
+                {
                     return Ok(None);
                 }
                 Ok(Some((outgoing, ())))
             })
-            .await?
-            .map(|(m, _)| m)
-            .context("Native question retired before publication")?;
+            .await;
+        let message = match message {
+            Ok(Some((message, _))) => message,
+            Ok(None)
+                if shared
+                    .store
+                    .conversation_turn_return(pending.local_turn_id)? =>
+            {
+                pending.message_id = 0;
+                pending.message_ids.clear();
+                pending.awaiting_text = false;
+                return Ok(());
+            }
+            Err(error) if error.is::<crate::telegram::PublicationRetired>() => {
+                pending.message_id = 0;
+                pending.message_ids.clear();
+                pending.awaiting_text = false;
+                return Ok(());
+            }
+            Ok(None) => bail!("Native question retired before publication"),
+            Err(error) => return Err(error),
+        };
         if message.chat.id != pending.session.chat_id
             || message.message_thread_id.unwrap_or(0) != pending.session.thread_id
         {
@@ -165,7 +199,12 @@ pub(super) async fn begin_dialogue(
                 tracing::warn!("Native question publication could not be confirmed");
                 let retired = closure.is_cancelled();
                 let _ = tx.send(UserInputDecision::Cancel);
-                if !retired {
+                if !retired
+                    && !shared
+                        .store
+                        .conversation_turn_return(local_turn_id)
+                        .unwrap_or(true)
+                {
                     let mut message = SendMessage::html(surface.chat_id,Some(surface.thread_id).filter(|id|*id!=0),"Native question delivery did not confirm its Telegram topic. No answer was sent; turn cancellation was requested.".into());
                     message.reply_parameters =
                         return_route.map(|r| crate::telegram::ReplyParameters {
@@ -218,7 +257,7 @@ async fn publish_dialogue(
         id: token.clone(), kind: "native".into(), state: "pending".into(), requester,
         native_thread: pending.request.thread_id.clone(), local_turn: local_turn_id,
         title: first.header.clone(), action: first.question.clone(), blocking: pending.request.is_blocking,
-        source: serde_json::json!({"requestId":serde_json::to_string(&pending.request_id)?,
+        source: serde_json::json!({"kind":"question","request":pending.request,"requestId":serde_json::to_string(&pending.request_id)?,
             "threadId":pending.request.thread_id,"turnId":pending.request.turn_id,"itemId":pending.request.item_id}),
     }, None)?;
     show_question(&shared, &token, &mut pending).await?;

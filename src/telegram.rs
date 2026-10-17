@@ -21,7 +21,17 @@ pub struct TelegramClient {
     outbound: Arc<OutboundRateLimiter>,
     local_file_root: Option<std::path::PathBuf>,
     capture_message_reactions: bool,
+    publication_guard: Option<Arc<dyn Fn() -> Result<bool> + Send + Sync>>,
 }
+
+#[derive(Debug)]
+pub struct PublicationRetired;
+impl fmt::Display for PublicationRetired {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("presentation moved to canonical conversation before publication")
+    }
+}
+impl Error for PublicationRetired {}
 
 #[cfg(unix)]
 fn open_local_file(
@@ -95,6 +105,25 @@ pub const TELEGRAM_PRIVATE_OUTBOUND_INTERVAL_MS: u64 = 1_000;
 const TELEGRAM_GLOBAL_OUTBOUND_INTERVAL_MS: u64 = 40;
 
 impl TelegramClient {
+    /// A scoped presentation client rechecks after cooldown/file reads, directly
+    /// before each HTTP attempt. It shares transport limits with the base client.
+    pub fn with_publication_guard(
+        mut self,
+        guard: impl Fn() -> Result<bool> + Send + Sync + 'static,
+    ) -> Self {
+        self.publication_guard = Some(Arc::new(guard));
+        self
+    }
+
+    fn check_publication(&self) -> Result<()> {
+        if let Some(guard) = &self.publication_guard
+            && !guard()?
+        {
+            return Err(anyhow::Error::new(PublicationRetired));
+        }
+        Ok(())
+    }
+
     pub fn new(token: String, api_base: String) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -102,6 +131,7 @@ impl TelegramClient {
             api_base: api_base.trim_end_matches('/').to_string(),
             outbound: Arc::new(OutboundRateLimiter::default()),
             local_file_root: None,
+            publication_guard: None,
             capture_message_reactions: false,
         }
     }
@@ -697,6 +727,7 @@ impl TelegramClient {
         }
         request = request.timeout(timeout);
 
+        self.check_publication()?;
         let response = request
             .send()
             .await
@@ -790,6 +821,7 @@ impl TelegramClient {
             form = form.text("message_thread_id", thread_id.to_string());
         }
 
+        self.check_publication()?;
         let response = self
             .http
             .post(url)
@@ -1575,6 +1607,62 @@ pub(crate) mod tests {
             requests
         });
         (address, worker)
+    }
+
+    #[tokio::test]
+    async fn scoped_publication_rechecks_after_cooldown_for_text_edits_drafts_and_uploads() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let api = format!("http://{}", listener.local_addr().unwrap());
+        let artifact = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(artifact.path(), "retained artifact").unwrap();
+        for variant in 0..4 {
+            let selected = Arc::new(AtomicBool::new(true));
+            let allowed = selected.clone();
+            let client = TelegramClient::new("synthetic-token".into(), api.clone())
+                .with_publication_guard(move || Ok(allowed.load(Ordering::SeqCst)));
+            client.outbound.backoff(100, 1).await;
+            let send = async {
+                match variant {
+                    0 => client
+                        .send_message(SendMessage::html(100, Some(7), "retained text".into()))
+                        .await
+                        .map(|_| ()),
+                    1 => client
+                        .edit_message_text(EditMessageText::html(100, 10, "retained edit".into()))
+                        .await
+                        .map(|_| ()),
+                    2 => client
+                        .send_message_draft(SendMessageDraft::html(
+                            100,
+                            Some(7),
+                            2,
+                            "retained draft".into(),
+                        ))
+                        .await
+                        .map(|_| ()),
+                    _ => client
+                        .send_document(100, Some(7), artifact.path(), "artifact.txt", None)
+                        .await
+                        .map(|_| ()),
+                }
+            };
+            tokio::pin!(send);
+            tokio::select! {
+                result = &mut send => panic!("publication did not wait for cooldown: {result:?}"),
+                _ = sleep(Duration::from_millis(30)) => {}
+            }
+            selected.store(false, Ordering::SeqCst);
+            assert!(send.await.unwrap_err().is::<PublicationRetired>());
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+            );
+            assert_eq!(
+                std::fs::read_to_string(artifact.path()).unwrap(),
+                "retained artifact"
+            );
+        }
     }
 
     #[tokio::test]

@@ -64,6 +64,12 @@ impl Store {
             native_thread TEXT NOT NULL,phase TEXT NOT NULL,local_turn INTEGER,retired INTEGER NOT NULL DEFAULT 0,
             doc TEXT NOT NULL,instance_id TEXT NOT NULL,created_at TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS conversation_inputs_entry ON conversation_inputs(session_id,human_id,native_thread);")?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS conversation_returns(
+            human_id INTEGER NOT NULL,native_thread TEXT NOT NULL,source_input TEXT NOT NULL,
+            selected_at TEXT NOT NULL,PRIMARY KEY(human_id,native_thread));
+            CREATE INDEX IF NOT EXISTS conversation_returns_native ON conversation_returns(native_thread);",
+        )?;
         // These are retained source identities, not live foreign keys. Retire
         // monotonically even when a binding or grant is subsequently restored.
         conn.execute_batch("CREATE TRIGGER IF NOT EXISTS conversation_input_binding_retired AFTER UPDATE OF codex_thread_id,force_fresh_thread,creator_user_id ON sessions BEGIN
@@ -167,6 +173,16 @@ impl Store {
         Ok(())
     }
 
+    /// The native provider proved that the initial packet was never written.
+    /// This also covers corrections admitted into that still-preparing packet.
+    /// It retains a known-unsent outcome and grants no automatic resubmission.
+    pub fn conversation_inputs_not_submitted(&self, human: i64, local_turn: i64) -> Result<()> {
+        self.conn.lock().expect("store mutex poisoned").execute(
+            "UPDATE conversation_inputs SET phase='retained_unsent' WHERE human_id=?1 AND local_turn=?2 AND instance_id=?3 AND phase IN ('sending','steering','uncertain')",
+            params![human,local_turn,self.instance_id])?;
+        Ok(())
+    }
+
     /// Begin events validate the current owner/binding/epoch in the same SQLite
     /// transaction. Observed acknowledgments remain recordable after revocation
     /// or a fence: recording an effect does not authorize future execution.
@@ -190,6 +206,10 @@ impl Store {
                 if matches!(input.phase.as_str(), "retained" | "rejected") =>
             {
                 eligible_on(&tx, &input)?;
+                // Select the return surface before any possible native uptake.
+                // The context may retain this input after the local turn ends,
+                // so the selection survives collectors and logical rebindings.
+                tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![human,input.native,input.id,now_string()])?;
                 ("queued", None)
             }
             ConversationInputEvent::Begin { local_turn, steer }
@@ -230,6 +250,30 @@ impl Store {
         let updated = read_on(&tx, id, human)?;
         tx.commit()?;
         Ok(updated)
+    }
+
+    pub fn conversation_turn_return(&self, local_turn: i64) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let selected:Option<bool>=conn.query_row("SELECT EXISTS(SELECT 1 FROM conversation_returns p WHERE p.native_thread=COALESCE(t.native_thread_id,s.codex_thread_id)) FROM turns t LEFT JOIN sessions s ON s.id=t.session_id WHERE t.id=?1",[local_turn],|r|r.get(0)).optional()?;
+        // A deleted/unknown execution is not authority to publish its output.
+        Ok(selected.unwrap_or(true))
+    }
+
+    pub fn native_interaction_source(
+        &self,
+        local_turn: i64,
+        human: i64,
+    ) -> Result<(SessionKey, String)> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.query_row("SELECT s.chat_id,s.thread_id,t.native_thread_id FROM turns t JOIN sessions s ON s.id=t.session_id WHERE t.id=?1 AND t.from_user_id=?2",params![local_turn,human],|r|Ok((SessionKey::new(r.get(0)?,Some(r.get(1)?)),r.get(2)?))).context("Native interaction source unavailable")
+    }
+
+    pub fn settle_native_projection(&self, id: &str, local_turn: i64, state: &str) -> Result<()> {
+        if !matches!(state, "answering" | "expired") {
+            bail!("Invalid native projection transition");
+        }
+        self.conn.lock().expect("store mutex poisoned").execute("UPDATE human_interactions SET state=?3,updated_at=?4 WHERE id=?1 AND local_turn=?2 AND kind='native' AND state='pending' AND instance_id=?5",params![id,local_turn,state,now_string(),self.instance_id])?;
+        Ok(())
     }
 }
 
@@ -563,5 +607,93 @@ mod tests {
         store.set_session_codex_thread(key, "entry-native").unwrap();
         assert_ne!(new.id, original.session);
         assert!(store.conversation_input_validate(100, &id).is_err());
+    }
+
+    #[test]
+    fn proven_unsent_initial_packet_retains_its_corrections_without_replay() {
+        let (_file, store, key, binding) = setup();
+        let local = turn(&store, key);
+        let mut ids = vec![];
+        for steer in [false, true] {
+            let id = Uuid::now_v7().to_string();
+            store
+                .conversation_input_capture(100, key, &binding, &id, "Original awaiting submission")
+                .unwrap();
+            store.conversation_input_event(100, &id, E::Queue).unwrap();
+            store
+                .conversation_input_event(
+                    100,
+                    &id,
+                    E::Begin {
+                        local_turn: local,
+                        steer,
+                    },
+                )
+                .unwrap();
+            ids.push(id);
+        }
+        store
+            .conversation_input_event(100, &ids[1], E::Uncertain { local_turn: local })
+            .unwrap();
+        store.conversation_inputs_not_submitted(100, local).unwrap();
+        for id in ids {
+            assert_eq!(
+                store.conversation_input_read(100, key, &id).unwrap().phase,
+                "retained_unsent"
+            );
+            assert!(store.conversation_input_event(100, &id, E::Queue).is_err());
+        }
+    }
+
+    #[test]
+    fn return_selection_follows_native_context_across_turns_restart_and_recreation() {
+        let (file, store, key, binding) = setup();
+        let first = turn(&store, key);
+        assert!(!store.conversation_turn_return(first).unwrap());
+        let id = Uuid::now_v7().to_string();
+        store
+            .conversation_input_capture(
+                100,
+                key,
+                &binding,
+                &id,
+                "Continue through this conversation",
+            )
+            .unwrap();
+        store.conversation_input_event(100, &id, E::Queue).unwrap();
+        assert!(store.conversation_turn_return(first).unwrap());
+        drop(store);
+        let store = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let second = turn(&store, key);
+        assert!(store.conversation_turn_return(second).unwrap());
+        store.delete_session(key).unwrap();
+        store
+            .ensure_session(key, 100, &super::super::tests::defaults())
+            .unwrap();
+        store.set_session_codex_thread(key, "entry-native").unwrap();
+        assert!(store.conversation_turn_return(turn(&store, key)).unwrap());
+        assert!(store.conversation_turn_return(first).unwrap());
+        store
+            .set_session_codex_thread(key, "a-new-context")
+            .unwrap();
+        let new = store.get_session(key).unwrap().unwrap();
+        let local = store
+            .record_turn_started(
+                new.id,
+                &TurnRequest {
+                    session_key: key,
+                    from_user_id: 100,
+                    prompt: "A new context".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(local, "a-new-context")
+            .unwrap();
+        assert!(!store.conversation_turn_return(local).unwrap());
     }
 }

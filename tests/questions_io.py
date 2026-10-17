@@ -69,8 +69,9 @@ class Journey:
                 self.wfile.write(data)
 
             def do_POST(self):
-                payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
                 method = self.path.rsplit('/', 1)[-1]
+                if hasattr(owner,'telegram_methods'):owner.telegram_methods.append(method)
+                payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
                 if method == 'getMe':
                     result = {'id': 123, 'is_bot': True, 'first_name': 'Fixture',
                               'username': 'FixtureBot', 'has_topics_enabled': True}

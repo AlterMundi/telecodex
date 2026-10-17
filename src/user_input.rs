@@ -11,7 +11,7 @@ pub enum NativeRequestId {
     String(String),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserInputRequest {
     pub thread_id: String,
@@ -21,7 +21,7 @@ pub struct UserInputRequest {
     pub questions: Vec<Question>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Question {
     pub id: String,
@@ -34,7 +34,7 @@ pub struct Question {
     pub options: Option<Vec<QuestionOption>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QuestionOption {
     pub label: String,
     pub description: String,

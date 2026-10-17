@@ -2489,6 +2489,7 @@ async fn retired_approval_does_not_publish_or_keep_pending_state() {
             options: vec![CodexApprovalDecision::Accept],
         },
         cancel,
+        None,
     )
     .await
     .unwrap();

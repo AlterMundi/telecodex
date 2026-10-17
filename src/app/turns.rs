@@ -283,11 +283,13 @@ pub(super) async fn process_turn(
             super::routing::started(&app, session.key, id, active)?;
         }
     }
-    let mut chat_action_task = if queued.conversation_input.is_some() {
+    let canonical_return = shared.store.conversation_turn_return(turn_id)?;
+    let mut chat_action_task = if queued.conversation_input.is_some() || canonical_return {
         None
     } else {
         Some(spawn_chat_action_task(
-            shared.telegram.clone(),
+            shared.clone(),
+            turn_id,
             session.key.chat_id,
             Some(session.key.thread_id).filter(|value| *value != 0),
             cancel.clone(),
@@ -306,7 +308,8 @@ pub(super) async fn process_turn(
     let placeholder_text = render_placeholder_html(thinking_text, turn_banner.as_deref());
     let thread_id = Some(session.key.thread_id).filter(|value| *value != 0);
     let draft_id = turn_id;
-    let routed = execution_root.is_some() || queued.conversation_input.is_some();
+    let routed =
+        execution_root.is_some() || queued.conversation_input.is_some() || canonical_return;
     let sink = if routed || !shared.config.telegram.show_unfinished_messages {
         Arc::new(Mutex::new(LiveTurnSink::new_preview(
             shared.clone(),
@@ -315,8 +318,7 @@ pub(super) async fn process_turn(
             None,
         )))
     } else if shared.config.telegram.use_message_drafts && queued.chat_kind == "private" {
-        match shared
-            .telegram
+        match super::presentation::turn_telegram(&shared, Some(turn_id))
             .send_message_draft(SendMessageDraft::html(
                 session.key.chat_id,
                 thread_id,
@@ -558,7 +560,7 @@ pub(super) async fn process_turn(
                                     }
                                     if !routed && super::rename::sync_native_title(&shared, session_key).await.is_err() {
                                         let _ = send_markdown_message(
-                                            &shared.telegram,
+                                            &super::presentation::turn_telegram(&shared, Some(turn_id)),
                                             session_key.chat_id,
                                             Some(session_key.thread_id).filter(|id| *id > 0),
                                             "The saved name could not be confirmed in Codex. Retry /rename with the intended name.",
@@ -580,7 +582,7 @@ pub(super) async fn process_turn(
                                     let approval = request_telegram_approval(
                                         shared, session_key.chat_id,
                                         Some(session_key.thread_id).filter(|value| *value != 0),
-                                        requester_user_id, request, approval_cancel.clone(),
+                                        requester_user_id, request, approval_cancel.clone(),Some(turn_id),
                                     );
                                     tokio::pin!(approval);
                                     let result = tokio::select! {
@@ -746,6 +748,15 @@ pub(super) async fn process_turn(
     } else {
         run.await
     };
+    if run_result
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.is::<crate::codex::NativeInputNotSubmitted>())
+    {
+        shared
+            .store
+            .conversation_inputs_not_submitted(queued.request.from_user_id, turn_id)?;
+    }
     if let Some(task) = deadline_task {
         let settled = queued
             .tribu_admission
@@ -786,7 +797,7 @@ pub(super) async fn process_turn(
         .interaction
         .as_deref()
         .or_else(|| attached.last().map(|i| i.id.as_str()));
-    if routed || !attached.is_empty() {
+    if routed || !attached.is_empty() || shared.store.conversation_turn_return(turn_id)? {
         shared.store.set_session_busy(session.key, false)?;
         let status = match &run_result {
             Ok(_) => "completed",
@@ -860,8 +871,8 @@ pub(super) async fn process_turn(
                     |message| async move { sink_for_failure.lock().await.finish(Some(message)).await },
                 )
                 .await;
-                if result.is_ok() {
-                    notify_turn_completion(&shared, session.key).await;
+                if result.is_ok() && !shared.store.conversation_turn_return(turn_id)? {
+                    notify_turn_completion(&shared, session.key, turn_id).await;
                 }
                 result
             }
@@ -888,6 +899,9 @@ pub(super) async fn process_turn(
         .is_some()
     {
         // Preserve inputs and partial artifacts needed by the explicit continuation.
+        return final_result;
+    }
+    if shared.store.conversation_turn_return(turn_id)? {
         return final_result;
     }
     finish_turn_cleanup(
@@ -923,8 +937,7 @@ async fn create_preview_sink_or_fail(
     turn_banner: Option<String>,
     placeholder_text: String,
 ) -> Result<Arc<Mutex<LiveTurnSink>>> {
-    let placeholder = match shared
-        .telegram
+    let placeholder = match super::presentation::turn_telegram(&shared, Some(turn_id))
         .send_message(SendMessage::html(
             session.key.chat_id,
             Some(session.key.thread_id).filter(|value| *value != 0),
@@ -933,7 +946,8 @@ async fn create_preview_sink_or_fail(
         .await
         .context("failed to create placeholder message")
     {
-        Ok(placeholder) => placeholder,
+        Ok(placeholder) => Some(placeholder),
+        Err(error) if error.is::<crate::telegram::PublicationRetired>() => None,
         Err(error) => {
             *cancel_slot.lock().expect("cancel mutex poisoned") = None;
             cancel.cancel();
@@ -962,7 +976,7 @@ async fn create_preview_sink_or_fail(
         shared,
         session,
         turn_banner,
-        Some(TelegramMessageRef {
+        placeholder.map(|placeholder| TelegramMessageRef {
             chat_id: session.key.chat_id,
             message_id: placeholder.message_id,
         }),
@@ -1037,7 +1051,7 @@ where
     FinishFailure: FnOnce(String) -> FinishFailureFut,
     FinishFailureFut: std::future::Future<Output = Result<()>>,
 {
-    let success_result = async {
+    let success_result: Result<()> = async {
         if !context.review_mode {
             if let Some(thread_id) = context.summary.codex_thread_id.as_deref() {
                 context
@@ -1064,6 +1078,14 @@ where
     .await;
 
     if let Err(error) = success_result {
+        if error.is::<crate::telegram::PublicationRetired>() {
+            context.store.record_turn_finished(
+                context.turn_id,
+                "completed",
+                Some(&context.summary.assistant_text),
+            )?;
+            return Ok(());
+        }
         context
             .store
             .record_turn_finished(context.turn_id, "failed", None)?;
@@ -1133,7 +1155,10 @@ fn notify_pre_codex_rate_limit(
             if can_retry {
                 request.reply_markup = Some(rate_limit_retry_keyboard(turn_id));
             }
-            match shared.telegram.send_message(request).await {
+            match super::presentation::turn_telegram(&shared, Some(turn_id))
+                .send_message(request)
+                .await
+            {
                 Ok(_) => return,
                 Err(error) => {
                     if let Some(next_retry_after) = telegram_retry_after(&error) {
@@ -1176,14 +1201,13 @@ pub(super) fn rate_limit_retry_keyboard(turn_id: i64) -> InlineKeyboardMarkup {
     }
 }
 
-async fn notify_turn_completion(shared: &Arc<AppShared>, session_key: SessionKey) {
+async fn notify_turn_completion(shared: &Arc<AppShared>, session_key: SessionKey, turn_id: i64) {
     let Some(text) =
         turn_completion_notification_text(&shared.config.telegram.completion_notify_usernames)
     else {
         return;
     };
-    let result = shared
-        .telegram
+    let result = super::presentation::turn_telegram(shared, Some(turn_id))
         .send_message(SendMessage::html(
             session_key.chat_id,
             Some(session_key.thread_id).filter(|value| *value != 0),
@@ -1230,6 +1254,17 @@ struct LiveTurnSink {
 }
 
 impl LiveTurnSink {
+    fn canonical(&self) -> Result<bool> {
+        self.turn_id
+            .map(|local| self.shared.store.conversation_turn_return(local))
+            .transpose()
+            .map(|selected| selected.unwrap_or(false))
+    }
+
+    fn telegram(&self) -> TelegramClient {
+        super::presentation::turn_telegram(&self.shared, self.turn_id)
+    }
+
     fn new_preview(
         shared: Arc<AppShared>,
         session: &crate::models::SessionRecord,
@@ -1306,6 +1341,9 @@ impl LiveTurnSink {
                 self.pending_text = text;
                 self.has_assistant_text = true;
                 self.flush(true).await?;
+                if self.canonical()? {
+                    return Ok(());
+                }
                 // Only an acknowledged permanent publication may freeze this message.
                 if self.last_flushed_text != self.pending_text {
                     anyhow::bail!("completed assistant publication was deferred by Telegram");
@@ -1375,6 +1413,11 @@ impl LiveTurnSink {
     }
 
     async fn flush(&mut self, force: bool) -> Result<()> {
+        if let Some(local) = self.turn_id
+            && self.shared.store.conversation_turn_return(local)?
+        {
+            return Ok(());
+        }
         if (!force && !self.shared.config.telegram.show_unfinished_messages)
             || (force && self.pending_text.trim().is_empty())
         {
@@ -1427,11 +1470,15 @@ impl LiveTurnSink {
                 .cloned()
                 .filter(|_| self.draft_id.is_none())
             {
-                self.edit_message(existing, chunk, &html).await?;
+                if let Err(error) = self.edit_message(existing, chunk, &html).await {
+                    if error.is::<crate::telegram::PublicationRetired>() {
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
             } else {
                 let result = self
-                    .shared
-                    .telegram
+                    .telegram()
                     .send_message(SendMessage::html(
                         self.session_key.chat_id,
                         Some(self.session_key.thread_id).filter(|value| *value != 0),
@@ -1440,6 +1487,9 @@ impl LiveTurnSink {
                     .await;
                 let message = match result {
                     Ok(message) => message,
+                    Err(error) if error.is::<crate::telegram::PublicationRetired>() => {
+                        return Ok(());
+                    }
                     Err(error) if self.defer_after_retry_after(&error, "telegram send chunk") => {
                         return Ok(());
                     }
@@ -1484,8 +1534,7 @@ impl LiveTurnSink {
         let draft_text = truncate_for_live_update(visible_text, self.shared.config.max_text_chunk);
         let html = render_markdown_to_html(&draft_text);
         match self
-            .shared
-            .telegram
+            .telegram()
             .send_message_draft(SendMessageDraft::html(
                 self.session_key.chat_id,
                 Some(self.session_key.thread_id).filter(|value| *value != 0),
@@ -1498,6 +1547,7 @@ impl LiveTurnSink {
                 self.last_flushed_text = visible_text.to_string();
                 self.last_flush_at = Instant::now();
             }
+            Err(error) if error.is::<crate::telegram::PublicationRetired>() => {}
             Err(error) if self.defer_after_retry_after(&error, "telegram draft update") => {}
             Err(error) => {
                 tracing::debug!("sendMessageDraft update failed: {error:#}");
@@ -1527,8 +1577,7 @@ impl LiveTurnSink {
         html: &str,
     ) -> Result<()> {
         let result = self
-            .shared
-            .telegram
+            .telegram()
             .edit_message_text(EditMessageText::html(
                 reference.chat_id,
                 reference.message_id,
@@ -1538,6 +1587,9 @@ impl LiveTurnSink {
         match result {
             Ok(_) => Ok(()),
             Err(error) => {
+                if error.is::<crate::telegram::PublicationRetired>() {
+                    return Err(error);
+                }
                 if is_message_not_modified(&error) {
                     return Ok(());
                 }
@@ -1546,8 +1598,7 @@ impl LiveTurnSink {
                 }
                 let fallback = html_escape::encode_safe(raw_text).to_string();
                 let fallback_result = self
-                    .shared
-                    .telegram
+                    .telegram()
                     .edit_message_text(EditMessageText::html(
                         reference.chat_id,
                         reference.message_id,
@@ -1946,13 +1997,22 @@ fn truncate_history_context(text: &str) -> String {
 }
 
 fn spawn_chat_action_task(
-    telegram: TelegramClient,
+    shared: Arc<AppShared>,
+    local_turn: i64,
     chat_id: i64,
     thread_id: Option<i64>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let telegram = super::presentation::turn_telegram(&shared, Some(local_turn));
         while !cancel.is_cancelled() {
+            if shared
+                .store
+                .conversation_turn_return(local_turn)
+                .unwrap_or(true)
+            {
+                break;
+            }
             tokio::select! {
                 _ = cancel.cancelled() => break,
                 result = telegram.send_chat_action(chat_id, thread_id, ChatAction::Typing) => {
@@ -2037,6 +2097,10 @@ async fn send_generated_artifacts(
     out_dir: &Path,
     assistant_text: &str,
 ) -> Result<()> {
+    if shared.store.conversation_turn_return(turn_id)? {
+        return Err(anyhow::Error::new(crate::telegram::PublicationRetired));
+    }
+    let telegram = super::presentation::turn_telegram(shared, Some(turn_id));
     validate_artifact_references(out_dir, assistant_text)?;
     let directory = fs::symlink_metadata(out_dir)?;
     if !directory.is_dir() || directory.file_type().is_symlink() {
@@ -2071,8 +2135,7 @@ async fn send_generated_artifacts(
             "mp4" | "mov" | "webm" => ChatAction::UploadVideo,
             _ => ChatAction::UploadDocument,
         };
-        let _ = shared
-            .telegram
+        let _ = telegram
             .send_chat_action(
                 session.key.chat_id,
                 Some(session.key.thread_id).filter(|value| *value != 0),
@@ -2094,8 +2157,7 @@ async fn send_generated_artifacts(
         )?;
         let receipt = async { match action {
             ChatAction::UploadPhoto => {
-                shared
-                    .telegram
+                telegram
                     .send_photo(
                         session.key.chat_id,
                         Some(session.key.thread_id).filter(|value| *value != 0),
@@ -2106,8 +2168,7 @@ async fn send_generated_artifacts(
                     .await
             }
             ChatAction::UploadAudio => {
-                shared
-                    .telegram
+                telegram
                     .send_audio(
                         session.key.chat_id,
                         Some(session.key.thread_id).filter(|value| *value != 0),
@@ -2118,8 +2179,7 @@ async fn send_generated_artifacts(
                     .await
             }
             ChatAction::UploadVideo => {
-                shared
-                    .telegram
+                telegram
                     .send_video(
                         session.key.chat_id,
                         Some(session.key.thread_id).filter(|value| *value != 0),
@@ -2130,8 +2190,7 @@ async fn send_generated_artifacts(
                     .await
             }
             _ => {
-                shared
-                    .telegram
+                telegram
                     .send_document(
                         session.key.chat_id,
                         Some(session.key.thread_id).filter(|value| *value != 0),
