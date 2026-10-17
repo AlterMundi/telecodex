@@ -23,7 +23,7 @@ class Receiver:
         self.question = None
         self.source = {'schema':'telecodex.presentation-part/v1',
             'id':'delivery:11111111-1111-1111-1111-111111111111', 'revision':'a'*64,
-            'kind':'worker_result', 'entry_binding':[100, {'chat_id':100,'thread_id':1},1,'entry-native'],
+            'kind':'worker_result', 'label':'#Alfa', 'entry_binding':[100, {'chat_id':100,'thread_id':1},1,'entry-native'],
             'text':'Alfa sigue trabajando. Beta ya respondió.', 'offset':0, 'next_offset':None,
             'current':True, 'correction_pending':False, 'completed':True, 'playback':'not_observed'}
     def authorized(self, human): return human == 100 and self.allowed
@@ -96,6 +96,9 @@ class Presentation(unittest.TestCase):
         self.assertEqual(first.headers['x-playback-observation'],'not_observed')
         self.assertNotIn(str(self.root),str(dict(first.headers)))
         self.assertIn(self.provider.source['text'].encode(),self.fixture.calls[0][2])
+        self.assertIn(('#Alfa. '+self.provider.source['text']).encode(),self.fixture.calls[0][2])
+        canonical = self.client.get('/api/interaction/part',params=self.body,headers=self.headers)
+        self.assertEqual(canonical.json()['text'],self.provider.source['text'])
         self.client.close()
         self.client=self.client_for()
         self.login()
@@ -103,6 +106,30 @@ class Presentation(unittest.TestCase):
         self.assertEqual(resumed.content,first.content)
         self.assertEqual(len(self.fixture.calls),1)
         self.assertGreaterEqual(self.provider.parts,4)
+
+    def test_source_label_change_during_synthesis_refuses_old_labeled_audio(self):
+        self.login()
+        self.fixture.hold=True
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pending=pool.submit(self.audio)
+            self.assertTrue(self.fixture.entered.wait(timeout=4))
+            self.provider.source['label']='#Beta'
+            self.fixture.release.set()
+            self.assertEqual(pending.result(timeout=8).status_code,409)
+        self.assertIn(b'#Alfa. ',self.fixture.calls[0][2])
+        self.assertEqual(len(self.fixture.calls),1)
+
+    def test_worker_continuation_and_integrator_audio_do_not_repeat_a_label(self):
+        self.login()
+        for changes in ({'offset':1600},{'kind':'integrator_answer','offset':0}):
+            self.provider.source.update(changes)
+            # Use the actual renderer; select the certified part directly so
+            # this test need not fake canonical pagination in the HTTP peer.
+            import asyncio
+            from dashboard.speech import Speech
+            renderer=Speech(self.config['speech'])
+            asyncio.run(renderer.render(self.provider.source))
+            self.assertNotIn(b'#Alfa. ',self.fixture.calls[-1][2])
 
     def test_correction_during_synthesis_prevents_stale_audio_response(self):
         self.login()
