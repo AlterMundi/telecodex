@@ -185,6 +185,7 @@ fn already_recorded(
     entry: SessionKey,
     d: &Decision,
     action: &Value,
+    source_input: Option<&str>,
 ) -> Result<Option<Value>> {
     let binding = app
         .shared
@@ -198,7 +199,7 @@ fn already_recorded(
             .store
             .conversation_decision_receipt(human, entry, &d.id, &d.revision)?
     {
-        if doc["action"] != *action {
+        if doc["action"] != *action || source_input.is_some_and(|id| doc["source_input"] != id) {
             bail!("A recorded decision cannot be replaced");
         }
         return Ok(Some(receipt(&binding, &doc, false)));
@@ -219,7 +220,7 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     let entry = cfg.entry();
     if let Some(raw) = args.strip_prefix("decide ") {
         let decision: Decision = serde_json::from_str(raw)?;
-        return decide(app, human, entry, decision).await;
+        return decide(app, human, entry, decision, None).await;
     }
     let fields: Vec<_> = args.split_whitespace().collect();
     match fields.as_slice() {
@@ -269,12 +270,68 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     }
 }
 
-async fn decide(app: &App, human: i64, entry: SessionKey, d: Decision) -> Result<Value> {
+/// Check a frozen human question selection before capture, without answering it.
+/// Delivery rechecks the revision after any transcription or other delay.
+pub(super) async fn validate_reply(
+    app: &App,
+    human: i64,
+    reply: Option<&crate::store::ConversationReply>,
+) -> Result<()> {
+    let Some(reply) = reply else { return Ok(()) };
+    let Some(id) = reply.source.strip_prefix("request:") else {
+        return Ok(());
+    };
+    let profile = super::routing::profile(&app.shared)?;
+    let view = detail(app, human, profile.entry(), id, 0).await?;
+    if view["kind"] != "question"
+        || view["actionable"] != true
+        || view["revision"] != reply.revision
+    {
+        bail!("Selected question is no longer current");
+    }
+    Ok(())
+}
+/// Answer only the selected live native question from the retained original.
+pub(super) async fn answer_original(
+    app: &App,
+    input: &crate::store::ConversationInput,
+) -> Result<()> {
+    let selected = input.reply.as_ref().context("Question selection missing")?;
+    let id = selected
+        .source
+        .strip_prefix("request:")
+        .context("Not a native question reply")?;
+    let binding = app
+        .shared
+        .store
+        .conversation_request_binding(input.human, input.entry)?;
+    let d = Decision {
+        binding: binding["binding"]
+            .as_str()
+            .context("Missing entry binding")?
+            .into(),
+        id: id.into(),
+        revision: selected.revision.clone(),
+        action: Action::Answer {
+            text: input.rendered(),
+        },
+    };
+    decide(app, input.human, input.entry, d, Some(&input.id)).await?;
+    Ok(())
+}
+
+async fn decide(
+    app: &App,
+    human: i64,
+    entry: SessionKey,
+    d: Decision,
+    source_input: Option<&str>,
+) -> Result<Value> {
     if d.id.len() > 64 || d.revision.len() != 64 {
         bail!("Invalid request decision identity");
     }
     let action = serde_json::to_value(&d.action)?;
-    if let Some(result) = already_recorded(app, human, entry, &d, &action)? {
+    if let Some(result) = already_recorded(app, human, entry, &d, &action, source_input)? {
         return Ok(result);
     }
     let snapshot = app.shared.store.conversation_request(human, entry, &d.id)?;
@@ -284,7 +341,7 @@ async fn decide(app: &App, human: i64, entry: SessionKey, d: Decision) -> Result
     if snapshot.item.source["kind"] == "question" {
         let mut guard = app.shared.pending_questions.lock().await;
         let snapshot = app.shared.store.conversation_request(human, entry, &d.id)?;
-        if let Some(result) = already_recorded(app, human, entry, &d, &action)? {
+        if let Some(result) = already_recorded(app, human, entry, &d, &action, source_input)? {
             return Ok(result);
         }
         let p = guard
@@ -336,6 +393,7 @@ async fn decide(app: &App, human: i64, entry: SessionKey, d: Decision) -> Result
             &json!({"question_id":p.request.questions[p.index].id,"answer":value}),
             state,
             next,
+            source_input,
         )?;
         if !fresh {
             return retained_receipt(app, human, entry, &d.id, &d.revision, false);
@@ -363,7 +421,7 @@ async fn decide(app: &App, human: i64, entry: SessionKey, d: Decision) -> Result
     } else if snapshot.item.source["kind"] == "approval" {
         let mut guard = app.shared.pending_approvals.lock().await;
         let snapshot = app.shared.store.conversation_request(human, entry, &d.id)?;
-        if let Some(result) = already_recorded(app, human, entry, &d, &action)? {
+        if let Some(result) = already_recorded(app, human, entry, &d, &action, source_input)? {
             return Ok(result);
         }
         let p = guard
@@ -392,6 +450,7 @@ async fn decide(app: &App, human: i64, entry: SessionKey, d: Decision) -> Result
             &approval_payload(p),
             &json!({"code":choice,"label":presentation::approval_button_text(selected)}),
             "answering",
+            None,
             None,
         )?;
         if !fresh {

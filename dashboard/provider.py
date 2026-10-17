@@ -227,10 +227,15 @@ class Provider:
         import re
         if value is None: return
         if (not isinstance(value, dict) or set(value) != {'source', 'revision'}
-                or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:'))
+                or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:', 'request:'))
                 or not isinstance(value['revision'], str) or not re.fullmatch('[a-f0-9]{64}', value['revision'])):
             raise ValueError('Select one retained original or worker result')
-        cls.input_id(value['source'].split(':', 1)[1])
+        ident=value['source'].split(':', 1)[1]
+        if value['source'].startswith('request:'):
+            if not re.fullmatch('[a-f0-9]{32}',ident):
+                raise ValueError('Select one current question')
+        else:
+            cls.input_id(ident)
 
     def conversation_input_route(self, ident, body):
         import re

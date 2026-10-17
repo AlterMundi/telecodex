@@ -23,6 +23,19 @@ fn outcome(input: &ConversationInput, fresh: bool) -> Value {
 
 fn response(app: &App, input: &ConversationInput, fresh: bool) -> Result<Value> {
     let mut value = outcome(input, fresh);
+    if let Some(reply) = &input.reply
+        && let Some(id) = reply.source.strip_prefix("request:")
+    {
+        let decision = app.shared.store.conversation_decision_receipt(
+            input.human,
+            input.entry,
+            id,
+            &reply.revision,
+        )?;
+        if let Some(doc) = decision.filter(|doc| doc["source_input"] == input.id) {
+            value["decision"] = json!({"id":id,"revision":reply.revision,"recorded":true,"source_input":input.id,"recorded_at":doc["recorded_at"],"native_incorporation":"Not established by recording an answer"});
+        }
+    }
     value["continuation"] = json!(app.shared.store.conversation_continuation(
         input.human,
         input.entry,
@@ -135,6 +148,15 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     )?;
     // Preserve capture/handoff order for this configured integrating entry. The
     // lock is released before native acknowledgments, so later steering proceeds.
+    if crate::interaction::explicit_selector(&request.text).is_none()
+        && app
+            .shared
+            .store
+            .conversation_input_read(human, cfg.entry(), &request.id)
+            .is_err()
+    {
+        super::conversation_requests::validate_reply(app, human, request.reply.as_ref()).await?;
+    }
     let interruption_targets = super::voice::snapshot(app).await;
     let _ingress = app.shared.conversation_ingress.lock().await;
     let (input, fresh) = app.shared.store.conversation_input_capture_reply(
@@ -166,6 +188,15 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
 }
 
 async fn deliver(app: &App, input: ConversationInput, resolve: Option<&str>) -> Result<()> {
+    if input
+        .reply
+        .as_ref()
+        .is_some_and(|r| r.source.starts_with("request:"))
+        && crate::interaction::explicit_selector(&input.text).is_none()
+        && resolve.is_none()
+    {
+        return super::conversation_requests::answer_original(app, &input).await;
+    }
     let profile = super::routing::profile(&app.shared)?;
     let action = app
         .shared
@@ -440,6 +471,14 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
         {
             bail!("Voice capture file is not owner-private and bounded");
         }
+    }
+    if app
+        .shared
+        .store
+        .conversation_input_read(human, entry, &request.id)
+        .is_err()
+    {
+        super::conversation_requests::validate_reply(app, human, request.reply.as_ref()).await?;
     }
     let interruption_targets = super::voice::snapshot(app).await;
     let permit = app

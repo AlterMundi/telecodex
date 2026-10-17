@@ -212,6 +212,12 @@ function boot() {
   const failure=races.holdStatus(true);const failing=raceCard.children[2].children[0].handlers.click();await failure.entered;
   await races.ui.refresh();const confirmed=raceCard.children[1].textContent;failure.release();await failing;
   assert.equal(raceCard.children[1].textContent,confirmed,"Late errors cannot overwrite a newer confirmed status");
+  const answered=boot(), answerOriginal={id:"answered-original",text:"A selected question answer",sequence:1,phase:"queued"};
+  answered.originals.set(answerOriginal.id,answerOriginal);await answered.ui.refresh();
+  const answeredCard=answered.nodes.get("#conversation-inputs").children[0];
+  const oldAnswerStatus=answered.holdStatus();const answerChecking=answeredCard.children[2].children[0].handlers.click();await oldAnswerStatus.entered;
+  answerOriginal.phase="answered";await answered.ui.refresh();answerOriginal.phase="preparing";oldAnswerStatus.release();await answerChecking;
+  assert.match(answeredCard.children[1].textContent,/Answer recorded/,"A late preparation read cannot undo an already recorded question answer");
   const integrated=boot();integrated.nativeRequest();await integrated.ui.refresh();
   const requestBox=integrated.nodes.get("#conversation-request-cards").children[0];
   await requestBox.children[3].handlers.click();

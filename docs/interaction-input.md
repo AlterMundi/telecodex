@@ -204,6 +204,25 @@ proposal. Existing Telegram question/approval controls consult the same pending
 state. Restart expires outstanding response channels while retaining decisions;
 there is no automatic replay or approval.
 
+A fully read current question can also select **Answer in conversation**. This
+freezes `reply = {source: "request:ID", revision: REVISION}` for one ordinary
+composer message or microphone capture. Native approvals keep their existing
+explicit controls. Selecting focus does not answer or start recording.
+
+Fresh capture validates the live owned question; finalized text is applied only
+to that exact revision through the existing responder. The decision receipt
+retains `source_input`, and the same transaction marks the original `answered`.
+Voice answers carry the retained automatic-transcription attribution rather than
+claiming verified written human speech. `answered` means the decision was recorded,
+not that native incorporation or task completion was observed. No new model
+session or work turn is needed, including for a cold integrating entry.
+
+A question that advances or closes during transcription cannot consume that old
+recording as its next answer. Its original and transcript remain inspectable
+without a second submission. Identical capture retries inspect the original
+receipt even after the question closes or the receiver restarts. A deliberate
+leading `#Topic` overrides question focus and uses the normal work route instead.
+
 `tests/conversation_requests_ui.js` and the host conversation integration tests
 qualify full-source gating, source changes, saved drafts, frozen retries,
 receipt-only recovery, terminal closure and overlapping scope changes.

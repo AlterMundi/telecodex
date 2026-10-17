@@ -20,7 +20,7 @@ pub struct ConversationRequest {
     pub scope: String,
 }
 
-fn read_on(
+pub(super) fn read_on(
     conn: &Connection,
     human: i64,
     entry: SessionKey,
@@ -193,6 +193,7 @@ impl Store {
         resolved: &Value,
         next_state: &str,
         next_question: Option<(&str, &str, usize)>,
+        source_input: Option<&str>,
     ) -> Result<bool> {
         if revision.len() != 64
             || !revision.bytes().all(|b| b.is_ascii_hexdigit())
@@ -206,6 +207,29 @@ impl Store {
         if current.scope != expected.scope || current.binding != expected.binding {
             bail!("Native request binding changed");
         }
+        let original = source_input
+            .map(|id| {
+                let input = super::conversation_inputs::read_on(&tx, id, human)?;
+                super::conversation_inputs::eligible_on(&tx, &input)?;
+                if input.entry != entry
+                    || input.phase != "retained"
+                    || input.reply.as_ref().is_none_or(|r| {
+                        r.source != format!("request:{}", expected.item.id)
+                            || r.revision != revision
+                    })
+                    || input.focus.as_ref().is_none_or(|f| {
+                        f.retired
+                            || f.target != current.key
+                            || f.native.as_deref() != Some(current.item.native_thread.as_str())
+                    })
+                    || action != &json!({"kind":"answer","text":input.rendered()})
+                    || current.item.source["kind"] != "question"
+                {
+                    bail!("Original answer source or selected question changed");
+                }
+                Ok::<_, anyhow::Error>(input)
+            })
+            .transpose()?;
         let mut item = current.item;
         let (entry_session, _) = super::presentation::entry_on(&tx, human, entry)?;
         let prior:Option<String>=tx.query_row("SELECT doc FROM conversation_decisions WHERE human_id=?1 AND entry_session=?2 AND request_id=?3 AND revision=?4",params![human,entry_session,item.id,revision],|r|r.get(0)).optional()?;
@@ -230,7 +254,7 @@ impl Store {
         let recorded_at = now_string();
         let receipt = json!({"id":item.id,"revision":revision,"action":action,"proposal":proposal,"resolved":resolved,
             "recorded_at":recorded_at,"binding":expected.binding,"source_scope":expected.scope,
-            "native_thread":item.native_thread,"local_turn":item.local_turn,"target":current.key});
+            "native_thread":item.native_thread,"local_turn":item.local_turn,"target":current.key,"source_input":source_input});
         tx.execute("INSERT INTO conversation_decisions(human_id,entry_session,entry_chat,entry_topic,request_id,revision,doc,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![human,entry_session,entry.chat_id,entry.thread_id,item.id,revision,receipt.to_string(),recorded_at])?;
         item.source["conversationDecisions"][revision] = json!({"recorded_at":recorded_at});
         if let Some((title, question, index)) = next_question {
@@ -248,6 +272,12 @@ impl Store {
                 now_string()
             ],
         )?;
+        if let Some(input) = original {
+            let changed=tx.execute("UPDATE conversation_inputs SET phase='answered' WHERE id=?1 AND human_id=?2 AND phase='retained' AND instance_id=?3",params![input.id,human,self.instance_id])?;
+            if changed != 1 {
+                bail!("Original answer source no longer current");
+            }
+        }
         tx.commit()?;
         Ok(true)
     }
@@ -329,7 +359,7 @@ mod tests {
     ) -> Result<bool> {
         store.conversation_request_decide(100,entry,current,revision,action,
             &json!({"kind":"question","question_id":"scope","question_index":0,"body":"Exact proposal and option descriptions"}),
-            &json!({"question_id":"scope","answer":"Selected exact option"}),state,next)
+            &json!({"question_id":"scope","answer":"Selected exact option"}),state,next,None)
     }
     #[test]
     fn canonical_request_scope_and_exact_receipt_prevent_duplicate_or_changed_decisions() {
