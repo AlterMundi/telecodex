@@ -594,6 +594,14 @@ def observer_status_is_read_only(binary):
         assert 'native history has not been reconciled' in text
         assert j.instructions(7) == instructions
         assert not any(r.get('method') in ('turn/start','turn/steer','thread/resume') for r in j.rpc[before:])
+        with sqlite3.connect(j.root / 'state.sqlite') as db:
+            db.execute("UPDATE sessions SET codex_thread_id='replacement-native' WHERE thread_id=7")
+        j.messages.clear()
+        j.admit('/interaction',topic=1)
+        j.wait(lambda: j.has('historical worker coverage for prior binding',1))
+        text = '\n'.join(m['text'] for m,_ in j.messages if m.get('message_thread_id') == 1)
+        assert 'Input: accepted (prior binding; native native-topic-7/' in text
+        assert 'Source: native-topic-7/' in text and 'Native source binding: replacement-native' in text
         j.activity_unavailable = True
         j.messages.clear()
         j.admit('/interaction',topic=1)

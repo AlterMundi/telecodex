@@ -2,13 +2,20 @@
 use super::*;
 use crate::interaction::{Delivery, Instruction};
 
+pub struct ObservedDelivery {
+    pub value: Delivery,
+    pub native_thread: String,
+    pub native_turn: String,
+    pub item_id: String,
+}
+
 pub struct SessionObservation {
     pub sampled_at: String,
     pub session_id: i64,
     pub native_thread: Option<String>,
     pub input_cut: i64,
     pub latest_input: Option<Instruction>,
-    pub latest_delivery: Option<Delivery>,
+    pub latest_delivery: Option<ObservedDelivery>,
     pub local_turn: Option<(i64, String, String)>,
     pub native_item: Option<(String, String, String)>,
     pub pending: interactions::InteractionPage,
@@ -44,18 +51,25 @@ impl Store {
             })
             .transpose()?;
         let input_cut = latest_input.as_ref().map_or(0, |i| i.sequence);
-        let result: Option<(String, String)> = tx.query_row(
-            "SELECT d.doc,d.phase FROM interaction_deliveries d JOIN interaction_requests r ON r.id=d.request_id WHERE r.session_id=?1 AND d.human_id=?2 ORDER BY d.rowid DESC LIMIT 1",
-            params![session_id,human], |r| Ok((r.get(0)?,r.get(1)?)),
+        let result: Option<(String, String, String, String, String)> = tx.query_row(
+            "SELECT d.doc,d.phase,o.native_thread,o.native_turn,o.item_id FROM interaction_deliveries d JOIN interaction_results o ON o.id=d.result_id JOIN interaction_requests r ON r.id=d.request_id WHERE r.session_id=?1 AND d.human_id=?2 ORDER BY d.rowid DESC LIMIT 1",
+            params![session_id,human], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
         ).optional()?;
         let latest_delivery = result
-            .map(|(doc, phase)| -> Result<Delivery> {
-                let mut d: Delivery = serde_json::from_str(&doc)?;
-                d.phase = phase;
-                (d.current, d.correction_pending) =
-                    routing::freshness(&tx, &d.request_id, &d.covered, d.declared)?;
-                Ok(d)
-            })
+            .map(
+                |(doc, phase, native_thread, native_turn, item_id)| -> Result<ObservedDelivery> {
+                    let mut d: Delivery = serde_json::from_str(&doc)?;
+                    d.phase = phase;
+                    (d.current, d.correction_pending) =
+                        routing::freshness(&tx, &d.request_id, &d.covered, d.declared)?;
+                    Ok(ObservedDelivery {
+                        value: d,
+                        native_thread,
+                        native_turn,
+                        item_id,
+                    })
+                },
+            )
             .transpose()?;
         let local_turn = tx.query_row(
             "SELECT id,status,COALESCE(completed_at,started_at) FROM turns WHERE session_id=?1 AND from_user_id=?2 AND (native_thread_id IS NULL OR native_thread_id IS ?3) ORDER BY id DESC LIMIT 1",
@@ -149,6 +163,40 @@ mod tests {
                 RequestRelation::New,
             )
             .unwrap();
+        store
+            .interaction_transport(
+                &instruction.id,
+                100,
+                turn,
+                crate::interaction::TransportPhase::Submitting,
+                None,
+            )
+            .unwrap();
+        store
+            .interaction_transport(
+                &instruction.id,
+                100,
+                turn,
+                crate::interaction::TransportPhase::Accepted,
+                Some("physical"),
+            )
+            .unwrap();
+        let answer = format!(
+            "Answer\n<daimon-result>{}</daimon-result>",
+            serde_json::json!({"requests":instruction.requests,"covered":[instruction.id],"completed":instruction.requests})
+        );
+        store
+            .interaction_record_result(
+                &instruction.id,
+                100,
+                turn,
+                "native-source",
+                "physical",
+                "final-item",
+                &answer,
+                true,
+            )
+            .unwrap();
         let task = HumanInteraction {
             id: "external-observation".into(),
             kind: "task".into(),
@@ -176,11 +224,14 @@ mod tests {
             assert_eq!(observed.input_cut, instruction.sequence);
             assert_eq!(observed.latest_input.unwrap().id, instruction.id);
             assert_eq!(observed.local_turn.unwrap().1, "running");
-            assert_eq!(observed.native_item.unwrap().1, "item");
+            assert_eq!(observed.native_item.unwrap().1, "final-item");
             assert_eq!(observed.presentation_gaps, 1);
             assert_eq!(observed.pending.actionable_total, 1);
             assert_eq!(observed.pending.items[0].id, task.id);
-            assert!(observed.latest_delivery.is_none());
+            assert_eq!(
+                observed.latest_delivery.unwrap().native_thread,
+                "native-source"
+            );
         }
         assert_eq!(store.conn.lock().unwrap().total_changes(), changes);
         assert!(store.interaction_observation(key, 101).unwrap().is_none());
@@ -193,6 +244,14 @@ mod tests {
         store.set_session_codex_thread(key, "replacement").unwrap();
         let observed = store.interaction_observation(key, 100).unwrap().unwrap();
         assert!(observed.native_item.is_none() && observed.local_turn.is_none());
+        assert_eq!(
+            observed.latest_input.unwrap().native_thread.as_deref(),
+            Some("native-source")
+        );
+        assert_eq!(
+            observed.latest_delivery.unwrap().native_thread,
+            "native-source"
+        );
         assert_eq!(observed.pending.actionable_total, 0);
         assert_eq!(observed.pending.history_total, 1);
         assert_eq!(observed.presentation_gaps, 0);

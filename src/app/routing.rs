@@ -199,16 +199,33 @@ async fn session_card(
         card.push_str("\nNo retained native item for this binding.");
     }
     if let Some(i) = &observed.latest_input {
-        card.push_str(&format!("\nInput: {}\n`{}`", i.phase.as_str(), i.id));
+        let binding = match i.native_thread.as_deref() {
+            Some(thread) if Some(thread) == observed.native_thread.as_deref() => "current binding",
+            Some(_) => "prior binding",
+            None => "native binding not established",
+        };
+        card.push_str(&format!(
+            "\nInput: {} ({binding}; native {}/{})\n`{}`",
+            i.phase.as_str(),
+            i.native_thread.as_deref().unwrap_or("unknown"),
+            i.native_turn.as_deref().unwrap_or("not observed"),
+            i.id
+        ));
     } else {
         card.push_str("\nNo admitted input.");
     }
-    if let Some(d) = &observed.latest_delivery {
+    if let Some(result) = &observed.latest_delivery {
+        let d = &result.value;
+        let current_binding =
+            Some(result.native_thread.as_str()) == observed.native_thread.as_deref();
+        let coverage = if current_binding {
+            relevance(d)
+        } else {
+            "historical worker coverage for prior binding; not current native work"
+        };
         card.push_str(&format!(
-            "\nResult: {} — {}\n`{}`",
-            d.phase,
-            relevance(d),
-            d.id
+            "\nResult: {} — {}\nSource: {}/{}/{}\n`{}`",
+            d.phase, coverage, result.native_thread, result.native_turn, result.item_id, d.id
         ));
     } else if observed.latest_input.is_some() {
         card.push_str("\nWorker result/coverage not yet observed.");
