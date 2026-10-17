@@ -164,7 +164,7 @@ impl Store {
     pub fn interaction_begin_delivery(&self, id: &str, human: i64) -> Result<Option<Delivery>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let raw:Option<String>=tx.query_row("SELECT d.doc FROM interaction_deliveries d JOIN users u ON u.tg_user_id=d.human_id WHERE d.id=?1 AND d.human_id=?2 AND u.allowed=1 AND d.phase='reserved'",params![id,human],|r|r.get(0)).optional()?;
+        let raw:Option<String>=tx.query_row("SELECT d.doc FROM interaction_deliveries d JOIN users u ON u.tg_user_id=d.human_id WHERE d.id=?1 AND d.human_id=?2 AND u.allowed=1 AND d.phase='reserved' AND NOT EXISTS(SELECT 1 FROM interaction_delivery_parts p WHERE p.delivery_id=d.id)",params![id,human],|r|r.get(0)).optional()?;
         let Some(raw) = raw else {
             return Ok(None);
         };
@@ -179,6 +179,41 @@ impl Store {
         Ok(Some(d))
     }
 
+    /// Read-only result inspection refreshes relevance without changing its
+    /// original recipient, transmission history or worker declaration.
+    pub fn interaction_delivery(&self, id: &str, human: i64) -> Result<Option<Delivery>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let raw:Option<(String,String)>=conn.query_row("SELECT d.doc,d.phase FROM interaction_deliveries d JOIN interaction_requests r ON r.id=d.request_id JOIN sessions s ON s.id=r.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE d.id=?1 AND d.human_id=?2 AND u.tg_user_id=?2 AND u.allowed=1",params![id,human],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        raw.map(|(doc, phase)| {
+            let mut d: Delivery = serde_json::from_str(&doc)?;
+            d.phase = phase;
+            (d.current, d.correction_pending) =
+                freshness(&conn, &d.request_id, &d.covered, d.declared)?;
+            Ok(d)
+        })
+        .transpose()
+    }
+
+    pub fn interaction_recent_deliveries(
+        &self,
+        human: i64,
+        target: SessionKey,
+    ) -> Result<Vec<Delivery>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut stmt=conn.prepare("SELECT d.id FROM interaction_deliveries d JOIN interaction_requests r ON r.id=d.request_id JOIN sessions s ON s.id=r.session_id WHERE d.human_id=?1 AND s.chat_id=?2 AND s.thread_id=?3 ORDER BY d.rowid DESC LIMIT 8")?;
+        let ids = stmt
+            .query_map(params![human, target.chat_id, target.thread_id], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        drop(conn);
+        ids.into_iter()
+            .map(|id| self.interaction_delivery(&id, human))
+            .collect::<Result<Vec<_>>>()
+            .map(|rows| rows.into_iter().flatten().collect())
+    }
+
     pub fn interaction_finish_delivery(
         &self,
         id: &str,
@@ -191,7 +226,11 @@ impl Store {
             params![id, human],
             |r| r.get(0),
         )?;
-        if phase == "delivered" {
+        if matches!(phase.as_str(), "delivered" | "withheld") {
+            return Ok(());
+        }
+        if phase == "preparing" && message.is_none() {
+            conn.execute("UPDATE interaction_deliveries SET phase='reserved' WHERE id=?1 AND NOT EXISTS(SELECT 1 FROM interaction_delivery_parts WHERE delivery_id=?1)",[id])?;
             return Ok(());
         }
         if !matches!(phase.as_str(), "sending" | "uncertain") {
@@ -199,7 +238,28 @@ impl Store {
                 "Interaction publication is not an active transmission"
             ));
         }
-        conn.execute("UPDATE interaction_deliveries SET phase=?2,message_id=COALESCE(?3,message_id) WHERE id=?1",params![id,if message.is_some(){"delivered"}else{"uncertain"},message])?;
+        let confirmed_phase = if let Some(message) = message {
+            let received:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_delivery_parts WHERE delivery_id=?1 AND message_id=?2)",params![id,message],|r|r.get(0))?;
+            if !received {
+                return Err(anyhow!(
+                    "Result completion requires a retained part receipt"
+                ));
+            }
+            let raw: String = conn.query_row(
+                "SELECT doc FROM interaction_deliveries WHERE id=?",
+                [id],
+                |r| r.get(0),
+            )?;
+            let frozen: Delivery = serde_json::from_str(&raw)?;
+            if frozen.correction_pending {
+                "withheld"
+            } else {
+                "delivered"
+            }
+        } else {
+            "uncertain"
+        };
+        conn.execute("UPDATE interaction_deliveries SET phase=?2,message_id=COALESCE(?3,message_id) WHERE id=?1",params![id,confirmed_phase,message])?;
         Ok(())
     }
 
@@ -593,6 +653,96 @@ mod tests {
     }
 
     #[test]
+    fn interaction_late_correction_preserves_uncertain_then_delivered_history_and_new_items() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let t = target(&s, 7);
+        let a = admit(&s, &t, 1, R::New);
+        let local = accept(&s, &t, &a);
+        let old = reserve(&s, &t, &a, local, "earlier");
+        s.interaction_begin_delivery(&old.id, 100).unwrap();
+        s.interaction_reserve_part(
+            &old.id,
+            100,
+            0,
+            "Earlier answer already attempting transmission",
+            "pending",
+        )
+        .unwrap();
+        let amendment = admit(&s, &t, 2, R::Amends(a.requests.clone()));
+        s.interaction_finish_delivery(&old.id, 100, None).unwrap();
+        let d = s.interaction_delivery(&old.id, 100).unwrap().unwrap();
+        assert_eq!(d.phase, "uncertain");
+        assert!(!d.current && d.correction_pending);
+        assert_eq!(d.body, "Answer");
+        assert!(s.interaction_begin_delivery(&d.id, 100).unwrap().is_none());
+        assert!(s.interaction_delivery(&d.id, 101).unwrap().is_none());
+        // Inspection is read-only and does not turn uncertainty into a retry.
+        for _ in 0..2 {
+            assert_eq!(
+                s.interaction_recent_deliveries(100, t.key).unwrap()[0].phase,
+                "uncertain"
+            );
+        }
+        assert!(
+            s.interaction_reserve_part(&d.id, 100, 0, "retry", "pending")
+                .unwrap()
+                .is_none()
+        );
+        // Exact late evidence confirms the earlier attempt, not the correction.
+        s.interaction_part_receipt(&d.id, 100, 0, 701).unwrap();
+        s.interaction_finish_delivery(&d.id, 100, Some(701))
+            .unwrap();
+        let prior = s.interaction_delivery(&d.id, 100).unwrap().unwrap();
+        assert_eq!(prior.phase, "delivered");
+        assert!(prior.correction_pending);
+        s.interaction_transport(&amendment.id, 100, local, P::Steering, None)
+            .unwrap();
+        s.interaction_transport(
+            &amendment.id,
+            100,
+            local,
+            P::Accepted,
+            Some("physical-turn"),
+        )
+        .unwrap();
+        let text = format!(
+            "Updated answer\n<daimon-result>{}</daimon-result>",
+            serde_json::json!({"requests":a.requests,"covered":[a.id,amendment.id],"completed":a.requests})
+        );
+        let thread = t.codex_thread_id.as_deref().unwrap();
+        s.record_native_message(
+            local,
+            thread,
+            "physical-turn",
+            "updated",
+            Some("final_answer"),
+            &text,
+        )
+        .unwrap();
+        let updated = s
+            .interaction_reserve_result(
+                &a.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "updated",
+                &text,
+            )
+            .unwrap();
+        assert_eq!(updated.len(), 1);
+        assert!(updated[0].current && !updated[0].correction_pending);
+        assert_eq!(
+            s.interaction_recent_deliveries(100, t.key).unwrap()[0].id,
+            updated[0].id
+        );
+        let unchanged = s.interaction_delivery(&d.id, 100).unwrap().unwrap();
+        assert_eq!(unchanged.body, "Answer");
+        assert!(unchanged.correction_pending);
+    }
+
+    #[test]
     fn interaction_restart_distinguishes_preparation_from_uncertain_transmission() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
@@ -609,8 +759,18 @@ mod tests {
             .unwrap();
         drop(s);
         let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        assert_eq!(
+            s.interaction_delivery(&da.id, 100).unwrap().unwrap().phase,
+            "reserved"
+        );
         assert!(s.interaction_begin_delivery(&da.id, 100).unwrap().is_some());
         assert!(s.interaction_begin_delivery(&db.id, 100).unwrap().is_none());
+        s.interaction_finish_delivery(&da.id, 100, None).unwrap();
+        assert_eq!(
+            s.interaction_delivery(&da.id, 100).unwrap().unwrap().phase,
+            "reserved"
+        );
+        assert!(s.interaction_begin_delivery(&da.id, 100).unwrap().is_some());
         assert!(
             s.interaction_reserve_part(&db.id, 100, 0, "B retry", "pending")
                 .unwrap()

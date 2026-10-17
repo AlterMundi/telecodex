@@ -82,6 +82,14 @@ corrections before an unsent item is published.
 
 ## Listener routing and return
 
+The native worker is explicitly told that an interaction controller is relaying
+an authenticated human input. The packet keeps controller guidance separate from
+the human-authored content and carries original author and source-message
+provenance. Direct enrolled-topic input retains that direct source even though
+it uses the same admission controller. Relay does not impersonate a direct human
+intervention, and future integrator interpretations must remain separately
+attributed. Canonical worker answers also retain their own authorship.
+
 `#Name message` or `#t7 message` in the integrating entry selects an existing
 owned native conversation. Replying to an original admitted message or returned
 result inherits its request and target; an explicit selector overrides that
@@ -106,11 +114,26 @@ known-unsent input; `/interaction retry ID` selects retained known-unsent input
 for recovery. Other native controls remain available in their own conversation.
 These operations do not initiate coordinated global Stop.
 
+`/interaction status OFFSET` pages over five enrolled conversations at a time.
+Each card distinguishes the latest input transport state, retained result
+transmission state and unresolved correction/coverage evidence. `/interaction
+input ID` inspects the admitted instruction without resubmitting it.
+
+`/interaction result ID` explicitly inspects a retained canonical answer and its
+current relevance. That inspection is a new controller response; it does not
+confirm or rewrite the original transmission. `/interaction deliver ID` uses
+the original publication boundary only for a reservation with no prior attempted
+parts. Restart restores preparation that never crossed that boundary to reserved;
+an attempted transmission remains uncertain. Delivered or uncertain output is
+never replayed by the recovery command. A failed output attempt produces a
+separate status notice, subject to the same recipient and transport constraints.
+
 Canonical outputs reserve per-request deliveries independently from task
 completion. Each part rechecks corrections after Telegram cooldown and retains
-its exact payload before the HTTP attempt. An obsolete answer is replaced with
-a correction-pending notice; another request's result can still be delivered.
-Every confirmed text part has an exact reply binding. Missing transmission
+its exact payload before the HTTP attempt. An obsolete answer is withheld and replaced with
+a notice about its missing correction coverage; another request's result can still be delivered.
+Every confirmed text part has an exact reply binding. A confirmed withholding
+notice is recorded as `withheld`, distinct from delivery of the canonical answer. Missing transmission
 receipts stay uncertain and are not automatically retransmitted. Worker metadata
 cannot choose a return address, and presentation strips its metadata tail.
 
@@ -129,6 +152,11 @@ SQLite peers. Registry/publication tests distinguish preparation, uncertain
 transmission, native acceptance, worker declarations and task completion.
 These are automated fixture checks; they are not a receiving deployment or a
 real model's semantic coverage qualification.
+
+Routed human-action declarations use the existing validated registration path
+and remain owned by the actual native worker. The controller points to that
+worker's `/pending` surface; entry-wide task presentation is still part of the
+attention work. Invalid declarations remain retained for inspection.
 
 Routed file output remains retained with its worker turn. This text adapter does
 not upload it through the legacy worker-topic uploader: attachment publication

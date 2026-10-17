@@ -42,17 +42,40 @@ fn label(shared: &AppShared, key: SessionKey) -> String {
 
 fn notice(shared: Arc<AppShared>, origin: ReturnRoute, text: String) {
     tokio::spawn(async move {
-        let mut msg = SendMessage::html(
-            origin.chat_id,
-            Some(origin.thread_id).filter(|id| *id != 0),
-            render_markdown_to_html(&text),
-        );
-        msg.reply_parameters = Some(crate::telegram::ReplyParameters {
-            message_id: origin.message_id,
-            allow_sending_without_reply: false,
-        });
-        if shared.telegram.send_message(msg).await.is_err() {
-            tracing::warn!("Interaction notice could not be confirmed");
+        for part in split_text(&text, 3000) {
+            let mut msg = SendMessage::html(
+                origin.chat_id,
+                Some(origin.thread_id).filter(|id| *id != 0),
+                render_markdown_to_html(&part),
+            );
+            msg.reply_parameters = Some(crate::telegram::ReplyParameters {
+                message_id: origin.message_id,
+                allow_sending_without_reply: false,
+            });
+            match shared
+                .telegram
+                .send_message_checked(origin.chat_id, || {
+                    let Some(cfg) = shared.config.interaction.as_ref() else {
+                        return Ok(None);
+                    };
+                    if !shared
+                        .store
+                        .get_user(cfg.human_id)?
+                        .is_some_and(|u| u.allowed)
+                    {
+                        return Ok(None);
+                    }
+                    Ok(Some((msg, ())))
+                })
+                .await
+            {
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(_) => {
+                    tracing::warn!("Interaction notice could not be confirmed");
+                    break;
+                }
+            }
         }
     });
 }
@@ -75,7 +98,50 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
         .context("Interaction input lacks its ingress journal identity")?;
     if text.starts_with("/interaction") {
         let args = text.split_whitespace().skip(1).collect::<Vec<_>>();
-        if let [verb, id] = args.as_slice() {
+        if let [verb, id] = args.as_slice()
+            && *verb != "status"
+        {
+            if matches!(*verb, "result" | "deliver") {
+                let delivery = app.shared.store.interaction_delivery(id, human)?;
+                if let Some(d) = delivery.filter(|d| enrolled(&app.shared, d.target)) {
+                    if *verb == "deliver" {
+                        if d.phase == "reserved" {
+                            publish(app.shared.clone(), d, human);
+                            notice(app.shared.clone(),origin,"Known-unsent result selected for delivery to its original requesting message.".into());
+                        } else {
+                            notice(
+                                app.shared.clone(),
+                                origin,
+                                format!(
+                                    "Result is {}. Only a known-unsent reservation can be selected for delivery; uncertain transmissions are never replayed.",
+                                    d.phase
+                                ),
+                            );
+                        }
+                    } else {
+                        let relevance = relevance(&d);
+                        notice(
+                            app.shared.clone(),
+                            origin,
+                            format!(
+                                "Retained worker result for #{}\nTransmission: {}\n{}\nCompletion reported by worker: {}\n\n{}",
+                                label(&app.shared, d.target),
+                                d.phase,
+                                relevance,
+                                d.completed,
+                                d.body
+                            ),
+                        );
+                    }
+                } else {
+                    notice(
+                        app.shared.clone(),
+                        origin,
+                        "Unknown result in this profile.".into(),
+                    );
+                }
+                return Ok(true);
+            }
             let Some(i) = app.shared.store.interaction_instruction(id, human)? else {
                 notice(app.shared.clone(), origin, "Unknown input.".into());
                 return Ok(true);
@@ -85,6 +151,25 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
                     app.shared.clone(),
                     origin,
                     "That conversation is not enrolled in this profile.".into(),
+                );
+                return Ok(true);
+            }
+            if *verb == "input" {
+                notice(
+                    app.shared.clone(),
+                    origin,
+                    format!(
+                        "Retained input for #{}\nTransport: {}\nRequest IDs: {}\nNative acceptance: {}\n\n{}",
+                        label(&app.shared, i.target),
+                        i.phase.as_str(),
+                        i.requests.join(", "),
+                        if i.phase == P::Accepted {
+                            "observed; incorporation still requires worker coverage"
+                        } else {
+                            "not established"
+                        },
+                        i.text
+                    ),
                 );
                 return Ok(true);
             }
@@ -111,19 +196,42 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
                 return Ok(true);
             }
         }
+        let offset = if let ["status", offset] = args.as_slice() {
+            offset.parse::<usize>().ok()
+        } else {
+            Some(0)
+        }
+        .unwrap_or(0)
+        .min(cfg.targets.len());
         let mut status = String::from("Interaction status");
-        for t in &cfg.targets {
+        for t in cfg.targets.iter().skip(offset).take(5) {
             let target = SessionKey::new(cfg.chat_id, Some(t.topic_id));
             let recent = app.shared.store.interaction_recent(human, target)?;
-            let state = recent
-                .first()
-                .map(|i| i.phase.as_str())
-                .unwrap_or("no admitted input");
-            status.push_str(&format!("\n#{}: {}", t.name, state));
+            status.push_str(&format!("\n\n#{} (#t{})", t.name, t.topic_id));
             if let Some(i) = recent.first() {
-                status.push_str(&format!("\nInput: `{}`", i.id));
+                status.push_str(&format!("\nInput: {}\n`{}`", i.phase.as_str(), i.id));
+            } else {
+                status.push_str("\nNo admitted input.");
+            }
+            let results = app
+                .shared
+                .store
+                .interaction_recent_deliveries(human, target)?;
+            if let Some(d) = results.first() {
+                status.push_str(&format!(
+                    "\nResult: {} — {}\n`{}`",
+                    d.phase,
+                    relevance(d),
+                    d.id
+                ));
+            } else if !recent.is_empty() {
+                status.push_str("\nWorker result/coverage not yet observed.");
             }
         }
+        if offset + 5 < cfg.targets.len() {
+            status.push_str(&format!("\n\nMore: /interaction status {}", offset + 5));
+        }
+        status.push_str("\n\nInspect: /interaction result ID. Recover a known-unsent result: /interaction deliver ID.");
         notice(app.shared.clone(), origin, status);
         return Ok(true);
     }
@@ -414,11 +522,14 @@ async fn admit_message(
 }
 
 fn packet(shared: &AppShared, i: &Instruction) -> Result<String> {
+    let source = shared.store.interaction_source(&i.id, i.human_id)?;
+    let provenance = serde_json::json!({"via":"interaction-controller","original_human_author":i.human_id,"source_channel":source.channel,"source_message":source.origin,"target":i.target});
     let context = shared
         .store
         .interaction_request_inputs(&i.requests, i.human_id)?;
     Ok(format!(
-        "[Interaction controller]\nCurrent instruction: {}\nAdmission sequence: {}\nRelation: {}\nAddressed requests: {}\nOriginal requests (context, not a command to repeat completed effects): {}\n\nCurrent human input:\n{}\n\nFor each final answer, append a final line <daimon-result>{{\"requests\":[addressed request IDs],\"covered\":[instruction IDs actually incorporated],\"completed\":[request IDs actually finished],\"deferred\":[unaddressed instruction IDs]}}</daimon-result>. This is your declaration, not native proof. Never invent IDs. Retain the normal answer text before that line. Do not claim completion merely because a turn ends. Later admission sequences take precedence over earlier conflicting instructions. Prior uncertain actions must not be repeated just from this context.\n",
+        "[Interaction controller]\nThis controller is relaying the authenticated human's input. Controller instructions and context are not quotations from the human.\nTransport provenance: {}\nCurrent instruction: {}\nAdmission sequence: {}\nRelation: {}\nAddressed requests: {}\nOriginal requests (context, not a command to repeat completed effects): {}\n\nCurrent human input:\n{}\n\nFor each final answer, append a final line <daimon-result>{{\"requests\":[addressed request IDs],\"covered\":[instruction IDs actually incorporated],\"completed\":[request IDs actually finished],\"deferred\":[unaddressed instruction IDs]}}</daimon-result>. This is your declaration, not native proof. Never invent IDs. Retain the normal answer text before that line. Do not claim completion merely because a turn ends. Later admission sequences take precedence over earlier conflicting instructions. Prior uncertain actions must not be repeated just from this context.\n",
+        provenance,
         i.id,
         i.sequence,
         serde_json::to_string(&i.relation)?,
@@ -712,97 +823,131 @@ pub(super) fn result(
         .store
         .interaction_reserve_result(root, human, local, thread, turn, item, text)?;
     for delivery in deliveries {
-        let shared = shared.clone();
-        tokio::spawn(async move {
-            let Some(d) = shared
-                .store
-                .interaction_begin_delivery(&delivery.id, human)
-                .ok()
-                .flatten()
-            else {
-                return;
-            };
-            let name = label(&shared, d.target);
-            let pending = render_markdown_to_html(&format!(
-                "#{} has an earlier result; your correction is still pending.",
-                name
-            ));
-            let qualification = if d.declared {
-                ""
-            } else {
-                "\nWorker instruction coverage was not reported."
-            };
-            let body = format!("#{}{}\n\n{}", name, qualification, d.body);
-            let mut last = None;
-            let mut complete = true;
-            for (index, part) in split_text(&body, 3000).into_iter().enumerate() {
-                let html = render_markdown_to_html(&part);
-                let sent = shared
-                    .telegram
-                    .send_message_checked(d.origin.chat_id, || {
-                        let Some((fresh, text)) = shared.store.interaction_reserve_part(
-                            &d.id,
-                            human,
-                            index as i64,
-                            &html,
-                            &pending,
-                        )?
-                        else {
-                            return Ok(None);
-                        };
-                        let mut message = SendMessage::html(
-                            fresh.origin.chat_id,
-                            Some(fresh.origin.thread_id).filter(|id| *id != 0),
-                            text,
-                        );
-                        message.reply_parameters = Some(crate::telegram::ReplyParameters {
-                            message_id: fresh.origin.message_id,
-                            allow_sending_without_reply: false,
-                        });
-                        Ok(Some((message, fresh.correction_pending)))
-                    })
-                    .await;
-                match sent {
-                    Ok(Some((message, correction)))
-                        if message.chat.id == d.origin.chat_id
-                            && message.message_thread_id.unwrap_or(0) == d.origin.thread_id =>
+        publish(shared.clone(), delivery, human);
+    }
+    Ok(())
+}
+
+fn relevance(d: &crate::interaction::Delivery) -> &'static str {
+    if d.correction_pending {
+        "this result does not report covering the correction"
+    } else if !d.declared {
+        "worker coverage unreported"
+    } else if !d.current {
+        "instruction coverage incomplete"
+    } else {
+        "current worker-declared coverage (not behavioral verification)"
+    }
+}
+
+fn publish(shared: Arc<AppShared>, delivery: crate::interaction::Delivery, human: i64) {
+    tokio::spawn(async move {
+        let Some(d) = shared
+            .store
+            .interaction_begin_delivery(&delivery.id, human)
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        let name = label(&shared, d.target);
+        let pending = render_markdown_to_html(&format!(
+            "#{}: this earlier result does not report incorporating your correction. Its canonical text remains retained for inspection.",
+            name
+        ));
+        let qualification = if d.declared {
+            ""
+        } else {
+            "\nWorker instruction coverage was not reported."
+        };
+        let body = format!("#{}{}\n\n{}", name, qualification, d.body);
+        let mut last = None;
+        let mut complete = true;
+        for (index, part) in split_text(&body, 3000).into_iter().enumerate() {
+            let html = render_markdown_to_html(&part);
+            let sent = shared
+                .telegram
+                .send_message_checked(d.origin.chat_id, || {
+                    let Some((fresh, text)) = shared.store.interaction_reserve_part(
+                        &d.id,
+                        human,
+                        index as i64,
+                        &html,
+                        &pending,
+                    )?
+                    else {
+                        return Ok(None);
+                    };
+                    let mut message = SendMessage::html(
+                        fresh.origin.chat_id,
+                        Some(fresh.origin.thread_id).filter(|id| *id != 0),
+                        text,
+                    );
+                    message.reply_parameters = Some(crate::telegram::ReplyParameters {
+                        message_id: fresh.origin.message_id,
+                        allow_sending_without_reply: false,
+                    });
+                    Ok(Some((message, fresh.correction_pending)))
+                })
+                .await;
+            match sent {
+                Ok(Some((message, correction)))
+                    if message.chat.id == d.origin.chat_id
+                        && message.message_thread_id.unwrap_or(0) == d.origin.thread_id =>
+                {
+                    if shared
+                        .store
+                        .interaction_part_receipt(&d.id, human, index as i64, message.message_id)
+                        .is_err()
                     {
-                        if shared
-                            .store
-                            .interaction_part_receipt(
-                                &d.id,
-                                human,
-                                index as i64,
-                                message.message_id,
-                            )
-                            .is_err()
-                        {
-                            complete = false;
-                            break;
-                        }
-                        last = Some(message.message_id);
-                        if correction {
-                            break;
-                        }
-                    }
-                    _ => {
                         complete = false;
                         break;
                     }
+                    last = Some(message.message_id);
+                    if correction {
+                        break;
+                    }
+                }
+                _ => {
+                    complete = false;
+                    break;
                 }
             }
-            let _ = shared.store.interaction_finish_delivery(
-                &d.id,
-                human,
-                if complete { last } else { None },
+        }
+        let _ = shared.store.interaction_finish_delivery(
+            &d.id,
+            human,
+            if complete { last } else { None },
+        );
+        if !complete {
+            notice(
+                shared.clone(),
+                d.origin,
+                format!(
+                    "#{} result transmission is unconfirmed. The original answer and transmission history are retained. Inspect with /interaction result {}. It was not replayed.",
+                    name, d.id
+                ),
             );
-        });
-    }
-    Ok(())
+        }
+    });
 }
 
 pub(super) fn retained_artifacts(shared: Arc<AppShared>, root: &str, human: i64) {
     if let Ok(Some(i)) = shared.store.interaction_instruction(root, human) {
         notice(shared,i.origin,"Generated files remain retained with the worker turn. This router currently returns text; file delivery is not yet enabled.".into());
+    }
+}
+
+pub(super) fn declaration(shared: Arc<AppShared>, root: &str, human: i64, registered: bool) {
+    if let Ok(Some(i)) = shared.store.interaction_instruction(root, human) {
+        let text = if registered {
+            format!(
+                "Human-action declaration recorded in #{}. Use /pending in that worker conversation to inspect it.",
+                label(&shared, i.target)
+            )
+        } else {
+            "A human-action declaration could not be registered. The declaration remains retained with its worker turn for inspection; no completed human action is claimed.".into()
+        };
+        notice(shared, i.origin, text);
     }
 }

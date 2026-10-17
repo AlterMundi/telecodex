@@ -4,6 +4,7 @@ Every human, token, model, conversation and peer here is synthetic.
 """
 import json
 import pathlib
+import re
 import sys
 import threading
 from goals_io import Goals
@@ -13,6 +14,13 @@ class Routing(Goals):
     def __init__(self, binary):
         self.question_held = threading.Event()
         self.release_question = threading.Event()
+        self.declare_task = False
+        self.block_typing = False
+        self.typing_held = threading.Event()
+        self.release_typing = threading.Event()
+        self.drop_result = False
+        self.cooldown_once = False
+        self.cooldown_seen = threading.Event()
         self.reject_next = False
         self.rejected_turn = None
         self.routed = False
@@ -51,11 +59,25 @@ topic_id=8
             return False
         p = m['params']
         thread = p['threadId']
+        if m['method'] in ('turn/start', 'turn/steer'):
+            text = '\n'.join(part.get('text', '') for part in p['input'])
+            provenance = json.loads(next(line.removeprefix('Transport provenance: ') for line in text.splitlines() if line.startswith('Transport provenance: ')))
+            assert text.startswith('[Interaction controller]')
+            assert provenance['via'] == 'interaction-controller' and provenance['original_human_author'] == 100
+            assert provenance['source_channel'] == 'telegram:123'
+            assert provenance['source_message']['thread_id'] in (1, 7, 8)
         if m['method'] == 'turn/interrupt':
             assert p['turnId'] == self.runs[thread]
             send({'id': m['id'], 'result': {}})
             self.broadcast(thread, 'turn/completed', {'turn': {'id': p['turnId'], 'status': 'interrupted'}})
         elif m['method'] == 'turn/start':
+            if self.declare_task:
+                self.declare_task = False
+                context = p['additionalContext']['telecodex.runtime']['value']
+                manifest = pathlib.Path(re.search(r'explicitly declare it in (\S+human-requests\.json)', context).group(1))
+                manifest.write_text(json.dumps({'schema': 'telecodex.human-requests/v1', 'requests': [
+                    {'id': 'physical-fixture', 'title': 'Physical fixture observation',
+                     'action': 'Synthetic required observation; no real human is contacted.', 'links': []}]}))
             turn = 'routed-' + str(len(self.runs) + 1)
             self.runs[thread] = turn
             self.packets.setdefault(thread, []).append(p)
@@ -72,7 +94,20 @@ topic_id=8
                 send({'id': m['id'], 'result': {'turnId': self.runs[thread]}})
         return True
 
+    def before_send_chat_action_reply(self, payload):
+        if self.block_typing:
+            self.typing_held.set()
+            self.release_typing.wait(timeout=10)
+
     def before_send_message_reply(self, payload):
+        if self.drop_result and 'Lost receipt result' in payload['text']:
+            self.drop_result = False
+            return False
+        if self.cooldown_once and 'Interaction status' in payload['text']:
+            self.cooldown_once = False
+            self.cooldown_seen.set()
+            return {'ok': False, 'error_code': 429, 'description': 'Synthetic cooldown',
+                    'parameters': {'retry_after': 3}}
         if self.routed and payload['text'].startswith('Codex question'):
             self.question_held.set()
             self.release_question.wait(timeout=10)
@@ -110,7 +145,7 @@ def parallel_and_corrections(binary):
         j.answer(8, 'Beta result')
         j.wait(lambda: j.has('Beta result', 1))
         j.answer(7, 'Obsolete Alpha result', covered=[j.instructions(7)[0][0]], item='old', finish=False)
-        j.wait(lambda: j.has('correction is still pending', 1))
+        j.wait(lambda: j.has('does not report incorporating your correction', 1))
         assert not j.has('Obsolete Alpha result', 1)
         j.answer(7, 'Corrected Alpha result', item='corrected')
         j.wait(lambda: j.has('Corrected Alpha result', 1))
@@ -222,8 +257,128 @@ def rejected_generation(binary):
         j.close()
 
 
+def publication_recovery(binary):
+    j = Routing(binary)
+    try:
+        j.prepare()
+        original = j.admit('#Alpha Retain a known-unsent output', topic=1)
+        j.wait(lambda: len(j.instructions(7)) == 1 and j.instructions(7)[0][1] == 'accepted')
+        j.cooldown_once = True
+        j.admit('/interaction', topic=1)
+        j.wait(lambda: j.cooldown_seen.is_set())
+        j.answer(7, 'Known-unsent canonical result')
+        j.wait(lambda: j.row("SELECT phase FROM interaction_deliveries") == [('preparing',)])
+        j.stop()
+        assert j.row('SELECT phase FROM interaction_deliveries') == [('preparing',)]
+        assert not j.has('Known-unsent canonical result', 1)
+        j.start()
+        j.admit('/interaction', topic=1)
+        j.wait(lambda: j.row('SELECT phase FROM interaction_deliveries') == [('reserved',)])
+        j.wait(lambda: j.has('Result: reserved', 1))
+        page = j.admit('/interaction status 1', topic=1)
+        j.wait(lambda: any(p.get('reply_parameters', {}).get('message_id') == page for _,p in j.messages))
+        page_text = next(m['text'] for m,p in j.messages if p.get('reply_parameters', {}).get('message_id') == page)
+        assert '#Beta (#t8)' in page_text and '#Alpha (#t7)' not in page_text
+        delivery = j.row('SELECT id FROM interaction_deliveries')[0][0]
+        before_starts = sum(m.get('method') == 'turn/start' for m in j.rpc)
+        j.admit('/interaction deliver ' + delivery, topic=1)
+        j.wait(lambda: j.row('SELECT phase FROM interaction_deliveries') == [('delivered',)])
+        actual = [(m,p) for m,p in j.messages if m['text'].startswith('#Alpha') and 'Known-unsent canonical result' in m['text']]
+        assert len(actual) == 1 and actual[0][1]['reply_parameters']['message_id'] == original
+        j.admit('/interaction result ' + delivery, topic=1)
+        j.wait(lambda: j.has('Retained worker result for #Alpha', 1))
+        j.admit('/interaction deliver ' + delivery, topic=1)
+        j.wait(lambda: j.has('Result is delivered.', 1))
+        assert sum(m.get('method') == 'turn/start' for m in j.rpc) == before_starts
+        assert len(j.instructions(7)) == 1
+        print('PASS restart before transmission, explicit unsent result recovery, original reply, read-only inspection, delivered replay refusal')
+    finally:
+        j.release_question.set()
+        j.close()
+
+    j = Routing(binary)
+    try:
+        j.prepare()
+        j.admit('#Beta A result with a lost transmission receipt', topic=1)
+        j.wait(lambda: len(j.instructions(8)) == 1 and j.instructions(8)[0][1] == 'accepted')
+        j.drop_result = True
+        j.answer(8, 'Lost receipt result')
+        j.wait(lambda: j.row('SELECT phase FROM interaction_deliveries') == [('uncertain',)])
+        j.wait(lambda: j.has('result transmission is unconfirmed', 1))
+        delivery = j.row('SELECT id FROM interaction_deliveries')[0][0]
+        j.stop()
+        j.start()
+        j.admit('/interaction deliver ' + delivery, topic=1)
+        j.wait(lambda: j.has('Result is uncertain.', 1))
+        j.admit('/interaction result ' + delivery, topic=1)
+        j.wait(lambda: j.has('Transmission: uncertain', 1))
+        attempted = [m for m,_ in j.messages if m['text'].startswith('#Beta') and 'Lost receipt result' in m['text']]
+        assert len(attempted) == 1
+        assert j.row('SELECT phase FROM interaction_deliveries') == [('uncertain',)]
+        assert len(j.instructions(8)) == 1
+        print('PASS lost HTTP receipt, explicit uncertainty notice, restart without replay, retained canonical inspection')
+    finally:
+        j.release_question.set()
+        j.close()
+
+
+def cosmetic_wait_does_not_delay_next_turn(binary):
+    j = Routing(binary)
+    try:
+        j.prepare()
+        j.block_typing = True
+        j.admit('#Alpha First work', topic=1)
+        j.wait(lambda: j.typing_held.is_set() and len(j.instructions(7)) == 1 and j.instructions(7)[0][1] == 'accepted')
+        j.answer(7, 'First result')
+        j.wait(lambda: j.row('SELECT count(*) FROM sessions WHERE busy=1') == [(0,)], seconds=3)
+        j.admit('#Alpha Next independent request', topic=1)
+        j.wait(lambda: len(j.instructions(7)) == 2 and j.instructions(7)[1][1] == 'accepted', seconds=3)
+        assert not j.release_typing.is_set()
+        j.release_typing.set()
+        j.answer(7, 'Second result', item='second')
+        j.idle()
+        print('PASS delayed typing receipt does not delay turn settlement or next native input')
+    finally:
+        j.release_typing.set()
+        j.release_question.set()
+        j.close()
+
+
+def routed_human_declaration(binary):
+    j = Routing(binary)
+    try:
+        j.prepare()
+        j.declare_task = True
+        j.admit('#Alpha Work requiring an external fixture observation', topic=1)
+        j.wait(lambda: len(j.instructions(7)) == 1 and j.instructions(7)[0][1] == 'accepted')
+        j.answer(7, 'Automated work finished; fixture observation remains')
+        j.wait(lambda: j.has('Human-action declaration recorded in #Alpha', 1))
+        assert j.row("SELECT s.thread_id,h.requester,h.kind,h.state FROM human_interactions h JOIN sessions s ON s.id=h.session_id") == [(7,100,'task','pending')]
+        def listed(rows):
+            return next(((m,p) for m,p in rows if any('Physical fixture observation' in b.get('text','') for row in p.get('reply_markup',{}).get('inline_keyboard',[]) for b in row)), None)
+        j.admit('/pending', topic=7)
+        j.wait(lambda: listed(j.messages) is not None)
+        control=listed(j.messages)
+        j.admit(callback=j.button(control,':open'),topic=7)
+        j.wait(lambda: j.has('Human request: Physical fixture observation',7))
+        j.idle()
+        j.stop()
+        j.start()
+        before=len(j.messages)
+        j.admit('/pending', topic=7)
+        j.wait(lambda: listed(j.messages[before:]) is not None)
+        assert len(j.instructions(7)) == 1
+        print('PASS routed required-action declaration retains actual worker ownership and survives restart in existing pending UI')
+    finally:
+        j.release_question.set()
+        j.close()
+
+
 if __name__ == '__main__':
     binary = str(pathlib.Path(sys.argv[1]).resolve())
     parallel_and_corrections(binary)
     clarification(binary)
     rejected_generation(binary)
+    publication_recovery(binary)
+    cosmetic_wait_does_not_delay_next_turn(binary)
+    routed_human_declaration(binary)

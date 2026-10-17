@@ -541,11 +541,38 @@ pub(super) async fn process_turn(
         };
         let text = run_result.as_ref().ok().map(|s| s.assistant_text.as_str());
         shared.store.record_turn_finished(turn_id, status, text)?;
+        let declaration_exists =
+            fs::symlink_metadata(turn_workspace.root.join(interactions::MANIFEST)).is_ok();
+        let mut declaration_retained = declaration_exists;
+        if declaration_exists
+            && let Ok(summary) = &run_result
+            && let Some(native) = summary.codex_thread_id.as_deref()
+        {
+            let registered = interactions::register_tasks(
+                &shared,
+                session.key,
+                queued.request.from_user_id,
+                turn_id,
+                native,
+                &turn_workspace.root,
+            )
+            .await
+            .is_ok();
+            declaration_retained = !registered;
+            if let Some(id) = queued.interaction.as_deref() {
+                super::routing::declaration(
+                    shared.clone(),
+                    id,
+                    queued.request.from_user_id,
+                    registered,
+                );
+            }
+        }
         if fs::read_dir(&turn_workspace.out_dir)?.next().is_some() {
             if let Some(id) = queued.interaction.as_deref() {
                 super::routing::retained_artifacts(shared.clone(), id, queued.request.from_user_id);
             }
-        } else {
+        } else if !declaration_retained {
             let _ = finish_turn_cleanup::<()>(&[], &turn_workspace.root, Ok(()));
         }
         return run_result.map(|_| ());
@@ -1655,11 +1682,11 @@ fn spawn_chat_action_task(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while !cancel.is_cancelled() {
-            if let Err(error) = telegram
-                .send_chat_action(chat_id, thread_id, ChatAction::Typing)
-                .await
-            {
-                tracing::debug!("sendChatAction failed: {error:#}");
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                result = telegram.send_chat_action(chat_id, thread_id, ChatAction::Typing) => {
+                    if let Err(error)=result {tracing::debug!("sendChatAction failed: {error:#}");}
+                }
             }
             tokio::select! {
                 _ = cancel.cancelled() => break,
