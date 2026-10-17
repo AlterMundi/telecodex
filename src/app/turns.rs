@@ -69,6 +69,80 @@ pub(super) async fn process_turn(
             return send_markdown_message(&shared.telegram,queued.request.session_key.chat_id,Some(queued.request.session_key.thread_id).filter(|id|*id!=0),"Queued goal activation was cancelled by a newer goal command. No native input was submitted.",None).await.map(|_|());
         }
     }
+    // Waiting work has a cancellation control but no native steer channel yet.
+    // Additional routed inputs stay queued until the worker is actually admitted.
+    let cancel = CancellationToken::new();
+    *cancel_slot.lock().expect("cancel mutex poisoned") = Some(cancel.clone());
+    let _worker_lease = if registration.is_some() {
+        match shared
+            .worker_budget
+            .acquire(queued.request.session_key, &cancel)
+            .await
+        {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                super::routing::retain_waiting(
+                    &shared,
+                    queued.request.session_key,
+                    queued.request.from_user_id,
+                )?;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    if registration.is_some() {
+        let held = shared
+            .store
+            .maintenance_writer_held(queued.request.session_key)?
+            || (queued.stop_resume.is_none()
+                && shared.store.stop_fenced(queued.request.session_key)?);
+        let allowed = shared
+            .store
+            .get_user(queued.request.from_user_id)?
+            .is_some_and(|u| u.allowed);
+        if shared
+            .store
+            .stop_admission_epoch(queued.request.session_key)?
+            != queued.admission_epoch
+            || held
+            || !allowed
+        {
+            super::routing::retain_waiting(
+                &shared,
+                queued.request.session_key,
+                queued.request.from_user_id,
+            )?;
+            bail!(
+                "Queued native admission retired, revoked or held while waiting for worker capacity"
+            );
+        }
+        if let Some(goal) = queued.goal.as_ref() {
+            if shared
+                .store
+                .bot_state_value(&super::goals::intent_key(queued.request.session_key))?
+                .as_deref()
+                != Some(goal.intent.as_str())
+            {
+                super::routing::retain_waiting(
+                    &shared,
+                    queued.request.session_key,
+                    queued.request.from_user_id,
+                )?;
+                bail!(
+                    "Queued goal activation withdrawn while waiting for worker capacity; no native input submitted"
+                );
+            }
+        }
+        if let Some(id) = queued.stop_resume.as_deref() {
+            shared.store.stop_validate_resume(
+                id,
+                queued.request.session_key,
+                queued.request.from_user_id,
+            )?;
+        }
+    }
     if !super::nexus::prepare(&shared, &mut queued).await? {
         return Ok(());
     }
@@ -134,8 +208,6 @@ pub(super) async fn process_turn(
     }
     let turn_workspace = prepare_turn_workspace(&session, turn_id)?;
 
-    let cancel = CancellationToken::new();
-    *cancel_slot.lock().expect("cancel mutex poisoned") = Some(cancel.clone());
     let (steer_tx, steer_rx) = mpsc::unbounded_channel();
     if queued.request.review_mode.is_none() {
         let active = ActiveTurnSteerHandle {

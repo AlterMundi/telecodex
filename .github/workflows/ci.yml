@@ -97,12 +97,25 @@ jobs:
           sys.exit(1 if failed else 0)
           PYTHON
       - run: python3 -B tests/artifacts_io.py target/release/telecodex
-      - run: python3 -B tests/routing_io.py target/release/telecodex
-      - run: python3 -B tests/observer_io.py target/release/telecodex
-      - run: python3 -B tests/observer_tool_io.py target/release/telecodex
-      - run: python3 -B tests/semantic_routing_io.py target/release/telecodex
-      - run: python3 -B tests/creation_io.py target/release/telecodex
-      - run: python3 -B tests/creation_recovery_io.py target/release/telecodex
+      - name: Qualify isolated interaction journeys
+        run: |
+          python3 - <<'PYTHON'
+          import concurrent.futures, subprocess, sys
+          def qualify(suite):
+              result = subprocess.run([sys.executable, '-B', 'tests/'+suite, 'target/release/telecodex'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+              return suite, result
+          failed = False
+          # Each suite owns its temporary database, native/HTTP peers and ports.
+          # Bound fixture concurrency; retain every log and nonzero exit result.
+          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+              jobs = [pool.submit(qualify, suite) for suite in ('routing_io.py', 'observer_io.py', 'observer_tool_io.py', 'semantic_routing_io.py', 'creation_io.py', 'creation_recovery_io.py', 'attention_io.py')]
+              for job in concurrent.futures.as_completed(jobs):
+                  suite, result = job.result()
+                  print(f'{suite}: exit {result.returncode}', flush=True)
+                  print(result.stdout, end='', flush=True)
+                  failed |= result.returncode != 0
+          sys.exit(1 if failed else 0)
+          PYTHON
       - run: python3 -B tests/pending_io.py target/release/telecodex
       - run: python3 -B tests/merge_io.py target/release/telecodex
       - run: python3 -B tests/stopping_io.py target/release/telecodex

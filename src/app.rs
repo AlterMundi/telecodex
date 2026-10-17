@@ -18,6 +18,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+mod attention;
 mod auth;
 mod creation;
 mod dialogue;
@@ -103,6 +104,7 @@ struct AppShared {
     pending_codex_login: Mutex<Option<PendingCodexLogin>>,
     codex_login_backoff_until: Mutex<Option<Instant>>,
     routing_runs: StdMutex<HashMap<SessionKey, routing::Run>>,
+    worker_budget: Arc<attention::WorkerBudget>,
     shutdown: CancellationToken,
 }
 
@@ -294,6 +296,12 @@ impl App {
             .with_shared_app_server(config.codex.shared_app_server);
         let service_user_id = config.startup_admin_ids.first().copied().unwrap_or(0);
 
+        let worker_budget = attention::WorkerBudget::new(
+            config
+                .interaction
+                .as_ref()
+                .map_or(2, |c| c.max_active_workers),
+        );
         Ok(Self {
             shared: Arc::new(AppShared {
                 config,
@@ -316,6 +324,7 @@ impl App {
                 pending_codex_login: Mutex::new(None),
                 codex_login_backoff_until: Mutex::new(None),
                 routing_runs: StdMutex::new(HashMap::new()),
+                worker_budget,
                 shutdown: CancellationToken::new(),
             }),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -2567,6 +2576,8 @@ impl App {
                     }
                     Err(error) => (None, Err(error)),
                 };
+                *cancel.lock().expect("cancel mutex poisoned") = None;
+                *steer.lock().expect("steer mutex poisoned") = None;
                 if let Some(id) = registration {
                     let failure_message = result.as_ref().err().map(ToString::to_string);
                     routing::finish_execution(

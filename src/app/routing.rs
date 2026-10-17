@@ -73,6 +73,24 @@ pub(super) fn enrolled(shared: &AppShared, key: SessionKey) -> bool {
     profile(shared).is_ok_and(|c| c.chat_id == key.chat_id && c.target(key.thread_id).is_some())
 }
 
+pub(super) fn retain_waiting(shared: &AppShared, key: SessionKey, human: i64) -> Result<()> {
+    let ids = shared
+        .routing_runs
+        .lock()
+        .expect("routing mutex poisoned")
+        .get(&key)
+        .map(|r| {
+            std::iter::once(r.root.clone())
+                .chain(r.pending.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for id in ids {
+        shared.store.interaction_unfinished(&id, human)?;
+    }
+    Ok(())
+}
+
 pub(super) fn explicit(text: &str) -> bool {
     explicit_selector(text).is_some() || text.starts_with("/interaction")
 }
@@ -285,6 +303,18 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
         .context("Interaction input lacks its ingress journal identity")?;
     if text.starts_with("/interaction") {
         let args = text.split_whitespace().skip(1).collect::<Vec<_>>();
+        if args.as_slice() == ["attention"] {
+            notice(
+                app.shared.clone(),
+                origin,
+                format!(
+                    "Interaction attention (current listener instance)\n{}",
+                    app.shared.worker_budget.snapshot()
+                ),
+            );
+            return Ok(true);
+        }
+
         if super::observer::handle(app, human, origin.clone(), &args)? {
             return Ok(true);
         }

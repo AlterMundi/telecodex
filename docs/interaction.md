@@ -444,3 +444,33 @@ selected target plan or grant access to another human's sessions. Configured and
 created contexts share the existing 64-target bound; pending uncertain creation
 intents reserve capacity. A new topic or native acceptance is not proof of
 incorporation or task completion.
+
+## Worker capacity and retained contexts
+
+`interaction.max_active_workers` defaults to two, matching the actual qualified
+two-worker native pilot; it may be selected from one to 64. It bounds enrolled
+top-level native turn reservations in this listener, including native control
+launches into enrolled topics. It does not claim a provider-wide model-call,
+child-agent or monetary limit. The integrating entry and bounded observer
+synthesis remain separate. No twenty-worker latency or cost guarantee follows
+from retaining twenty contexts.
+
+Waiting workers retain their input and one ordered writer reservation. They
+acquire capacity before native preparation, context work or user presentation.
+Corrections to a worker already running use its existing native steer path.
+Corrections to a waiting worker stay queued and join that actual execution when
+it starts. A scoped interruption can withdraw a waiting execution without a
+native RPC; its admitted inputs remain known unsent for explicit recovery.
+Owner, captured input generation and maintenance/Stop fences are checked again
+after the capacity wait. A queued goal revoked during that wait cannot activate;
+attached inputs remain known unsent. Existing explicit Stop-resume validation
+stays intact.
+
+`/interaction attention` reports current-instance active/waiting reservations,
+peak concurrency and capacity waiting time without a model call. These counters
+are not task completion or receipt evidence and reset with the listener; durable
+request/result/return state remains in the existing journals. The semaphore is
+FIFO for waiting acquisitions. A native turn keeps its permit until its local
+execution finishes, including native goal/tool waits; this is not preemptive
+round-robin scheduling. Higher-load provider costs and attention policy still
+require their selected live qualification.
