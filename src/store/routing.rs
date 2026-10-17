@@ -2,7 +2,7 @@
 use super::*;
 use crate::interaction::{Delivery, Instruction, ReturnRoute, worker_result};
 
-fn freshness(
+pub(super) fn freshness(
     conn: &Connection,
     request: &str,
     covered: &[String],
@@ -256,6 +256,7 @@ impl Store {
         .transpose()
     }
 
+    #[cfg(test)]
     pub fn interaction_recent_deliveries(
         &self,
         human: i64,

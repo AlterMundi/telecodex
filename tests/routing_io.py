@@ -38,6 +38,7 @@ class Routing(Goals):
         self.release_binding = threading.Event()
         self.packets = {}
         self.runs = {}
+        self.activity_unavailable = False
         super().__init__(binary)
 
     def prepare(self):
@@ -64,6 +65,12 @@ topic_id=8
         self.start()
 
     def handle_extra_rpc(self, m, send):
+        if self.routed and m.get('method') == 'thread/read':
+            if self.activity_unavailable:
+                send({'id':m['id'],'error':{'code':-32000,'message':'Synthetic disconnected native status'}})
+            else:
+                send({'id':m['id'],'result':{'thread':{'id':m['params']['threadId'],'status':{'type':'active'}}}})
+            return True
         if self.block_goal_pause and m.get('method') == 'thread/goal/set' and m.get('params',{}).get('status') == 'paused' and any(active_send is send for _,active_send in list(self.clients.values())):
             self.goal_pause_held.set()
             self.release_goal_pause.wait(timeout=30)
@@ -563,6 +570,41 @@ def admission_is_checked_at_native_write(binary):
         j.close()
 
 
+def observer_status_is_read_only(binary):
+    j = Routing(binary)
+    try:
+        j.prepare()
+        j.declare_task = True
+        j.admit('#Alpha Work with a retained external observation',topic=1)
+        j.wait(lambda: len(j.instructions(7)) == 1 and j.instructions(7)[0][1] == 'accepted')
+        j.answer(7,'Work with retained observation finished')
+        j.idle()
+        j.wait(lambda: j.row('SELECT count(*) FROM human_interactions') == [(1,)])
+        before = len(j.rpc)
+        instructions = j.instructions(7)
+        with sqlite3.connect(j.root / 'state.sqlite') as db:
+            local = json.loads(instructions[0][2])['local_turn']
+            db.execute('INSERT INTO bot_state(key,value) VALUES(?,?)',(f'interaction_presentation_gap:{local}','retained-native-items'))
+        j.admit('/interaction',topic=1)
+        j.wait(lambda: j.has('Presentation incomplete',1))
+        text = '\n'.join(m['text'] for m,_ in j.messages if m.get('message_thread_id') == 1 and 'Interaction status' in m['text'])
+        assert 'Physical fixture observation' in text and 'Needs attention: 1 (1 pending)' in text
+        assert 'Local source cut:' in text and 'Last retained native item:' in text
+        assert 'Native activity: active (sampled' in text
+        assert 'native history has not been reconciled' in text
+        assert j.instructions(7) == instructions
+        assert not any(r.get('method') in ('turn/start','turn/steer','thread/resume') for r in j.rpc[before:])
+        j.activity_unavailable = True
+        j.messages.clear()
+        j.admit('/interaction',topic=1)
+        j.wait(lambda: j.has('unknown; unavailable or changed source',1))
+        assert not j.has('Native activity: idle',1)
+        assert j.instructions(7) == instructions
+        print('PASS observer pending/source cuts/gaps and disconnected activity are attributable read-only observations; no native work or false idle')
+    finally:
+        j.close()
+
+
 if __name__ == '__main__':
     binary = str(pathlib.Path(sys.argv[1]).resolve())
     parallel_and_corrections(binary)
@@ -576,3 +618,4 @@ if __name__ == '__main__':
     native_launch_joins_routing(binary)
     native_launch_joins_routing(binary,preparing=True)
     admission_is_checked_at_native_write(binary)
+    observer_status_is_read_only(binary)

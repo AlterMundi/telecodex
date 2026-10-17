@@ -185,6 +185,27 @@ appear in the original requesting conversation while their durable interaction
 and native answer retain the actual source worker. The ordinary question UI and
 explicit answer controls preserve that distinction.
 
+## Read-only session observation
+
+`/interaction` cards now read a bounded, owner-scoped SQLite snapshot containing
+its admitted-input sequence, latest return reservation, recorded local execution,
+last retained canonical native item, pending questions/tasks and known presentation
+gaps. Each card identifies the source session, native binding and observation time.
+Pending items retain their owning turn and ID; their existing worker `/pending`
+surface remains the place to answer them.
+
+Native activity is sampled separately through the existing bounded read-only
+`thread/read` adapter. Reads run asynchronously so disconnected status cannot
+block new input. A changed binding, unavailable daemon or unknown native status
+produces an explicit unknown state. Local recorded execution, native activity,
+worker coverage and completion remain separate observations. Reading status never
+submits a turn, steers, resumes work or advances an instruction sequence.
+
+These cards explicitly describe their bounded, unreconciled native-history
+coverage. Presentation gaps remain visible even when newer native activity is
+available. They are the deterministic observer surface; durable incremental
+history reconciliation and semantic summaries remain subsequent observer work.
+
 ## Verification and remaining scope
 
 The native identity and deferred-approval foundations are merged in #121/#123.
