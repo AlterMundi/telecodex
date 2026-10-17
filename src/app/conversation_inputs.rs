@@ -191,7 +191,7 @@ async fn deliver(app: &App, input: ConversationInput, resolve: Option<&str>) -> 
     if input
         .reply
         .as_ref()
-        .is_some_and(|r| r.source.starts_with("request:"))
+        .is_some_and(|r| r.source.starts_with("request:") && !r.context_only)
         && crate::interaction::explicit_selector(&input.text).is_none()
         && resolve.is_none()
     {

@@ -220,7 +220,7 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     let entry = cfg.entry();
     if let Some(raw) = args.strip_prefix("decide ") {
         let decision: Decision = serde_json::from_str(raw)?;
-        return decide(app, human, entry, decision, None).await;
+        return decide(app, human, entry, decision, None, None).await;
     }
     let fields: Vec<_> = args.split_whitespace().collect();
     match fields.as_slice() {
@@ -278,6 +278,11 @@ pub(super) async fn validate_reply(
     reply: Option<&crate::store::ConversationReply>,
 ) -> Result<()> {
     let Some(reply) = reply else { return Ok(()) };
+    if reply.context_only {
+        // Ownership is checked in the capture transaction. A question that
+        // advanced after playback remains context, never an implicit answer.
+        return Ok(());
+    }
     let Some(id) = reply.source.strip_prefix("request:") else {
         return Ok(());
     };
@@ -313,11 +318,81 @@ pub(super) async fn answer_original(
         id: id.into(),
         revision: selected.revision.clone(),
         action: Action::Answer {
-            text: input.rendered(),
+            text: input.answer_text(),
         },
     };
-    decide(app, input.human, input.entry, d, Some(&input.id)).await?;
+    decide(app, input.human, input.entry, d, Some(&input.id), None).await?;
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextQuestion {
+    input_ref: String,
+    #[serde(default)]
+    offset: usize,
+}
+
+/// Classify a retained contextual input without model-authored answer text.
+pub(super) async fn interpret_context(
+    app: &App,
+    human: i64,
+    entry: SessionKey,
+    native: &str,
+    arguments: Value,
+    closed: &CancellationToken,
+    answer: bool,
+) -> Result<Value> {
+    let args: ContextQuestion = serde_json::from_value(arguments)?;
+    let input = app
+        .shared
+        .store
+        .conversation_input_read(human, entry, &args.input_ref)?;
+    let selected = input
+        .reply
+        .as_ref()
+        .filter(|r| r.context_only)
+        .context("This input has no contextual source")?;
+    let id = selected
+        .source
+        .strip_prefix("request:")
+        .context("Context is not a native question")?;
+    if input.native != native || closed.is_cancelled() {
+        bail!("Context interpretation belongs to another native conversation");
+    }
+    if !answer {
+        let view = detail(app, human, entry, id, args.offset).await?;
+        return Ok(
+            json!({"reported_context":selected,"matches_current":view["revision"]==selected.revision,"question":view}),
+        );
+    }
+    if args.offset != 0 {
+        bail!("An answer does not select a fragment");
+    }
+    let binding = app
+        .shared
+        .store
+        .conversation_request_binding(human, entry)?;
+    let decision = Decision {
+        binding: binding["binding"]
+            .as_str()
+            .context("Missing conversation binding")?
+            .into(),
+        id: id.into(),
+        revision: selected.revision.clone(),
+        action: Action::Answer {
+            text: input.answer_text(),
+        },
+    };
+    decide(
+        app,
+        human,
+        entry,
+        decision,
+        Some(&input.id),
+        Some((native, closed)),
+    )
+    .await
 }
 
 async fn decide(
@@ -326,6 +401,7 @@ async fn decide(
     entry: SessionKey,
     d: Decision,
     source_input: Option<&str>,
+    interpretation: Option<(&str, &CancellationToken)>,
 ) -> Result<Value> {
     if d.id.len() > 64 || d.revision.len() != 64 {
         bail!("Invalid request decision identity");
@@ -394,6 +470,7 @@ async fn decide(
             state,
             next,
             source_input,
+            interpretation,
         )?;
         if !fresh {
             return retained_receipt(app, human, entry, &d.id, &d.revision, false);
@@ -450,6 +527,7 @@ async fn decide(
             &approval_payload(p),
             &json!({"code":choice,"label":presentation::approval_button_text(selected)}),
             "answering",
+            None,
             None,
             None,
         )?;

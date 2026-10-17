@@ -10,6 +10,35 @@ use sha2::{Digest, Sha256};
 pub struct ConversationReply {
     pub source: String,
     pub revision: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub context_only: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !value
+}
+impl ConversationReply {
+    pub(super) fn validate_context(&self) -> Result<()> {
+        let question = self.source.strip_prefix("request:").is_some_and(|id| {
+            id.len() == 32
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
+        let delivery = self
+            .source
+            .strip_prefix("delivery:")
+            .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == id));
+        if !(question || delivery)
+            || self.revision.len() != 64
+            || !self
+                .revision
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            bail!("Invalid reported conversation context");
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationFocus {
@@ -69,6 +98,7 @@ fn input_focus_on(
     };
     Ok(Some((
         ConversationReply {
+            context_only: false,
             source: format!("input:{}", input.id),
             revision: digest(json!([
                 human,
@@ -113,7 +143,9 @@ pub(super) fn reply_on(
     }
     if let Some(id) = reply.source.strip_prefix("request:") {
         let snapshot = super::conversation_requests::read_on(conn, human, entry, id)?;
-        if snapshot.item.source["kind"] != "question" || snapshot.item.state != "pending" {
+        if snapshot.item.source["kind"] != "question"
+            || (!reply.context_only && snapshot.item.state != "pending")
+        {
             bail!("Select a current native question");
         }
         return Ok(ConversationFocus {
@@ -139,7 +171,9 @@ pub(super) fn reply_on(
     }
     let source = super::presentation::source_on(conn, human, entry, &reply.source)?
         .context("Reply source unavailable")?;
-    if source["kind"] != "worker_result" || source["revision"] != reply.revision {
+    if source["kind"] != "worker_result"
+        || (!reply.context_only && source["revision"] != reply.revision)
+    {
         bail!("Select the current worker result");
     }
     let request = source["request_id"]
@@ -286,7 +320,11 @@ impl Store {
             )
         } else if let Some((selector, body)) = explicit {
             (profile.resolve(selector), body)
-        } else if let Some(focus) = &input.focus {
+        } else if let Some(focus) = input
+            .focus
+            .as_ref()
+            .filter(|_| !input.reply.as_ref().is_some_and(|r| r.context_only))
+        {
             (vec![focus.target], input.text.as_str())
         } else {
             return Ok(None);

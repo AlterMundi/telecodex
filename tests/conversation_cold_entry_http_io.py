@@ -68,7 +68,7 @@ class Browser:
     def voice(self,reply=None):
         clip=audio();ident=str(uuid.uuid4())
         h={**self.headers,'content-type':'audio/wav','x-input-id':ident,'x-input-binding':self.binding,'x-audio-sha256':hashlib.sha256(clip).hexdigest()}
-        if reply:h.update({'x-reply-source':reply['source'],'x-reply-revision':reply['revision']})
+        if reply:h.update({'x-reply-source':('context:' if reply.get('context_only') else '')+reply['source'],'x-reply-revision':reply['revision']})
         r=self.client.post('/api/interaction/voice',content=clip,headers=h);assert r.status_code==200,r.text
         return ident,r.json()
     def get(self,path):

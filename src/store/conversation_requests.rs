@@ -194,6 +194,7 @@ impl Store {
         next_state: &str,
         next_question: Option<(&str, &str, usize)>,
         source_input: Option<&str>,
+        interpretation: Option<(&str, &tokio_util::sync::CancellationToken)>,
     ) -> Result<bool> {
         if revision.len() != 64
             || !revision.bytes().all(|b| b.is_ascii_hexdigit())
@@ -211,8 +212,18 @@ impl Store {
             .map(|id| {
                 let input = super::conversation_inputs::read_on(&tx, id, human)?;
                 super::conversation_inputs::eligible_on(&tx, &input)?;
+                let contextual = input.reply.as_ref().is_some_and(|r| r.context_only);
+                let eligible = if let Some((native, closed)) = interpretation {
+                    let linked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND session_id=?2 AND from_user_id=?3 AND native_thread_id=?4)",params![input.local_turn,input.session,human,native],|r|r.get(0))?;
+                    let routed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_sources WHERE channel='conversation' AND event_id=?1 AND human_id=?2)",params![input.id,human],|r|r.get(0))?;
+                    let creating: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4)",params![human,entry.chat_id,entry.thread_id,input.id],|r|r.get(0))?;
+                    contextual && input.native == native && linked && !routed && !creating && !closed.is_cancelled()
+                        && matches!(input.phase.as_str(),"sending"|"steering"|"accepted")
+                } else {
+                    !contextual && input.phase == "retained"
+                };
                 if input.entry != entry
-                    || input.phase != "retained"
+                    || !eligible
                     || input.reply.as_ref().is_none_or(|r| {
                         r.source != format!("request:{}", expected.item.id)
                             || r.revision != revision
@@ -222,7 +233,7 @@ impl Store {
                             || f.target != current.key
                             || f.native.as_deref() != Some(current.item.native_thread.as_str())
                     })
-                    || action != &json!({"kind":"answer","text":input.rendered()})
+                    || action != &json!({"kind":"answer","text":input.answer_text()})
                     || current.item.source["kind"] != "question"
                 {
                     bail!("Original answer source or selected question changed");
@@ -273,10 +284,13 @@ impl Store {
             ],
         )?;
         if let Some(input) = original {
-            let changed=tx.execute("UPDATE conversation_inputs SET phase='answered' WHERE id=?1 AND human_id=?2 AND phase='retained' AND instance_id=?3",params![input.id,human,self.instance_id])?;
+            let changed=tx.execute("UPDATE conversation_inputs SET phase='answered' WHERE id=?1 AND human_id=?2 AND phase=?4 AND instance_id=?3",params![input.id,human,self.instance_id,input.phase])?;
             if changed != 1 {
                 bail!("Original answer source no longer current");
             }
+        }
+        if interpretation.is_some_and(|(_, closed)| closed.is_cancelled()) {
+            bail!("Context interpretation closed before commitment");
         }
         tx.commit()?;
         Ok(true)
@@ -359,7 +373,7 @@ mod tests {
     ) -> Result<bool> {
         store.conversation_request_decide(100,entry,current,revision,action,
             &json!({"kind":"question","question_id":"scope","question_index":0,"body":"Exact proposal and option descriptions"}),
-            &json!({"question_id":"scope","answer":"Selected exact option"}),state,next,None)
+            &json!({"question_id":"scope","answer":"Selected exact option"}),state,next,None,None)
     }
     #[test]
     fn canonical_request_scope_and_exact_receipt_prevent_duplicate_or_changed_decisions() {

@@ -242,10 +242,13 @@ class Provider:
     def check_reply(cls, value):
         import re
         if value is None: return
-        if (not isinstance(value, dict) or set(value) != {'source', 'revision'}
+        if (not isinstance(value, dict) or set(value) not in ({'source', 'revision'}, {'source', 'revision', 'context_only'})
+                or 'context_only' in value and value['context_only'] is not True
                 or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:', 'request:'))
                 or not isinstance(value['revision'], str) or not re.fullmatch('[a-f0-9]{64}', value['revision'])):
             raise ValueError('Select one retained original or worker result')
+        if value.get('context_only') and not value['source'].startswith(('request:', 'delivery:')):
+            raise ValueError('Context must refer to a reported question or worker result')
         ident=value['source'].split(':', 1)[1]
         if value['source'].startswith('request:'):
             if not re.fullmatch('[a-f0-9]{32}',ident):
