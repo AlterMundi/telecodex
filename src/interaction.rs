@@ -110,11 +110,58 @@ pub fn explicit_selector(text: &str) -> Option<(&str, &str)> {
     Some((selector, selected[end..].trim_start()))
 }
 
+/// Original Telegram update or authenticated conversation UUID. The wire type
+/// preserves the source namespace; conversation IDs never become fake updates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum InputReference {
+    Telegram(i64),
+    Conversation(String),
+}
+impl InputReference {
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Telegram(id) if *id >= 0 => Ok(()),
+            Self::Conversation(id)
+                if uuid::Uuid::parse_str(id)
+                    .ok()
+                    .is_some_and(|v| v.to_string() == *id) =>
+            {
+                Ok(())
+            }
+            _ => bail!("Invalid original input reference"),
+        }
+    }
+    pub fn update(&self) -> Option<i64> {
+        if let Self::Telegram(id) = self {
+            Some(*id)
+        } else {
+            None
+        }
+    }
+    pub fn event(&self) -> String {
+        match self {
+            Self::Telegram(id) => id.to_string(),
+            Self::Conversation(id) => id.clone(),
+        }
+    }
+}
+impl From<i64> for InputReference {
+    fn from(id: i64) -> Self {
+        Self::Telegram(id)
+    }
+}
+impl std::fmt::Display for InputReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.event())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReturnRoute {
     pub chat_id: i64,
     pub thread_id: i64,
-    pub message_id: i64,
+    pub message_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

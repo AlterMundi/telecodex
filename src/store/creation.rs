@@ -1,6 +1,9 @@
 //! Retained creation intents and enrollment in the existing interaction registry.
 use super::*;
-use crate::interaction::{InteractionConfig, RequestRelation, ReturnRoute, SourceInput, Target};
+use crate::interaction::{
+    InputReference, InteractionConfig, RequestRelation, ReturnRoute, SourceInput, Target,
+};
+use anyhow::bail;
 use serde_json::{Value, json};
 
 impl Store {
@@ -41,8 +44,10 @@ impl Store {
         &self,
         key: SessionKey,
         human: i64,
-        update: i64,
+        update: impl Into<InputReference>,
     ) -> Result<Value> {
+        let update = update.into();
+        update.validate()?;
         let conn = self.conn.lock().expect("store mutex poisoned");
         let id:String=conn.query_row("SELECT id FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4",params![human,key.chat_id,key.thread_id,update],|r|r.get(0))?;
         creation_on(&conn, &id, human)
@@ -55,20 +60,21 @@ impl Store {
         key: SessionKey,
         human: i64,
         native: &str,
-        update: i64,
+        update: impl Into<InputReference>,
         name: &str,
         reason: &str,
         context: &Value,
         capacity: usize,
         closed: &tokio_util::sync::CancellationToken,
     ) -> Result<(Value, bool)> {
+        let update = update.into();
+        update.validate()?;
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let original = super::dialogue::entry_inputs_on(&tx, key, human, native, Some(update))?
-            .pop()
-            .context("Original input unavailable")?;
-        let (text, transcription) = super::voice::content_on(&tx, &original, human)?;
-        let source = original.message.context("Original message missing")?;
+        let (source, _) =
+            super::dialogue::original_on(&tx, key, human, native, &update, "", false)?;
+        let text = source.text;
+        let transcription = source.transcription;
         if text.trim().is_empty()
             || text.trim_start().starts_with('/')
             || context.to_string().len() > 48000
@@ -84,7 +90,7 @@ impl Store {
             .as_bytes(),
         )
         .to_string();
-        let mut doc = json!({"id":id,"human":human,"entry":key,"entry_native":native,"input_update":update,"name":name,"reason":reason,"context":context,"original_text":text,"origin":{"chat_id":source.chat.id,"thread_id":source.message_thread_id.unwrap_or(0),"message_id":source.message_id}});
+        let mut doc = json!({"id":id,"human":human,"entry":key,"entry_native":native,"input_update":update,"name":name,"reason":reason,"context":context,"original_text":text,"origin":source.origin});
         if let Some(transcription) = transcription {
             doc["transcription"] = serde_json::to_value(transcription)?;
         }
@@ -106,8 +112,8 @@ impl Store {
             return Err(anyhow!("Creation capacity is already reserved"));
         }
         let routed: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM interaction_sources WHERE human_id=?1 AND update_id=?2)",
-            params![human, update],
+            "SELECT EXISTS(SELECT 1 FROM interaction_sources WHERE human_id=?1 AND ((update_id=?2 AND ?2 IS NOT NULL) OR (channel='conversation' AND event_id=?3 AND ?2 IS NULL)))",
+            params![human, update.update(),update.event()],
             |r| r.get(0),
         )?;
         if routed {
@@ -128,9 +134,11 @@ impl Store {
         &self,
         key: SessionKey,
         human: i64,
-        update: i64,
+        update: impl Into<InputReference>,
         closed: &tokio_util::sync::CancellationToken,
     ) -> Result<(Value, bool)> {
+        let update = update.into();
+        update.validate()?;
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
         let id:String=tx.query_row("SELECT id FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4",params![human,key.chat_id,key.thread_id,update],|r|r.get(0))?;
@@ -198,8 +206,12 @@ impl Store {
             transcription: serde_json::from_value(
                 d.get("transcription").cloned().unwrap_or(Value::Null),
             )?,
-            channel: channel.into(),
-            event_id: d["input_update"].to_string(),
+            channel: if d["input_update"].is_string() {
+                "conversation".into()
+            } else {
+                channel.into()
+            },
+            event_id: serde_json::from_value::<InputReference>(d["input_update"].clone())?.event(),
             update_id: d["input_update"].as_i64(),
             human_id: human,
             target_sessions: vec![session],
@@ -244,13 +256,15 @@ fn creation_on(conn: &Connection, id: &str, human: i64) -> Result<Value> {
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     let intent: Value = serde_json::from_str(&doc)?;
-    let mut q=conn.prepare("SELECT i.id,i.phase FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id JOIN sessions destination ON destination.id=i.session_id WHERE s.human_id=?1 AND s.update_id=?2 AND destination.chat_id=?3 AND destination.thread_id=?4 ORDER BY i.sequence LIMIT 1")?;
+    let reference: InputReference = serde_json::from_value(intent["input_update"].clone())?;
+    let mut q=conn.prepare("SELECT i.id,i.phase FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id JOIN sessions destination ON destination.id=i.session_id WHERE s.human_id=?1 AND ((s.update_id=?2 AND ?2 IS NOT NULL) OR (s.channel='conversation' AND s.event_id=?5 AND ?2 IS NULL)) AND destination.chat_id=?3 AND destination.thread_id=?4 ORDER BY i.sequence LIMIT 1")?;
     let rows = q.query_map(
         params![
             human,
-            intent["input_update"].as_i64(),
+            reference.update(),
             intent["entry"]["chat_id"].as_i64(),
-            topic
+            topic,
+            reference.event()
         ],
         |r| Ok(json!({"id":r.get::<_,String>(0)?,"phase":r.get::<_,String>(1)?})),
     )?;
@@ -262,36 +276,23 @@ fn creation_on(conn: &Connection, id: &str, human: i64) -> Result<Value> {
 fn eligible(conn: &Connection, operation: &Value) -> Result<()> {
     let d = &operation["intent"];
     let key: SessionKey = serde_json::from_value(d["entry"].clone())?;
-    let original = super::dialogue::committed_entry_input_on(
+    let reference: InputReference = serde_json::from_value(d["input_update"].clone())?;
+    let (original, _) = super::dialogue::original_on(
         conn,
         key,
         d["human"].as_i64().context("Missing human")?,
         d["entry_native"].as_str().context("Missing native")?,
-        d["input_update"]
-            .as_i64()
-            .context("Missing original update")?,
+        &reference,
+        "",
+        true,
     )?;
-    if original.len() != 1 {
-        return Err(anyhow!("Creation original retired or rebound"));
-    }
-    let message = original[0]
-        .message
-        .as_ref()
-        .context("Original message missing")?;
     let origin: ReturnRoute = serde_json::from_value(d["origin"].clone())?;
-    let (content, transcription) = super::voice::content_on(
-        conn,
-        &original[0],
-        d["human"].as_i64().context("Missing human")?,
-    )?;
-    if Some(content.as_str()) != d["original_text"].as_str()
-        || serde_json::to_value(transcription)?
+    if Some(original.text.as_str()) != d["original_text"].as_str()
+        || serde_json::to_value(original.transcription)?
             != d.get("transcription").cloned().unwrap_or(Value::Null)
-        || message.chat.id != origin.chat_id
-        || message.message_thread_id.unwrap_or(0) != origin.thread_id
-        || message.message_id != origin.message_id
+        || original.origin != origin
     {
-        return Err(anyhow!("Retained creation original changed"));
+        bail!("Retained creation original changed");
     }
     Ok(())
 }
@@ -365,7 +366,7 @@ mod tests {
             origin: ReturnRoute {
                 chat_id: 100,
                 thread_id: 1,
-                message_id: 20,
+                message_id: Some(20),
             },
             text: "Start a distinct new task".into(),
         };

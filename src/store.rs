@@ -271,6 +271,10 @@ impl Store {
              VALUES(?1,?2,'received',?3,?4)",
             params![update.update_id, payload, self.instance_id, now_string()],
         )?;
+        tx.execute(
+            "INSERT INTO original_ingress_order(channel,event_id) VALUES('telegram',?1)",
+            [update.update_id.to_string()],
+        )?;
         // Capture ownership epoch with journal admission, before attachment/network work.
         tx.execute("INSERT INTO bot_state(key,value) SELECT ?,COALESCE(b.value,'initial') FROM (SELECT COALESCE((SELECT creator_user_id FROM sessions WHERE chat_id=COALESCE(json_extract(?,'$.message.chat.id'),json_extract(?,'$.callback_query.message.chat.id')) AND thread_id=COALESCE(json_extract(?,'$.message.message_thread_id'),json_extract(?,'$.callback_query.message.message_thread_id'),0)),COALESCE(json_extract(?,'$.message.from.id'),json_extract(?,'$.callback_query.from.id'))) AS human) s LEFT JOIN bot_state b ON b.key='stop_admission_epoch:'||s.human",params![format!("stop_input_epoch:{}",update.update_id),payload,payload,payload,payload,payload,payload])?;
         tx.execute(
@@ -1292,6 +1296,7 @@ impl Store {
                 FOREIGN KEY(turn_id) REFERENCES turns(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS original_ingress_order(id INTEGER PRIMARY KEY AUTOINCREMENT,channel TEXT NOT NULL,event_id TEXT NOT NULL,UNIQUE(channel,event_id));
             CREATE TABLE IF NOT EXISTS incoming_updates(
                 update_id INTEGER PRIMARY KEY,
                 payload_json TEXT NOT NULL,

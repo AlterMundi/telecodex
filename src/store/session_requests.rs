@@ -470,7 +470,7 @@ mod tests {
                     origin: ReturnRoute {
                         chat_id: 100,
                         thread_id: 1,
-                        message_id: 10,
+                        message_id: Some(10),
                     },
                     text: "Human task".into(),
                 },

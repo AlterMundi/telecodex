@@ -93,7 +93,10 @@ def semantic_voice_and_responsive_corrections(binary):
         assert source['transcription']['audio_sha256']==digest and source['text'].startswith('NATURAL-ROUTE')
         assert source['transcription']['audio_millis']==100
         packet=j.packets['native-topic-7'][-1]['input'][0]['text']
-        assert 'transcription' in packet and 'later original ingress updates take precedence' in packet
+        provenance=json.loads(packet.split('Transport provenance: ',1)[1].split('\nCurrent instruction:',1)[0])
+        assert provenance['transcription']['audio_sha256']==digest
+        assert provenance['input_ref']==original and isinstance(provenance['capture_order'],int)
+        assert 'later captured input takes precedence' in packet
         assert str(correction) in packet and str(original) in packet
         explicit,_,explicit_digest=j.voice('#Alpha Incorporate the explicit voice correction19.')
         j.wait(lambda:len(j.instructions(7))==3 and all(i[1]=='accepted' for i in j.instructions(7)))

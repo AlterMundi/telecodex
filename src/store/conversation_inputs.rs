@@ -136,6 +136,10 @@ impl Store {
             local_turn: None,
             retired: false,
         };
+        tx.execute(
+            "INSERT INTO original_ingress_order(channel,event_id) VALUES('conversation',?1)",
+            [&input.id],
+        )?;
         tx.execute("INSERT INTO conversation_inputs(id,human_id,session_id,native_thread,phase,doc,instance_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![input.id,human,session,input.native,input.phase,serde_json::to_string(&input)?,self.instance_id,now_string()])?;
         tx.commit()?;
         Ok((input, true))
@@ -250,6 +254,21 @@ impl Store {
         let updated = read_on(&tx, id, human)?;
         tx.commit()?;
         Ok(updated)
+    }
+
+    pub fn interaction_select_native_return(
+        &self,
+        id: &str,
+        human: i64,
+        native: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let source: String=conn.query_row("SELECT x.doc FROM interaction_sources x JOIN interaction_instructions i ON i.input_id=x.id WHERE i.id=?1 AND x.human_id=?2",params![id,human],|r|r.get(0))?;
+        let source: crate::interaction::SourceInput = serde_json::from_str(&source)?;
+        if source.origin.message_id.is_none() {
+            conn.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![human,native,source.event_id,now_string()])?;
+        }
+        Ok(())
     }
 
     pub fn conversation_turn_return(&self, local_turn: i64) -> Result<bool> {
@@ -695,5 +714,259 @@ mod tests {
             .record_turn_native_thread(local, "a-new-context")
             .unwrap();
         assert!(!store.conversation_turn_return(local).unwrap());
+    }
+    #[test]
+    fn canonical_original_routes_and_creates_without_telegram_identity() {
+        use crate::interaction::{InputReference, RequestRelation};
+        let (_file, store, entry, binding) = setup();
+        let local = turn(&store, entry);
+        let closed = tokio_util::sync::CancellationToken::new();
+        let worker = SessionKey::new(100, Some(7));
+        let row = store
+            .ensure_session(worker, 100, &super::super::tests::defaults())
+            .unwrap();
+        store
+            .set_session_codex_thread(worker, "worker-native")
+            .unwrap();
+        let mut refs = vec![];
+        for text in [
+            "  Route this exact canonical original.  ",
+            "Create this independent canonical task.",
+        ] {
+            let id = Uuid::now_v7().to_string();
+            store
+                .conversation_input_capture(100, entry, &binding, &id, text)
+                .unwrap();
+            store.conversation_input_event(100, &id, E::Queue).unwrap();
+            store
+                .conversation_input_event(
+                    100,
+                    &id,
+                    E::Begin {
+                        local_turn: local,
+                        steer: false,
+                    },
+                )
+                .unwrap();
+            store
+                .conversation_input_event(100, &id, E::Accepted { local_turn: local })
+                .unwrap();
+            refs.push(InputReference::Conversation(id));
+        }
+        let (mut source, message) = store
+            .interaction_entry_original(entry, 100, "entry-native", &refs[0], "telegram:fixture")
+            .unwrap();
+        assert!(message.is_none());
+        assert_eq!(source.channel, "conversation");
+        assert!(source.update_id.is_none());
+        assert!(source.origin.message_id.is_none());
+        source.target_sessions = vec![row.id];
+        let admitted = store
+            .interaction_admit_entry_plan(
+                entry,
+                100,
+                "entry-native",
+                &source,
+                &[(worker, RequestRelation::New)],
+                &closed,
+            )
+            .unwrap();
+        assert!(admitted[0].1);
+        assert_eq!(admitted[0].0.admission_epoch.as_deref(), Some("initial"));
+        assert!(
+            store
+                .interaction_original_allowed(&admitted[0].0.id, 100)
+                .unwrap()
+        );
+        let evidence = store
+            .interaction_original_provenance(&admitted[0].0.id, 100)
+            .unwrap();
+        assert_eq!(evidence["input_ref"], refs[0].event());
+        assert!(evidence["capture_order"].as_i64().unwrap() > 0);
+
+        assert!(
+            !store
+                .interaction_admit_entry_plan(
+                    entry,
+                    100,
+                    "entry-native",
+                    &source,
+                    &[(worker, RequestRelation::New)],
+                    &closed
+                )
+                .unwrap()[0]
+                .1
+        );
+        source.text = "A forged replacement".into();
+        assert!(
+            store
+                .interaction_admit_entry_plan(
+                    entry,
+                    100,
+                    "entry-native",
+                    &source,
+                    &[(worker, RequestRelation::New)],
+                    &closed
+                )
+                .is_err()
+        );
+        let (operation, fresh) = store
+            .interaction_prepare_creation(
+                entry,
+                100,
+                "entry-native",
+                refs[1].clone(),
+                "Gamma",
+                "A distinct canonical task",
+                &serde_json::json!({"sources":[]}),
+                2,
+                &closed,
+            )
+            .unwrap();
+        assert!(fresh);
+        let id = operation["id"].as_str().unwrap();
+        store.interaction_creation_start(id, 100).unwrap();
+        store.interaction_creation_topic(id, 100, 77).unwrap();
+        let target = SessionKey::new(100, Some(77));
+        store
+            .ensure_session(target, 100, &super::super::tests::defaults())
+            .unwrap();
+        store.set_session_codex_thread(target, "temporary").unwrap();
+        store.clear_session_conversation(target).unwrap();
+        let created = store
+            .interaction_creation_finish(id, 100, "telegram:fixture")
+            .unwrap();
+        let original = store.interaction_source(&created.id, 100).unwrap();
+        assert_eq!(original.channel, "conversation");
+        assert!(original.update_id.is_none());
+        assert!(original.origin.message_id.is_none());
+        assert_eq!(original.event_id, refs[1].event());
+        assert_eq!(
+            store
+                .interaction_creation_for_input(entry, 100, refs[1].clone())
+                .unwrap()["phase"],
+            "ready"
+        );
+        store
+            .save_bot_state("stop_admission_epoch:100", "later-epoch")
+            .unwrap();
+        assert!(
+            !store
+                .interaction_original_allowed(&admitted[0].0.id, 100)
+                .unwrap()
+        );
+        assert!(
+            store
+                .interaction_bind_epoch(&admitted[0].0.id, 100, "later-epoch")
+                .is_err()
+        );
+        store
+            .save_bot_state("stop_admission_epoch:100", "initial")
+            .unwrap();
+        store.clear_session_conversation(entry).unwrap();
+        store
+            .set_session_codex_thread(entry, "entry-native")
+            .unwrap();
+        assert!(
+            !store
+                .interaction_original_allowed(&admitted[0].0.id, 100)
+                .unwrap()
+        );
+        let conn = store.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM incoming_updates", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT typeof(input_update) FROM interaction_creations",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "text"
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn receiver_capture_order_spans_channels_and_never_infers_legacy_order() {
+        let (file, store, entry, binding) = setup();
+        let first = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+        let second = "00000000-0000-4000-8000-000000000001";
+        store
+            .conversation_input_capture(100, entry, &binding, first, "Captured first")
+            .unwrap();
+        let update:crate::telegram::Update=serde_json::from_value(serde_json::json!({"update_id":500,"message":{"message_id":500,"message_thread_id":1,"from":{"id":100,"is_bot":false,"first_name":"Fixture"},"chat":{"id":100,"type":"private"},"text":"Captured between canonical originals"}})).unwrap();
+        assert!(store.admit_update(&update).unwrap());
+        store
+            .conversation_input_capture(
+                100,
+                entry,
+                &binding,
+                second,
+                "Captured last despite smaller client UUID",
+            )
+            .unwrap();
+        assert!(!store.admit_update(&update).unwrap());
+        assert!(
+            !store
+                .conversation_input_capture(100, entry, &binding, first, "Captured first")
+                .unwrap()
+                .1
+        );
+        {
+            let conn = store.conn.lock().unwrap();
+            let mut q = conn
+                .prepare("SELECT channel,event_id FROM original_ingress_order ORDER BY id")
+                .unwrap();
+            let order = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(
+                order,
+                vec![
+                    ("conversation".into(), first.into()),
+                    ("telegram".into(), "500".into()),
+                    ("conversation".into(), second.into())
+                ]
+            );
+            conn.execute(
+                "DELETE FROM original_ingress_order WHERE channel='telegram'",
+                [],
+            )
+            .unwrap();
+        }
+        drop(store);
+        let store = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let conn = store.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM incoming_updates WHERE update_id=500",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM original_ingress_order WHERE channel='telegram'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
     }
 }

@@ -111,6 +111,6 @@ fn origin(message: &Message) -> crate::interaction::ReturnRoute {
     crate::interaction::ReturnRoute {
         chat_id: message.chat.id,
         thread_id: message.message_thread_id.unwrap_or(0),
-        message_id: message.message_id,
+        message_id: Some(message.message_id),
     }
 }

@@ -65,7 +65,12 @@ pub(super) fn admit_on(
         || source.human_id <= 0
         || source.origin.chat_id == 0
         || source.origin.thread_id < 0
-        || source.origin.message_id <= 0
+        || source.origin.message_id.is_some_and(|id| id <= 0)
+        || (source.origin.message_id.is_none()
+            && !matches!(
+                source.channel.as_str(),
+                "conversation" | "local-session" | "local-session-result"
+            ))
         || source.update_id.is_some_and(|id| id < 0)
         || relation.requests().len() > 64
         || source.target_sessions.is_empty()
@@ -79,8 +84,14 @@ pub(super) fn admit_on(
     {
         return Err(anyhow!("Invalid interaction input"));
     }
-    if let Some(update) = source.update_id {
-        let reserved:Option<(String,Option<i64>,i64)>=tx.query_row("SELECT phase,topic,entry_chat FROM interaction_creations WHERE human_id=?1 AND input_update=?2",params![source.human_id,update],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    {
+        let reference = source
+            .update_id
+            .map(crate::interaction::InputReference::Telegram)
+            .unwrap_or_else(|| {
+                crate::interaction::InputReference::Conversation(source.event_id.clone())
+            });
+        let reserved:Option<(String,Option<i64>,i64)>=tx.query_row("SELECT phase,topic,entry_chat FROM interaction_creations WHERE human_id=?1 AND input_update=?2",params![source.human_id,reference],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         if let Some((phase, topic, chat)) = reserved {
             if !matches!(phase.as_str(), "topic_known" | "ready")
                 || topic != Some(target.thread_id)
@@ -109,6 +120,21 @@ pub(super) fn admit_on(
             bail!("Voice input does not match committed interpretation");
         }
     }
+    let mut source_epoch = None;
+    if source.channel == "conversation" {
+        let original = super::conversation_inputs::read_on(tx, &source.event_id, source.human_id)?;
+        super::conversation_inputs::eligible_on(tx, &original)?;
+        source_epoch = Some(original.epoch.clone());
+        if source.update_id.is_some()
+            || source.transcription.is_some()
+            || source.origin.message_id.is_some()
+            || original.entry.chat_id != source.origin.chat_id
+            || original.entry.thread_id != source.origin.thread_id
+            || original.text != source.text
+        {
+            bail!("Canonical routing source does not match its original");
+        }
+    }
     let id = Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
         format!(
@@ -127,6 +153,11 @@ pub(super) fn admit_on(
     ).optional()?;
     let (session, native) =
         target_row.context("Interaction target is not an owned bound session")?;
+    if source.origin.message_id.is_none()
+        && let Some(native) = native.as_deref()
+    {
+        tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![source.human_id,native,source.event_id,now_string()])?;
+    }
     if !source.target_sessions.contains(&session) {
         return Err(anyhow!(
             "Destination is outside the immutable selected target plan"
@@ -194,7 +225,7 @@ pub(super) fn admit_on(
         text: source.text.clone(),
         origin: source.origin.clone(),
         phase: crate::interaction::TransportPhase::Queued,
-        admission_epoch: None,
+        admission_epoch: source_epoch,
         local_turn: None,
         native_thread: native,
         native_turn: None,
@@ -242,7 +273,7 @@ impl Store {
              CREATE TABLE IF NOT EXISTS interaction_sources(
                 id TEXT PRIMARY KEY,human_id INTEGER NOT NULL,update_id INTEGER,
                 channel TEXT NOT NULL,event_id TEXT NOT NULL,
-                origin_chat INTEGER NOT NULL,origin_thread INTEGER NOT NULL,origin_message INTEGER NOT NULL,
+                origin_chat INTEGER NOT NULL,origin_thread INTEGER NOT NULL,origin_message INTEGER,
                 doc TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(channel,event_id)
              );
              CREATE INDEX IF NOT EXISTS interaction_sources_reply ON interaction_sources(human_id,origin_chat,origin_thread,origin_message);
@@ -262,6 +293,27 @@ impl Store {
                 PRIMARY KEY(instruction_id,request_id)
              );",
             )?;
+        {
+            let conn = self.conn.lock().expect("store mutex poisoned");
+            let old:bool=conn.query_row("SELECT [notnull] FROM pragma_table_info('interaction_sources') WHERE name='origin_message'",[],|r|r.get(0))?;
+            if old {
+                // Rebuild only this constraint; keep every source, dependency and
+                // receipt identity. Startup holds the sole store connection.
+                conn.pragma_update(None, "foreign_keys", false)?;
+                let migration=conn.execute_batch("BEGIN IMMEDIATE;
+                    CREATE TABLE interaction_sources_nullable(id TEXT PRIMARY KEY,human_id INTEGER NOT NULL,update_id INTEGER,channel TEXT NOT NULL,event_id TEXT NOT NULL,origin_chat INTEGER NOT NULL,origin_thread INTEGER NOT NULL,origin_message INTEGER,doc TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(channel,event_id));
+                    INSERT INTO interaction_sources_nullable SELECT * FROM interaction_sources;
+                    DROP TABLE interaction_sources;
+                    ALTER TABLE interaction_sources_nullable RENAME TO interaction_sources;
+                    CREATE INDEX interaction_sources_reply ON interaction_sources(human_id,origin_chat,origin_thread,origin_message);
+                    COMMIT;");
+                if migration.is_err() {
+                    let _ = conn.execute_batch("ROLLBACK");
+                }
+                conn.pragma_update(None, "foreign_keys", true)?;
+                migration?;
+            }
+        }
         self.conn.lock().expect("store mutex poisoned").execute(
             "UPDATE interaction_instructions SET phase=CASE WHEN phase='queued' THEN 'retained_unsent' ELSE 'uncertain' END WHERE instance_id!=?1 AND phase IN ('queued','submitting','steering')",[&self.instance_id],
         )?;
@@ -747,7 +799,7 @@ mod tests {
             origin: crate::interaction::ReturnRoute {
                 chat_id: 100,
                 thread_id: 1,
-                message_id: event,
+                message_id: Some(event),
             },
             text: format!("Instruction {event}"),
         }
@@ -863,7 +915,7 @@ mod tests {
         let source = input(1, &[a.id]);
         let (instruction, _) = store.interaction_admit(&source, a.key, R::New).unwrap();
         let mut changed = source.clone();
-        changed.origin.message_id = 999;
+        changed.origin.message_id = Some(999);
         assert!(store.interaction_admit(&changed, a.key, R::New).is_err());
         assert!(store.interaction_admit(&source, b.key, R::New).is_err());
         changed = source.clone();
@@ -980,6 +1032,71 @@ mod tests {
                 .unwrap()
                 .phase,
             P::Submitting
+        );
+    }
+    #[test]
+    fn nullable_origin_migration_preserves_existing_sources_and_dependencies() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let defaults = super::super::tests::defaults();
+        let store = Store::open(file.path(), &[100], &defaults).unwrap();
+        let worker = target(&store, 7, 100);
+        let source = input(20, &[worker.id]);
+        let (instruction, _) = store
+            .interaction_admit(
+                &source,
+                worker.key,
+                crate::interaction::RequestRelation::New,
+            )
+            .unwrap();
+        let original = serde_json::to_string(&source).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            let schema:String=conn.query_row("SELECT sql FROM sqlite_master WHERE type='table' AND name='interaction_sources'",[],|r|r.get(0)).unwrap();
+            let old = schema
+                .replacen("interaction_sources(", "interaction_sources_old(", 1)
+                .replace(
+                    "origin_message INTEGER,",
+                    "origin_message INTEGER NOT NULL,",
+                );
+            conn.pragma_update(None, "foreign_keys", false).unwrap();
+            conn.execute_batch(&format!("BEGIN IMMEDIATE; {old}; INSERT INTO interaction_sources_old SELECT * FROM interaction_sources; DROP TABLE interaction_sources; ALTER TABLE interaction_sources_old RENAME TO interaction_sources; CREATE INDEX interaction_sources_reply ON interaction_sources(human_id,origin_chat,origin_thread,origin_message); COMMIT;")).unwrap();
+            conn.pragma_update(None, "foreign_keys", true).unwrap();
+            assert!(conn.query_row("SELECT [notnull] FROM pragma_table_info('interaction_sources') WHERE name='origin_message'",[],|r|r.get::<_,bool>(0)).unwrap());
+        }
+        drop(store);
+        let store = Store::open(file.path(), &[100], &defaults).unwrap();
+        assert_eq!(
+            store.interaction_source(&instruction.id, 100).unwrap(),
+            source
+        );
+        let conn = store.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT doc FROM interaction_sources", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            original
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM interaction_requests WHERE input_id=?1",
+                [instruction.input_id],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0
+        );
+        assert!(!conn.query_row("SELECT [notnull] FROM pragma_table_info('interaction_sources') WHERE name='origin_message'",[],|r|r.get::<_,bool>(0)).unwrap());
+        assert!(
+            conn.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))
+                .unwrap()
         );
     }
 }

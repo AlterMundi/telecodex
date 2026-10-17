@@ -207,9 +207,11 @@ pub(super) async fn begin_dialogue(
                 {
                     let mut message = SendMessage::html(surface.chat_id,Some(surface.thread_id).filter(|id|*id!=0),"Native question delivery did not confirm its Telegram topic. No answer was sent; turn cancellation was requested.".into());
                     message.reply_parameters =
-                        return_route.map(|r| crate::telegram::ReplyParameters {
-                            message_id: r.message_id,
-                            allow_sending_without_reply: false,
+                        return_route.and_then(|r| r.message_id).map(|message_id| {
+                            crate::telegram::ReplyParameters {
+                                message_id,
+                                allow_sending_without_reply: false,
+                            }
                         });
                     let _ = shared.telegram.send_message(message).await;
                 }
@@ -241,7 +243,7 @@ async fn publish_dialogue(
             .map(|r| SessionKey::new(r.chat_id, Some(r.thread_id)))
             .unwrap_or(native_session),
         native_session,
-        return_parent: return_route.as_ref().map(|r| r.message_id),
+        return_parent: return_route.as_ref().and_then(|r| r.message_id),
         requester,
         request,
         index: 0,
