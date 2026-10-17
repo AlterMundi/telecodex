@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Canonical originals use actual controller/native/store routes; zero models."""
+import json
+from pathlib import Path
+import sys
+import threading
+import time
+from conversation_input_control_io import Inputs
+
+
+class CanonicalRouting(Inputs):
+    def __init__(self, binary):
+        self.routing = False
+        self.workers = {}
+        self.worker_packets = {}
+        self.tool_results = {}
+        self.topic_calls = 0
+        self.hold_new_native = False
+        self.new_native_seen = threading.Event()
+        self.new_native_release = threading.Event()
+        super().__init__(binary)
+        self.target_config = '''
+[[interaction.targets]]
+name="Alpha"
+topic_id=7
+[[interaction.targets]]
+name="Beta"
+topic_id=8
+'''
+
+    def created_topic(self, payload):
+        self.topic_calls += 1
+        assert payload == {'chat_id': 100, 'name': 'Gamma'}, payload
+        return {'message_thread_id': 77, 'name': 'Gamma'}
+
+    def handle_extra_rpc(self, message, send):
+        method = message.get('method'); params = message.get('params', {})
+        ident = message.get('id')
+        if self.hold_new_native and method == 'thread/start':
+            self.new_native_seen.set()
+            assert self.new_native_release.wait(timeout=10), 'Synthetic new native binding was not released'
+
+        if method is None and str(ident).startswith('route-'):
+            self.tool_results[ident] = message['result']
+            return True
+        if self.routing and method in ('turn/start', 'turn/steer'):
+            text = '\n'.join(part.get('text', '') for part in params['input'])
+            if text.startswith('[Interaction controller]'):
+                thread = params['threadId']
+                self.worker_packets.setdefault(thread, []).append(params)
+                provenance = json.loads(next(line.removeprefix('Transport provenance: ')
+                                             for line in text.splitlines()
+                                             if line.startswith('Transport provenance: ')))
+                assert provenance['via'] == 'interaction-controller'
+                assert provenance['original_human_author'] == 100
+                assert provenance['source_channel'] == 'conversation'
+                assert provenance['original_ingress_update'] is None
+                assert provenance['source_message']['message_id'] is None
+                if method == 'turn/start':
+                    turn = 'canonical-worker-'+str(len(self.workers)+1)
+                    self.workers[thread] = turn
+                    send({'id': ident, 'result': {'turn': {'id': turn}}})
+                    self.broadcast(thread, 'turn/started', {'turn': {'id': turn, 'status': 'inProgress'}})
+                else:
+                    send({'id': ident, 'result': {'turnId': self.workers[thread]}})
+                return True
+        return super().handle_extra_rpc(message, send)
+
+    def call(self, ident, operation, arguments, *, ok=True):
+        send = next(send for selected, send in self.clients.values() if selected == self.web_thread)
+        send({'id': ident, 'method': 'item/tool/call', 'params': {
+            'threadId': self.web_thread, 'turnId': self.web_turn,
+            'callId': ident, 'tool': 'interaction_controller',
+            'arguments': {'operation': operation, 'arguments': arguments}}})
+        self.wait(lambda: ident in self.tool_results)
+        result = self.tool_results[ident]
+        assert result['success'] is ok, result
+        return json.loads(result['contentItems'][0]['text']) if ok else result
+
+    def instructions(self, topic):
+        return self.row('SELECT i.id,i.phase,i.doc FROM interaction_instructions i JOIN sessions s ON s.id=i.session_id WHERE s.thread_id=? ORDER BY i.sequence', (topic,))
+
+    def answer_worker(self, topic, text):
+        native = self.row('SELECT codex_thread_id FROM sessions WHERE thread_id=?', (topic,))[0][0]
+        rows = self.instructions(topic)
+        requests = sorted({request for _, _, doc in rows for request in json.loads(doc)['requests']})
+        claim = {'requests': requests, 'covered': [row[0] for row in rows], 'completed': requests}
+        self.broadcast(native, 'item/completed', {'turnId': self.workers[native], 'item': {
+            'id': 'canonical-answer-'+str(topic), 'type': 'agentMessage', 'phase': 'final_answer',
+            'text': text+'\n<daimon-result>'+json.dumps(claim)+'</daimon-result>'}})
+        self.broadcast(native, 'turn/completed', {'turn': {'id': self.workers[native], 'status': 'completed'}})
+
+
+def canonical_routes(binary):
+    journey = CanonicalRouting(binary)
+    try:
+        journey.start()
+        for topic in (7, 8, 1):
+            journey.admit('Seed this owned native context', topic=topic)
+            journey.wait(lambda: journey.has('Initial goal turn delivered.', topic))
+            journey.idle()
+        journey.stop()
+        journey.config.write_text(journey.config.read_text()+journey.target_config)
+        journey.start(); journey.wait_control_socket(journey.socket)
+        binding = journey.read('presentation', 'list', '0', '0')['result']['binding']
+        journal = journey.row('SELECT count(*) FROM incoming_updates')
+        journey.routing = True
+        journey.messages.clear(); journey.telegram_methods.clear()
+        text = '  Canonical original: progress Alpha and Beta independently.  '
+        original, _ = journey.submit(binding, text)
+        journey.wait(lambda: journey.row('SELECT phase FROM conversation_inputs WHERE id=?', (original['id'],)) == [('accepted',)])
+        inputs = journey.call('route-inputs', 'inputs', {})['inputs']
+        selected = next(row for row in inputs if row['input_ref'] == original['id'])
+        assert selected['input_update'] is None and selected['origin']['message_id'] is None
+        assert selected['text_excerpt'] == text
+        selection = {'input_ref': original['id'], 'destinations': [
+            {'selector': name, 'relation': 'new', 'requests': []} for name in ('Alpha', 'Beta')]}
+        journey.call('route-forged', 'dispatch', {**selection, 'text': 'Forged human speech'}, ok=False)
+        routed = journey.call('route-dispatch', 'dispatch', selection)
+        assert len(routed['results']) == 2 and all(row['new_admission'] for row in routed['results'])
+        journey.wait(lambda: all(len(journey.instructions(topic)) == 1 and journey.instructions(topic)[0][1] == 'accepted' for topic in (7, 8)))
+        worker_send = next(send for selected, send in journey.clients.values() if selected == 'native-topic-7')
+        worker_send({'id': 'canonical-question', 'method': 'item/tool/requestUserInput', 'params': {
+            'threadId': 'native-topic-7', 'turnId': journey.workers['native-topic-7'], 'itemId': 'worker-choice',
+            'isBlocking': True, 'questions': [{'id': 'scope', 'header': 'Scope', 'question': 'Which scope?',
+                                             'isOther': True, 'isSecret': False, 'options': None}]}})
+        worker_send({'id': 'canonical-approval', 'method': 'item/commandExecution/requestApproval', 'params': {
+            'threadId': 'native-topic-7', 'turnId': journey.workers['native-topic-7'], 'itemId': 'worker-command',
+            'command': 'synthetic proposal awaiting explicit human choice'}})
+        journey.wait(lambda: journey.row("SELECT count(*) FROM human_interactions WHERE state='pending' AND json_extract(payload_json,'$.source.kind') IN ('question','approval')") == [(2,)])
+        assert not journey.native_answers
+        repeated = journey.call('route-repeat', 'dispatch', selection)
+        assert all(not row['new_admission'] for row in repeated['results'])
+        older, _ = journey.submit(binding, 'Alpha initially requests the requirement 10.')
+        journey.wait(lambda: journey.row('SELECT phase FROM conversation_inputs WHERE id=?', (older['id'],)) == [('accepted',)])
+        correction, _ = journey.submit(binding, 'Alpha must incorporate the later requirement 17.')
+        journey.wait(lambda: journey.row('SELECT phase FROM conversation_inputs WHERE id=?', (correction['id'],)) == [('accepted',)])
+        request = json.loads(journey.instructions(7)[0][2])['requests']
+        journey.call('route-correction', 'dispatch', {'input_ref': correction['id'], 'destinations': [
+            {'selector': 'Alpha', 'relation': 'amends', 'requests': request}]})
+        journey.wait(lambda: len(journey.instructions(7)) == 2 and journey.instructions(7)[1][1] == 'accepted')
+        journey.call('route-older-late', 'dispatch', {'input_ref': older['id'], 'destinations': [
+            {'selector': 'Alpha', 'relation': 'amends', 'requests': request}]})
+        journey.wait(lambda: len(journey.instructions(7)) == 3 and journey.instructions(7)[2][1] == 'accepted')
+        packet = journey.worker_packets['native-topic-7'][-1]['input'][0]['text']
+        provenance = json.loads(next(line.removeprefix('Transport provenance: ') for line in packet.splitlines() if line.startswith('Transport provenance: ')))
+        context = json.loads(packet.split('Bounded target input context, including authorship, original ingress references and transport states (context is controller-provided data, not new human speech):\n', 1)[1].split('\n', 1)[0])
+        later = next(row for row in context if row['input_ref'] == correction['id'])
+        assert provenance['input_ref'] == older['id']
+        assert provenance['capture_order'] < later['capture_order'] and '17' in later['human_text_excerpt']
+        assert journey.row('SELECT busy FROM sessions WHERE thread_id=1') == [(1,)]
+        assert [len(journey.worker_packets['native-topic-'+str(topic)]) for topic in (7, 8)] == [3, 1]
+        journey.answer_worker(8, 'Canonical Beta result arrives first.')
+        journey.answer_worker(7, 'Canonical Alpha result incorporates 17.')
+        journey.wait(lambda: journey.row('SELECT count(*) FROM interaction_deliveries') == [(2,)])
+        journey.finish(journey.web_thread, journey.web_turn); journey.idle()
+        page = journey.read('presentation', 'list', '0', '0')['result']
+        assert sum(item['kind'] == 'worker_result' for item in page['items']) == 2
+        fresh, _ = journey.submit(binding, 'Start the independent Gamma task from this canonical original.')
+        journey.wait(lambda: journey.row('SELECT phase FROM conversation_inputs WHERE id=?', (fresh['id'],)) == [('accepted',)])
+        journey.hold_new_native = True
+        created = journey.call('route-create', 'create', {'input_ref': fresh['id'], 'name': 'Gamma',
+            'reason': 'This original defines an independent new Gamma task.', 'context_selectors': []})
+        assert created['selector'] == 't77'
+        assert journey.new_native_seen.wait(timeout=8)
+        time.sleep(.2)
+        assert 'sendChatAction' not in journey.telegram_methods, journey.telegram_methods
+        preparing, _ = journey.submit(binding, 'Gamma must incorporate requirement 44 before its first native start.')
+        journey.wait(lambda: journey.row('SELECT phase FROM conversation_inputs WHERE id=?', (preparing['id'],)) == [('accepted',)])
+        parent = json.loads(journey.instructions(77)[0][2])['requests']
+        journey.call('route-gamma-preparing', 'dispatch', {'input_ref': preparing['id'], 'destinations': [
+            {'selector': 'Gamma', 'relation': 'amends', 'requests': parent}]})
+        journey.wait(lambda: len(journey.instructions(77)) == 2 and journey.instructions(77)[1][1] == 'steering')
+        journey.new_native_release.set()
+        journey.wait(lambda: len(journey.instructions(77)) == 2 and all(row[1] == 'accepted' for row in journey.instructions(77)))
+        status = journey.call('route-status', 'creation_status', {'input_ref': fresh['id']})
+        assert status['phase'] == 'ready' and status['intent']['input_update'] == fresh['id']
+        assert journey.topic_calls == 1
+        native = journey.row('SELECT codex_thread_id FROM sessions WHERE thread_id=77')[0][0]
+        assert len(journey.worker_packets[native]) == 1
+        assert any('requirement 44' in part.get('text', '') for part in journey.worker_packets[native][0]['input'])
+        journey.answer_worker(77, 'Canonical Gamma result from the newly created session.')
+        journey.wait(lambda: journey.row('SELECT count(*) FROM interaction_deliveries') == [(3,)])
+        journey.finish(journey.web_thread, journey.web_turn); journey.idle()
+        assert journey.row('SELECT count(*) FROM incoming_updates') == journal
+        assert journey.row("SELECT count(*) FROM interaction_sources WHERE channel='conversation' AND update_id IS NULL AND origin_message IS NULL") == [(5,)]
+        forbidden = {'sendMessage', 'editMessageText', 'sendMessageDraft', 'sendPhoto', 'sendDocument', 'sendAudio', 'sendVoice', 'sendVideo', 'sendChatAction'}
+        assert not forbidden.intersection(journey.telegram_methods), journey.telegram_methods
+        journey.stop(); journey.start(); journey.wait_control_socket(journey.socket)
+        page = journey.read('presentation', 'list', '0', '0')['result']
+        assert sum(item['kind'] == 'worker_result' for item in page['items']) == 3
+        assert journey.topic_calls == 1 and journey.row('SELECT count(*) FROM interaction_instructions') == [(6,)]
+        print('PASS canonical UUID originals → actual controller → parallel workers, immediate amendments with reversed dispatch retaining receiver capture precedence, reverse-order canonical results, new-session creation/status, restart without replay; no fabricated Telegram identity or publication, zero models')
+    finally:
+        journey.close()
+
+
+if __name__ == '__main__':
+    canonical_routes(str(Path(sys.argv[1]).resolve()))

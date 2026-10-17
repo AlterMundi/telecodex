@@ -1,15 +1,17 @@
 //! Create one justified destination through the existing topic/session adapter.
 use super::*;
+use crate::interaction::InputReference;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub(super) fn schema() -> Value {
-    json!({"type":"object","properties":{"input_update":{"type":"integer"},"name":{"type":"string","description":"Short single-token topic selector; stable tID names are reserved"},"reason":{"type":"string","description":"Why this original input is a distinct task; uncertainty or a busy worker is not a reason"},"context_selectors":{"type":"array","items":{"type":"string"},"maxItems":5}},"required":["input_update","name","reason","context_selectors"],"additionalProperties":false})
+    json!({"type":"object","properties":{"input_ref":{"oneOf":[{"type":"integer","minimum":0},{"type":"string","format":"uuid"}]},"name":{"type":"string","description":"Short single-token topic selector; stable tID names are reserved"},"reason":{"type":"string","description":"Why this original input is a distinct task; uncertainty or a busy worker is not a reason"},"context_selectors":{"type":"array","items":{"type":"string"},"maxItems":5}},"required":["input_ref","name","reason","context_selectors"],"additionalProperties":false})
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Create {
-    input_update: i64,
+    #[serde(alias = "input_update")]
+    input_ref: InputReference,
     name: String,
     reason: String,
     context_selectors: Vec<String>,
@@ -44,17 +46,20 @@ pub(super) async fn create(
     {
         bail!("Invalid, duplicate or unsupported new destination");
     }
-    let original = shared
-        .store
-        .interaction_entry_inputs(key, human, native, Some(args.input_update))?
-        .pop()
-        .context("Original input unavailable")?;
-    let (content, transcription) = shared.store.interaction_input_content(&original, human)?;
-    let message = original.message.context("Original message missing")?;
-    let text = content.as_str();
-    if !(is_text_only_steer_candidate(&message, text) || transcription.is_some())
-        || text.trim_start().starts_with('/')
-        || (message.chat.kind != "private" && !message.chat.is_forum.unwrap_or(false))
+    args.input_ref.validate()?;
+    let (original, message) = shared.store.interaction_entry_original(
+        key,
+        human,
+        native,
+        &args.input_ref,
+        &format!("telegram:{}", shared.bot_id),
+    )?;
+    if original.text.trim_start().starts_with('/')
+        || message.as_ref().is_some_and(|message| {
+            !(is_text_only_steer_candidate(message, &original.text)
+                || original.transcription.is_some())
+                || (message.chat.kind != "private" && !message.chat.is_forum.unwrap_or(false))
+        })
     {
         bail!("Creation requires committed text and supported topics");
     }
@@ -83,7 +88,7 @@ pub(super) async fn create(
         key,
         human,
         native,
-        args.input_update,
+        args.input_ref,
         &args.name,
         &args.reason,
         &context,
@@ -107,13 +112,13 @@ pub(super) async fn resume(
     key: SessionKey,
     human: i64,
     native: &str,
-    update: i64,
+    reference: InputReference,
     closed: &CancellationToken,
 ) -> Result<Value> {
     let (operation, claimed) = app
         .shared
         .store
-        .interaction_creation_resume(key, human, update, closed)?;
+        .interaction_creation_resume(key, human, reference, closed)?;
     if !claimed {
         return Ok(operation);
     }
@@ -150,9 +155,7 @@ async fn execute_claimed(
         .context("Missing creation identity")?;
     let intent = &operation["intent"];
     let name = intent["name"].as_str().context("Missing retained name")?;
-    let update = intent["input_update"]
-        .as_i64()
-        .context("Missing original input")?;
+    let reference: InputReference = serde_json::from_value(intent["input_update"].clone())?;
     let topic = if operation["phase"] == "prepared" {
         let topic = shared
             .telegram
@@ -189,11 +192,7 @@ async fn execute_claimed(
         human,
         &format!("telegram:{}", shared.bot_id),
     )?;
-    let error = HUMAN_UPDATE_ID
-        .scope(
-            update,
-            super::routing::dispatch(app, &instruction.id, human),
-        )
+    let error = super::dialogue::dispatch_original(app, &instruction.id, human, &reference)
         .await
         .err()
         .map(|_| "Native delivery unconfirmed; inspect retained input, do not replay");

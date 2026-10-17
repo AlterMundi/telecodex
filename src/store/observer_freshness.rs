@@ -477,7 +477,7 @@ mod tests {
                     origin: ReturnRoute {
                         chat_id: 100,
                         thread_id: 1,
-                        message_id: 1,
+                        message_id: Some(1),
                     },
                     text: "Queued correction".into(),
                 },

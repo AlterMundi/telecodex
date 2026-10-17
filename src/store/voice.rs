@@ -175,6 +175,7 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+    #[cfg(test)]
     pub fn interaction_input_content(
         &self,
         update: &crate::telegram::Update,
@@ -567,7 +568,7 @@ mod tests {
             origin: ReturnRoute {
                 chat_id: 100,
                 thread_id: 1,
-                message_id: 20,
+                message_id: Some(20),
             },
             text: "Investiguemos el gesto".into(),
         };

@@ -283,7 +283,18 @@ pub(super) async fn process_turn(
             super::routing::started(&app, session.key, id, active)?;
         }
     }
-    let canonical_return = shared.store.conversation_turn_return(turn_id)?;
+    let canonical_origin = queued
+        .interaction
+        .as_deref()
+        .map(|id| {
+            shared
+                .store
+                .interaction_source(id, queued.request.from_user_id)
+                .map(|source| source.origin.message_id.is_none())
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let canonical_return = canonical_origin || shared.store.conversation_turn_return(turn_id)?;
     let mut chat_action_task = if queued.conversation_input.is_some() || canonical_return {
         None
     } else {
@@ -554,6 +565,7 @@ pub(super) async fn process_turn(
                                 super::nexus::thread(&shared,turn_id,&thread_id)?;
                                 if let Some(id)=admission.as_deref() {shared.store.tribu_native_thread(session_key,id,&thread_id)?;}
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
+                                if let Some(id)=interaction.as_deref() {shared.store.interaction_select_native_return(id,requester_user_id,&thread_id)?;}
                                 if preserve_thread_binding && attach_native.is_none() && conversation_input.is_none() {
                                     if !voice_bound {
                                         shared.store.set_session_codex_thread(session_key, &thread_id)?;

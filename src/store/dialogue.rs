@@ -1,5 +1,6 @@
 //! Original committed entry inputs, not model-authored messages or new authority.
 use super::*;
+use anyhow::bail;
 
 pub(super) fn entry_inputs_on(
     conn: &Connection,
@@ -9,16 +10,6 @@ pub(super) fn entry_inputs_on(
     selected: Option<i64>,
 ) -> Result<Vec<crate::telegram::Update>> {
     entry_inputs_query(conn, key, human, native, selected, false)
-}
-
-pub(super) fn committed_entry_input_on(
-    conn: &Connection,
-    key: SessionKey,
-    human: i64,
-    native: &str,
-    update: i64,
-) -> Result<Vec<crate::telegram::Update>> {
-    entry_inputs_query(conn, key, human, native, Some(update), true)
 }
 
 fn entry_inputs_query(
@@ -44,9 +35,115 @@ fn entry_inputs_query(
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
 }
 
+use crate::interaction::{InputReference, ReturnRoute, SourceInput};
+
+impl rusqlite::ToSql for InputReference {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        match self {
+            Self::Telegram(id) => id.to_sql(),
+            Self::Conversation(id) => id.to_sql(),
+        }
+    }
+}
+
+pub(super) fn original_on(
+    conn: &Connection,
+    key: SessionKey,
+    human: i64,
+    native: &str,
+    reference: &InputReference,
+    channel: &str,
+    committed: bool,
+) -> Result<(SourceInput, Option<crate::telegram::Message>)> {
+    reference.validate()?;
+    match reference {
+        InputReference::Telegram(update) => {
+            let original = entry_inputs_query(conn, key, human, native, Some(*update), committed)?
+                .pop()
+                .context("Original Telegram input unavailable")?;
+            let (text, transcription) = super::voice::content_on(conn, &original, human)?;
+            let message = original.message.context("Original message missing")?;
+            let origin = ReturnRoute {
+                chat_id: message.chat.id,
+                thread_id: message.message_thread_id.unwrap_or(0),
+                message_id: Some(message.message_id),
+            };
+            Ok((
+                SourceInput {
+                    transcription,
+                    channel: channel.into(),
+                    event_id: update.to_string(),
+                    update_id: Some(*update),
+                    human_id: human,
+                    target_sessions: vec![],
+                    origin,
+                    text,
+                },
+                Some(message),
+            ))
+        }
+        InputReference::Conversation(id) => {
+            let input = super::conversation_inputs::read_on(conn, id, human)?;
+            super::conversation_inputs::eligible_on(conn, &input)?;
+            let linked:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND session_id=?2 AND from_user_id=?3 AND native_thread_id=?4)",params![input.local_turn,input.session,human,native],|r|r.get(0))?;
+            let retained_creation=committed && input.phase=="uncertain" && conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4)",params![human,key.chat_id,key.thread_id,id],|r|r.get::<_,bool>(0))?;
+            if input.entry != key
+                || input.native != native
+                || !linked
+                || !(matches!(input.phase.as_str(), "sending" | "steering" | "accepted")
+                    || retained_creation)
+            {
+                bail!("Original conversation input is not linked to this native entry");
+            }
+            Ok((
+                SourceInput {
+                    transcription: None,
+                    channel: "conversation".into(),
+                    event_id: id.clone(),
+                    update_id: None,
+                    human_id: human,
+                    target_sessions: vec![],
+                    origin: ReturnRoute {
+                        chat_id: key.chat_id,
+                        thread_id: key.thread_id,
+                        message_id: None,
+                    },
+                    text: input.text,
+                },
+                None,
+            ))
+        }
+    }
+}
+
+pub(super) fn source_reference(source: &SourceInput) -> Option<InputReference> {
+    source.update_id.map(InputReference::Telegram).or_else(|| {
+        (source.channel == "conversation")
+            .then(|| InputReference::Conversation(source.event_id.clone()))
+    })
+}
+pub(super) fn original_order_on(conn: &Connection, source: &SourceInput) -> Result<Option<i64>> {
+    let Some(reference) = source_reference(source) else {
+        return Ok(None);
+    };
+    let channel = if reference.update().is_some() {
+        "telegram"
+    } else {
+        "conversation"
+    };
+    Ok(conn
+        .query_row(
+            "SELECT id FROM original_ingress_order WHERE channel=?1 AND event_id=?2",
+            params![channel, reference.event()],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 impl Store {
     /// Return only inputs actually linked to this owned native integrating entry.
     /// Retired generations and uncertain inputs cannot become automatic dispatch.
+    #[cfg(test)]
     pub fn interaction_entry_inputs(
         &self,
         key: SessionKey,
@@ -56,6 +153,69 @@ impl Store {
     ) -> Result<Vec<crate::telegram::Update>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         entry_inputs_on(&conn, key, human, native, selected)
+    }
+
+    pub fn interaction_entry_original(
+        &self,
+        key: SessionKey,
+        human: i64,
+        native: &str,
+        reference: &InputReference,
+        channel: &str,
+    ) -> Result<(SourceInput, Option<crate::telegram::Message>)> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        original_on(&conn, key, human, native, reference, channel, false)
+    }
+
+    pub fn interaction_entry_references(
+        &self,
+        key: SessionKey,
+        human: i64,
+        native: &str,
+    ) -> Result<Vec<InputReference>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut refs = entry_inputs_on(&conn, key, human, native, None)?
+            .into_iter()
+            .map(|u| InputReference::Telegram(u.update_id))
+            .collect::<Vec<_>>();
+        let mut query=conn.prepare("SELECT id FROM conversation_inputs WHERE human_id=?1 AND native_thread=?2 AND retired=0 AND phase IN ('sending','steering','accepted') ORDER BY created_at DESC LIMIT 12")?;
+        let ids = query
+            .query_map(params![human, native], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for id in ids {
+            let reference = InputReference::Conversation(id);
+            if original_on(&conn, key, human, native, &reference, "", false).is_ok() {
+                refs.push(reference);
+            }
+        }
+        Ok(refs)
+    }
+
+    pub fn interaction_original_allowed(&self, id: &str, human: i64) -> Result<bool> {
+        let source = self.interaction_source(id, human)?;
+        if source.channel != "conversation" {
+            return Ok(true);
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let input = super::conversation_inputs::read_on(&conn, &source.event_id, human)?;
+        Ok(super::conversation_inputs::eligible_on(&conn, &input).is_ok())
+    }
+
+    pub fn interaction_source_order(&self, source: &SourceInput) -> Result<Option<i64>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        original_order_on(&conn, source)
+    }
+
+    pub fn interaction_original_provenance(
+        &self,
+        id: &str,
+        human: i64,
+    ) -> Result<serde_json::Value> {
+        let source = self.interaction_source(id, human)?;
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Ok(
+            serde_json::json!({"input_ref":source_reference(&source),"capture_order":original_order_on(&conn,&source)?}),
+        )
     }
 
     /// Atomically retain the whole routing plan under the original entry owner,
@@ -71,31 +231,24 @@ impl Store {
     ) -> Result<Vec<(crate::interaction::Instruction, bool)>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let update = source
+        let reference = source
             .update_id
-            .context("Missing original ingress reference")?;
-        let original = entry_inputs_on(&tx, key, human, native, Some(update))?
-            .pop()
-            .context("Original entry input no longer eligible")?;
-        let (content, transcription) = super::voice::content_on(&tx, &original, human)?;
-        let message = original.message.context("Missing original message")?;
-        if source.human_id != human
-            || source.event_id != update.to_string()
-            || content != source.text
-            || transcription != source.transcription
-            || source.origin.chat_id != message.chat.id
-            || source.origin.thread_id != message.message_thread_id.unwrap_or(0)
-            || source.origin.message_id != message.message_id
+            .map(InputReference::Telegram)
+            .unwrap_or_else(|| InputReference::Conversation(source.event_id.clone()));
+        let (mut original, _) =
+            original_on(&tx, key, human, native, &reference, &source.channel, false)?;
+        original.target_sessions = source.target_sessions.clone();
+        if original != *source
             || plan.len() != source.target_sessions.len()
             || plan.is_empty()
             || plan
                 .iter()
-                .map(|(k, _)| *k)
+                .map(|(key, _)| *key)
                 .collect::<std::collections::HashSet<_>>()
                 .len()
                 != plan.len()
         {
-            return Err(anyhow!("Routing plan does not match original entry input"));
+            bail!("Routing plan does not match original entry input");
         }
         let mut admitted = vec![];
         for (target, relation) in plan {
@@ -130,7 +283,7 @@ impl Store {
                 r.get::<_, String>(2)?,
             ))
         })?;
-        rows.map(|row|{let(doc,phase,source)=row?;let i:crate::interaction::Instruction=serde_json::from_str(&doc)?;let source:crate::interaction::SourceInput=serde_json::from_str(&source)?;let author=super::session_requests::author_on(&conn,&i.input_id)?;Ok(json!({"author":author,"instruction":i.id,"requests":i.requests,"relation":i.relation,"transport_phase":phase,"source_channel":source.channel,"transcription":source.transcription,"original_ingress_update":source.update_id,"source_message":source.origin,"human_text_excerpt":if author.is_none() && source.transcription.is_none(){Some(i.text.chars().take(4000).collect::<String>())}else{None},"attributed_text_excerpt":i.text.chars().take(4000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Result<Vec<Value>>>()
+        rows.map(|row|{let(doc,phase,source)=row?;let i:crate::interaction::Instruction=serde_json::from_str(&doc)?;let source:crate::interaction::SourceInput=serde_json::from_str(&source)?;let capture=original_order_on(&conn,&source)?;let reference=source_reference(&source);let author=super::session_requests::author_on(&conn,&i.input_id)?;Ok(json!({"author":author,"instruction":i.id,"requests":i.requests,"relation":i.relation,"transport_phase":phase,"input_ref":reference,"capture_order":capture,"source_channel":source.channel,"transcription":source.transcription,"original_ingress_update":source.update_id,"source_message":source.origin,"human_text_excerpt":if author.is_none() && source.transcription.is_none(){Some(i.text.chars().take(4000).collect::<String>())}else{None},"attributed_text_excerpt":i.text.chars().take(4000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Result<Vec<Value>>>()
     }
 }
 
@@ -211,7 +364,7 @@ mod tests {
             origin: ReturnRoute {
                 chat_id: 100,
                 thread_id: 1,
-                message_id: 20,
+                message_id: Some(20),
             },
             text: "The exact original human input".into(),
         };

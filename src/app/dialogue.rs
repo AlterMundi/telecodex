@@ -1,6 +1,6 @@
 //! Conversational decisions select retained original input; the controller dispatches it.
 use super::*;
-use crate::interaction::{RequestRelation, ReturnRoute, SourceInput};
+use crate::interaction::{InputReference, RequestRelation};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -13,7 +13,7 @@ pub(super) fn tool_specs() -> Vec<Value> {
 }
 
 fn dispatch_schema() -> Value {
-    json!({"type":"object","properties":{"input_update":{"type":"integer"},"destinations":{"type":"array","minItems":1,"maxItems":5,"items":{"type":"object","properties":{"selector":{"type":"string"},"relation":{"type":"string","enum":["new","amends","context"]},"requests":{"type":"array","items":{"type":"string"},"maxItems":64}},"required":["selector","relation","requests"],"additionalProperties":false}}},"required":["input_update","destinations"],"additionalProperties":false})
+    json!({"type":"object","properties":{"input_ref":{"oneOf":[{"type":"integer","minimum":0},{"type":"string","format":"uuid"}]},"destinations":{"type":"array","minItems":1,"maxItems":5,"items":{"type":"object","properties":{"selector":{"type":"string"},"relation":{"type":"string","enum":["new","amends","context"]},"requests":{"type":"array","items":{"type":"string"},"maxItems":64}},"required":["selector","relation","requests"],"additionalProperties":false}}},"required":["input_ref","destinations"],"additionalProperties":false})
 }
 
 #[derive(Deserialize)]
@@ -26,7 +26,8 @@ struct ControllerArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DispatchArgs {
-    input_update: i64,
+    #[serde(alias = "input_update")]
+    input_ref: InputReference,
     destinations: Vec<Destination>,
 }
 #[derive(Deserialize)]
@@ -74,33 +75,37 @@ pub(super) fn tool_call(
             super::observer::tool_owner(shared,key,human,&request.thread_id)?;
             if request.namespace.is_some() || request.arguments.to_string().len()>16000 {bail!("Unsupported integrating tool arguments");}
             if request.tool=="controller_capabilities" && request.arguments==json!({}) {
-                return Ok(json!({"schema":"telecodex.interaction-controller/v1","operations":{"capabilities":{"arguments":{}},"inputs":{"arguments":{},"description":"Recent original human text references within this native entry; no dispatch"},"candidates":{"description":"Bounded observer source interpretations; no dispatch","arguments":{"mode":"inventory or refresh","selectors":["one to five enrolled labels or stable tID; inventory can use an empty array"]}},"create":{"input_schema":super::creation::schema(),"description":"Create one justified new work session from an original retained input, with selected attributed context. Never create for ambiguity or a busy worker."},"creation_resume":{"arguments":{"input_update":"original input reference"},"description":"Explicitly continue a retained known-unsent creation or confirmed topic. Unknown external effects and completed plans are inspected without replay."},"creation_status":{"arguments":{"input_update":"original input reference"},"description":"Inspect a retained creation; no retry or new work"},"dispatch":{"input_schema":dispatch_schema(),"description":"One durable selected target plan, then existing per-target delivery. Text is taken only from the original referenced ingress record. Amendments/context require actual request IDs. Admission/native acceptance is not proof of incorporation."}},"unsupported":["cross-body routing","global Stop"],"uncertainty":"Never repeat an uncertain operation; inspect retained outcomes before explicit recovery"}));
+                return Ok(json!({"schema":"telecodex.interaction-controller/v1","operations":{"capabilities":{"arguments":{}},"inputs":{"arguments":{},"description":"Recent original human text references within this native entry; no dispatch"},"candidates":{"description":"Bounded observer source interpretations; no dispatch","arguments":{"mode":"inventory or refresh","selectors":["one to five enrolled labels or stable tID; inventory can use an empty array"]}},"create":{"input_schema":super::creation::schema(),"description":"Create one justified new work session from an original retained input, with selected attributed context. Never create for ambiguity or a busy worker."},"creation_resume":{"arguments":{"input_ref":"original integer Telegram update or conversation UUID"},"description":"Explicitly continue a retained known-unsent creation or confirmed topic. Unknown external effects and completed plans are inspected without replay."},"creation_status":{"arguments":{"input_ref":"original integer Telegram update or conversation UUID"},"description":"Inspect a retained creation; no retry or new work"},"dispatch":{"input_schema":dispatch_schema(),"description":"One durable selected target plan, then existing per-target delivery. Text is taken only from the original referenced ingress record. Amendments/context require actual request IDs. Admission/native acceptance is not proof of incorporation."}},"unsupported":["cross-body routing","global Stop"],"uncertainty":"Never repeat an uncertain operation; inspect retained outcomes before explicit recovery"}));
             }
             if request.tool=="interaction_inputs" {
                 if request.arguments!=json!({}) {bail!("Unexpected input query arguments");}
-                let inputs=shared.store.interaction_entry_inputs(key,human,&request.thread_id,None)?;
-                return Ok(json!({"kind":"original_integrating_inputs","bounded":true,"inputs":inputs.into_iter().filter_map(|u|{let (text,transcription)=shared.store.interaction_input_content(&u,human).ok()?;let m=u.message?;Some(json!({"input_update":u.update_id,"human":human,"origin":{"chat_id":m.chat.id,"thread_id":m.message_thread_id,"message_id":m.message_id},"transcription":transcription,"text_excerpt":text.chars().take(2000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Vec<_>>()}));
+                let refs=shared.store.interaction_entry_references(key,human,&request.thread_id)?;
+                let mut inputs=vec![];
+                for reference in refs {
+                    let (source,_)=shared.store.interaction_entry_original(key,human,&request.thread_id,&reference,&format!("telegram:{}",shared.bot_id))?;
+                    inputs.push(json!({"capture_order":shared.store.interaction_source_order(&source)?,"input_ref":reference,"input_update":reference.update(),"human":human,"origin":source.origin,"channel":source.channel,"transcription":source.transcription,"text_excerpt":source.text.chars().take(2000).collect::<String>(),"excerpt_bounded":true}));
+                }
+                return Ok(json!({"kind":"original_integrating_inputs","bounded":true,"inputs":inputs}));
             }
             if request.tool=="interaction_create" {
                 return super::creation::create(&app,key,human,&request.thread_id,request.arguments,&closed).await;
             }
             if matches!(request.tool.as_str(),"interaction_creation_status"|"interaction_creation_resume") {
                 if request.arguments.as_object().is_none_or(|a|a.len()!=1) {bail!("Unexpected creation status arguments");}
-                let update=request.arguments["input_update"].as_i64().context("Missing original input reference")?;
+                let reference:InputReference=serde_json::from_value(request.arguments.get("input_ref").or_else(||request.arguments.get("input_update")).context("Missing original input reference")?.clone())?;
+                reference.validate()?;
                 if request.tool=="interaction_creation_resume" {
-                    return super::creation::resume(&app,key,human,&request.thread_id,update,&closed).await;
+                    return super::creation::resume(&app,key,human,&request.thread_id,reference,&closed).await;
                 }
-                let operation=shared.store.interaction_creation_for_input(key,human,update)?;
+                let operation=shared.store.interaction_creation_for_input(key,human,reference)?;
                 return Ok(operation);
             }
             if request.tool!="interaction_dispatch" {bail!("Unknown integrating tool");}
             let args:DispatchArgs=serde_json::from_value(request.arguments)?;
-            if args.input_update<0 || args.destinations.is_empty() || args.destinations.len()>5 {bail!("Invalid routing selection");}
-            let original=shared.store.interaction_entry_inputs(key,human,&request.thread_id,Some(args.input_update))?.pop().context("Original input unavailable or retired")?;
-            let (content,transcription)=shared.store.interaction_input_content(&original,human)?;
-            let message=original.message.context("Original human message missing")?;
-            let text=content.as_str();
-            if text.trim().is_empty() || text.starts_with('/') || !(is_text_only_steer_candidate(&message,text) || transcription.is_some()) {bail!("This adapter requires original committed text");}
+            args.input_ref.validate()?;
+            if args.destinations.is_empty() || args.destinations.len()>5 {bail!("Invalid routing selection");}
+            let (mut source,message)=shared.store.interaction_entry_original(key,human,&request.thread_id,&args.input_ref,&format!("telegram:{}",shared.bot_id))?;
+            if source.text.trim().is_empty() || source.text.starts_with('/') || message.as_ref().is_some_and(|message|!(is_text_only_steer_candidate(message,&source.text) || source.transcription.is_some())) {bail!("This adapter requires original committed text");}
             let cfg=super::routing::profile(shared)?;
             let mut plan=vec![];
             for d in args.destinations {
@@ -108,7 +113,8 @@ pub(super) fn tool_call(
                 if matches.len()!=1 || plan.iter().any(|(k,_,_)|*k==matches[0]) {bail!("Select distinct unambiguous enrolled destinations");}
                 let target=matches[0];
                 let observed=shared.store.interaction_observation(target,human)?.context("Destination ownership unavailable")?;
-                if observed.native_thread.is_none() {bail!("Destination has no native source yet");}
+                // The owning store also admits a freshly created owned session
+                // while its first native writer is still preparing.
                 let relation=match d.relation.as_str() {
                     "new" if d.requests.is_empty()=>RequestRelation::New,
                     "amends" if !d.requests.is_empty() && d.requests.len()<=64=>RequestRelation::Amends(d.requests),
@@ -118,7 +124,7 @@ pub(super) fn tool_call(
                 plan.push((target,observed.session_id,relation));
             }
             plan.sort_by_key(|(key,_,_)|(key.chat_id,key.thread_id));
-            let source=SourceInput{ transcription,channel:format!("telegram:{}",shared.bot_id),event_id:args.input_update.to_string(),update_id:Some(args.input_update),human_id:human,target_sessions:plan.iter().map(|(_,id,_)|*id).collect(),origin:ReturnRoute{chat_id:message.chat.id,thread_id:message.message_thread_id.unwrap_or(0),message_id:message.message_id},text:text.to_owned()};
+            source.target_sessions=plan.iter().map(|(_,id,_)|*id).collect();
             if closed.is_cancelled() {bail!("Tool request closed before admission");}
             let selected=plan.into_iter().map(|(key,_,relation)|(key,relation)).collect::<Vec<_>>();
             let admitted=shared.store.interaction_admit_entry_plan(key,human,&request.thread_id,&source,&selected,&closed)?;
@@ -127,15 +133,32 @@ pub(super) fn tool_call(
             let mut results=vec![];
             for(i,fresh)in admitted {
                 let error=if fresh {
-                    HUMAN_UPDATE_ID.scope(args.input_update,super::routing::dispatch(&app,&i.id,human)).await.err().map(|_|"Dispatch unconfirmed; inspect the retained input; no automatic retry")
+                    dispatch_original(&app,&i.id,human,&args.input_ref).await.err().map(|_|"Dispatch unconfirmed; inspect the retained input; no automatic retry")
                 }else{None};
                 let current=shared.store.interaction_instruction(&i.id,human)?.context("Retained input unavailable")?;
                 results.push(json!({"target":i.target,"instruction":i.id,"requests":current.requests,"phase":current.phase.as_str(),"new_admission":fresh,"dispatch_error":error,"incorporation":"Not established by controller admission or native acceptance; inspect worker coverage"}));
             }
-            Ok(json!({"kind":"integrator_routing_outcomes","original_ingress_update":args.input_update,"original_human":human,"results":results}))
+            Ok(json!({"kind":"integrator_routing_outcomes","input_ref":args.input_ref,"original_ingress_update":args.input_ref.update(),"original_human":human,"results":results}))
         }.await;
         let result=match outcome {Ok(value)=>crate::codex::dynamic_tool_result(true,value.to_string()),Err(_)=>crate::codex::dynamic_tool_result(false,"Routing unavailable for this original input, binding, generation or selection. No uncertain operation was retried. Inspect any retained per-target outcomes before recovery.".into())};
         let _ = send.send(result);
     });
     recv
+}
+
+/// Reuse Telegram task-local attribution only for an actual Telegram update.
+pub(super) async fn dispatch_original(
+    app: &App,
+    id: &str,
+    human: i64,
+    reference: &InputReference,
+) -> Result<()> {
+    match reference.update() {
+        Some(update) => {
+            HUMAN_UPDATE_ID
+                .scope(update, super::routing::dispatch(app, id, human))
+                .await
+        }
+        None => super::routing::dispatch(app, id, human).await,
+    }
 }

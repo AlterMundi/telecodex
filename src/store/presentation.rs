@@ -250,7 +250,7 @@ mod tests {
                     origin: ReturnRoute {
                         chat_id: 100,
                         thread_id: 1,
-                        message_id: 1,
+                        message_id: Some(1),
                     },
                     text: "Calculate".into(),
                 },
@@ -394,7 +394,7 @@ mod tests {
                     origin: ReturnRoute {
                         chat_id: 100,
                         thread_id: 1,
-                        message_id: 2,
+                        message_id: Some(2),
                     },
                     text: "Use updated values".into(),
                 },

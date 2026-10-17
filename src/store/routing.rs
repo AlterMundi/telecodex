@@ -387,7 +387,7 @@ impl Store {
         bind_message(
             &tx,
             &ReturnRoute {
-                message_id: message,
+                message_id: Some(message),
                 ..d.origin
             },
             human,
@@ -592,7 +592,7 @@ mod tests {
                 origin: ReturnRoute {
                     chat_id: 100,
                     thread_id: 1,
-                    message_id: event,
+                    message_id: Some(event),
                 },
                 text: format!("Input {event}"),
             },
@@ -860,7 +860,7 @@ mod tests {
         );
         s.interaction_part_receipt(&da.id, 100, 0, 501).unwrap();
         let reply = ReturnRoute {
-            message_id: 501,
+            message_id: Some(501),
             ..a.origin.clone()
         };
         assert_eq!(
@@ -1022,7 +1022,7 @@ mod tests {
         assert!(
             s.interaction_message_target(
                 &ReturnRoute {
-                    message_id: 601,
+                    message_id: Some(601),
                     ..b.origin
                 },
                 100
