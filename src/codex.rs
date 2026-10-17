@@ -133,7 +133,7 @@ pub enum CodexApprovalDecision {
 #[derive(Debug)]
 pub enum CodexEventOutcome {
     None,
-    Approval(CodexApprovalDecision),
+    Approval(oneshot::Receiver<CodexApprovalDecision>),
     UserInput(oneshot::Receiver<UserInputDecision>),
 }
 
@@ -1100,6 +1100,14 @@ where
                 > + Send,
         >,
     >;
+    type PendingApproval = Pin<
+        Box<
+            dyn std::future::Future<Output = (NativeRequestId, Option<CodexApprovalDecision>)>
+                + Send,
+        >,
+    >;
+    let mut pending_approvals = FuturesUnordered::<PendingApproval>::new();
+    let mut open_approvals = HashMap::<NativeRequestId, CancellationToken>::new();
     let mut pending_inputs = FuturesUnordered::<PendingInput>::new();
     let mut open_inputs = HashMap::<NativeRequestId, CancellationToken>::new();
     let mut submitted_inputs = HashSet::new();
@@ -1124,6 +1132,13 @@ where
               break;
           }
           _=async{if let Some(bound)=bounded{sleep_until(bound.deadline).await;}}, if bounded.is_some() && !cancel.is_cancelled() => { cancel.cancel(); }
+          Some((id, decision)) = pending_approvals.next(), if !pending_approvals.is_empty() => {
+            if open_approvals.remove(&id).is_some() && !cancelled && !cancel.is_cancelled() {
+                if let Some(decision) = decision {
+                    process.send_result(&id, json!({"decision":approval_decision_value(decision)})).await?;
+                }
+            }
+          }
           Some((id, decision)) = pending_inputs.next(), if !pending_inputs.is_empty() => {
             if open_inputs.remove(&id).is_some() && !cancelled && !cancel.is_cancelled() {
                 match decision {
@@ -1216,6 +1231,7 @@ where
                 } else if method == "serverRequest/resolved" {
                     if let Some(id) = params.get("requestId") {
                         let id: NativeRequestId = serde_json::from_value(id.clone())?;
+                        if let Some(closed) = open_approvals.remove(&id) { closed.cancel(); }
                         if submitted_inputs.remove(&id) && !cancelled {
                             let _=on_event(CodexEvent::UserInputAnswered(id.clone())).await?;
                         }
@@ -1246,7 +1262,17 @@ where
                         })),
                         _ => bail!("native question has no human response channel"),
                     }
-                } else {handle_server_request(&mut process,id,&method,&params,on_event).await?;}
+                } else if let Some((id, receiver)) = handle_server_request(&mut process,id,&method,&params,on_event).await? {
+                    let closed = CancellationToken::new();
+                    open_approvals.insert(id.clone(), closed.clone());
+                    pending_approvals.push(Box::pin(async move {
+                        let decision = tokio::select! {
+                            result = receiver => Some(result.unwrap_or(CodexApprovalDecision::Cancel)),
+                            _ = closed.cancelled() => None,
+                        };
+                        (id, decision)
+                    }));
+                }
               }
             }
             if staged_goal && active_turn_id.is_some() && goal_activation_id.is_none() {
@@ -1276,6 +1302,8 @@ where
     for closed in open_inputs.into_values() {
         closed.cancel();
     }
+    // Dropping deferred receivers tells the presentation task to retire its UI.
+    drop(pending_approvals);
     summary.stderr_text = process.shutdown().await?;
     if let Some(error) = turn_error {
         bail!("{error}");
@@ -1592,43 +1620,36 @@ where
     Ok(())
 }
 
+type DeferredApproval = (NativeRequestId, oneshot::Receiver<CodexApprovalDecision>);
+
 async fn handle_server_request<F, Fut>(
     process: &mut AppServerProcess,
     id: NativeRequestId,
     method: &str,
     params: &Value,
     on_event: &mut F,
-) -> Result<()>
+) -> Result<Option<DeferredApproval>>
 where
     F: FnMut(CodexEvent) -> Fut,
     Fut: std::future::Future<Output = Result<CodexEventOutcome>>,
 {
-    match method {
-        "item/commandExecution/requestApproval" => {
-            let request = build_command_approval_request(params);
-            let outcome = on_event(CodexEvent::ApprovalRequest(request)).await?;
-            process
-                .send_result(
-                    &id,
-                    json!({"decision": approval_decision_value(outcome_to_approval_decision(outcome))}),
-                )
-                .await?;
-        }
-        "item/fileChange/requestApproval" => {
-            let request = build_file_change_approval_request(params);
-            let outcome = on_event(CodexEvent::ApprovalRequest(request)).await?;
-            process
-                .send_result(
-                    &id,
-                    json!({"decision": approval_decision_value(outcome_to_approval_decision(outcome))}),
-                )
-                .await?;
-        }
+    let request = match method {
+        "item/commandExecution/requestApproval" => build_command_approval_request(params),
+        "item/fileChange/requestApproval" => build_file_change_approval_request(params),
+        _ => bail!("unsupported app-server server request `{method}`"),
+    };
+    match on_event(CodexEvent::ApprovalRequest(request)).await? {
+        CodexEventOutcome::Approval(receiver) => Ok(Some((id, receiver))),
         _ => {
-            bail!("unsupported app-server server request `{method}`");
+            process
+                .send_result(
+                    &id,
+                    json!({"decision": approval_decision_value(CodexApprovalDecision::Decline)}),
+                )
+                .await?;
+            Ok(None)
         }
     }
-    Ok(())
 }
 async fn run_review_turn<F, Fut>(
     spec: CommandSpec,
@@ -2150,13 +2171,6 @@ fn approval_decision_value(decision: CodexApprovalDecision) -> &'static str {
         CodexApprovalDecision::AcceptForSession => "acceptForSession",
         CodexApprovalDecision::Decline => "decline",
         CodexApprovalDecision::Cancel => "cancel",
-    }
-}
-
-fn outcome_to_approval_decision(outcome: CodexEventOutcome) -> CodexApprovalDecision {
-    match outcome {
-        CodexEventOutcome::Approval(decision) => decision,
-        CodexEventOutcome::None | CodexEventOutcome::UserInput(_) => CodexApprovalDecision::Decline,
     }
 }
 
@@ -2759,6 +2773,132 @@ mod tests {
             assert_eq!(summary.codex_thread_id.as_deref(), Some("tribu-thread"));
             session.codex_thread_id = summary.codex_thread_id;
         }
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pending_approval_does_not_block_steering_or_targeted_interrupt() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let binary = proxy_fixture(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(message) = socket.next().await {
+                let message = message.unwrap();
+                if message.is_close() {
+                    break;
+                }
+                let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                let id = &request["id"];
+                let result = match request["method"].as_str() {
+                    Some("initialize") => json!({}),
+                    Some("initialized") => continue,
+                    Some("thread/start") => {
+                        json!({"thread":{"id":"approval-thread"},"model":"synthetic-model"})
+                    }
+                    Some("thread/goal/get") => json!({"goal":null}),
+                    Some("turn/start") => {
+                        assert_eq!(request["params"]["clientUserMessageId"], "original-input");
+                        socket
+                            .send(WsMessage::Text(
+                                json!({"id":id,"result":{"turn":{"id":"approval-turn"}}})
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .unwrap();
+                        socket.send(WsMessage::Text(json!({"id":900,"method":"item/commandExecution/requestApproval","params":{"threadId":"approval-thread","turnId":"approval-turn","command":"synthetic approval"}}).to_string().into())).await.unwrap();
+                        continue;
+                    }
+                    Some("turn/steer") => {
+                        assert_eq!(request["params"]["expectedTurnId"], "approval-turn");
+                        assert_eq!(request["params"]["clientUserMessageId"], "correction-input");
+                        json!({"turnId":"approval-turn"})
+                    }
+                    Some("turn/interrupt") => {
+                        assert_eq!(request["params"]["turnId"], "approval-turn");
+                        socket
+                            .send(WsMessage::Text(
+                                json!({"id":id,"result":{}}).to_string().into(),
+                            ))
+                            .await
+                            .unwrap();
+                        socket.send(WsMessage::Text(json!({"method":"turn/completed","params":{"threadId":"approval-thread","turn":{"id":"approval-turn","status":"interrupted"}}}).to_string().into())).await.unwrap();
+                        break;
+                    }
+                    other => panic!(
+                        "Unexpected response/request while approval was still pending: {other:?}"
+                    ),
+                };
+                socket
+                    .send(WsMessage::Text(
+                        json!({"id":id,"result":result}).to_string().into(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let (approval_response, approval_receiver) = oneshot::channel::<CodexApprovalDecision>();
+        let (approval_started, started) = oneshot::channel();
+        let cancel = CancellationToken::new();
+        let control = cancel.clone();
+        let (steer, receiver) = mpsc::unbounded_channel();
+        let run = tokio::spawn(async move {
+            let runner = CodexRunner::new(binary)
+                .with_shared_app_server(true)
+                .with_client_message_id(Some("original-input".into()));
+            let session = session_with_sandbox("read-only");
+            let mut request = review_request();
+            request.review_mode = None;
+            let mut pending = Some(approval_receiver);
+            let mut started = Some(approval_started);
+            runner
+                .run_turn(&session, &request, cancel, receiver, move |event| {
+                    let outcome = if matches!(event, CodexEvent::ApprovalRequest(_)) {
+                        let _ = started.take().unwrap().send(());
+                        CodexEventOutcome::Approval(pending.take().unwrap())
+                    } else {
+                        CodexEventOutcome::None
+                    };
+                    async move { Ok(outcome) }
+                })
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(10), started)
+            .await
+            .unwrap()
+            .unwrap();
+        let (response, received) = oneshot::channel();
+        steer
+            .send(CodexSteerRequest {
+                text: "Change the work while approval is pending".into(),
+                client_message_id: Some("correction-input".into()),
+                goal: None,
+                response,
+            })
+            .unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), received)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            Some("approval-turn".into())
+        );
+        control.cancel();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), run)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        let mut approval_response = approval_response;
+        tokio::time::timeout(Duration::from_secs(2), approval_response.closed())
+            .await
+            .unwrap();
         server.await.unwrap();
     }
 

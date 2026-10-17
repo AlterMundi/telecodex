@@ -2447,3 +2447,28 @@ async fn retired_queue_packet_never_runs_after_stop_release() {
     .unwrap();
     assert!(!app.shared.store.get_session(key).unwrap().unwrap().busy);
 }
+
+#[tokio::test]
+async fn retired_approval_does_not_publish_or_keep_pending_state() {
+    let (mut app, _db) = sample_app();
+    Arc::get_mut(&mut app.shared).unwrap().telegram =
+        TelegramClient::new("synthetic-test-token".into(), "http://127.0.0.1:1".into());
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let decision = request_telegram_approval(
+        app.shared.clone(),
+        100,
+        Some(7),
+        100,
+        crate::codex::CodexApprovalRequest {
+            kind: CodexApprovalKind::CommandExecution,
+            prompt: "An expired request".into(),
+            options: vec![CodexApprovalDecision::Accept],
+        },
+        cancel,
+    )
+    .await
+    .unwrap();
+    assert_eq!(decision, CodexApprovalDecision::Cancel);
+    assert!(app.shared.pending_approvals.lock().await.is_empty());
+}

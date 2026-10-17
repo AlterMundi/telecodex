@@ -155,6 +155,9 @@ pub(super) async fn request_telegram_approval(
     request: CodexApprovalRequest,
     cancel: CancellationToken,
 ) -> Result<CodexApprovalDecision> {
+    if cancel.is_cancelled() {
+        return Ok(CodexApprovalDecision::Cancel);
+    }
     let token = Uuid::now_v7().simple().to_string();
     let keyboard = approval_keyboard(&token, &request.options);
     let (sender, receiver) = oneshot::channel();
@@ -171,15 +174,14 @@ pub(super) async fn request_telegram_approval(
         CodexApprovalKind::FileChange => "Approval required: file change",
     };
     let message_text = format!("{header}\n\n{}", request.prompt);
-    if let Err(error) = send_markdown_message(
-        &shared.telegram,
-        chat_id,
-        thread_id,
-        &message_text,
-        keyboard,
-    )
-    .await
-    {
+    let publication = tokio::select! {
+        result = send_markdown_message(&shared.telegram, chat_id, thread_id, &message_text, keyboard) => result,
+        _ = cancel.cancelled() => {
+            shared.pending_approvals.lock().await.remove(&token);
+            return Ok(CodexApprovalDecision::Cancel);
+        }
+    };
+    if let Err(error) = publication {
         shared.pending_approvals.lock().await.remove(&token);
         return Err(error);
     }
@@ -200,11 +202,13 @@ pub(super) async fn request_telegram_approval(
 
     if send_status {
         let status = format!("Approval {}", approval_decision_status(decision));
-        if let Err(error) =
-            send_markdown_message(&shared.telegram, chat_id, thread_id, &status, None).await
-        {
-            tracing::debug!("failed to send approval status: {error:#}");
-        }
+        tokio::spawn(async move {
+            if let Err(error) =
+                send_markdown_message(&shared.telegram, chat_id, thread_id, &status, None).await
+            {
+                tracing::debug!("failed to send approval status: {error:#}");
+            }
+        });
     }
 
     Ok(decision)
