@@ -44,9 +44,12 @@ async fn show_question(
     pending: &mut PendingDialogue,
 ) -> Result<()> {
     let question = &pending.request.questions[pending.index];
-    shared
-        .store
-        .update_native_interaction(token, &question.header, &question.question)?;
+    shared.store.update_native_interaction(
+        token,
+        &question.header,
+        &question.question,
+        pending.index,
+    )?;
     if shared
         .store
         .conversation_turn_return(pending.local_turn_id)?

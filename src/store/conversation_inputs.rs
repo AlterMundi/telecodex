@@ -13,6 +13,9 @@ pub struct ConversationInput {
     pub native: String,
     pub epoch: String,
     pub text: String,
+    /// Bounded owned question versions present before capture/ASR, not device hints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_versions: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<ConversationVoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -332,6 +335,9 @@ impl Store {
             native,
             epoch: super::stopping::admission_epoch_on(&tx, entry)?,
             text: text.into(),
+            question_versions: Some(super::conversation_requests::capture_questions_on(
+                &tx, human, entry,
+            )?),
             voice: voice.clone(),
             reply,
             focus,

@@ -331,6 +331,57 @@ struct ContextQuestion {
     input_ref: String,
     #[serde(default)]
     offset: usize,
+    #[serde(default)]
+    question: Option<QuestionSelection>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuestionSelection {
+    id: String,
+    revision: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuestionCatalog {
+    input_ref: String,
+    #[serde(default)]
+    after: i64,
+}
+
+pub(super) async fn questions(
+    app: &App,
+    human: i64,
+    entry: SessionKey,
+    native: &str,
+    arguments: Value,
+    closed: &CancellationToken,
+) -> Result<Value> {
+    let args: QuestionCatalog = serde_json::from_value(arguments)?;
+    let input = app
+        .shared
+        .store
+        .conversation_input_read(human, entry, &args.input_ref)?;
+    if input.native != native || closed.is_cancelled() {
+        bail!("Question inspection belongs to another native conversation");
+    }
+    let page = command(app, human, &format!("list {}", args.after)).await?;
+    let mut items = Vec::new();
+    for item in page["items"].as_array().context("Missing questions")? {
+        if item["kind"] != "question" {
+            continue;
+        }
+        let mut item = item.clone();
+        item["available_at_capture"] = json!(app.shared.store.conversation_question_at_capture(
+            human,
+            entry,
+            &input.id,
+            item["id"].as_str().context("Missing question identity")?
+        )?);
+        items.push(item);
+    }
+    Ok(
+        json!({"input_ref":input.id,"items":items,"cursor":page["cursor"],"more":page["more"],"selection":"No answer or destination selected; inspect the full question before interpreting an original"}),
+    )
 }
 
 /// Classify a retained contextual input without model-authored answer text.
@@ -348,22 +399,31 @@ pub(super) async fn interpret_context(
         .shared
         .store
         .conversation_input_read(human, entry, &args.input_ref)?;
-    let selected = input
-        .reply
-        .as_ref()
-        .filter(|r| r.context_only)
-        .context("This input has no contextual source")?;
-    let id = selected
-        .source
-        .strip_prefix("request:")
-        .context("Context is not a native question")?;
+    let (id, selected_revision, explicit) = if let Some(selected) = &args.question {
+        if selected.id.len() != 32 || selected.revision.len() != 64 {
+            bail!("Invalid question selection");
+        }
+        (selected.id.as_str(), selected.revision.as_str(), true)
+    } else {
+        let selected = input.reply.as_ref().filter(|r| r.context_only).context(
+            "This input has no contextual source; inspect questions and select one explicitly",
+        )?;
+        (
+            selected
+                .source
+                .strip_prefix("request:")
+                .context("Context is not a native question")?,
+            selected.revision.as_str(),
+            false,
+        )
+    };
     if input.native != native || closed.is_cancelled() {
         bail!("Context interpretation belongs to another native conversation");
     }
     if !answer {
         let view = detail(app, human, entry, id, args.offset).await?;
         return Ok(
-            json!({"reported_context":selected,"matches_current":view["revision"]==selected.revision,"question":view}),
+            json!({"reported_context":input.reply,"selection":{"id":id,"revision":selected_revision},"matches_current":view["revision"]==selected_revision,"available_at_capture":app.shared.store.conversation_question_at_capture(human,entry,&input.id,id)?,"question":view}),
         );
     }
     if args.offset != 0 {
@@ -379,7 +439,7 @@ pub(super) async fn interpret_context(
             .context("Missing conversation binding")?
             .into(),
         id: id.into(),
-        revision: selected.revision.clone(),
+        revision: selected_revision.into(),
         action: Action::Answer {
             text: input.answer_text(),
         },
@@ -390,7 +450,7 @@ pub(super) async fn interpret_context(
         entry,
         decision,
         Some(&input.id),
-        Some((native, closed)),
+        Some((native, closed, explicit)),
     )
     .await
 }
@@ -401,7 +461,7 @@ async fn decide(
     entry: SessionKey,
     d: Decision,
     source_input: Option<&str>,
-    interpretation: Option<(&str, &CancellationToken)>,
+    interpretation: Option<(&str, &CancellationToken, bool)>,
 ) -> Result<Value> {
     if d.id.len() > 64 || d.revision.len() != 64 {
         bail!("Invalid request decision identity");

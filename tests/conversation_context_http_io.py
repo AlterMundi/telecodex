@@ -2,6 +2,8 @@
 from pathlib import Path
 import sys
 import sqlite3
+import json
+import threading
 from conversation_cold_entry_http_io import ColdEntry, Browser
 
 
@@ -76,4 +78,146 @@ def qualify(binary):
         j.close()
 
 
-if __name__=='__main__':qualify(sys.argv[1])
+def unhinted_question_selection(binary):
+    j=ColdEntry(str(Path(binary).resolve()));b=None;recording=None
+    try:
+        j.prepare();b=Browser(j)
+        for name,topic in (('Alpha',7),('Beta',8)):
+            b.text('#'+name+' Work on this independent requirement.')
+            j.wait(lambda topic=topic:j.instructions(topic)and j.instructions(topic)[0][1]=='accepted')
+        early,_=b.text('Discuss this before any question exists.')
+        j.wait(lambda:b.status(early)['phase']=='accepted')
+        workers={topic:next(send for thread,send in j.clients.values()if thread=='native-topic-'+str(topic))for topic in(7,8)}
+        def ask(topic,rpc,questions):
+            workers[topic]({'id':rpc,'method':'item/tool/requestUserInput','params':{
+                'threadId':'native-topic-'+str(topic),'turnId':j.workers['native-topic-'+str(topic)],'itemId':rpc,'isBlocking':True,'questions':questions}})
+        def question(ident,body):
+            return {'id':ident,'header':ident.title(),'question':body,'isOther':True,'options':None}
+        ask(7,'canonical-selection-alpha',[question('colour','Which colour should Alpha use?'),question('scope','Which final scope should Alpha use?')])
+        ask(8,'canonical-selection-beta',[question('scope','Which scope should Beta use?')])
+        workers[8]({'id':'canonical-selection-approval','method':'item/commandExecution/requestApproval','params':{
+            'threadId':'native-topic-8','turnId':j.workers['native-topic-8'],'itemId':'selection-approval','command':'echo synthetic-only','reason':'Never approve from an interpreted original','availableDecisions':['accept','decline']}})
+        j.wait(lambda:j.row("SELECT count(*)FROM human_interactions WHERE state='pending'")==[(3,)])
+        items=b.get('/api/interaction/requests')['items']
+        alpha=next(v for v in items if v['kind']=='question'and v['label']=='#Alpha')
+        beta=next(v for v in items if v['kind']=='question'and v['label']=='#Beta')
+        approval=next(v for v in items if v['kind']=='approval')
+        def selection(view):return {k:view[k]for k in('id','revision')}
+        def call(tag,operation,ident,view=None,ok=True,**extra):
+            args={'input_ref':ident,**extra}
+            if view:args['question']=selection(view)
+            return j.call('route-select-'+tag,operation,args,ok=ok)
+        page=call('early-list','questions',early)
+        assert len(page['items'])==2 and all(not v['available_at_capture']for v in page['items'])
+        assert all(v['kind']=='question'for v in page['items'])
+        call('not-yet-asked','answer_question',early,alpha,ok=False)
+        plain,_=b.text('Use blue for Alpha colour.')
+        before_step,_=b.text('This original was captured before Alpha advanced to its next question.')
+        j.wait(lambda:all(b.status(ident)['phase']=='accepted'for ident in(plain,before_step)))
+        assert not j.native_answers,'Plain text implicitly answered a question'
+        catalog=call('plain-list','questions',plain)
+        assert all(v['available_at_capture']for v in catalog['items'])and not catalog['more']
+        assert not call('next-page','questions',plain,after=catalog['cursor'])['items']
+        call('bad-page','questions',plain,ok=False,after=-1)
+        full=call('plain-read','question_context',plain,alpha)
+        assert full['matches_current']and full['available_at_capture']and 'Which colour' in full['question']['body']
+        call('approval-refused','answer_question',plain,approval,ok=False)
+        call('invented-answer','answer_question',plain,alpha,ok=False,text='Invented human speech')
+        call('bad-revision','answer_question',plain,{**alpha,'revision':'f'*64},ok=False)
+        prior_update=j.row('SELECT updated_at FROM human_interactions WHERE id=?',(alpha['id'],))[0][0]
+        callback_message={'message_id':4242,'chat':{'id':100,'type':'private'}}
+        j.admit(callback=(callback_message,'qopen:'+alpha['id']),topic=1)
+        j.wait(lambda:j.row('SELECT updated_at FROM human_interactions WHERE id=?',(alpha['id'],))[0][0]!=prior_update)
+        reopened=call('unchanged-reopen','question_context',plain,alpha)
+        assert reopened['matches_current']and reopened['available_at_capture'],'Reopening unchanged controls invalidated the original'
+        answered=call('plain-answer','answer_question',plain,alpha)
+        assert answered['recorded']and answered['new_decision']
+        assert b.status(plain)['phase']=='answered'and b.status(plain)['decision']['source_input']==plain
+        assert not j.native_answers,'A multi-part native question closed before its final answer'
+        alpha2=b.get('/api/interaction/requests/'+alpha['id'])
+        assert alpha2['revision']!=alpha['revision']and 'final scope' in alpha2['body']
+        call('earlier-step','answer_question',before_step,alpha2,ok=False)
+        versions=call('independent-versions','questions',before_step)['items']
+        assert not next(v for v in versions if v['id']==alpha['id'])['available_at_capture']
+        assert next(v for v in versions if v['id']==beta['id'])['available_at_capture'],'An unrelated question change invalidated Beta'
+        assert not call('plain-identical','answer_question',plain,alpha)['new_decision']
+        call('plain-no-dispatch','dispatch',plain,ok=False,destinations=[{'selector':'Beta','relation':'new','requests':[]}])
+        context={'source':'request:'+alpha2['id'],'revision':alpha2['revision'],'context_only':True}
+        other,_=b.text('For Beta, keep only the selected requirement.',context)
+        j.wait(lambda:b.status(other)['phase']=='accepted')
+        call('explicit-other-question','answer_question',other,beta)
+        j.wait(lambda:any(v['id']=='canonical-selection-beta'for v in j.native_answers))
+        actual=next(v for v in j.native_answers if v['id']=='canonical-selection-beta')['result']['answers']['scope']['answers'][0]
+        assert actual=='For Beta, keep only the selected requirement.'
+        status=b.status(other);assert status['decision']['id']==beta['id']and status['decision']['source_input']==other
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            retained=json.loads(db.execute('SELECT doc FROM conversation_inputs WHERE id=?',(other,)).fetchone()[0])
+        assert retained['reply']==context,'Semantic selection rewrote the device context'
+        call('consumed-no-second-question','answer_question',other,alpha2,ok=False)
+
+        (j.root/'hold-asr').touch();voice_result=[];voice_errors=[]
+        def voice():
+            try:voice_result.append(b.voice())
+            except BaseException as error:voice_errors.append(error)
+        recording=threading.Thread(target=voice);recording.start()
+        j.wait(lambda:j.row("SELECT count(*) FROM conversation_inputs WHERE phase='preparing'")==[(1,)])
+        ask(8,'canonical-selection-later',[{**question('first','Which identical scope should Beta use?'),'header':'Scope'},{**question('second','Which identical scope should Beta use?'),'header':'Scope'}])
+        pending_later="SELECT id FROM human_interactions WHERE state='pending' AND json_extract(payload_json,'$.source.itemId')='canonical-selection-later'"
+        j.wait(lambda:len(j.row(pending_later))==1)
+        later=b.get('/api/interaction/requests/'+j.row(pending_later)[0][0])
+        assert later['kind']=='question'and later['label']=='#Beta'and later['actionable']
+        (j.root/'release-asr').touch();recording.join(timeout=15)
+        assert not recording.is_alive()and not voice_errors,voice_errors
+        spoken=voice_result[0][0];j.wait(lambda:b.status(spoken)['phase']=='accepted')
+        late_view=call('late-asr-read','question_context',spoken,later)
+        assert late_view['matches_current']and not late_view['available_at_capture']
+        call('late-asr-refused','answer_question',spoken,later,ok=False)
+        assert b.status(spoken)['phase']=='accepted'
+        legacy,_=b.text('A retained legacy original has no version snapshot.')
+        j.wait(lambda:b.status(legacy)['phase']=='accepted')
+        with sqlite3.connect(j.root/'state.sqlite')as db:db.execute("UPDATE conversation_inputs SET doc=json_remove(doc,'$.question_versions')WHERE id=?",(legacy,))
+        call('no-legacy-snapshot','answer_question',legacy,later,ok=False)
+        reserved,_=b.text('An original reserved for creation must not answer as well.')
+        j.wait(lambda:b.status(reserved)['phase']=='accepted')
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            db.execute("INSERT INTO interaction_creations(id,human_id,entry_chat,entry_topic,input_update,phase,doc,instance_id)SELECT 'question-selection-reserved',100,100,1,?,'prepared','{}',instance_id FROM conversation_inputs WHERE id=?",(reserved,reserved))
+        call('creation-exclusive','answer_question',reserved,later,ok=False)
+        routed,_=b.text('Use this original as a new Beta task, never also an answer.')
+        j.wait(lambda:b.status(routed)['phase']=='accepted')
+        call('route-exclusive','dispatch',routed,destinations=[{'selector':'Beta','relation':'new','requests':[]}])
+        call('routed-no-answer','answer_question',routed,later,ok=False)
+        final,_=b.text('Use only the final Alpha requirement.')
+        j.wait(lambda:b.status(final)['phase']=='accepted')
+        call('final-alpha','answer_question',final,alpha2)
+        j.wait(lambda:any(v['id']=='canonical-selection-alpha'for v in j.native_answers))
+        answers=next(v for v in j.native_answers if v['id']=='canonical-selection-alpha')['result']['answers']
+        assert answers['colour']['answers']==['Use blue for Alpha colour.']and answers['scope']['answers']==['Use only the final Alpha requirement.']
+        old_same,_=b.text('This was captured before the identical-looking next question.')
+        first_same,_=b.text('Use the first selected Beta scope.')
+        j.wait(lambda:all(b.status(ident)['phase']=='accepted'for ident in(old_same,first_same)))
+        call('same-proposal-first','answer_question',first_same,later)
+        later2=b.get('/api/interaction/requests/'+later['id'])
+        assert later2['revision']!=later['revision']and later2['question_index']==1
+        assert 'Which identical scope' in later2['body']
+        call('same-visible-proposal-next','answer_question',old_same,later2,ok=False)
+        second_same,_=b.text('Use the second selected Beta scope.')
+        j.wait(lambda:b.status(second_same)['phase']=='accepted')
+        call('same-proposal-second','answer_question',second_same,later2)
+        j.wait(lambda:any(v['id']=='canonical-selection-later'for v in j.native_answers))
+        same_answers=next(v for v in j.native_answers if v['id']=='canonical-selection-later')['result']['answers']
+        assert same_answers['first']['answers']==['Use the first selected Beta scope.']and same_answers['second']['answers']==['Use the second selected Beta scope.']
+        journal=j.row('SELECT count(*)FROM conversation_decisions')
+        j.stop();j.start();j.wait_control_socket(j.socket)
+        assert b.status(plain)['decision']['source_input']==plain and b.status(other)['decision']['id']==beta['id']
+        assert j.row('SELECT count(*)FROM conversation_decisions')==journal
+        print('PASS actual HTTP/native/SQLite unhinted question selection: exact original answers, independent concurrent questions, unchanged conflicting playback hint, multi-question capture versions, late ASR/legacy refusal, approvals excluded, no invented text/double-use, immutable receipts and restart; zero models.')
+    finally:
+        (j.root/'release-asr').touch()
+        if recording is not None:recording.join(timeout=30)
+        if b:b.client.close()
+        j.close()
+
+
+if __name__=='__main__':
+    qualify(sys.argv[1])
+    unhinted_question_selection(sys.argv[1])

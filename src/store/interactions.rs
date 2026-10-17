@@ -295,11 +295,17 @@ impl Store {
         Ok(())
     }
 
-    pub fn update_native_interaction(&self, id: &str, title: &str, action: &str) -> Result<()> {
+    pub fn update_native_interaction(
+        &self,
+        id: &str,
+        title: &str,
+        action: &str,
+        index: usize,
+    ) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute("UPDATE human_interactions SET payload_json=json_set(payload_json,'$.title',?2,'$.action',?3),updated_at=?4
+        conn.execute("UPDATE human_interactions SET payload_json=json_set(payload_json,'$.title',?2,'$.action',?3,'$.source.conversationIndex',?6),updated_at=?4
             WHERE id=?1 AND instance_id=?5 AND kind='native' AND state='pending'",
-            params![id,title,action,now_string(),self.instance_id])?;
+            params![id,title,action,now_string(),self.instance_id,index as i64])?;
         Ok(())
     }
 

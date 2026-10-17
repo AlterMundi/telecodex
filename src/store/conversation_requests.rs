@@ -18,6 +18,7 @@ pub struct ConversationRequest {
     pub binding: String,
     pub entry_binding: Value,
     pub scope: String,
+    pub capture_version: String,
 }
 
 pub(super) fn read_on(
@@ -55,13 +56,55 @@ pub(super) fn read_on(
         super::stopping::admission_epoch_on(conn, entry)?,
         super::stopping::admission_epoch_on(conn, key)?
     ]);
+    let scope = format!("{:x}", Sha256::digest(proof.to_string().as_bytes()));
+    let index = item.source["conversationIndex"].as_u64().unwrap_or(0);
+    let proposal = &item.source["request"]["questions"][index as usize];
+    let capture_version = format!(
+        "{:x}",
+        Sha256::digest(
+            json!([scope, item.id, index, proposal, item.title, item.action])
+                .to_string()
+                .as_bytes()
+        )
+    );
     Ok(ConversationRequest {
         item,
         key,
         binding,
         entry_binding: json!([human, entry, session, native]),
-        scope: format!("{:x}", Sha256::digest(proof.to_string().as_bytes())),
+        scope,
+        capture_version,
     })
+}
+
+/// Snapshot only current canonical owned questions; keep bodies out of originals.
+/// The bound exceeds the twenty-context qualification and does not block capture.
+pub(super) fn capture_questions_on(
+    conn: &Connection,
+    human: i64,
+    entry: SessionKey,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT h.id FROM human_interactions h
+        JOIN sessions s ON s.id=h.session_id JOIN users u ON u.tg_user_id=h.requester
+        JOIN turns t ON t.id=h.local_turn
+        WHERE h.kind='native' AND h.state='pending' AND h.requester=?2 AND u.allowed=1
+        AND s.creator_user_id=?2 AND s.codex_thread_id=h.native_thread AND s.force_fresh_thread=0
+        AND t.session_id=s.id AND t.from_user_id=?2 AND t.native_thread_id=h.native_thread
+        AND t.status='running' AND json_extract(h.payload_json,'$.source.kind')='question'
+        {CANONICAL_SCOPE} ORDER BY h.rowid LIMIT 128"
+    ))?;
+    let ids = statement
+        .query_map(params![0, human, entry.chat_id, entry.thread_id], |r| {
+            r.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    ids.into_iter()
+        .map(|id| {
+            let current = read_on(conn, human, entry, &id)?;
+            Ok((id, current.capture_version))
+        })
+        .collect()
 }
 
 impl Store {
@@ -100,6 +143,40 @@ impl Store {
               WHERE kind='native' AND requester=NEW.tg_user_id AND state IN ('pending','answering'); END; COMMIT;"))?;
         Ok(())
     }
+    pub fn conversation_question_at_capture(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        input_id: &str,
+        question: &str,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let input = super::conversation_inputs::read_on(&conn, input_id, human)?;
+        super::conversation_inputs::eligible_on(&conn, &input)?;
+        if input.entry != entry {
+            bail!("Original belongs to another entry");
+        }
+        let current = read_on(&conn, human, entry, question)?;
+        Ok(input
+            .question_versions
+            .as_ref()
+            .and_then(|v| v.get(question))
+            == Some(&current.capture_version))
+    }
+
+    pub fn conversation_answer_receipt(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        input_id: &str,
+    ) -> Result<Option<Value>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, _) = super::presentation::entry_on(&conn, human, entry)?;
+        let raw:Option<String> = conn.query_row("SELECT doc FROM conversation_decisions WHERE human_id=?1 AND entry_session=?2 AND entry_chat=?3 AND entry_topic=?4 AND json_extract(doc,'$.source_input')=?5",params![human,session,entry.chat_id,entry.thread_id,input_id],|r|r.get(0)).optional()?;
+        raw.map(|r| serde_json::from_str(&r).map_err(Into::into))
+            .transpose()
+    }
+
     pub fn conversation_request_binding(&self, human: i64, entry: SessionKey) -> Result<Value> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
@@ -194,7 +271,7 @@ impl Store {
         next_state: &str,
         next_question: Option<(&str, &str, usize)>,
         source_input: Option<&str>,
-        interpretation: Option<(&str, &tokio_util::sync::CancellationToken)>,
+        interpretation: Option<(&str, &tokio_util::sync::CancellationToken, bool)>,
     ) -> Result<bool> {
         if revision.len() != 64
             || !revision.bytes().all(|b| b.is_ascii_hexdigit())
@@ -213,26 +290,28 @@ impl Store {
                 let input = super::conversation_inputs::read_on(&tx, id, human)?;
                 super::conversation_inputs::eligible_on(&tx, &input)?;
                 let contextual = input.reply.as_ref().is_some_and(|r| r.context_only);
-                let eligible = if let Some((native, closed)) = interpretation {
+                let eligible = if let Some((native, closed, explicit)) = interpretation {
                     let linked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND session_id=?2 AND from_user_id=?3 AND native_thread_id=?4)",params![input.local_turn,input.session,human,native],|r|r.get(0))?;
                     let routed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_sources WHERE channel='conversation' AND event_id=?1 AND human_id=?2)",params![input.id,human],|r|r.get(0))?;
                     let creating: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4)",params![human,entry.chat_id,entry.thread_id,input.id],|r|r.get(0))?;
-                    contextual && input.native == native && linked && !routed && !creating && !closed.is_cancelled()
+                    (contextual || explicit) && input.native == native && linked && !routed && !creating && !closed.is_cancelled()
                         && matches!(input.phase.as_str(),"sending"|"steering"|"accepted")
                 } else {
                     !contextual && input.phase == "retained"
                 };
                 if input.entry != entry
                     || !eligible
-                    || input.reply.as_ref().is_none_or(|r| {
-                        r.source != format!("request:{}", expected.item.id)
-                            || r.revision != revision
-                    })
-                    || input.focus.as_ref().is_none_or(|f| {
-                        f.retired
-                            || f.target != current.key
-                            || f.native.as_deref() != Some(current.item.native_thread.as_str())
-                    })
+                    || if interpretation.is_some_and(|(_, _, explicit)| explicit) {
+                        input.question_versions.as_ref().and_then(|v| v.get(&current.item.id))
+                            != Some(&current.capture_version)
+                    } else {
+                        input.reply.as_ref().is_none_or(|r| {
+                            r.source != format!("request:{}", expected.item.id) || r.revision != revision
+                        }) || input.focus.as_ref().is_none_or(|f| {
+                            f.retired || f.target != current.key
+                                || f.native.as_deref() != Some(current.item.native_thread.as_str())
+                        })
+                    }
                     || action != &json!({"kind":"answer","text":input.answer_text()})
                     || current.item.source["kind"] != "question"
                 {
@@ -289,7 +368,7 @@ impl Store {
                 bail!("Original answer source no longer current");
             }
         }
-        if interpretation.is_some_and(|(_, closed)| closed.is_cancelled()) {
+        if interpretation.is_some_and(|(_, closed, _)| closed.is_cancelled()) {
             bail!("Context interpretation closed before commitment");
         }
         tx.commit()?;
