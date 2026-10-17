@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 mod auth;
+mod dialogue;
 mod forum;
 mod goals;
 mod icons;

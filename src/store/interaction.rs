@@ -47,6 +47,149 @@ pub(super) fn record_native_message_on(
     Ok(inserted)
 }
 
+pub(super) fn admit_on(
+    tx: &Connection,
+    source: &crate::interaction::SourceInput,
+    target: SessionKey,
+    relation: crate::interaction::RequestRelation,
+    instance: &str,
+) -> Result<(crate::interaction::Instruction, bool)> {
+    use crate::interaction::{Instruction, RequestRelation};
+    if source.text.trim().is_empty()
+        || source.text.len() > 256 * 1024
+        || source.channel.is_empty()
+        || source.channel.len() > 64
+        || source.event_id.is_empty()
+        || source.event_id.len() > 256
+        || source.human_id <= 0
+        || source.origin.chat_id == 0
+        || source.origin.thread_id < 0
+        || source.origin.message_id <= 0
+        || source.update_id.is_some_and(|id| id < 0)
+        || relation.requests().len() > 64
+        || source.target_sessions.is_empty()
+        || source.target_sessions.len() > 64
+        || source
+            .target_sessions
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != source.target_sessions.len()
+    {
+        return Err(anyhow!("Invalid interaction input"));
+    }
+    let id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!(
+            "telecodex:interaction:{}:{}",
+            source.channel, source.event_id
+        )
+        .as_bytes(),
+    )
+    .to_string();
+    let raw_source = serde_json::to_string(source)?;
+    let target_row: Option<(i64, Option<String>)> = tx.query_row(
+        "SELECT s.id,s.codex_thread_id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
+         WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1
+         AND (s.codex_thread_id IS NOT NULL OR s.force_fresh_thread=1)",
+        params![target.chat_id,target.thread_id,source.human_id], |r| Ok((r.get(0)?,r.get(1)?)),
+    ).optional()?;
+    let (session, native) =
+        target_row.context("Interaction target is not an owned bound session")?;
+    if !source.target_sessions.contains(&session) {
+        return Err(anyhow!(
+            "Destination is outside the immutable selected target plan"
+        ));
+    }
+    let existing: Option<(String, String, String)> = tx.query_row(
+        "SELECT s.doc,i.doc,i.phase FROM interaction_sources s JOIN interaction_instructions i ON i.input_id=s.id
+         WHERE s.id=?1 AND i.session_id=?2", params![id,session],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+    ).optional()?;
+    if let Some((old_source, old_instruction, phase)) = existing {
+        let mut previous: Instruction = serde_json::from_str(&old_instruction)?;
+        if raw_source != old_source || previous.relation != relation {
+            return Err(anyhow!("Interaction source identity is immutable"));
+        }
+        previous.phase = phase.as_str().try_into()?;
+        return Ok((previous, false));
+    }
+    let old_source: Option<String> = tx
+        .query_row(
+            "SELECT doc FROM interaction_sources WHERE id=?",
+            [&id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if old_source.as_ref().is_some_and(|old| old != &raw_source) {
+        return Err(anyhow!("Interaction source identity is immutable"));
+    }
+    let instruction_id =
+        Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("{id}:{session}").as_bytes()).to_string();
+    let requests = match &relation {
+        RequestRelation::New => vec![instruction_id.clone()],
+        RequestRelation::Amends(ids) | RequestRelation::Context(ids) => {
+            if ids.is_empty()
+                || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
+            {
+                return Err(anyhow!(
+                    "An amendment/context must identify distinct existing requests"
+                ));
+            }
+            for request in ids {
+                let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_requests WHERE id=?1 AND session_id=?2 AND human_id=?3)",params![request,session,source.human_id],|r|r.get(0))?;
+                if !valid {
+                    return Err(anyhow!(
+                        "Interaction relation crosses request ownership or destination"
+                    ));
+                }
+            }
+            ids.clone()
+        }
+    };
+    let sequence: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(sequence),0)+1 FROM interaction_instructions WHERE session_id=?",
+        [session],
+        |r| r.get(0),
+    )?;
+    let instruction = Instruction {
+        id: instruction_id,
+        input_id: id.clone(),
+        human_id: source.human_id,
+        target_session: session,
+        target,
+        sequence,
+        relation,
+        requests,
+        text: source.text.clone(),
+        origin: source.origin.clone(),
+        phase: crate::interaction::TransportPhase::Queued,
+        admission_epoch: None,
+        local_turn: None,
+        native_thread: native,
+        native_turn: None,
+    };
+    tx.execute("INSERT OR IGNORE INTO interaction_sources(id,human_id,update_id,channel,event_id,origin_chat,origin_thread,origin_message,doc,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![id,source.human_id,source.update_id,source.channel,source.event_id,source.origin.chat_id,source.origin.thread_id,source.origin.message_id,raw_source,now_string()])?;
+    tx.execute("INSERT INTO interaction_instructions(id,input_id,session_id,sequence,phase,doc,instance_id) VALUES(?1,?2,?3,?4,'queued',?5,?6)",params![instruction.id,instruction.input_id,session,sequence,serde_json::to_string(&instruction)?,instance])?;
+    if matches!(instruction.relation, RequestRelation::New) {
+        tx.execute(
+            "INSERT INTO interaction_requests(id,input_id,session_id,human_id) VALUES(?1,?2,?3,?4)",
+            params![
+                instruction.id,
+                instruction.input_id,
+                session,
+                source.human_id
+            ],
+        )?;
+    }
+    for request in &instruction.requests {
+        tx.execute(
+            "INSERT INTO interaction_request_links(instruction_id,request_id) VALUES(?1,?2)",
+            params![instruction.id, request],
+        )?;
+    }
+    Ok((instruction, true))
+}
+
 impl Store {
     pub(super) fn init_interaction(&self) -> Result<()> {
         self.conn
@@ -120,135 +263,11 @@ impl Store {
         target: SessionKey,
         relation: crate::interaction::RequestRelation,
     ) -> Result<(crate::interaction::Instruction, bool)> {
-        use crate::interaction::{Instruction, RequestRelation};
-        if source.text.trim().is_empty()
-            || source.text.len() > 256 * 1024
-            || source.channel.is_empty()
-            || source.channel.len() > 64
-            || source.event_id.is_empty()
-            || source.event_id.len() > 256
-            || source.human_id <= 0
-            || source.origin.chat_id == 0
-            || source.origin.thread_id < 0
-            || source.origin.message_id <= 0
-            || source.update_id.is_some_and(|id| id < 0)
-            || relation.requests().len() > 64
-            || source.target_sessions.is_empty()
-            || source.target_sessions.len() > 64
-            || source
-                .target_sessions
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len()
-                != source.target_sessions.len()
-        {
-            return Err(anyhow!("Invalid interaction input"));
-        }
-        let id = Uuid::new_v5(
-            &Uuid::NAMESPACE_URL,
-            format!(
-                "telecodex:interaction:{}:{}",
-                source.channel, source.event_id
-            )
-            .as_bytes(),
-        )
-        .to_string();
-        let raw_source = serde_json::to_string(source)?;
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let target_row: Option<(i64, Option<String>)> = tx.query_row(
-            "SELECT s.id,s.codex_thread_id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
-             WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1
-             AND (s.codex_thread_id IS NOT NULL OR s.force_fresh_thread=1)",
-            params![target.chat_id,target.thread_id,source.human_id], |r| Ok((r.get(0)?,r.get(1)?)),
-        ).optional()?;
-        let (session, native) =
-            target_row.context("Interaction target is not an owned bound session")?;
-        if !source.target_sessions.contains(&session) {
-            return Err(anyhow!(
-                "Destination is outside the immutable selected target plan"
-            ));
-        }
-        let existing: Option<(String, String, String)> = tx.query_row(
-            "SELECT s.doc,i.doc,i.phase FROM interaction_sources s JOIN interaction_instructions i ON i.input_id=s.id
-             WHERE s.id=?1 AND i.session_id=?2", params![id,session],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-        ).optional()?;
-        if let Some((old_source, old_instruction, phase)) = existing {
-            let mut previous: Instruction = serde_json::from_str(&old_instruction)?;
-            if raw_source != old_source || previous.relation != relation {
-                return Err(anyhow!("Interaction source identity is immutable"));
-            }
-            previous.phase = phase.as_str().try_into()?;
-            return Ok((previous, false));
-        }
-        let old_source: Option<String> = tx
-            .query_row(
-                "SELECT doc FROM interaction_sources WHERE id=?",
-                [&id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if old_source.as_ref().is_some_and(|old| old != &raw_source) {
-            return Err(anyhow!("Interaction source identity is immutable"));
-        }
-        let instruction_id =
-            Uuid::new_v5(&Uuid::NAMESPACE_URL, format!("{id}:{session}").as_bytes()).to_string();
-        let requests = match &relation {
-            RequestRelation::New => vec![instruction_id.clone()],
-            RequestRelation::Amends(ids) | RequestRelation::Context(ids) => {
-                if ids.is_empty()
-                    || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
-                {
-                    return Err(anyhow!(
-                        "An amendment/context must identify distinct existing requests"
-                    ));
-                }
-                for request in ids {
-                    let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_requests WHERE id=?1 AND session_id=?2 AND human_id=?3)",params![request,session,source.human_id],|r|r.get(0))?;
-                    if !valid {
-                        return Err(anyhow!(
-                            "Interaction relation crosses request ownership or destination"
-                        ));
-                    }
-                }
-                ids.clone()
-            }
-        };
-        let sequence: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(sequence),0)+1 FROM interaction_instructions WHERE session_id=?",
-            [session],
-            |r| r.get(0),
-        )?;
-        let instruction = Instruction {
-            id: instruction_id,
-            input_id: id.clone(),
-            human_id: source.human_id,
-            target_session: session,
-            target,
-            sequence,
-            relation,
-            requests,
-            text: source.text.clone(),
-            origin: source.origin.clone(),
-            phase: crate::interaction::TransportPhase::Queued,
-            admission_epoch: None,
-            local_turn: None,
-            native_thread: native,
-            native_turn: None,
-        };
-        tx.execute("INSERT OR IGNORE INTO interaction_sources(id,human_id,update_id,channel,event_id,origin_chat,origin_thread,origin_message,doc,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![id,source.human_id,source.update_id,source.channel,source.event_id,source.origin.chat_id,source.origin.thread_id,source.origin.message_id,raw_source,now_string()])?;
-        tx.execute("INSERT INTO interaction_instructions(id,input_id,session_id,sequence,phase,doc,instance_id) VALUES(?1,?2,?3,?4,'queued',?5,?6)",params![instruction.id,instruction.input_id,session,sequence,serde_json::to_string(&instruction)?,self.instance_id])?;
-        if matches!(instruction.relation, RequestRelation::New) {
-            tx.execute("INSERT INTO interaction_requests(id,input_id,session_id,human_id) VALUES(?1,?2,?3,?4)",params![instruction.id,instruction.input_id,session,source.human_id])?;
-        }
-        for request in &instruction.requests {
-            tx.execute(
-                "INSERT INTO interaction_request_links(instruction_id,request_id) VALUES(?1,?2)",
-                params![instruction.id, request],
-            )?;
-        }
+        let result = admit_on(&tx, source, target, relation, &self.instance_id)?;
         tx.commit()?;
-        Ok((instruction, true))
+        Ok(result)
     }
 
     pub fn interaction_instruction(

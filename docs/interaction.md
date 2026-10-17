@@ -294,6 +294,49 @@ Finite observer reconciliations already started by a tool can finish separately
 from the integrating native turn; closing that turn does not resume or cancel
 source workers or authorize another query.
 
+## Semantic destination selection through the integrating dialogue
+
+New native integrating entries also declare the stable `interaction_controller`
+tool. Its `capabilities` operation returns the supported operations and schemas,
+so later controller features can evolve without replacing a native conversation's
+persisted tool set. Existing observer-only entries retain their original tools;
+the adapter never silently changes a native binding to add tools.
+
+`inputs` returns bounded excerpts and original ingress references for up to twelve
+human text inputs actually linked to the current owned integrating native entry.
+`candidates` reuses the observer. `dispatch` selects an original input reference
+and one to five distinct enrolled destinations. It accepts no replacement human
+text. Each destination declares a new request, amendment or context relation;
+amendments/context require real request IDs owned by the same human/destination.
+The conversational model can keep a topic local or ask for clarification through
+its ordinary dialogue. New-session creation and broader routing remain pending.
+
+The controller resolves the exact original human message from the immutable
+existing ingress journal. Eligibility checks its actual entry/native binding,
+owner, live allowlist, journal state and original admission generation. The
+complete selected plan, source identity and request links are retained in one
+SQLite transaction before transport. A rejected target/relation rolls the plan
+back without starting any worker. Source text/origin cannot be replaced, and a
+closed native tool cannot commit a previously unadmitted plan. No additional
+message bus or autobiographical memory store is introduced.
+
+After plan commitment, each original input follows the existing per-target
+queue/steer/return path under its captured ingress generation. The deliveries are
+independent of the front dialogue's lifetime; closing speech or an integrating
+turn does not silently retract work already admitted. Repeating the same source
+and selected plan returns retained identities/outcomes without another dispatch.
+An uncertain or known-unsent outcome uses the existing explicit recovery path.
+Admission/native acceptance remains separate from worker-declared incorporation
+and task completion.
+
+Worker packets identify the integrator, original human and original ingress
+reference, retain the original message unchanged and label controller context
+separately. Their bounded recent target context includes original source order
+and transport state. A later original correction takes precedence within the same
+channel even if an older semantic selection completes afterward; transport
+admission order cannot rewrite human chronology. Context excerpts are bounded,
+and incomparable channels do not establish an automatic precedence rule.
+
 ## Verification and remaining scope
 
 The native identity and deferred-approval foundations are merged in #121/#123.
@@ -340,7 +383,23 @@ Routed file output remains retained with its worker turn. This text adapter does
 not upload it through the legacy worker-topic uploader: attachment publication
 needs the same per-request correction and return reservation as text.
 
-The remaining product plan includes attachment publication, semantic selection, observer summaries,
+The remaining product plan includes attachment publication, evaluated semantic routing and justified new-session creation, receiving observer adoption,
 attention across many contexts, unified approval/task presentation, voice,
 device input, derived interviews and authorized cross-body operation. The
 configuration above is opt-in and does not enroll arbitrary new sessions.
+
+`tests/semantic_routing_io.py` qualifies original-input discovery and dispatch
+through the process boundary: rejected model-authored replacements, one atomic
+two-target selection, repeated-selection deduplication, a correction while the
+integrator remains active, and an older semantic selection arriving after an
+already accepted correction. The delayed case inspects actual packet ingress
+references and retained correction context; synthetic worker output does not
+prove that a real model obeys the precedence instruction.
+
+`tests/observer_tools_native.py` is an opt-in continuation of the retained native
+fixture. It qualifies actual observer tool calls in one new integrating entry
+and native tool restoration across listener restart, preserving earlier source
+bindings and completed reports. It does not qualify semantic dispatch or real
+Telegram. Its narrowly guarded `--resume` continues only the pending second
+entry turn after the recorded reader-method failure; completed turns are never
+replayed.
