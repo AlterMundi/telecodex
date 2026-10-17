@@ -201,9 +201,9 @@ import_desktop_history=false
         with sqlite3.connect(self.root / 'state.sqlite') as db:
             return db.execute(sql, params).fetchall()
 
-    def controls(self, index, topic=7):
+    def controls(self, index, topic=7, *, header=None):
         with self.lock:
-            rows = [m for m in self.messages if html.unescape(m[1]['text']).startswith(f'Codex question {index}/') and m[0]['message_thread_id'] == topic and 'inline_keyboard' in m[1].get('reply_markup', {})]
+            rows = [m for m in self.messages if html.unescape(m[1]['text']).startswith(f'Codex question {index}/') and m[0]['message_thread_id'] == topic and 'inline_keyboard' in m[1].get('reply_markup', {}) and (header is None or header in html.unescape(m[1]['text']))]
             return rows[-1] if rows else None
 
     @staticmethod
@@ -353,9 +353,12 @@ def scenario(binary, mode):
             j.wait(lambda: any('delivery did not confirm' in m[1]['text'] for m in j.messages))
             assert not j.answers
             print(json.dumps({'scenario':mode,'unbound_controls_rejected':True}),flush=True); return
-        j.wait(lambda: j.controls(1))
-        first = j.controls(1)
-        assert len([m for m in j.messages if html.unescape(m[1]['text']).startswith('Codex question 1/') and 'inline_keyboard' in m[1].get('reply_markup', {})]) == 1
+        # Concurrent independent requests can both have a first question.
+        # Select the Scope request, not whichever first-page control arrived last.
+        header = 'Scope' if mode == 'multi' else None
+        j.wait(lambda: j.controls(1, header=header))
+        first = j.controls(1, header=header)
+        assert len([m for m in j.messages if html.unescape(m[1]['text']).startswith('Codex question 1/') and 'inline_keyboard' in m[1].get('reply_markup', {}) and (header is None or header in html.unescape(m[1]['text']))]) == 1
         assert all(len(html.unescape(m[1]['text']).encode('utf-16-le'))//2 <= 4096 for m in j.messages)
         if mode in ('restart', 'restart_gap'):
             if mode == 'restart':
