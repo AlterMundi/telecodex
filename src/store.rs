@@ -12,6 +12,7 @@ use uuid::Uuid;
 mod interaction;
 mod interactions;
 mod merging;
+mod routing;
 mod stopping;
 pub use stopping::{StopOperation, StopTarget};
 mod nexus;
@@ -78,6 +79,7 @@ impl Store {
         store.init_tribu()?;
         store.init_interactions()?;
         store.init_interaction()?;
+        store.init_routing()?;
         store.init_nexus()?;
         store.init_merging()?;
         store.init_stopping()?;

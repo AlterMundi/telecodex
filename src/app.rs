@@ -29,6 +29,7 @@ mod nexus;
 mod presentation;
 mod questions;
 mod rename;
+mod routing;
 mod stopping;
 mod support;
 mod tribu;
@@ -98,6 +99,7 @@ struct AppShared {
     pending_icon_pickers: Mutex<HashMap<String, icons::PendingIconPicker>>,
     pending_codex_login: Mutex<Option<PendingCodexLogin>>,
     codex_login_backoff_until: Mutex<Option<Instant>>,
+    routing_runs: StdMutex<HashMap<SessionKey, routing::Run>>,
     shutdown: CancellationToken,
 }
 
@@ -166,6 +168,7 @@ struct QueuedTurn {
     nexus: Option<String>,
     merge: Option<String>,
     stop_resume: Option<String>,
+    interaction: Option<String>,
     admission_epoch: String,
 }
 
@@ -309,6 +312,7 @@ impl App {
                 pending_icon_pickers: Mutex::new(HashMap::new()),
                 pending_codex_login: Mutex::new(None),
                 codex_login_backoff_until: Mutex::new(None),
+                routing_runs: StdMutex::new(HashMap::new()),
                 shutdown: CancellationToken::new(),
             }),
             workers: Arc::new(Mutex::new(HashMap::new())),
@@ -602,6 +606,9 @@ impl App {
         if is_foreign_bot_command(text, self.shared.bot_username.as_deref()) {
             return Ok(());
         }
+        if routing::explicit(text) && routing::handle(self, &message, from.id, text).await? {
+            return Ok(());
+        }
         if goals::handle_edit_reply(self, &message, from.id, text).await? {
             return Ok(());
         }
@@ -620,6 +627,9 @@ impl App {
             _ => None,
         };
         let text = feedback.as_deref().unwrap_or(text);
+        if routing::handle(self, &message, from.id, text).await? {
+            return Ok(());
+        }
         if self.dispatch_command_text(&user, &message, text).await? {
             return Ok(());
         }
@@ -975,7 +985,7 @@ impl App {
                         self.shared.telegram.send_message(crate::telegram::SendMessage {
                             chat_id: message.chat.id, message_thread_id: message.message_thread_id,
                             text: "Fork did not finish. Some creation steps may already have succeeded; inspect the private fork audit before retrying. Existing conversations were preserved.".to_string(),
-                            parse_mode: "HTML".to_string(), link_preview_options: None, reply_markup: None,
+                            parse_mode: "HTML".to_string(), link_preview_options: None, reply_markup: None, reply_parameters: None,
                         }).await?;
                     }
                 }
@@ -2002,6 +2012,7 @@ impl App {
                     parse_mode: "HTML".to_string(),
                     link_preview_options: None,
                     reply_markup: None,
+                    reply_parameters: None,
                 })
                 .await?;
         }
@@ -2401,6 +2412,7 @@ impl App {
                 nexus,
                 merge: None,
                 stop_resume,
+                interaction: None,
                 admission_epoch,
             })
             .map_err(|_| anyhow!("session worker dropped"));
@@ -2521,14 +2533,30 @@ impl App {
         workers.insert(key, handle.clone());
 
         let shared = self.shared.clone();
+        let workers = Arc::downgrade(&self.workers);
         tokio::spawn(async move {
             while let Some(turn) = rx.recv().await {
+                let Some(workers) = workers.upgrade() else {
+                    break;
+                };
+                let app = App {
+                    shared: shared.clone(),
+                    workers,
+                };
+                let interaction = turn.interaction.clone();
+                let requester = turn.request.from_user_id;
+                let target = turn.request.session_key;
                 let update_id = turn.update_id;
                 let admission = turn.tribu_admission.clone();
                 let nexus_id = turn.nexus.clone();
                 let merge_id = turn.merge.clone();
-                let result =
-                    process_turn(shared.clone(), cancel.clone(), steer.clone(), turn).await;
+                let result = process_turn(app, cancel.clone(), steer.clone(), turn).await;
+                if let Some(id) = interaction {
+                    routing::finished(&shared, target, &id, requester);
+                    if let Err(error) = &result {
+                        routing::failure(shared.clone(), &id, requester, &error.to_string());
+                    }
+                }
                 if let Some(id) = merge_id {
                     let _ = shared.store.merge_finish(&id);
                 }

@@ -173,6 +173,30 @@ impl TelegramClient {
             .await
     }
 
+    /// Select the exact payload after outbound cooldown, immediately before one
+    /// HTTP attempt. The controller can recheck an unsent result at this seam.
+    pub async fn send_message_checked<F, C>(
+        &self,
+        chat: i64,
+        prepare: F,
+    ) -> Result<Option<(Message, C)>>
+    where
+        F: FnOnce() -> Result<Option<(SendMessage, C)>>,
+    {
+        self.outbound.wait(chat).await;
+        let Some((message, context)) = prepare()? else {
+            return Ok(None);
+        };
+        if message.chat_id != chat {
+            bail!("Checked publication changed its return chat");
+        }
+        let result = self.post("sendMessage", Some(&message)).await;
+        if let Err(error) = &result {
+            self.outbound.note_retry_after(chat, error).await;
+        }
+        result.map(|message| Some((message, context)))
+    }
+
     /// Open Telegram's reply composer while retaining the same delivery limits.
     pub async fn send_force_reply(&self, message: SendMessage) -> Result<Message> {
         if message.reply_markup.is_some() {
@@ -1073,6 +1097,12 @@ pub struct BotCommand {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ReplyParameters {
+    pub message_id: i64,
+    pub allow_sending_without_reply: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SendMessage {
     pub chat_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1083,6 +1113,8 @@ pub struct SendMessage {
     pub link_preview_options: Option<LinkPreviewOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_markup: Option<InlineKeyboardMarkup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_parameters: Option<ReplyParameters>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1156,6 +1188,7 @@ impl SendMessage {
             parse_mode: "HTML".to_string(),
             link_preview_options: Some(LinkPreviewOptions { is_disabled: true }),
             reply_markup: None,
+            reply_parameters: None,
         }
     }
 }

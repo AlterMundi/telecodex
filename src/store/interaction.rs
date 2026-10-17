@@ -242,7 +242,7 @@ impl Store {
         human: i64,
     ) -> Result<Option<crate::interaction::Instruction>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        let raw:Option<(String,String)>=conn.query_row("SELECT i.doc,i.phase FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id JOIN users u ON u.tg_user_id=s.human_id WHERE i.id=?1 AND s.human_id=?2 AND u.allowed=1",params![id,human],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        let raw:Option<(String,String)>=conn.query_row("SELECT i.doc,i.phase FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id WHERE i.id=?1 AND s.human_id=?2",params![id,human],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
         raw.map(|(doc, phase)| {
             let mut instruction: crate::interaction::Instruction = serde_json::from_str(&doc)?;
             instruction.phase = phase.as_str().try_into()?;
@@ -251,6 +251,7 @@ impl Store {
         .transpose()
     }
 
+    #[cfg(test)]
     pub fn interaction_for_update(
         &self,
         update: i64,

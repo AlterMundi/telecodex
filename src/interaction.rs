@@ -302,3 +302,18 @@ mod tests {
         assert!(worker_result("Ordinary answer").1.is_none());
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Delivery {
+    pub id: String,
+    pub request_id: String,
+    pub target: SessionKey,
+    pub origin: ReturnRoute,
+    pub body: String,
+    pub covered: Vec<String>,
+    pub declared: bool,
+    pub completed: bool,
+    pub current: bool,
+    pub correction_pending: bool,
+    pub phase: String,
+}

@@ -58,7 +58,7 @@ for recovery; uncertainty is never a reason to replay or create another session.
 
 An instruction's transport state is not a task-completion flag. Canonical native
 outputs are recorded separately. Worker coverage and correction-aware publication
-are the next layer on these retained records. Operational state stays in Telecodex;
+use these retained records independently. Operational state stays in Telecodex;
 DMK provides consolidation techniques rather than becoming the transient journal.
 
 ## Worker coverage
@@ -80,21 +80,61 @@ invalid coverage remains unreported and cannot silently settle a correction.
 The output reservation/transmission boundary must also recheck admitted
 corrections before an unsent item is published.
 
-## Current implementation checkpoint
+## Listener routing and return
+
+`#Name message` or `#t7 message` in the integrating entry selects an existing
+owned native conversation. Replying to an original admitted message or returned
+result inherits its request and target; an explicit selector overrides that
+focus. Direct text in an enrolled worker topic uses the same controller. Plain
+unselected entry text remains ordinary conversation. Semantic routing is a later
+extension; this adapter does not pretend an explicit selector is a classifier.
+
+An ambiguous or unknown name retains the original source without dispatch and
+asks for a stable selector. Replying with that selector resolves the original
+input once. `/cancel` in reply withdraws pending routing. Reply bindings preserve
+the actual requesting topic and human, including after restart.
+
+The worker control channel opens before asynchronous preparation or presentation.
+Inputs already waiting before native start enter its initial packet; later inputs
+use `turn/steer`. Acceptance is journaled before subsequent canonical output is
+processed. Unconfirmed acceptance is retained without automatic replay. An exact
+native rejection can queue the same instruction for a subsequent native turn.
+
+`#Name /interrupt` selects that listener-owned turn only. `/interaction` displays
+transport state and instruction IDs. `/interaction cancel ID` withdraws only
+known-unsent input; `/interaction retry ID` selects retained known-unsent input
+for recovery. Other native controls remain available in their own conversation.
+These operations do not initiate coordinated global Stop.
+
+Canonical outputs reserve per-request deliveries independently from task
+completion. Each part rechecks corrections after Telegram cooldown and retains
+its exact payload before the HTTP attempt. An obsolete answer is replaced with
+a correction-pending notice; another request's result can still be delivered.
+Every confirmed text part has an exact reply binding. Missing transmission
+receipts stay uncertain and are not automatically retransmitted. Worker metadata
+cannot choose a return address, and presentation strips its metadata tail.
+
+Native question publication runs outside the native event pump. Routed questions
+appear in the original requesting conversation while their durable interaction
+and native answer retain the actual source worker. The ordinary question UI and
+explicit answer controls preserve that distinction.
+
+## Verification and remaining scope
 
 The native identity and deferred-approval foundations are merged in #121/#123.
-The request registry, explicit-selector parser, frozen selection/return binding,
-per-request correction links and transport recovery are implemented on the
-interaction-router branch. Registry tests exercise separate requests in one
-physical turn, ownership failures, duplicate admission, restart uncertainty and
-cancellation before submission. The listener ingress, worker packet delivery,
-clarification bindings and publication reservation still need to be connected;
-this is not an end-to-end text-router acceptance claim.
+This branch connects the registry, explicit ingress, live steering, question
+presentation and correction-aware return. `tests/routing_io.py` exercises the
+process boundary with synthetic Telegram HTTP, native WebSocket and persistent
+SQLite peers. Registry/publication tests distinguish preparation, uncertain
+transmission, native acceptance, worker declarations and task completion.
+These are automated fixture checks; they are not a receiving deployment or a
+real model's semantic coverage qualification.
 
-Continue inside the existing App and native worker. Establish the worker's steer
-channel before asynchronous presentation/preparation. Keep native event handling
-responsive by deferring network presentation and human dialogue waits. Use the
-existing immutable ingress journal for clarification source references. Wire
-both explicit entry input and direct enrolled-topic input through the same
-controller. Native outputs must pass request coverage and publication reservation
-before returning to the recorded requesting conversation.
+Routed file output remains retained with its worker turn. This text adapter does
+not upload it through the legacy worker-topic uploader: attachment publication
+needs the same per-request correction and return reservation as text.
+
+The remaining product plan includes attachment publication, semantic selection, observer summaries,
+attention across many contexts, unified approval/task presentation, voice,
+device input, derived interviews and authorized cross-body operation. The
+configuration above is opt-in and does not enroll arbitrary new sessions.
