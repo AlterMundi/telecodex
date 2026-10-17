@@ -14,6 +14,7 @@ class Routing(Goals):
         self.question_held = threading.Event()
         self.release_question = threading.Event()
         self.reject_next = False
+        self.rejected_turn = None
         self.routed = False
         self.packets = {}
         self.runs = {}
@@ -64,6 +65,8 @@ topic_id=8
             self.packets.setdefault(thread, []).append(p)
             if self.reject_next:
                 self.reject_next = False
+                self.rejected_turn = self.runs[thread]
+            if self.rejected_turn == self.runs[thread]:
                 send({'id': m['id'], 'error': {'code': -32600, 'message': 'Synthetic finished generation'}})
             else:
                 send({'id': m['id'], 'result': {'turnId': self.runs[thread]}})
