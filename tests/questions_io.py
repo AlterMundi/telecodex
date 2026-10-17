@@ -227,8 +227,20 @@ import_desktop_history=false
         raise AssertionError(f'{self.mode}: boundary did not complete; messages={self.messages!r}; rpc={self.rpc!r}')
 
     def row(self, sql, params=()):
-        with sqlite3.connect(self.root / 'state.sqlite') as db:
-            return db.execute(sql, params).fetchall()
+        # Startup migrations may invalidate a concurrently prepared read. Only
+        # retry the same SELECT for SQLITE_SCHEMA; never replay fixture mutations
+        # or hide another database error behind the readiness poll.
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                with sqlite3.connect(self.root / 'state.sqlite') as db:
+                    return db.execute(sql, params).fetchall()
+            except sqlite3.OperationalError as error:
+                if (getattr(error, 'sqlite_errorcode', None) != sqlite3.SQLITE_SCHEMA
+                        or not sql.lstrip().upper().startswith('SELECT')
+                        or time.monotonic() >= deadline):
+                    raise
+                time.sleep(.01)
 
     def controls(self, index, topic=7, *, header=None):
         with self.lock:

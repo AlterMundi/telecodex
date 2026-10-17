@@ -2,8 +2,10 @@
 
 The owner-local controller accepts non-Telegram text into the configured native
 integrating entry. It reuses the existing queue, native writer and active steer;
-there is no second model session or fabricated Telegram update. The entry must
-already have an owned native binding. The Mini App includes authenticated text
+there is no second model session or fabricated Telegram update. The selected entry can be empty. Its first ordinary human message creates the
+native context through the existing writer; explicit routes can reach workers
+before the front context starts. Its logical input binding stays stable during
+that initial creation, including while a voice transcript or question is pending. The Mini App includes authenticated text
 input, retained-message inspection and native question/approval controls.
 Microphone recording uses the same journal and writer. Receiving deployment requires the new
 canonical-return policy in every relevant active collector before exposing input.

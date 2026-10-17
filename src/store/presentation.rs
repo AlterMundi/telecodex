@@ -10,16 +10,26 @@ fn digest(value: &Value) -> String {
 
 pub(super) fn entry_on(conn: &Connection, human: i64, entry: SessionKey) -> Result<(i64, String)> {
     conn.query_row(
-        "SELECT s.id,s.codex_thread_id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
+        "SELECT s.id,COALESCE(s.codex_thread_id,'') FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
          WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1
-         AND s.codex_thread_id IS NOT NULL AND s.force_fresh_thread=0",
+         AND (s.codex_thread_id IS NULL OR s.force_fresh_thread=0)",
         params![entry.chat_id, entry.thread_id, human],
         |r| Ok((r.get(0)?, r.get(1)?)),
     ).context("Integrating entry owner or native binding unavailable")
 }
 
-pub(super) fn entry_binding(human: i64, entry: SessionKey, session: i64, native: &str) -> String {
-    digest(&json!([human, entry, session, native]))
+pub(super) fn entry_binding(
+    conn: &Connection,
+    human: i64,
+    entry: SessionKey,
+    session: i64,
+) -> Result<String> {
+    let generation: String = conn.query_row(
+        "SELECT generation FROM conversation_entry_generations WHERE session_id=?1",
+        [session],
+        |r| r.get(0),
+    )?;
+    Ok(digest(&json!([human, entry, session, generation])))
 }
 
 impl Store {
@@ -105,7 +115,7 @@ impl Store {
             }
         }
         Ok(json!({"schema":"telecodex.presentation-list/v1",
-            "binding":entry_binding(human,entry,session,&native),"items":items,
+            "binding":entry_binding(&conn,human,entry,session)?,"items":items,
             "cursor":{"delivery":deliveries.iter().take(8).next_back().map_or(after_delivery,|r|r.0),
                       "native":natives.iter().take(8).next_back().copied().unwrap_or(after_native)},
             "newest":{"delivery":deliveries.iter().take(8).map(|r|r.0).max().unwrap_or(0),
@@ -209,7 +219,12 @@ pub(super) fn source_on(
     } else {
         return Ok(None);
     };
-    source["entry_binding"] = json!([human, entry, entry_session, entry_native]);
+    source["entry_binding"] = json!([
+        human,
+        entry,
+        entry_session,
+        entry_binding(conn, human, entry, entry_session)?
+    ]);
     source["text_sha256"] = json!(format!(
         "{:x}",
         Sha256::digest(source["text"].as_str().unwrap_or("").as_bytes())

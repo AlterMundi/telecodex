@@ -256,7 +256,7 @@ impl Store {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
         let (session, native) = super::presentation::entry_on(&tx, human, entry)?;
-        if binding != super::presentation::entry_binding(human, entry, session, &native) {
+        if binding != super::presentation::entry_binding(&tx, human, entry, session)? {
             bail!("Selected conversation changed before input capture");
         }
         let existing: bool = tx.query_row(
@@ -426,7 +426,7 @@ impl Store {
         Ok(
             serde_json::json!({"schema":"telecodex.conversation-input-list/v1",
             "entry_binding":[human,entry,session,native],
-            "binding":super::presentation::entry_binding(human,entry,session,&native),
+            "binding":super::presentation::entry_binding(&conn,human,entry,session)?,
             "cursor":rows.iter().take(8).next_back().map(|row|row.0),
             "newest":rows.iter().take(8).map(|row|row.0).max().unwrap_or(0),
             "more":rows.len()>8,"items":items}),
@@ -485,7 +485,9 @@ impl Store {
                 // Select the return surface before any possible native uptake.
                 // The context may retain this input after the local turn ends,
                 // so the selection survives collectors and logical rebindings.
-                tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![human,input.native,input.id,now_string()])?;
+                if !input.native.is_empty() {
+                    tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![human,input.native,input.id,now_string()])?;
+                }
                 ("queued", None)
             }
             ConversationInputEvent::Begin { local_turn, steer }
@@ -684,6 +686,15 @@ mod tests {
                 .is_err()
         );
         let pending = Uuid::now_v7().to_string();
+        assert!(
+            store
+                .conversation_voice_capture(100, key, &binding, &pending, clip(), true)
+                .is_err()
+        );
+        let binding = store.conversation_request_binding(100, key).unwrap()["binding"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         store
             .conversation_voice_capture(100, key, &binding, &pending, clip(), true)
             .unwrap();

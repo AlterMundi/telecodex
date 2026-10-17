@@ -72,11 +72,15 @@ fn input_focus_on(
                 human,
                 entry,
                 session,
-                native,
+                super::presentation::entry_binding(conn, human, entry, session)?,
                 input.id,
                 instruction,
                 focus.session,
-                focus.native,
+                conn.query_row(
+                    "SELECT generation FROM conversation_entry_generations WHERE session_id=?1",
+                    [focus.session],
+                    |r| r.get::<_, String>(0)
+                )?,
                 focus.requests
             ])),
         },

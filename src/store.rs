@@ -9,6 +9,7 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+mod conversation_entry;
 mod conversation_inputs;
 mod conversation_routing;
 pub use conversation_routing::{
@@ -116,6 +117,7 @@ impl Store {
         store.init_merging()?;
         store.init_stopping()?;
         store.init_conversation_inputs()?;
+        store.init_conversation_entry()?;
         store.init_conversation_requests()?;
         store.init_observer_cards()?;
         store.init_observer_freshness()?;

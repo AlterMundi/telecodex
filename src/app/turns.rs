@@ -13,6 +13,16 @@ pub(super) async fn process_turn(
     registration: Option<String>,
 ) -> Result<()> {
     let shared = app.shared.clone();
+    let initial_binding = if queued.request.review_mode.is_none()
+        && shared.config.interaction.as_ref().is_some_and(|p| {
+            p.entry() == queued.request.session_key && p.human_id == queued.request.from_user_id
+        }) {
+        shared
+            .store
+            .conversation_initial_binding(queued.request.from_user_id, queued.request.session_key)?
+    } else {
+        None
+    };
     let mut conversation_native = None;
     if let Some(id) = queued.conversation_input.as_deref() {
         shared
@@ -27,7 +37,8 @@ pub(super) async fn process_turn(
                     id,
                 )?
                 .native,
-        );
+        )
+        .filter(|native| !native.is_empty());
     }
     shared.store.voice_validate(
         queued.update_id,
@@ -197,7 +208,10 @@ pub(super) async fn process_turn(
         queued.request.from_user_id,
         &shared.session_defaults,
     )?;
-    let session = if queued.merge.is_some() {
+    // A cold canonical entry establishes its own context on the first actual
+    // input. Attaching unrelated cwd history would retire that accepted input
+    // before the initial writer can bind it.
+    let session = if queued.merge.is_some() || initial_binding.is_some() {
         session
     } else {
         resolve_session_codex_binding_from_history(&shared, session)?
@@ -524,6 +538,7 @@ pub(super) async fn process_turn(
                 let requester_user_id = queued.request.from_user_id;
                 let session_key = session.key;
                 let voice_update = queued.update_id;
+                let initial_binding=initial_binding.clone();
                 let preserve_thread_binding = queued.request.review_mode.is_none();
                 let admission=queued.tribu_admission.clone();
                 let physical_turn=physical_turn.clone();
@@ -537,6 +552,7 @@ pub(super) async fn process_turn(
                 let routing_app=app.clone();
                 let presentation_tx=presentation_tx.clone();
                 move |event| {
+                    let initial_binding=initial_binding.clone();
                     let sink = sink.clone();
                     let shared = shared.clone();
                     let cancel = approval_cancel.clone();
@@ -560,6 +576,10 @@ pub(super) async fn process_turn(
                                     if native!=thread_id {bail!("Attachment returned a different native thread");}
                                     shared.store.validate_owned_binding(session_key,requester_user_id,native)?;
                                 }
+                                shared.store.voice_validate(voice_update,session_key,requester_user_id)?;
+                                let initial_bound=if let Some(expected)=initial_binding.as_deref() {
+                                    shared.store.conversation_bind_initial(requester_user_id,session_key,turn_id,expected,&thread_id)?
+                                } else {false};
                                 let voice_bound=shared.store.voice_bind_native(voice_update,session_key,requester_user_id,&thread_id)?;
                                 shared.store.merge_thread(turn_id,&thread_id)?;
                                 super::nexus::thread(&shared,turn_id,&thread_id)?;
@@ -567,7 +587,7 @@ pub(super) async fn process_turn(
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_select_native_return(id,requester_user_id,&thread_id)?;}
                                 if preserve_thread_binding && attach_native.is_none() && conversation_input.is_none() {
-                                    if !voice_bound {
+                                    if !voice_bound && !initial_bound {
                                         shared.store.set_session_codex_thread(session_key, &thread_id)?;
                                     }
                                     if !routed && super::rename::sync_native_title(&shared, session_key).await.is_err() {
