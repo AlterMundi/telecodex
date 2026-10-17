@@ -39,7 +39,7 @@ window.VoiceInput = (() => {
       if(value.id!==frozen.id || value.voice?.audio_sha256!==frozen.audio_sha256)throw Error('Voice capture does not match this recording.');
       latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256};
       onInput(value,frozen.focusVersion);pending=undefined;phase='idle';
-      state.textContent=value.retired?'This saved recording is no longer eligible to start work.':
+      state.textContent=value.phase==='answered'?'Recording and automatic transcript saved; answer recorded for the selected question.':value.retired?'This saved recording is no longer eligible to start work.':
         value.phase==='retained_unsent'?'Recording saved; no work was submitted. You can keep writing.':
         value.phase==='preparation_unconfirmed'?'Recording saved; transcription unconfirmed. Nothing was resubmitted.':
         value.phase==='preparing'?'Recording saved; preparing its automatic transcript.':

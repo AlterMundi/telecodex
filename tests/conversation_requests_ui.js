@@ -12,7 +12,7 @@ function boot(count=1) {
   });
   const document={createElement:element,querySelector(selector){if(!nodes.has(selector))nodes.set(selector,element('section'));return nodes.get(selector);}};
   let binding='bound', mode, heldList, heldDetail, heldPost;
-  const sources=new Map(),receipts=new Map(),calls=[];
+  const sources=new Map(),receipts=new Map(),calls=[],replies=[];
   for(let n=1;n<=count;n++) sources.set(`request-${n}`,{id:`request-${n}`,sequence:n,binding,revision:`revision-${n}-0`,
     state:'pending',kind:'question',actionable:true,title:`Choice ${n}`,label:`#Worker${n}`,body:'ABCDEFGHIJ',choices:[{label:'Selected scope',action:{kind:'option',index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:2,recorded_revisions:[]});
   const error=status=>Object.assign(new Error('Unavailable'),{status});
@@ -54,14 +54,14 @@ function boot(count=1) {
   }
   const context=vm.createContext({window:{},document,TextEncoder,URLSearchParams});
   vm.runInContext(fs.readFileSync('dashboard/web/requests.js','utf8'),context);
-  let ui;ui=context.window.RequestControls.mount({api,getBinding:()=>binding,setCsrf(){},unauthorized(){ui.reset();}});
+  let ui;ui=context.window.RequestControls.mount({api,getBinding:()=>binding,setCsrf(){},unauthorized(){ui.reset();},onReply:(reference,label)=>replies.push({reference:clone(reference),label})});
   const all=(el,predicate)=>[...(predicate(el)?[el]:[]),...el.children.flatMap(child=>all(child,predicate))];
   const button=(card,text)=>all(card,el=>el.tag==='button'&&el.textContent===text)[0];
-  return {ui,nodes,sources,receipts,calls,button,all,
+  return {ui,nodes,sources,receipts,calls,replies,button,all,
     cards:()=>nodes.get('#conversation-request-cards').children,
     mode:value=>{mode=value;},bind(value){binding=value;for(const source of sources.values())source.binding=value;},
     holdList(){return heldList=deferred();},holdDetail(){return heldDetail=deferred();},holdPost(){return heldPost=deferred();},
-    async read(card){let b=button(card,'Read request')||button(card,'Read current request')||button(card,'Review current request')||button(card,'Refresh request');await b.handlers.click();while((b=button(card,'Continue reading request')))await b.handlers.click();},
+    async read(card){let b=button(card,'Read request')||button(card,'Continue reading request')||button(card,'Read current request')||button(card,'Review current request')||button(card,'Refresh request');await b.handlers.click();while((b=button(card,'Continue reading request')))await b.handlers.click();},
   };
 }
 (async()=>{
@@ -83,6 +83,20 @@ function boot(count=1) {
   assert.equal(f.receipts.size,2);assert.equal([...f.receipts.values()][1].action.text,'  Exact second answer  ');
   assert.equal(text.value,'');
 
+  const voiced=boot();await voiced.ui.refresh();const vc=voiced.cards()[0];
+  await voiced.button(vc,'Read request').handlers.click();
+  await voiced.button(vc,'Answer in conversation').handlers.click();assert.equal(voiced.replies.length,0,'Partial questions cannot become voice reply focus');
+  await voiced.read(vc);await voiced.button(vc,'Answer in conversation').handlers.click();
+  assert.deepEqual(voiced.replies[0].reference,{source:'request:request-1',revision:'revision-1-0'});
+  assert.equal(voiced.calls.filter(v=>v.body).length,0,'Selecting microphone/composer focus is not a native decision');
+  voiced.sources.get('request-1').revision='changed-question';voiced.sources.get('request-1').body='Different';
+  await voiced.ui.refresh();await voiced.button(vc,'Answer in conversation').handlers.click();
+  assert.equal(voiced.replies.length,1,'An unread changed question cannot replace the frozen selection');
+
+  const approvalFocus=boot();approvalFocus.sources.get('request-1').kind='approval';approvalFocus.sources.get('request-1').allows_text=false;
+  await approvalFocus.ui.refresh();const ac=approvalFocus.cards()[0];await approvalFocus.read(ac);
+  assert(approvalFocus.button(ac,'Answer in conversation').hidden);await approvalFocus.button(ac,'Answer in conversation').handlers.click();
+  assert.equal(approvalFocus.replies.length,0,'Native approval does not become a text or microphone answer');
   const offline=boot();await offline.ui.refresh();const off=offline.cards()[0];await offline.read(off);
   offline.mode('before');await offline.button(off,'Selected scope').handlers.click();assert.equal(offline.receipts.size,0);
   await offline.button(off,'Check decision').handlers.click();assert.equal(offline.receipts.size,0);

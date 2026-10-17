@@ -278,10 +278,19 @@ impl Store {
             }
             return Ok((input, false));
         }
-        let focus = reply
-            .as_ref()
-            .map(|r| super::conversation_routing::reply_on(&tx, human, entry, r))
-            .transpose()?;
+        let question_override = voice.is_none()
+            && crate::interaction::explicit_selector(text).is_some()
+            && reply
+                .as_ref()
+                .is_some_and(|r| r.source.starts_with("request:"));
+        let focus = if question_override {
+            None
+        } else {
+            reply
+                .as_ref()
+                .map(|r| super::conversation_routing::reply_on(&tx, human, entry, r))
+                .transpose()?
+        };
         let input = ConversationInput {
             id: id.into(),
             human,

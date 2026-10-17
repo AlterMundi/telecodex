@@ -111,6 +111,23 @@ pub(super) fn reply_on(
     {
         bail!("Invalid reply source revision");
     }
+    if let Some(id) = reply.source.strip_prefix("request:") {
+        let snapshot = super::conversation_requests::read_on(conn, human, entry, id)?;
+        if snapshot.item.source["kind"] != "question" || snapshot.item.state != "pending" {
+            bail!("Select a current native question");
+        }
+        return Ok(ConversationFocus {
+            target: snapshot.key,
+            session: conn.query_row(
+                "SELECT id FROM sessions WHERE chat_id=?1 AND thread_id=?2",
+                params![snapshot.key.chat_id, snapshot.key.thread_id],
+                |r| r.get(0),
+            )?,
+            native: Some(snapshot.item.native_thread),
+            retired: false,
+            requests: vec![],
+        });
+    }
     if let Some(id) = reply.source.strip_prefix("input:") {
         let original = super::conversation_inputs::read_on(conn, id, human)?;
         let (expected, focus) = input_focus_on(conn, human, entry, &original)?
@@ -304,7 +321,10 @@ impl Store {
             bail!("Only scoped /interrupt is supported after a selector");
         }
         let target_session:i64=tx.query_row("SELECT s.id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1",params![target.chat_id,target.thread_id,human],|r|r.get(0))?;
-        let inherited = input.focus.as_ref().filter(|f| f.target == target);
+        let inherited = input
+            .focus
+            .as_ref()
+            .filter(|f| f.target == target && !f.requests.is_empty());
         if let Some(focus) = inherited {
             let (native, fresh): (Option<String>, bool) = tx.query_row(
                 "SELECT codex_thread_id,force_fresh_thread FROM sessions WHERE id=?1",

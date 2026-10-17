@@ -15,7 +15,7 @@ window.RequestControls = (() => {
         unknown:"Earlier response remains unconfirmed.", cancelled:"Cancellation requested.",
         expired:"This request is closed.", source_changed:"This request is no longer current."})[value.state]
       || "This request has no live response channel.";
-  function mount({api, getBinding, setCsrf, unauthorized}) {
+  function mount({api, getBinding, setCsrf, unauthorized, onReply}) {
     const cards = new Map(), section = $("#conversation-requests"), container = $("#conversation-request-cards");
     const state = $("#conversation-request-state"), more = $("#conversation-requests-more");
     let generation = 0, observation = 0, cursor = 0, reading = false, probeCursor = 0;
@@ -28,6 +28,7 @@ window.RequestControls = (() => {
       const allowed = card.view?.actionable && !terminal(card.view) && card.complete
         && !card.reviewRequired && !card.closed && !card.busy && !card.loading && !card.pending && !card.unavailable && card.view.binding === getBinding();
       for (const button of card.choices.children) button.disabled = !allowed;
+      card.reply.disabled = !allowed;
       card.text.disabled = !allowed;
       card.submit.disabled = !allowed;
       card.cancel.disabled = !allowed;
@@ -97,6 +98,7 @@ window.RequestControls = (() => {
       text.rows = 3; text.id = `answer-${value.id}`; label.setAttribute("for", text.id);
       const submit = node("button", "Send answer"); submit.type = "submit";
       form.append(label, text, submit); form.hidden = true;
+      const reply = node("button", "Answer in conversation"); reply.type = "button"; reply.hidden = true; form.append(reply);
       const cancel = node("button", "Cancel this turn"); cancel.type = "button"; cancel.hidden = true;
       const check = node("button", "Check decision"), retry = node("button", "Retry this same decision");
       const dismiss = node("button", "Dismiss");
@@ -106,7 +108,7 @@ window.RequestControls = (() => {
       const saved = node("details"); saved.hidden = true; saved.append(node("summary", "Previous drafts"));
       box.append(title,status,preview,read,body,choices,form,cancel,actions,note,saved);
       container.append(box);
-      const card = {id:value.id,box,title,status,preview,body,read,choices,form,text,submit,cancel,check,retry,dismiss,note,saved,
+      const card = {id:value.id,box,title,status,preview,body,read,choices,form,text,submit,reply,cancel,check,retry,dismiss,note,saved,
         observed:0,readVersion:0,complete:false,expanded:false,busy:false,loading:false,closed:false};
       cards.set(value.id,card);
       read.addEventListener("click", () => readRequest(card,false,true));
@@ -114,6 +116,11 @@ window.RequestControls = (() => {
       retry.addEventListener("click", () => card.pending && sendDecision(card,card.pending));
       cancel.addEventListener("click", () => choose(card,{kind:"cancel"},card.reviewedRevision));
       form.addEventListener("submit", event => {event.preventDefault(); return choose(card,{kind:"answer",text:card.text.value},card.answerRevision);});
+      reply.addEventListener("click", () => {
+        const view=card.view;
+        if(typeof onReply!=="function" || view?.kind!=="question" || !view.actionable || !card.complete || card.reviewRequired || card.closed || card.busy || card.loading || card.pending || card.unavailable || view.binding!==getBinding())return;
+        onReply({source:`request:${card.id}`,revision:view.revision},`${view.label || "Conversation"} · ${view.title || "Question"}`);
+      });
       text.addEventListener("input", () => {card.answerRevision = card.view?.revision;});
       dismiss.addEventListener("click", () => {
         if (card.busy || card.pending || !terminal(card.meta) && card.meta?.state !== "unknown") return;
@@ -141,6 +148,7 @@ window.RequestControls = (() => {
         button.addEventListener("click", () => choose(card,choice.action,value.revision)); card.choices.append(button);
       }
       card.form.hidden = !value.allows_text;
+      card.reply.hidden = value.kind!=="question" || !value.allows_text || typeof onReply!=="function";
       card.cancel.hidden = !value.can_cancel;
     }
     async function readRequest(card, force = false, userGesture = false) {

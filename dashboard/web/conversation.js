@@ -8,7 +8,7 @@ window.Conversation = (() => {
     return value;
   };
   function mount({api, headers, setCsrf, modeChanged, telegram}) {
-    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed});
+    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus});
     const microphone = window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),pauseAudio:pause,unauthorized:failed,telegram});
     const cards = new Map();
     const inputs = new Map();
@@ -20,6 +20,7 @@ window.Conversation = (() => {
       : value.routing ? routeText(value.routing) : ({awaiting_target:"Choose the session for this saved message.",preparing:"Recording saved; preparing its automatic transcript.", preparation_unconfirmed:"Recording saved; transcription unconfirmed. No work was submitted automatically.", retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
           sending:"Sending to your conversation…", steering:"Sending to your conversation…",
           accepted:"Sent to your conversation. Work may continue.",
+          answered:"Answer recorded for the selected question. Work may continue.",
           retained_unsent:"Saved; not sent.", uncertain:"Saved; delivery unconfirmed. Check status."})[value.phase]
         || "Submission unconfirmed. Check status before sending this message again.";
     function routeText(route) {
@@ -113,7 +114,7 @@ window.Conversation = (() => {
       }
       if (observed < card.observed) {
         // A request that started earlier can nevertheless observe a later commit.
-        if (["accepted","retained_unsent"].includes(value.phase)) {
+        if (["accepted","answered","retained_unsent"].includes(value.phase)) {
           if (!card.value.phase && draft.value === card.value.text) draft.value = "";
           card.value.phase = value.phase;
         }
@@ -130,7 +131,7 @@ window.Conversation = (() => {
         renderRoute(card);return card;
       }
       // Native acceptance and retirement cannot be undone by a late snapshot.
-      if (["accepted","retained_unsent"].includes(card.value.phase)) value = {...value,phase:card.value.phase};
+      if (["accepted","answered","retained_unsent"].includes(card.value.phase)) value = {...value,phase:card.value.phase};
       if(card.value.routing) {
         // Destination selection is immutable, even if a later-started request
         // sampled an earlier database state before the route committed.
