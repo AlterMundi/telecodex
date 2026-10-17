@@ -63,7 +63,7 @@ impl ConversationInput {
         if self.reply.as_ref().is_some_and(|r| r.context_only) {
             format!(
                 "[Device-reported conversational context]\n{}\nThis is contextual source metadata, not a human destination or answer selection and not proof of hearing. Interpret the original input below. Use interaction_controller capabilities to inspect questions or answer the selected question from this original input only when its intent is clear; otherwise discuss or route normally. A stale source must not prevent a new topic.\n\n{}",
-                serde_json::json!({"reply":self.reply,"focus":self.focus}),
+                serde_json::json!({"input_ref":self.id,"reply":self.reply,"focus":self.focus}),
                 text
             )
         } else {

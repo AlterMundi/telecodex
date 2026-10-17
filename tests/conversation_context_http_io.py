@@ -27,7 +27,7 @@ def qualify(binary):
         assert changed_mode.status_code==503,'An immutable contextual original became an explicit answer'
         assert len(j.packets)==1
 
-        assert '[Device-reported conversational context]'in str(j.packets[0])
+        assert '[Device-reported conversational context]'in str(j.packets[0])and changed in str(j.packets[0])
         view=j.call('route-read-question-context','question_context',{'input_ref':changed})
         assert view['matches_current']and view['question']['body']==question['body']
         j.call('route-context-new-topic','dispatch',{'input_ref':changed,'destinations':[{'selector':'Beta','relation':'new','requests':[]}]})
