@@ -89,7 +89,7 @@ fn label(shared: &AppShared, key: SessionKey) -> String {
         .unwrap_or_else(|| format!("t{}", key.thread_id))
 }
 
-fn notice(shared: Arc<AppShared>, origin: ReturnRoute, text: String) {
+pub(super) fn notice(shared: Arc<AppShared>, origin: ReturnRoute, text: String) {
     notice_when(shared, origin, text, None);
 }
 
@@ -274,6 +274,9 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
         .context("Interaction input lacks its ingress journal identity")?;
     if text.starts_with("/interaction") {
         let args = text.split_whitespace().skip(1).collect::<Vec<_>>();
+        if super::observer::handle(app, human, origin.clone(), &args)? {
+            return Ok(true);
+        }
         if let [verb, id] = args.as_slice()
             && *verb != "status"
         {

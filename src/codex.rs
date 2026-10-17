@@ -643,7 +643,7 @@ impl CodexRunner {
             let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
             process.initialize().await?;
             let mut cursor=None;let mut cursors=HashSet::new();let mut entries=Vec::new();let mut boundary=None;
-            let mut budget=48_000usize;let mut bounded=false;let mut unfinished=false;let mut provisional=Vec::new();
+            let mut budget=48_000usize;let mut bounded=false;let mut unfinished=false;let mut provisional=Vec::new();let mut turn_ids=Vec::new();let mut text_truncated=false;
             for _ in 0..6 {
                 let mut params=json!({"threadId":native,"limit":20,"sortDirection":"desc","itemsView":"full"});
                 if let Some(c)=&cursor {params["cursor"]=json!(c);}
@@ -653,11 +653,11 @@ impl CodexRunner {
                 for turn in turns {
                     let turn_id=turn["id"].as_str().ok_or_else(||anyhow!("merge source turn has no ID"))?;
                     let completed=turn["status"]=="completed";
-                    if completed && boundary.is_none(){boundary=Some(turn_id.to_string());}
                     unfinished |= turn["status"]=="inProgress" || turn["status"]=="running";
                     let mut texts=Vec::new();
                     for item in turn["items"].as_array().into_iter().flatten() {
                         if let Some((role,text))=native_handoff_text(item) {
+                            text_truncated |= text.chars().count()>4000 || text.starts_with("[Context integration /merge ");
                             // Carry the provenance marker; don't circulate the imported packet again.
                             let text=if text.starts_with("[Context integration /merge ") {
                                 text.lines().next().unwrap_or_default().to_string()+" [Previously received context; consult original provenance, not a new firsthand contribution.]"
@@ -667,6 +667,8 @@ impl CodexRunner {
                     }
                     let entry=format!("[Native source turn {turn_id}; native status {}; {}]\n{}",turn["status"].as_str().unwrap_or("unknown"),if completed{"completed"}else{"provisional statements, not completed decisions or effects"},texts.join("\n"));
                     if entry.len()>budget {bounded=true;break;}
+                    if completed && boundary.is_none(){boundary=Some(turn_id.to_string());}
+                    turn_ids.push(turn_id.to_string());
                     budget-=entry.len();if completed{entries.push(entry);}else{provisional.push(entry);}
                 }
                 cursor=page["nextCursor"].as_str().filter(|s|!s.is_empty()).map(str::to_string);
@@ -677,8 +679,8 @@ impl CodexRunner {
             process.shutdown().await?;
             if entries.is_empty() && provisional.is_empty(){bail!("source has no native text to merge");}
             entries.reverse();
-            let revision=uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID,serde_json::to_string(&json!([native,boundary,entries,provisional]))?.as_bytes()).to_string();
-            Ok(json!({"native":native,"boundary":boundary,"entries":entries,"in_progress_entries":provisional,"revision":revision,"bounded":bounded,"unfinished_observed":unfinished}))
+            let revision=uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID,serde_json::to_string(&json!([native,boundary,entries,provisional,turn_ids,text_truncated,bounded,unfinished]))?.as_bytes()).to_string();
+            Ok(json!({"native":native,"boundary":boundary,"entries":entries,"in_progress_entries":provisional,"revision":revision,"bounded":bounded,"text_truncated":text_truncated,"turn_ids":turn_ids,"unfinished_observed":unfinished}))
         }).await.context("merge source read timed out; source unchanged")?
     }
 
