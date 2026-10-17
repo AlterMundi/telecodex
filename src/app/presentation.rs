@@ -16,21 +16,46 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
         bail!("Interaction presentation owner mismatch");
     }
     let fields: Vec<_> = args.split_whitespace().collect();
-    match fields.as_slice() {
+    let mut result = match fields.as_slice() {
         ["list", delivery, native] => app.shared.store.interaction_presentation_list(
             human,
             cfg.entry(),
             delivery.parse()?,
             native.parse()?,
         ),
+        ["before", delivery, native] => app.shared.store.interaction_presentation_page(
+            human,
+            cfg.entry(),
+            delivery.parse()?,
+            native.parse()?,
+            true,
+        ),
         ["part", id, revision, offset] if id.len() <= 64 && revision.len() == 64 => app
             .shared
             .store
             .interaction_presentation_part(human, cfg.entry(), id, revision, offset.parse()?),
         _ => bail!(
-            "Expected presentation list DELIVERY_CURSOR NATIVE_CURSOR or part SOURCE REVISION OFFSET"
+            "Expected presentation list|before DELIVERY_CURSOR NATIVE_CURSOR or part SOURCE REVISION OFFSET"
         ),
+    }?;
+    if let Some(items) = result["items"].as_array_mut() {
+        for item in items {
+            source_label(&app.shared, item)?;
+        }
+    } else {
+        source_label(&app.shared, &mut result)?;
     }
+    Ok(result)
+}
+
+fn source_label(shared: &AppShared, source: &mut serde_json::Value) -> Result<()> {
+    source["label"] = if source["kind"] == "worker_result" {
+        let target: SessionKey = serde_json::from_value(source["target"].clone())?;
+        serde_json::json!(format!("#{}", super::routing::label(shared, target)))
+    } else {
+        serde_json::json!("Integrator")
+    };
+    Ok(())
 }
 
 pub(super) fn approval_waiting_text(kind: CodexApprovalKind) -> String {

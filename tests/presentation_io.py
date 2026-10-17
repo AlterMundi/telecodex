@@ -28,7 +28,7 @@ class Receiver:
     def authorized(self, human): return human == 100 and self.allowed
     def close(self): pass
     def snapshot(self): return {'sessions':[]}
-    def presentation_list(self, delivery, native):
+    def presentation_list(self, delivery, native, direction='after'):
         result=copy.deepcopy(self.source)
         result['preview']=result.pop('text')
         return {'schema':'telecodex.presentation-list/v1','items':[result]}

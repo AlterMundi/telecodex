@@ -145,3 +145,39 @@ reconnect reuse and corrections/revocation during a held synthesis. Rust store
 tests check canonical text reassembly, SQLite reopen, entry final/progress
 separation and original owner/native/correction fences. These tests make no
 external provider or native model calls and do not qualify a real Telegram device.
+
+## Conversation reader and audio
+
+The existing authenticated Sessions app has a Conversation view, also selected by
+`?view=conversation` or the Telegram launch parameter `conversation`. These select
+the view only; the same validated identity and live owner grant remain required.
+The view reads canonical integrating replies separately from attributed worker
+results, shows correction/coverage warnings and opens complete text in bounded
+parts. It initially loads recent replies, retains older history on request and
+reads new replies with independent forward cursors. Recent metadata refreshes do
+not skip a backlog that is still being read forward. It adds no native work.
+
+When the receiving speech binding is configured, Listen requests only the selected
+source revision and part. The browser verifies the returned source, offset and
+audio digest, then checks the source again before unmuting playback. Explicit
+Play remains available when the browser requires another user gesture. Pause,
+Stop audio, loss of connectivity and leaving the view affect playback only.
+They never send native Stop, interrupt a worker or discard its original reply.
+Hidden/deactivated views pause playback; return/reconnect refreshes sources without
+automatically resuming audio. A stopped or replaced selection owns a generation
+fence so late synthesis and stale source checks cannot control a newer selection.
+The next part is requested only after the selected audio actually ends and is
+validated again before playback. A changed source requires a new selection.
+
+Complete audio remains in the private server cache for an authorized reconnect;
+browser audio URLs are temporary and released on Stop/page exit. No browser
+playback state is a durable hearing receipt. This view does not yet capture
+microphone input or submit new text; the existing Telegram entry remains the
+original-input route until typed browser ingress is implemented.
+
+`node tests/conversation_ui.js` runs the shipped state machine against synthetic
+DOM/network, including more than forty new replies, arrivals during metadata
+refresh and a stale validation that fails after a newer selection. Browser
+qualification uses an owned Chromium context with fictional identity, synthetic
+loopback audio and muted speakers. It establishes rendering and media lifecycle
+behavior, not physical audibility or real Telegram Android/iOS acceptance.

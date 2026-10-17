@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
         if args.len() < 5 || !matches!(args[3].as_str(), "stop" | "attach-active" | "presentation")
         {
             anyhow::bail!(
-                "Usage: telecodex --control CONFIG stop all|status ID|resume ID; attach-active CHAT TOPIC NATIVE_THREAD NATIVE_TURN; presentation list DELIVERY_CURSOR NATIVE_CURSOR|part SOURCE REVISION OFFSET"
+                "Usage: telecodex --control CONFIG stop all|status ID|resume ID; attach-active CHAT TOPIC NATIVE_THREAD NATIVE_TURN; presentation list|before DELIVERY_CURSOR NATIVE_CURSOR|part SOURCE REVISION OFFSET"
             );
         }
         let config = config::Config::load(args[2].clone().into())?;
