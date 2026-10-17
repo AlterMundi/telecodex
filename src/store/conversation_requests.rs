@@ -45,7 +45,7 @@ fn read_on(
     let mut item: HumanInteraction = serde_json::from_str(&raw)?;
     item.state = state;
     let key = SessionKey::new(chat, Some(topic));
-    let binding = super::presentation::entry_binding(human, entry, session, &native);
+    let binding = super::presentation::entry_binding(conn, human, entry, session)?;
     let proof = json!([
         binding,
         key,
@@ -76,7 +76,7 @@ impl Store {
         };
         let on_update = lineage("NEW");
         let on_delete = lineage("OLD");
-        self.conn.lock().expect("store mutex poisoned").execute_batch(&format!("CREATE TABLE IF NOT EXISTS conversation_decisions(
+        self.conn.lock().expect("store mutex poisoned").execute_batch(&format!("BEGIN IMMEDIATE; DROP TRIGGER IF EXISTS native_request_binding_retired; CREATE TABLE IF NOT EXISTS conversation_decisions(
             human_id INTEGER NOT NULL,entry_session INTEGER NOT NULL,entry_chat INTEGER NOT NULL,entry_topic INTEGER NOT NULL,
             request_id TEXT NOT NULL,revision TEXT NOT NULL,doc TEXT NOT NULL,created_at TEXT NOT NULL,
             PRIMARY KEY(human_id,entry_session,request_id,revision));
@@ -87,7 +87,7 @@ impl Store {
             CREATE TRIGGER IF NOT EXISTS native_request_discovery_order AFTER INSERT ON human_interactions WHEN NEW.kind='native'
             BEGIN INSERT INTO conversation_request_order(request_id) VALUES(NEW.id); END;
             CREATE TRIGGER IF NOT EXISTS native_request_binding_retired AFTER UPDATE OF codex_thread_id,force_fresh_thread,creator_user_id ON sessions
-            WHEN OLD.codex_thread_id IS NOT NEW.codex_thread_id OR OLD.creator_user_id!=NEW.creator_user_id OR NEW.force_fresh_thread=1
+            WHEN (OLD.codex_thread_id IS NOT NULL AND OLD.codex_thread_id IS NOT NEW.codex_thread_id) OR OLD.creator_user_id!=NEW.creator_user_id OR NEW.force_fresh_thread=1
             BEGIN UPDATE human_interactions SET state=CASE WHEN state='pending' THEN 'expired' ELSE 'unknown' END
               WHERE kind='native' AND state IN ('pending','answering') AND (session_id=NEW.id OR id IN(
                 SELECT h.id FROM human_interactions h JOIN sessions s ON s.id=h.session_id WHERE 1=1 {on_update})); END;
@@ -97,14 +97,14 @@ impl Store {
                 SELECT h.id FROM human_interactions h JOIN sessions s ON s.id=h.session_id WHERE 1=1 {on_delete})); END;
             CREATE TRIGGER IF NOT EXISTS native_request_grant_retired AFTER UPDATE OF allowed ON users WHEN NEW.allowed=0
             BEGIN UPDATE human_interactions SET state=CASE WHEN state='pending' THEN 'expired' ELSE 'unknown' END
-              WHERE kind='native' AND requester=NEW.tg_user_id AND state IN ('pending','answering'); END;"))?;
+              WHERE kind='native' AND requester=NEW.tg_user_id AND state IN ('pending','answering'); END; COMMIT;"))?;
         Ok(())
     }
     pub fn conversation_request_binding(&self, human: i64, entry: SessionKey) -> Result<Value> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
         Ok(
-            json!({"binding":super::presentation::entry_binding(human,entry,session,&native),"entry_binding":[human,entry,session,native]}),
+            json!({"binding":super::presentation::entry_binding(&conn,human,entry,session)?,"entry_binding":[human,entry,session,native]}),
         )
     }
     /// Receipt retention has no live-session/turn foreign key and never restores

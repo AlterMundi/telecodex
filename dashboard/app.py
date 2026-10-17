@@ -319,6 +319,22 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         authorize(request)
         return result
 
+    @app.post('/api/interaction/inputs/{ident}/route')
+    async def conversation_input_route(request: Request, ident: str):
+        session = authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        try:
+            body = await request.json()
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_input_route, ident, body)
+        except (ValueError, UnicodeError):
+            raise HTTPException(400, 'Select one destination for this retained message') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(409, 'Selection unconfirmed or no longer current. Inspect the retained message; nothing was replayed') from None
+        authorize(request)
+        return result
+
     @app.post('/api/interaction/voice')
     async def conversation_voice(request: Request):
         session = authorize(request)
@@ -327,6 +343,10 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         metadata = {key:request.headers.get(header, '') for key, header in
                     (('binding', 'x-input-binding'), ('id', 'x-input-id'),
                      ('audio_sha256', 'x-audio-sha256'), ('mime', 'content-type'))}
+        reply_source = request.headers.get('x-reply-source')
+        reply_revision = request.headers.get('x-reply-revision')
+        if reply_source is not None or reply_revision is not None:
+            metadata['reply'] = {'source':reply_source, 'revision':reply_revision}
         try:
             data = await request.body()
             from starlette.concurrency import run_in_threadpool

@@ -128,7 +128,12 @@ def qualify(binary):
                     db.execute('UPDATE sessions SET codex_thread_id=?,force_fresh_thread=0 WHERE thread_id=1',(journey.web_thread,))
                 else:
                     db.execute("DELETE FROM bot_state WHERE key='native_writer_hold:100:1'")
-            repeated=journey.read('input','submit',json.dumps(pending))['result']
+            if change=='clear':
+                assert not journey.read('input','submit',json.dumps(pending),ok=False)['ok']
+                binding=journey.read('presentation','list','0','0')['result']['binding']
+                assert binding!=pending['binding'],'Clear/restore revived the old browser generation'
+            retry={**pending,'binding':binding}
+            repeated=journey.read('input','submit',json.dumps(retry))['result']
             assert not repeated['new_input'] and repeated['phase']=='retained_unsent'
             if change=='clear':assert repeated['retired']
         journey.hold_resume=False

@@ -10,13 +10,49 @@ struct Submit {
     binding: String,
     id: String,
     text: String,
+    #[serde(default)]
+    reply: Option<crate::store::ConversationReply>,
 }
 
 fn outcome(input: &ConversationInput, fresh: bool) -> Value {
     json!({"schema":"telecodex.conversation-input/v1","id":input.id,"phase":input.phase,
-        "new_input":fresh,"retired":input.retired,"text":input.text,"voice":input.voice,
+        "new_input":fresh,"retired":input.retired,"text":input.text,"voice":input.voice,"routing":input.routing,
         "entry_binding":[input.human,input.entry,input.session,input.native],"native_acceptance":if input.phase=="accepted" {"observed"}else{"unconfirmed"},
         "incorporation":"Not established by input retention or native acceptance"})
+}
+
+fn response(app: &App, input: &ConversationInput, fresh: bool) -> Result<Value> {
+    let mut value = outcome(input, fresh);
+    value["continuation"] = json!(app.shared.store.conversation_continuation(
+        input.human,
+        input.entry,
+        &input.id
+    )?);
+    if input
+        .routing
+        .as_ref()
+        .is_some_and(|r| r.phase == "accepted")
+    {
+        value["native_acceptance"] = json!("observed");
+    }
+    Ok(value)
+}
+fn choices(app: &App) -> Result<Value> {
+    let profile = super::routing::profile(&app.shared)?;
+    Ok(json!(
+        profile
+            .targets
+            .iter()
+            .map(|t| json!({"selector":format!("t{}",t.topic_id),"label":t.name}))
+            .collect::<Vec<_>>()
+    ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Resolve {
+    binding: String,
+    id: String,
+    selector: String,
 }
 
 pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> {
@@ -42,6 +78,29 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     if let Some(body) = args.strip_prefix("voice submit ") {
         return voice_submit(app, human, cfg.entry(), body).await;
     }
+    if let Some(body) = args.strip_prefix("route ") {
+        let selected: Resolve = serde_json::from_str(body)?;
+        let _ingress = app.shared.conversation_ingress.lock().await;
+        let binding = app
+            .shared
+            .store
+            .conversation_request_binding(human, cfg.entry())?;
+        if binding["binding"] != selected.binding {
+            bail!("Entry changed before routing selection");
+        }
+        let input = app
+            .shared
+            .store
+            .conversation_input_read(human, cfg.entry(), &selected.id)?;
+        deliver(app, input, Some(&selected.selector)).await?;
+        return response(
+            app,
+            &app.shared
+                .store
+                .conversation_input_read(human, cfg.entry(), &selected.id)?,
+            false,
+        );
+    }
     if let Some(page) = args.strip_prefix("list ") {
         let parts: Vec<_> = page.split_whitespace().collect();
         if parts.is_empty()
@@ -52,20 +111,23 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         {
             bail!("Expected input list CURSOR [before|after]");
         }
-        return app.shared.store.conversation_input_page(
+        let mut page = app.shared.store.conversation_input_page(
             human,
             cfg.entry(),
             parts[0].parse()?,
             parts.get(1) != Some(&"after"),
-        );
+        )?;
+        page["routing_choices"] = choices(app)?;
+        return Ok(page);
     }
     if let Some(id) = args.strip_prefix("status ") {
-        return Ok(outcome(
+        return response(
+            app,
             &app.shared
                 .store
                 .conversation_input_read(human, cfg.entry(), id)?,
             false,
-        ));
+        );
     }
     let request: Submit = serde_json::from_str(
         args.strip_prefix("submit ")
@@ -73,31 +135,85 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     )?;
     // Preserve capture/handoff order for this configured integrating entry. The
     // lock is released before native acknowledgments, so later steering proceeds.
+    let interruption_targets = super::voice::snapshot(app).await;
     let _ingress = app.shared.conversation_ingress.lock().await;
-    let (input, fresh) = app.shared.store.conversation_input_capture(
+    let (input, fresh) = app.shared.store.conversation_input_capture_reply(
         human,
         cfg.entry(),
         &request.binding,
         &request.id,
         &request.text,
+        request.reply,
     )?;
     if fresh && input.phase == "retained" {
-        app.shared
-            .store
-            .conversation_input_event(human, &input.id, E::Queue)?;
-        if let Err(error) = submit(app.clone(), input.clone()).await {
+        if let Err(error) = super::voice::INTERRUPT_TARGETS
+            .scope(interruption_targets, deliver(app, input.clone(), None))
+            .await
+        {
             app.shared
                 .store
                 .conversation_input_finish(human, &input.id)?;
             return Err(error);
         }
     }
-    Ok(outcome(
+    response(
+        app,
         &app.shared
             .store
             .conversation_input_read(human, cfg.entry(), &input.id)?,
         fresh,
-    ))
+    )
+}
+
+async fn deliver(app: &App, input: ConversationInput, resolve: Option<&str>) -> Result<()> {
+    let profile = super::routing::profile(&app.shared)?;
+    match app
+        .shared
+        .store
+        .conversation_route(input.human, &input.id, &profile, resolve)?
+    {
+        Some(crate::store::ConversationRouteAction::Worker(instruction, fresh)) => {
+            if fresh
+                && super::dialogue::dispatch_original(
+                    app,
+                    &instruction.id,
+                    input.human,
+                    &crate::interaction::InputReference::Conversation(input.id.clone()),
+                )
+                .await
+                .is_err()
+            {
+                app.shared
+                    .store
+                    .interaction_unfinished(&instruction.id, input.human)?;
+            }
+            return Ok(());
+        }
+        Some(crate::store::ConversationRouteAction::Interrupt(expected)) => {
+            app.shared
+                .store
+                .conversation_interruption_apply(input.human, &input.id, |target| {
+                    if target == expected {
+                        super::voice::interrupt_snapshot(target)
+                    } else {
+                        None
+                    }
+                })?;
+            return Ok(());
+        }
+        None => {}
+    }
+    let current = app
+        .shared
+        .store
+        .conversation_input_read(input.human, input.entry, &input.id)?;
+    if current.phase != "retained" {
+        return Ok(());
+    }
+    app.shared
+        .store
+        .conversation_input_event(input.human, &input.id, E::Queue)?;
+    submit(app.clone(), input).await
 }
 
 async fn submit(app: App, input: ConversationInput) -> Result<()> {
@@ -229,6 +345,8 @@ struct VoiceSubmit {
     id: String,
     audio_sha256: String,
     mime: String,
+    #[serde(default)]
+    reply: Option<crate::store::ConversationReply>,
 }
 
 async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> Result<Value> {
@@ -272,6 +390,7 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
             bail!("Voice capture file is not owner-private and bounded");
         }
     }
+    let interruption_targets = super::voice::snapshot(app).await;
     let permit = app
         .shared
         .voice_preparations
@@ -279,20 +398,21 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
         .try_acquire_owned()
         .ok();
     let _ingress = app.shared.conversation_ingress.lock().await;
-    let (input, fresh) = app.shared.store.conversation_voice_capture(
+    let (input, fresh) = app.shared.store.conversation_voice_capture_reply(
         human,
         entry,
         &request.binding,
         &request.id,
         voice,
         permit.is_some(),
+        request.reply,
     )?;
     if fresh && input.phase == "preparing" {
         let worker = app.clone();
         let captured = input.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let preparation = async {
+            let preparation = super::voice::INTERRUPT_TARGETS.scope(interruption_targets, async {
                 worker
                     .shared
                     .store
@@ -317,11 +437,7 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
                     &text,
                     proof,
                 )?;
-                worker
-                    .shared
-                    .store
-                    .conversation_input_event(human, &ready.id, E::Queue)?;
-                if let Err(error) = submit(worker.clone(), ready).await {
+                if let Err(error) = deliver(&worker, ready, None).await {
                     worker
                         .shared
                         .store
@@ -329,7 +445,7 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
                     return Err(error);
                 }
                 Ok::<_, anyhow::Error>(())
-            };
+            });
             let result = tokio::select! {biased;_ = worker.shared.voice_shutdown.cancelled()=>Err(anyhow!("Voice preparation ended for listener restart")),result=preparation=>result};
             if result.is_err() {
                 let _ = worker
@@ -342,10 +458,11 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
             }
         });
     }
-    Ok(outcome(
+    response(
+        app,
         &app.shared
             .store
             .conversation_input_read(human, entry, &input.id)?,
         fresh,
-    ))
+    )
 }

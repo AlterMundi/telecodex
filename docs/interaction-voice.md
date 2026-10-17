@@ -70,4 +70,4 @@ one-button acceptance remain #118 and the linked Integrators tasks. The entire
 parent remains AlterMundi/daimon-matrix#313.
 
 The separate [speech rendering component](interaction-speech.md) provides a
-durable exact-text provider adapter. It is not yet wired to result playback.
+durable exact-text provider adapter. The canonical conversation player renders selected retained replies through that adapter.
