@@ -101,7 +101,17 @@ print(json.dumps({'text':item['text'],'final':True}))
             db.execute('UPDATE users SET allowed=0 WHERE tg_user_id=100');db.execute('UPDATE users SET allowed=1 WHERE tg_user_id=100')
         (j.root/('release-'+digest2)).touch();j.wait(lambda:status(retired)['phase']=='preparation_unconfirmed')
         assert status(retired)['retired'] and len(j.packets)==2
-        assert upload(data2,retired)[1].json()['new_input'] is False and calls().count(digest2)==1
+        # Grant restoration creates a new browser binding. An old tab cannot
+        # capture input with its retired generation, even for the same UUID.
+        stale=upload(data2,retired)[1];assert stale.status_code==503,stale.text
+        assert calls().count(digest2)==1
+        current=client.get('/api/interaction/inputs',headers=headers)
+        assert current.status_code==200,current.text
+        assert current.json()['binding']!=binding
+        binding=current.json()['binding']
+        repeated=upload(data2,retired)[1];assert repeated.status_code==200,repeated.text
+        assert repeated.json()['new_input'] is False and repeated.json()['retired']
+        assert calls().count(digest2)==1 and len(j.packets)==2
         # Restart closes only fixture processes, retaining uncertainty without ASR/native replay.
         data3=audio(770);digest3=register(data3,'Never replay after restart',True)
         interrupted,r=upload(data3);assert r.status_code==200;j.wait(lambda:digest3 in calls())
