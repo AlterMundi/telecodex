@@ -18,7 +18,9 @@ pub use stopping::{StopOperation, StopTarget};
 mod nexus;
 mod observer;
 mod observer_cards;
+mod observer_freshness;
 pub use observer_cards::{ObserverCard, ObserverPreparation};
+pub use observer_freshness::ObserverFreshness;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};
 pub use tribu::TribuAdmission;
@@ -87,6 +89,7 @@ impl Store {
         store.init_merging()?;
         store.init_stopping()?;
         store.init_observer_cards()?;
+        store.init_observer_freshness()?;
         // A restarted process cannot continue a previous command's activity lease.
         store.conn.lock().expect("store mutex poisoned").execute(
             "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",

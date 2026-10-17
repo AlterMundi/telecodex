@@ -233,10 +233,24 @@ asking to observe again does not replay them; `/interaction observe #Topic
 workers are never resumed, steered or interrupted by observation. Only the
 read-only synthesis uses a separate ephemeral context with tools disabled.
 
-This source-driven refresh currently runs on explicit observation requests.
-Event-derived freshness/candidate refresh and semantic routing integration remain
-part of the continuing observer/router work. Runtime quality qualification must
-check factual summaries separately from successful processing and support IDs.
+Local canonical message, turn, input and human-question changes invalidate the
+card through a counter updated in the owning transaction. The counter is captured
+before the native read; the read completion time is retained separately from
+synthesis commit time. Activity arriving during synthesis therefore leaves the
+result visibly stale. Unchanged-source rereads update the check without another
+synthesis. A restart requires native reconciliation even if the local counter
+has not changed. An equal counter proves only no observed local change; external
+native history remains sampled. Unsettled transport inputs are shown separately.
+
+Original snapshots and cards survive explicit session deletion as historical
+provenance; derived activity/check metadata is removed. Startup migrates the
+previous session foreign keys transactionally, retaining original bytes. Current
+owner and native-binding checks still control access to retained cards.
+
+Source-driven refresh currently runs on explicit observation requests. Automatic
+candidate refresh and semantic routing integration remain continuing work.
+Runtime quality qualification must check factual summaries separately from
+successful processing and support IDs.
 
 ## Verification and remaining scope
 

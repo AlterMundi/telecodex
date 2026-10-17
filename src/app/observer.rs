@@ -23,6 +23,21 @@ fn render(name: &str, card: &ObserverCard) -> String {
     )
 }
 
+fn render_checked(
+    shared: &AppShared,
+    key: SessionKey,
+    human: i64,
+    name: &str,
+    card: &ObserverCard,
+) -> String {
+    let mut text = render(name, card);
+    match shared.store.observer_freshness(key,human,card) {
+        Ok(f)=>text.push_str(&format!("\n\nFreshness: {}\nLocal activity cut: {:?} → {}\nSource checked: {}\nUnsettled current/unbound transport inputs: {} (tracked separately from summary)",f.state,f.observed_cut,f.current_cut,f.checked_at.as_deref().unwrap_or("not recorded"),f.unsettled_inputs)),
+        Err(_)=>text.push_str("\n\nFreshness unknown; source binding or observation is unavailable."),
+    }
+    text
+}
+
 pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) -> Result<bool> {
     if !args
         .first()
@@ -77,7 +92,7 @@ pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) 
         .clone();
     let card = shared.store.observer_card(key, human, &native)?;
     if args[0] == "summary" {
-        routing::notice(shared,origin,card.as_ref().map(|c|render(&name,c)).unwrap_or_else(||"No retained observer card for this native source. Use /interaction observe #Topic.".into()));
+        routing::notice(shared.clone(),origin,card.as_ref().map(|c|render_checked(&shared,key,human,&name,c)).unwrap_or_else(||"No retained observer card for this native source. Use /interaction observe #Topic.".into()));
         return Ok(true);
     }
     if args[0] == "sources" {
@@ -126,9 +141,12 @@ pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) 
     );
     tokio::spawn(async move {
         let outcome:Result<String>=async {
-            let source=shared.codex.merge_history(&native).await?;
+            let activity_cut=shared.store.observer_activity_cut(key,human,&native)?;
+            let mut source=shared.codex.merge_history(&native).await?;
+            source["observer_activity_cut"]=serde_json::json!(activity_cut);
+            source["observer_checked_at"]=serde_json::json!(Utc::now().to_rfc3339());
             match shared.store.observer_prepare(key,human,&source,card.as_ref().map_or(0,|c|c.revision),retry)? {
-                ObserverPreparation::Unchanged(card)=>Ok(format!("Source unchanged; no synthesis call. Source checked {}.\n\n{}",Utc::now().to_rfc3339(),render(&name,&card))),
+                ObserverPreparation::Unchanged(card)=>Ok(format!("Source unchanged; no synthesis call.\n\n{}",render_checked(&shared,key,human,&name,&card))),
                 ObserverPreparation::Retained(phase)=>Ok(format!("Observer attempt is {phase}; no model call was repeated. Inspect the retained /interaction summary #{name}. An uncertain attempt requires /interaction observe #{name} --retry.")),
                 ObserverPreparation::Ready(attempt)=>{
                     let context=source["entries"].as_array().into_iter().flatten().chain(source["in_progress_entries"].as_array().into_iter().flatten()).map(|v|v.as_str().unwrap().to_owned()).collect::<Vec<_>>();
@@ -136,7 +154,7 @@ pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) 
                     let result=async {
                         let (summary,supports)=shared.codex.summarize_context(&session,&format!("Observer #{name}"),&context,POLICY).await?;
                         let card=shared.store.observer_commit(key,human,&attempt,&summary,&supports)?;
-                        Ok::<_,anyhow::Error>(render(&name,&card))
+                        Ok::<_,anyhow::Error>(render_checked(&shared,key,human,&name,&card))
                     }.await;
                     if result.is_err(){shared.store.observer_uncertain(&attempt.id)?;}
                     result

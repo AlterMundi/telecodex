@@ -252,6 +252,12 @@ async fn session_card(
     if observed.presentation_gaps > 0 {
         card.push_str("\nPresentation incomplete: queued activity was dropped; retained native items remain available.");
     }
+    if let Some((summary, freshness)) = &observed.semantic {
+        card.push_str(&format!(
+            "\nSemantic card revision {}: {} (source observed {})",
+            summary.revision, freshness.state, summary.observed_at
+        ));
+    }
     card.push_str("\nCoverage: bounded local evidence; native history has not been reconciled. Activity is not task completion.");
     card
 }

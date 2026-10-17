@@ -32,24 +32,59 @@ pub enum ObserverPreparation {
     Ready(ObserverAttempt),
 }
 
-fn binding(conn: &Connection, key: SessionKey, human: i64, native: &str) -> Result<i64> {
+pub(super) fn binding(conn: &Connection, key: SessionKey, human: i64, native: &str) -> Result<i64> {
     conn.query_row("SELECT s.id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND s.codex_thread_id=?4",
         params![key.chat_id,key.thread_id,human,native],|r|r.get(0))
         .optional()?.context("Observer source is no longer an owned native binding")
 }
 
-fn head(conn: &Connection, session: i64, native: &str) -> Result<Option<ObserverCard>> {
+pub(super) fn head(conn: &Connection, session: i64, native: &str) -> Result<Option<ObserverCard>> {
     let raw:Option<String> = conn.query_row("SELECT doc FROM interaction_observer_cards WHERE session_id=?1 AND native_thread=?2 ORDER BY revision DESC LIMIT 1",
         params![session,native],|r|r.get(0)).optional()?;
     raw.map(|raw| serde_json::from_str(&raw).map_err(Into::into))
         .transpose()
 }
 
+// Original observer evidence survives logical session removal, like the
+// existing routed request ledger. Retained session IDs are never reassigned.
+fn migrate_retained_observer_history(conn: &mut Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA foreign_key_list(interaction_observer_attempts)")?;
+    let session_fk = stmt
+        .query_map([], |r| r.get::<_, String>(2))?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .iter()
+        .any(|table| table == "sessions");
+    drop(stmt);
+    if !session_fk {
+        return Ok(());
+    }
+    let tx = conn.transaction()?;
+    tx.execute_batch("CREATE TABLE interaction_observer_attempts_retained(
+        id TEXT PRIMARY KEY,session_id INTEGER NOT NULL,human_id INTEGER NOT NULL,
+        native_thread TEXT NOT NULL,source_revision TEXT NOT NULL,policy TEXT NOT NULL,
+        expected_revision INTEGER NOT NULL,source_doc TEXT NOT NULL,observed_at TEXT NOT NULL,
+        phase TEXT NOT NULL,instance_id TEXT NOT NULL);
+        INSERT INTO interaction_observer_attempts_retained SELECT * FROM interaction_observer_attempts;
+        CREATE TABLE interaction_observer_cards_retained(
+        session_id INTEGER NOT NULL,native_thread TEXT NOT NULL,revision INTEGER NOT NULL,
+        attempt_id TEXT NOT NULL UNIQUE REFERENCES interaction_observer_attempts_retained(id),
+        doc TEXT NOT NULL,PRIMARY KEY(session_id,native_thread,revision));
+        INSERT INTO interaction_observer_cards_retained SELECT * FROM interaction_observer_cards;
+        DROP TABLE interaction_observer_cards;
+        DROP TABLE interaction_observer_attempts;
+        ALTER TABLE interaction_observer_attempts_retained RENAME TO interaction_observer_attempts;
+        ALTER TABLE interaction_observer_cards_retained RENAME TO interaction_observer_cards;
+        CREATE INDEX interaction_observer_source ON interaction_observer_attempts(session_id,native_thread,source_revision,policy);
+        CREATE UNIQUE INDEX interaction_observer_active ON interaction_observer_attempts(session_id,native_thread,source_revision,policy) WHERE phase='summarizing';")?;
+    tx.commit()?;
+    Ok(())
+}
+
 impl Store {
     pub(super) fn init_observer_cards(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch("CREATE TABLE IF NOT EXISTS interaction_observer_attempts(
-            id TEXT PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES sessions(id),human_id INTEGER NOT NULL,
+            id TEXT PRIMARY KEY,session_id INTEGER NOT NULL,human_id INTEGER NOT NULL,
             native_thread TEXT NOT NULL,source_revision TEXT NOT NULL,policy TEXT NOT NULL,
             expected_revision INTEGER NOT NULL,source_doc TEXT NOT NULL,observed_at TEXT NOT NULL,
             phase TEXT NOT NULL,instance_id TEXT NOT NULL);
@@ -58,9 +93,10 @@ impl Store {
             CREATE UNIQUE INDEX IF NOT EXISTS interaction_observer_active
               ON interaction_observer_attempts(session_id,native_thread,source_revision,policy) WHERE phase='summarizing';
             CREATE TABLE IF NOT EXISTS interaction_observer_cards(
-              session_id INTEGER NOT NULL REFERENCES sessions(id),native_thread TEXT NOT NULL,
+              session_id INTEGER NOT NULL,native_thread TEXT NOT NULL,
               revision INTEGER NOT NULL,attempt_id TEXT NOT NULL UNIQUE REFERENCES interaction_observer_attempts(id),
               doc TEXT NOT NULL,PRIMARY KEY(session_id,native_thread,revision));")?;
+        migrate_retained_observer_history(&mut conn)?;
         conn.execute("UPDATE interaction_observer_attempts SET phase='uncertain' WHERE phase='summarizing' AND instance_id!=?",[&self.instance_id])?;
         Ok(())
     }
@@ -121,7 +157,18 @@ impl Store {
             && card.source_revision == revision
             && card.policy == OBSERVER_POLICY
         {
-            return Ok(ObserverPreparation::Unchanged(card.clone()));
+            let card = card.clone();
+            observer_freshness::checked_on(
+                &tx,
+                session,
+                native,
+                revision,
+                source["observer_activity_cut"].as_i64(),
+                source["observer_checked_at"].as_str(),
+                &self.instance_id,
+            )?;
+            tx.commit()?;
+            return Ok(ObserverPreparation::Unchanged(card));
         }
         if previous.as_ref().map_or(0, |c| c.revision) != expected {
             return Err(anyhow!(
@@ -163,7 +210,10 @@ impl Store {
             .collect::<Vec<_>>();
         retained["delta_indices"] = json!(changed);
         let raw = serde_json::to_string(&retained)?;
-        let observed_at = now_string();
+        let observed_at = source["observer_checked_at"]
+            .as_str()
+            .unwrap_or("not recorded")
+            .to_owned();
         let id = Uuid::now_v7().to_string();
         tx.execute("INSERT INTO interaction_observer_attempts VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'summarizing',?10)",
             params![id,session,human,native,revision,OBSERVER_POLICY,expected,raw,observed_at,self.instance_id])?;
@@ -262,6 +312,15 @@ impl Store {
                 attempt.id,
                 serde_json::to_string(&card)?
             ],
+        )?;
+        observer_freshness::checked_on(
+            &tx,
+            session,
+            native,
+            &card.source_revision,
+            source["observer_activity_cut"].as_i64(),
+            source["observer_checked_at"].as_str(),
+            &self.instance_id,
         )?;
         tx.execute(
             "UPDATE interaction_observer_attempts SET phase='committed' WHERE id=?1",
@@ -462,5 +521,49 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 2);
+    }
+    #[test]
+    fn legacy_session_links_migrate_without_losing_originals_or_blocking_session_removal() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;
+            CREATE TABLE sessions(id INTEGER PRIMARY KEY AUTOINCREMENT);
+            INSERT INTO sessions VALUES(1);
+            CREATE TABLE interaction_observer_attempts(id TEXT PRIMARY KEY,session_id INTEGER NOT NULL REFERENCES sessions(id),human_id INTEGER NOT NULL,native_thread TEXT NOT NULL,source_revision TEXT NOT NULL,policy TEXT NOT NULL,expected_revision INTEGER NOT NULL,source_doc TEXT NOT NULL,observed_at TEXT NOT NULL,phase TEXT NOT NULL,instance_id TEXT NOT NULL);
+            CREATE TABLE interaction_observer_cards(session_id INTEGER NOT NULL REFERENCES sessions(id),native_thread TEXT NOT NULL,revision INTEGER NOT NULL,attempt_id TEXT NOT NULL UNIQUE REFERENCES interaction_observer_attempts(id),doc TEXT NOT NULL,PRIMARY KEY(session_id,native_thread,revision));
+            INSERT INTO interaction_observer_attempts VALUES('a',1,100,'native-source','source-one','policy',0,'{\"original\":\"retained\"}','observed','committed','old-instance');
+            INSERT INTO interaction_observer_cards VALUES(1,'native-source',1,'a','{\"summary\":\"retained interpretation\"}');").unwrap();
+        assert!(conn.execute("DELETE FROM sessions WHERE id=1", []).is_err());
+        migrate_retained_observer_history(&mut conn).unwrap();
+        migrate_retained_observer_history(&mut conn).unwrap();
+        conn.execute("DELETE FROM sessions WHERE id=1", []).unwrap();
+        let original: String = conn
+            .query_row(
+                "SELECT source_doc FROM interaction_observer_attempts",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let card: String = conn
+            .query_row("SELECT doc FROM interaction_observer_cards", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&original).unwrap()["original"],
+            "retained"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&card).unwrap()["summary"],
+            "retained interpretation"
+        );
+        assert!(
+            conn.prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .query([])
+                .unwrap()
+                .next()
+                .unwrap()
+                .is_none()
+        );
     }
 }
