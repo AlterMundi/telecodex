@@ -283,6 +283,12 @@ pub(super) async fn process_turn(
     } else {
         runner
     };
+    let runner = runner.with_client_message_id(queued.update_id.map(|id| {
+        format!(
+            "telegram:{}:{}:{id}",
+            session.key.chat_id, queued.request.from_user_id
+        )
+    }));
     let physical_turn = Arc::new(StdMutex::new(None::<String>));
     let run =
         runner
@@ -371,6 +377,10 @@ pub(super) async fn process_turn(
 
                                 shared.store.merge_input_accepted(turn_id,&native_id)?;
                                 shared.store.nexus_input_accepted(turn_id,&native_id)?;
+                                Ok(CodexEventOutcome::None)
+                            }
+                            CodexEvent::NativeMessageCompleted { thread_id, turn_id: native_turn, item_id, phase, text } => {
+                                shared.store.record_native_message(turn_id, &thread_id, &native_turn, &item_id, phase.as_deref(), &text)?;
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::FinalAnswerCompleted(text) => {
@@ -956,7 +966,8 @@ impl LiveTurnSink {
             CodexEvent::ThreadStarted(thread_id) => {
                 tracing::debug!("codex thread started: {thread_id}");
             }
-            CodexEvent::UserInputRequest { .. }
+            CodexEvent::NativeMessageCompleted { .. }
+            | CodexEvent::UserInputRequest { .. }
             | CodexEvent::NativeInputRejected
             | CodexEvent::NativeInputAccepted(_)
             | CodexEvent::NativeTurnStarted(_)

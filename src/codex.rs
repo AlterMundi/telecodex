@@ -41,6 +41,7 @@ pub struct CodexRunner {
     shared_app_server: bool,
     bounded_turn: Option<BoundedTurn>,
     goal_activation: Option<GoalActivation>,
+    client_message_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -81,6 +82,14 @@ pub enum CodexEvent {
     AssistantText(String),
     CommentaryCompleted(String),
     FinalAnswerCompleted(String),
+    /// Canonical native identity, before the legacy text-only presentation event.
+    NativeMessageCompleted {
+        thread_id: String,
+        turn_id: String,
+        item_id: String,
+        phase: Option<String>,
+        text: String,
+    },
     ThreadStarted(String),
     NativeTurnStarted(String),
     NativeInputAccepted(String),
@@ -141,6 +150,7 @@ pub type CodexSteerResponse = std::result::Result<Option<String>, CodexSteerErro
 pub struct CodexSteerRequest {
     /// User text to append to the in-flight turn.
     pub text: String,
+    pub client_message_id: Option<String>,
     pub goal: Option<GoalControl>,
     /// Completion channel reports acceptance, definite rejection or uncertainty.
     pub response: oneshot::Sender<CodexSteerResponse>,
@@ -411,6 +421,7 @@ impl CodexRunner {
             shared_app_server: false,
             bounded_turn: None,
             goal_activation: None,
+            client_message_id: None,
         }
     }
     pub fn with_shared_app_server(mut self, shared: bool) -> Self {
@@ -778,6 +789,11 @@ impl CodexRunner {
         .await
         .context("native rename acknowledgment timed out; its effect is unconfirmed")?
     }
+    pub fn with_client_message_id(&self, id: Option<String>) -> Self {
+        let mut runner = self.clone();
+        runner.client_message_id = id;
+        runner
+    }
     pub fn with_goal_activation(&self, goal: GoalActivation) -> Self {
         let mut runner = self.clone();
         runner.goal_activation = Some(goal);
@@ -806,6 +822,7 @@ impl CodexRunner {
             self.shared_app_server,
             self.bounded_turn.as_ref(),
             self.goal_activation.as_ref(),
+            self.client_message_id.as_deref(),
             session,
             request,
             cancel,
@@ -897,6 +914,7 @@ async fn run_app_server_turn<F, Fut>(
     shared_app_server: bool,
     bounded: Option<&BoundedTurn>,
     goal_activation: Option<&GoalActivation>,
+    client_message_id: Option<&str>,
     session: &SessionRecord,
     request: &TurnRequest,
     cancel: CancellationToken,
@@ -1028,6 +1046,9 @@ where
         // or unresponsive goal APIs leave ordinary conversations usable.
     }
     let mut params = build_turn_start_params(&thread_id, &effective_session, request);
+    if let Some(id) = client_message_id {
+        params["clientUserMessageId"] = json!(id);
+    }
     if let Some(bound) = bounded {
         if Instant::now() >= bound.deadline {
             bail!("deadline expired before native submission");
@@ -1320,7 +1341,12 @@ async fn send_steer_request(
     let request_id = process
         .send_request(
             "turn/steer",
-            build_turn_steer_params(thread_id, turn_id, &steer.text),
+            build_turn_steer_params(
+                thread_id,
+                turn_id,
+                &steer.text,
+                steer.client_message_id.as_deref(),
+            ),
         )
         .await?;
     pending_steers.insert(
@@ -1334,12 +1360,21 @@ async fn send_steer_request(
 }
 
 /// Builds the documented `turn/steer` request payload for one active turn.
-fn build_turn_steer_params(thread_id: &str, turn_id: &str, text: &str) -> Value {
-    json!({
+fn build_turn_steer_params(
+    thread_id: &str,
+    turn_id: &str,
+    text: &str,
+    client_id: Option<&str>,
+) -> Value {
+    let mut params = json!({
         "threadId": thread_id,
         "input": [{"type": "text", "text": text}],
         "expectedTurnId": turn_id,
-    })
+    });
+    if let Some(id) = client_id {
+        params["clientUserMessageId"] = json!(id);
+    }
+    params
 }
 
 /// Validates that Codex accepted the steering request for the expected active turn.
@@ -1501,6 +1536,20 @@ where
                             // A blank item cannot qualify assistant output or idle completion.
                             return Ok(());
                         }
+                        if let (Some(thread), Some(turn), Some(id)) = (
+                            params.get("threadId").and_then(Value::as_str),
+                            params.get("turnId").and_then(Value::as_str),
+                            item.get("id").and_then(Value::as_str),
+                        ) {
+                            let _ = on_event(CodexEvent::NativeMessageCompleted {
+                                thread_id: thread.to_owned(),
+                                turn_id: turn.to_owned(),
+                                item_id: id.to_owned(),
+                                phase: item.get("phase").and_then(Value::as_str).map(str::to_owned),
+                                text: text.clone(),
+                            })
+                            .await?;
+                        }
                         *assistant_message_completed = true;
                         summary.assistant_text = text.clone();
                         let event = match item.get("phase").and_then(Value::as_str) {
@@ -1628,7 +1677,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -3093,13 +3142,55 @@ while True:
     #[test]
     fn builds_turn_steer_params_for_the_active_turn() {
         assert_eq!(
-            build_turn_steer_params("thread-1", "turn-7", "change direction"),
+            build_turn_steer_params("thread-1", "turn-7", "change direction", None),
             json!({
                 "threadId": "thread-1",
                 "input": [{"type": "text", "text": "change direction"}],
                 "expectedTurnId": "turn-7",
             })
         );
+    }
+
+    #[test]
+    fn steering_identity_does_not_change_expected_turn_or_user_text() {
+        let params =
+            build_turn_steer_params("thread-1", "turn-7", "correction", Some("telegram:1:100:6"));
+        assert_eq!(params["clientUserMessageId"], "telegram:1:100:6");
+        assert_eq!(params["expectedTurnId"], "turn-7");
+        assert_eq!(params["input"][0]["text"], "correction");
+    }
+
+    #[tokio::test]
+    async fn completed_items_keep_native_identity_before_presentation() {
+        let mut summary = RunSummary {
+            codex_thread_id: Some("thread".into()),
+            assistant_text: String::new(),
+            stderr_text: String::new(),
+        };
+        let mut active = Some("turn".into());
+        let mut error = None;
+        let mut terminal = false;
+        let mut completed = false;
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let capture = observed.clone();
+        let mut callback = move |event| {
+            capture.lock().unwrap().push(event);
+            async { Ok(CodexEventOutcome::None) }
+        };
+        for (id, text) in [("A", "Answer A"), ("B", "Answer B")] {
+            handle_notification("item/completed", &json!({"threadId":"thread", "turnId":"turn", "item":{"id":id,"type":"agentMessage","phase":"final_answer","text":text}}), &mut summary, &mut active, &mut error, &mut terminal, &mut completed, &mut callback).await.unwrap();
+        }
+        let events = observed.lock().unwrap();
+        assert_eq!(events.len(), 4);
+        assert!(
+            matches!(&events[0], CodexEvent::NativeMessageCompleted { thread_id, turn_id, item_id, text, .. } if thread_id == "thread" && turn_id == "turn" && item_id == "A" && text == "Answer A")
+        );
+        assert!(matches!(&events[1], CodexEvent::FinalAnswerCompleted(text) if text == "Answer A"));
+        assert!(
+            matches!(&events[2], CodexEvent::NativeMessageCompleted { item_id, .. } if item_id == "B")
+        );
+        assert!(matches!(&events[3], CodexEvent::FinalAnswerCompleted(text) if text == "Answer B"));
+        assert!(!terminal);
     }
 
     #[test]

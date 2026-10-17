@@ -383,7 +383,7 @@ async fn activate(
             replace,
         };
         let (response, ack) = oneshot::channel();
-        attached.sender.send(CodexSteerRequest{text:String::new(),goal:Some(GoalControl::Activate(activation)),response})
+        attached.sender.send(CodexSteerRequest{client_message_id:None,text:String::new(),goal:Some(GoalControl::Activate(activation)),response})
             .map_err(|_|anyhow!("The goal subscriber just finished. Inspect /goal and request the change again; it was not queued."))?;
         match tokio::time::timeout(Duration::from_secs(12), ack).await {
             Ok(Ok(Ok(_))) => {}
@@ -641,6 +641,7 @@ pub(super) async fn control_live(
     attached
         .sender
         .send(CodexSteerRequest {
+            client_message_id: None,
             text: String::new(),
             goal: Some(control),
             response,
