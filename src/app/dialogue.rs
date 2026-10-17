@@ -53,6 +53,7 @@ pub(super) fn tool_call(
                 "dispatch" => "interaction_dispatch",
                 "create" => "interaction_create",
                 "creation_status" => "interaction_creation_status",
+                "creation_resume" => "interaction_creation_resume",
                 _ => "unsupported_controller_operation",
             }
             .into();
@@ -70,7 +71,7 @@ pub(super) fn tool_call(
             super::observer::tool_owner(shared,key,human,&request.thread_id)?;
             if request.namespace.is_some() || request.arguments.to_string().len()>16000 {bail!("Unsupported integrating tool arguments");}
             if request.tool=="controller_capabilities" && request.arguments==json!({}) {
-                return Ok(json!({"schema":"telecodex.interaction-controller/v1","operations":{"capabilities":{"arguments":{}},"inputs":{"arguments":{},"description":"Recent original human text references within this native entry; no dispatch"},"candidates":{"description":"Bounded observer source interpretations; no dispatch","arguments":{"mode":"inventory or refresh","selectors":["one to five enrolled labels or stable tID; inventory can use an empty array"]}},"create":{"input_schema":super::creation::schema(),"description":"Create one justified new work session from an original retained input, with selected attributed context. Never create for ambiguity or a busy worker."},"creation_status":{"arguments":{"input_update":"original input reference"},"description":"Inspect a retained creation; no retry or new work"},"dispatch":{"input_schema":dispatch_schema(),"description":"One durable selected target plan, then existing per-target delivery. Text is taken only from the original referenced ingress record. Amendments/context require actual request IDs. Admission/native acceptance is not proof of incorporation."}},"unsupported":["cross-body routing","global Stop"],"uncertainty":"Never repeat an uncertain operation; inspect retained outcomes before explicit recovery"}));
+                return Ok(json!({"schema":"telecodex.interaction-controller/v1","operations":{"capabilities":{"arguments":{}},"inputs":{"arguments":{},"description":"Recent original human text references within this native entry; no dispatch"},"candidates":{"description":"Bounded observer source interpretations; no dispatch","arguments":{"mode":"inventory or refresh","selectors":["one to five enrolled labels or stable tID; inventory can use an empty array"]}},"create":{"input_schema":super::creation::schema(),"description":"Create one justified new work session from an original retained input, with selected attributed context. Never create for ambiguity or a busy worker."},"creation_resume":{"arguments":{"input_update":"original input reference"},"description":"Explicitly continue a retained known-unsent creation or confirmed topic. Unknown external effects and completed plans are inspected without replay."},"creation_status":{"arguments":{"input_update":"original input reference"},"description":"Inspect a retained creation; no retry or new work"},"dispatch":{"input_schema":dispatch_schema(),"description":"One durable selected target plan, then existing per-target delivery. Text is taken only from the original referenced ingress record. Amendments/context require actual request IDs. Admission/native acceptance is not proof of incorporation."}},"unsupported":["cross-body routing","global Stop"],"uncertainty":"Never repeat an uncertain operation; inspect retained outcomes before explicit recovery"}));
             }
             if request.tool=="interaction_inputs" {
                 if request.arguments!=json!({}) {bail!("Unexpected input query arguments");}
@@ -80,9 +81,12 @@ pub(super) fn tool_call(
             if request.tool=="interaction_create" {
                 return super::creation::create(&app,key,human,&request.thread_id,request.arguments,&closed).await;
             }
-            if request.tool=="interaction_creation_status" {
+            if matches!(request.tool.as_str(),"interaction_creation_status"|"interaction_creation_resume") {
                 if request.arguments.as_object().is_none_or(|a|a.len()!=1) {bail!("Unexpected creation status arguments");}
                 let update=request.arguments["input_update"].as_i64().context("Missing original input reference")?;
+                if request.tool=="interaction_creation_resume" {
+                    return super::creation::resume(&app,key,human,&request.thread_id,update,&closed).await;
+                }
                 let operation=shared.store.interaction_creation_for_input(key,human,update)?;
                 return Ok(operation);
             }

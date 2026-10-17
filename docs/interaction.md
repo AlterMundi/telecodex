@@ -424,8 +424,15 @@ lost or invalid topic receipt is uncertain and is never retried automatically.
 `creation_status` takes the original `input_update` reference to inspect the
 retained operation even when the original tool response was lost. A confirmed
 topic is retained if later initialization or admission fails; inspection is not
-a request to create another topic. Automated recovery of such incomplete
-creation operations is not yet implemented.
+a request to create another topic. The explicit `creation_resume` operation takes the original `input_update`.
+It transactionally claims only `retained_unsent` (one still-unsent topic mutation)
+or `retained_topic` (initialization/admission of the already confirmed topic).
+Concurrent, completed and uncertain operations are inspected without replay.
+Original owner, binding and ingress generation must still be eligible; a new
+request cannot revive a retired original. After commitment the resumed operation
+continues independently of the front dialogue, using the same checked HTTP seam.
+Failures retain the last known boundary. `creation_status` also exposes actual
+instruction IDs/phases for the existing downstream known-unsent recovery path.
 
 The existing empty-session initializer copies the selected entry settings into
 a fresh owned destination. Final admission atomically enrolls that destination

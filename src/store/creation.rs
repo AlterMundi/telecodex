@@ -48,12 +48,6 @@ impl Store {
         creation_on(&conn, &id, human)
     }
 
-    pub fn interaction_creation_unconfirmed(&self, id: &str, human: i64) -> Result<()> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute("UPDATE interaction_creations SET phase=CASE phase WHEN 'prepared' THEN 'retained_unsent' ELSE 'uncertain' END WHERE id=?1 AND human_id=?2 AND phase IN ('prepared','creating_topic') AND instance_id=?3",params![id,human,self.instance_id])?;
-        Ok(())
-    }
-
     /// Freeze one original, attributed context package before a topic RPC.
     #[allow(clippy::too_many_arguments)]
     pub fn interaction_prepare_creation(
@@ -123,6 +117,43 @@ impl Store {
         tx.commit()?;
         drop(conn);
         Ok((self.interaction_creation(&id, human)?, true))
+    }
+
+    /// Claim only a known-unsent mutation or a confirmed topic for explicit
+    /// recovery. Concurrent calls, completed plans and unknown effects only inspect.
+    pub fn interaction_creation_resume(
+        &self,
+        key: SessionKey,
+        human: i64,
+        update: i64,
+        closed: &tokio_util::sync::CancellationToken,
+    ) -> Result<(Value, bool)> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let id:String=tx.query_row("SELECT id FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4",params![human,key.chat_id,key.thread_id,update],|r|r.get(0))?;
+        let operation = creation_on(&tx, &id, human)?;
+        let phase = match operation["phase"].as_str() {
+            Some("retained_unsent") => "prepared",
+            Some("retained_topic") => "topic_known",
+            _ => return Ok((operation, false)),
+        };
+        eligible(&tx, &operation)?;
+        tx.execute(
+            "UPDATE interaction_creations SET phase=?1,instance_id=?2 WHERE id=?3",
+            params![phase, self.instance_id, id],
+        )?;
+        if closed.is_cancelled() {
+            return Err(anyhow!("Native request closed before recovery commitment"));
+        }
+        let operation = creation_on(&tx, &id, human)?;
+        tx.commit()?;
+        Ok((operation, true))
+    }
+
+    pub fn interaction_creation_suspend(&self, id: &str, human: i64) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute("UPDATE interaction_creations SET phase=CASE phase WHEN 'prepared' THEN 'retained_unsent' WHEN 'creating_topic' THEN 'uncertain' ELSE 'retained_topic' END WHERE id=?1 AND human_id=?2 AND instance_id=?3 AND phase IN ('prepared','creating_topic','topic_known')",params![id,human,self.instance_id])?;
+        Ok(())
     }
 
     /// Mark the external mutation before sending it. Unknown RPC outcomes never retry.
@@ -206,22 +237,48 @@ fn creation_on(conn: &Connection, id: &str, human: i64) -> Result<Value> {
         params![id, human],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
+    let intent: Value = serde_json::from_str(&doc)?;
+    let mut q=conn.prepare("SELECT i.id,i.phase FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id JOIN sessions destination ON destination.id=i.session_id WHERE s.human_id=?1 AND s.update_id=?2 AND destination.chat_id=?3 AND destination.thread_id=?4 ORDER BY i.sequence LIMIT 1")?;
+    let rows = q.query_map(
+        params![
+            human,
+            intent["input_update"].as_i64(),
+            intent["entry"]["chat_id"].as_i64(),
+            topic
+        ],
+        |r| Ok(json!({"id":r.get::<_,String>(0)?,"phase":r.get::<_,String>(1)?})),
+    )?;
+    let instructions = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(
-        json!({"id":id,"intent":serde_json::from_str::<Value>(&doc)?,"phase":phase,"topic":topic,"uncertainty":"A recorded intent or topic is not proof of worker incorporation; never replay an unconfirmed topic creation"}),
+        json!({"id":id,"intent":intent,"phase":phase,"topic":topic,"instructions":instructions,"uncertainty":"A recorded intent or topic is not proof of worker incorporation; never replay an unconfirmed topic creation. Inspect retained instruction IDs for downstream delivery recovery."}),
     )
 }
 fn eligible(conn: &Connection, operation: &Value) -> Result<()> {
     let d = &operation["intent"];
     let key: SessionKey = serde_json::from_value(d["entry"].clone())?;
-    let original = super::dialogue::entry_inputs_on(
+    let original = super::dialogue::committed_entry_input_on(
         conn,
         key,
         d["human"].as_i64().context("Missing human")?,
         d["entry_native"].as_str().context("Missing native")?,
-        d["input_update"].as_i64(),
+        d["input_update"]
+            .as_i64()
+            .context("Missing original update")?,
     )?;
     if original.len() != 1 {
         return Err(anyhow!("Creation original retired or rebound"));
+    }
+    let message = original[0]
+        .message
+        .as_ref()
+        .context("Original message missing")?;
+    let origin: ReturnRoute = serde_json::from_value(d["origin"].clone())?;
+    if message.text.as_deref() != d["original_text"].as_str()
+        || message.chat.id != origin.chat_id
+        || message.message_thread_id.unwrap_or(0) != origin.thread_id
+        || message.message_id != origin.message_id
+    {
+        return Err(anyhow!("Retained creation original changed"));
     }
     Ok(())
 }
@@ -304,12 +361,74 @@ mod tests {
                 .is_err(),
             "Original creation input became a different dispatch plan"
         );
+        store.interaction_creation_suspend(id, 100).unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE incoming_updates SET status='undetermined' WHERE update_id=20",
+                [],
+            )
+            .unwrap();
+        assert!(
+            store
+                .interaction_entry_inputs(entry, 100, "entry-native", Some(20))
+                .unwrap()
+                .is_empty(),
+            "Ordinary new dispatch accepted uncertain ingress"
+        );
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        cancelled.cancel();
+        assert!(
+            store
+                .interaction_creation_resume(entry, 100, 20, &cancelled)
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .interaction_creation_for_input(entry, 100, 20)
+                .unwrap()["phase"],
+            "retained_unsent"
+        );
+        assert!(
+            store
+                .interaction_creation_resume(entry, 100, 20, &token)
+                .unwrap()
+                .1
+        );
+        assert!(
+            !store
+                .interaction_creation_resume(entry, 100, 20, &token)
+                .unwrap()
+                .1
+        );
         store.interaction_creation_start(id, 100).unwrap();
         assert!(
             store.interaction_creation_start(id, 100).is_err(),
             "External topic mutation was replayed"
         );
         store.interaction_creation_topic(id, 100, 77).unwrap();
+        store.interaction_creation_suspend(id, 100).unwrap();
+        assert_eq!(
+            store
+                .interaction_creation_for_input(entry, 100, 20)
+                .unwrap()["phase"],
+            "retained_topic"
+        );
+        assert!(
+            store
+                .interaction_creation_resume(entry, 100, 20, &token)
+                .unwrap()
+                .1
+        );
+        assert!(
+            !store
+                .interaction_creation_resume(entry, 100, 20, &token)
+                .unwrap()
+                .1
+        );
+
         let key = SessionKey::new(100, Some(77));
         store.ensure_session(key, 100, &defaults).unwrap();
         let mut template = source;
@@ -324,6 +443,17 @@ mod tests {
             .unwrap();
         assert_eq!(instruction.text, "Start a distinct new task");
         assert_eq!(instruction.target, key);
+        assert!(
+            !store
+                .interaction_creation_resume(entry, 100, 20, &token)
+                .unwrap()
+                .1
+        );
+        let status = store
+            .interaction_creation_for_input(entry, 100, 20)
+            .unwrap();
+        assert_eq!(status["instructions"][0]["id"], instruction.id);
+
         assert!(
             store
                 .interaction_creation_finish(id, 100, "telegram:fixture")
