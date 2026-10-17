@@ -97,8 +97,15 @@ topic_id=8
             text = '\n'.join(part.get('text', '') for part in p['input'])
             provenance = json.loads(next(line.removeprefix('Transport provenance: ') for line in text.splitlines() if line.startswith('Transport provenance: ')))
             assert text.startswith('[Interaction controller]')
-            assert provenance['via'] == 'interaction-controller' and provenance['original_human_author'] == 100
-            assert provenance['source_channel'] == 'telegram:123'
+            assert provenance['via'] == 'interaction-controller'
+            if provenance.get('author') is None:
+                assert provenance['original_human_author'] == 100
+                assert provenance['source_channel'] == 'telegram:123'
+            else:
+                assert provenance['original_human_author'] is None
+                assert provenance['authorized_human'] == 100
+                assert provenance['author']['kind'] in ('session_request','session_result')
+                assert provenance['source_channel'] in ('local-session','local-session-result')
             assert provenance['source_message']['thread_id'] in (1, 7, 8)
         if m['method'] == 'turn/interrupt':
             assert p['turnId'] == self.runs[thread]

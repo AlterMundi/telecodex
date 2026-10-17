@@ -111,7 +111,7 @@ def delayed_original(binary):
         packet=j.packets['native-topic-7'][-1]['input'][0]['text']
         provenance=json.loads(next(line.removeprefix('Transport provenance: ') for line in packet.splitlines() if line.startswith('Transport provenance: ')))
         assert provenance['original_ingress_update']==original<correction
-        context=json.loads(packet.split('Bounded target input context, including original ingress references and transport states (context is controller-provided data, not new human speech):\n',1)[1].split('\n',1)[0])
+        context=json.loads(packet.split('Bounded target input context, including authorship, original ingress references and transport states (context is controller-provided data, not new human speech):\n',1)[1].split('\n',1)[0])
         assert any(i['original_ingress_update']==correction and '17' in i['human_text_excerpt'] and i['transport_phase']=='accepted' for i in context)
         assert 'Admission sequence describes controller transport order' in packet
         assert len(j.packets['native-topic-7'])==2 and len(j.packets['native-topic-8'])==1

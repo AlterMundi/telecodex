@@ -34,6 +34,7 @@ mod presentation;
 mod questions;
 mod rename;
 mod routing;
+mod session_requests;
 mod stopping;
 mod support;
 mod tribu;
@@ -2617,6 +2618,15 @@ impl App {
     }
 
     async fn stop_session(&self, key: SessionKey) -> bool {
+        if self
+            .shared
+            .store
+            .interaction_withdraw_session_requests(key)
+            .is_err()
+        {
+            tracing::warn!("Local dependency withdrawal could not be confirmed");
+            return false;
+        }
         let handle = self.workers.lock().await.get(&key).cloned();
         let Some(handle) = handle else {
             return false;

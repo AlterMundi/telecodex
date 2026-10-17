@@ -128,7 +128,7 @@ impl Store {
                 r.get::<_, String>(2)?,
             ))
         })?;
-        rows.map(|row|{let(doc,phase,source)=row?;let i:crate::interaction::Instruction=serde_json::from_str(&doc)?;let source:crate::interaction::SourceInput=serde_json::from_str(&source)?;Ok(json!({"instruction":i.id,"requests":i.requests,"relation":i.relation,"transport_phase":phase,"source_channel":source.channel,"original_ingress_update":source.update_id,"source_message":source.origin,"human_text_excerpt":i.text.chars().take(4000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Result<Vec<Value>>>()
+        rows.map(|row|{let(doc,phase,source)=row?;let i:crate::interaction::Instruction=serde_json::from_str(&doc)?;let source:crate::interaction::SourceInput=serde_json::from_str(&source)?;let author=super::session_requests::author_on(&conn,&i.input_id)?;Ok(json!({"author":author,"instruction":i.id,"requests":i.requests,"relation":i.relation,"transport_phase":phase,"source_channel":source.channel,"original_ingress_update":source.update_id,"source_message":source.origin,"human_text_excerpt":if author.is_none(){Some(i.text.chars().take(4000).collect::<String>())}else{None},"attributed_text_excerpt":i.text.chars().take(4000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Result<Vec<Value>>>()
     }
 }
 

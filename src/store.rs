@@ -15,6 +15,7 @@ mod interaction;
 mod interactions;
 mod merging;
 mod routing;
+mod session_requests;
 mod stopping;
 pub use stopping::{StopOperation, StopTarget};
 mod nexus;
@@ -88,6 +89,7 @@ impl Store {
         store.init_interaction()?;
         store.init_interaction_creation()?;
         store.init_routing()?;
+        store.init_session_requests()?;
         store.init_nexus()?;
         store.init_merging()?;
         store.init_stopping()?;

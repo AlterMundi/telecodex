@@ -553,7 +553,13 @@ impl Store {
             let raw:Option<String>=conn.query_row("SELECT s.doc FROM interaction_requests r JOIN interaction_sources s ON s.id=r.input_id WHERE r.id=?1 AND r.human_id=?2",params![request,human],|r|r.get(0)).optional()?;
             if let Some(raw) = raw {
                 let source: crate::interaction::SourceInput = serde_json::from_str(&raw)?;
-                out.push(serde_json::json!({"request":request,"original_text":source.text}));
+                let input_id: String = conn.query_row(
+                    "SELECT input_id FROM interaction_requests WHERE id=?",
+                    [request],
+                    |r| r.get(0),
+                )?;
+                let author = super::session_requests::author_on(&conn, &input_id)?;
+                out.push(serde_json::json!({"request":request,"original_text":source.text,"author":author}));
             }
         }
         Ok(out)

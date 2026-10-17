@@ -33,10 +33,26 @@ class NativeJourney(Journey):
             text = re.sub(r'^api_base=.*$', lambda _: endpoint, saved_config, flags=re.M)
             self.sequence = self.row('SELECT coalesce(max(update_id),0) FROM incoming_updates')[0][0]
             self.message_id = 1000000 + self.sequence
+        # Telegram allocates message IDs independently of listener lifetimes.
+        # Continue its fake peer's high-water mark, including legacy receipts.
+        self.message_counter = self.root / 'fixture-telegram-message-id'
+        if self.message_counter.exists():
+            self.message_id = max(self.message_id, int(self.message_counter.read_text()))
+        if (self.root / 'state.sqlite').exists():
+            with sqlite3.connect(self.root / 'state.sqlite') as db:
+                for table in ('handoff_messages', 'interaction_deliveries', 'interaction_delivery_parts'):
+                    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
+                        self.message_id = max(self.message_id, db.execute(f'SELECT coalesce(max(message_id),0) FROM {table}').fetchone()[0])
         text = text.replace('binary=' + json.dumps(str(self.root / 'codex')), 'binary=' + json.dumps(self.codex))
         text = text.replace('default_model="fixture-model"\n', '')
         self.config.write_text(text)
         self.log = None
+
+    def before_send_message_reply(self, payload):
+        with self.lock:
+            temporary = self.message_counter.with_suffix('.tmp')
+            temporary.write_text(str(self.message_id))
+            temporary.replace(self.message_counter)
 
     def start(self):
         env = dict(os.environ, CODEX_HOME=self.native_home, RUST_LOG='warn,telecodex::codex=debug')

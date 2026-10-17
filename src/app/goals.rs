@@ -621,6 +621,9 @@ pub(super) fn intent_key(key: SessionKey) -> String {
 fn revoke_queued(app: &App, key: SessionKey) -> Result<()> {
     app.shared
         .store
+        .interaction_withdraw_session_requests(key)?;
+    app.shared
+        .store
         .save_bot_state(&intent_key(key), &Uuid::now_v7().to_string())
 }
 pub(super) async fn control_live(
