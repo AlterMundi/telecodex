@@ -20,6 +20,7 @@ pub struct SessionObservation {
     pub native_item: Option<(String, String, String)>,
     pub pending: interactions::InteractionPage,
     pub presentation_gaps: usize,
+    pub semantic: Option<(super::observer_cards::ObserverCard, ObserverFreshness)>,
 }
 
 impl Store {
@@ -84,6 +85,22 @@ impl Store {
             params![session_id,human,native_thread], |r| r.get(0),
         )?;
         let pending = interactions::interaction_page_on(&tx, key, human, 0, false)?;
+        let semantic = if let Some(native) = native_thread.as_deref() {
+            super::observer_cards::head(&tx, session_id, native)?
+                .map(|card| {
+                    let freshness = super::observer_freshness::freshness_on(
+                        &tx,
+                        session_id,
+                        native,
+                        &card.source_revision,
+                        &self.instance_id,
+                    )?;
+                    Ok::<_, anyhow::Error>((card, freshness))
+                })
+                .transpose()?
+        } else {
+            None
+        };
         let sampled_at = now_string();
         tx.commit()?;
         Ok(Some(SessionObservation {
@@ -97,6 +114,7 @@ impl Store {
             native_item,
             pending,
             presentation_gaps,
+            semantic,
         }))
     }
 }

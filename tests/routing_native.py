@@ -22,11 +22,11 @@ from questions_io import Journey
 
 
 class NativeJourney(Journey):
-    def __init__(self, args):
+    def __init__(self, args, *, reuse=False):
         self.codex = str(pathlib.Path(args.codex).resolve())
         self.native_home = str(pathlib.Path(args.native_home).resolve())
-        saved_config = (args.state / 'local.toml').read_text() if args.resume else None
-        super().__init__(str(pathlib.Path(args.binary).resolve()), 'real-native', state=args.state, resume=args.resume)
+        saved_config = (args.state / 'local.toml').read_text() if args.resume or reuse else None
+        super().__init__(str(pathlib.Path(args.binary).resolve()), 'real-native', state=args.state, resume=args.resume or reuse)
         text = self.config.read_text()
         if saved_config is not None:
             endpoint = re.search(r'^api_base=.*$', text, re.M).group(0)

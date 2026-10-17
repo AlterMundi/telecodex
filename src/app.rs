@@ -26,6 +26,7 @@ mod interactions;
 mod io;
 mod merging;
 mod nexus;
+mod observer;
 mod presentation;
 mod questions;
 mod rename;

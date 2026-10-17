@@ -89,7 +89,7 @@ fn label(shared: &AppShared, key: SessionKey) -> String {
         .unwrap_or_else(|| format!("t{}", key.thread_id))
 }
 
-fn notice(shared: Arc<AppShared>, origin: ReturnRoute, text: String) {
+pub(super) fn notice(shared: Arc<AppShared>, origin: ReturnRoute, text: String) {
     notice_when(shared, origin, text, None);
 }
 
@@ -252,6 +252,12 @@ async fn session_card(
     if observed.presentation_gaps > 0 {
         card.push_str("\nPresentation incomplete: queued activity was dropped; retained native items remain available.");
     }
+    if let Some((summary, freshness)) = &observed.semantic {
+        card.push_str(&format!(
+            "\nSemantic card revision {}: {} (source observed {})",
+            summary.revision, freshness.state, summary.observed_at
+        ));
+    }
     card.push_str("\nCoverage: bounded local evidence; native history has not been reconciled. Activity is not task completion.");
     card
 }
@@ -274,6 +280,9 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64, text: &str)
         .context("Interaction input lacks its ingress journal identity")?;
     if text.starts_with("/interaction") {
         let args = text.split_whitespace().skip(1).collect::<Vec<_>>();
+        if super::observer::handle(app, human, origin.clone(), &args)? {
+            return Ok(true);
+        }
         if let [verb, id] = args.as_slice()
             && *verb != "status"
         {

@@ -206,6 +206,52 @@ coverage. Presentation gaps remain visible even when newer native activity is
 available. They are the deterministic observer surface; durable incremental
 history reconciliation and semantic summaries remain subsequent observer work.
 
+## Derived semantic cards
+
+`/interaction observe #Topic` reads only the selected owned native source through
+the existing bounded history adapter. It freezes original completed/provisional
+entries, their native turn references, source revision and changed-entry indices
+before reserving one read-only synthesis. The summary describes purpose,
+decisions/corrections, current work and open questions. It is an attributed
+interpretation of source statements, not verified completion or new authority.
+
+The retained source, summary support indices, processed boundary and expected
+summary revision commit together. A concurrent or late response cannot overwrite
+a newer revision. Unchanged source revisions reuse the existing card without a
+synthesis call. Missing previous boundaries remain explicit continuity gaps;
+truncation/window bounds are preserved. Original snapshots remain available for
+rebuild and inspection rather than relying on summaries of summaries.
+
+`/interaction summary #Topic` inspects the current binding's retained card without
+native/model calls. `/interaction sources #Topic` shows bounded original support
+excerpts with their entry and native source references. Native binding changes
+select a separate card lineage; they never relabel an earlier source as current.
+
+Interrupted/uncertain synthesis attempts remain retained across restart. Merely
+asking to observe again does not replay them; `/interaction observe #Topic
+--retry` explicitly selects a new attempt while preserving the old record. Source
+workers are never resumed, steered or interrupted by observation. Only the
+read-only synthesis uses a separate ephemeral context with tools disabled.
+
+Local canonical message, turn, input and human-question changes invalidate the
+card through a counter updated in the owning transaction. The counter is captured
+before the native read; the read completion time is retained separately from
+synthesis commit time. Activity arriving during synthesis therefore leaves the
+result visibly stale. Unchanged-source rereads update the check without another
+synthesis. A restart requires native reconciliation even if the local counter
+has not changed. An equal counter proves only no observed local change; external
+native history remains sampled. Unsettled transport inputs are shown separately.
+
+Original snapshots and cards survive explicit session deletion as historical
+provenance; derived activity/check metadata is removed. Startup migrates the
+previous session foreign keys transactionally, retaining original bytes. Current
+owner and native-binding checks still control access to retained cards.
+
+Source-driven refresh currently runs on explicit observation requests. Automatic
+candidate refresh and semantic routing integration remain continuing work.
+Runtime quality qualification must check factual summaries separately from
+successful processing and support IDs.
+
 ## Verification and remaining scope
 
 The native identity and deferred-approval foundations are merged in #121/#123.
