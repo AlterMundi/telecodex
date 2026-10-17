@@ -49,9 +49,10 @@ pub(super) async fn create(
         .interaction_entry_inputs(key, human, native, Some(args.input_update))?
         .pop()
         .context("Original input unavailable")?;
+    let (content, transcription) = shared.store.interaction_input_content(&original, human)?;
     let message = original.message.context("Original message missing")?;
-    let text = message.text.as_deref().context("Committed text missing")?;
-    if !is_text_only_steer_candidate(&message, text)
+    let text = content.as_str();
+    if !(is_text_only_steer_candidate(&message, text) || transcription.is_some())
         || text.trim_start().starts_with('/')
         || (message.chat.kind != "private" && !message.chat.is_forum.unwrap_or(false))
     {

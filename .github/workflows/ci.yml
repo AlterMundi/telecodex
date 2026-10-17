@@ -106,6 +106,12 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ steps.text-rust-cache.outputs.cache-primary-key }}
+      - name: Ensure voice decoding prerequisite
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
       - name: Qualify independent foreground ingress and native-question journeys
         run: |
           python3 - <<'PYTHON'
@@ -155,7 +161,7 @@ jobs:
           failed = False
           # Every suite owns its temporary native/HTTP peers, sockets and store.
           # Keep all existing gates and logs, with the same two-process bound.
-          suites = ('pending_io.py', 'merge_io.py', 'stopping_io.py', 'attachment_io.py', 'goals_io.py', 'nexus_io.py', 'nexus_context_io.py', 'icons_io.py', 'stickers_io.py', 'reactions_io.py', 'fork_io.py', 'tribu_io.py')
+          suites = ('pending_io.py', 'merge_io.py', 'stopping_io.py', 'attachment_io.py', 'voice_io.py', 'goals_io.py', 'nexus_io.py', 'nexus_context_io.py', 'icons_io.py', 'stickers_io.py', 'reactions_io.py', 'fork_io.py', 'tribu_io.py')
           with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
               jobs = [pool.submit(qualify, suite) for suite in suites]
               for job in concurrent.futures.as_completed(jobs):

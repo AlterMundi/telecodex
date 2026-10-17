@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    pub voice: Option<crate::voice::VoiceConfig>,
     pub telegram: TelegramConfig,
     pub codex: CodexConfig,
     #[serde(default = "default_db_path")]
@@ -184,6 +185,12 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
+        if let Some(voice) = &self.voice {
+            voice.validate()?;
+            if self.interaction.is_none() {
+                bail!("Voice requires an explicit interaction profile");
+            }
+        }
         if let Some(interaction) = &self.interaction {
             interaction.validate()?;
             if !self.codex.shared_app_server {

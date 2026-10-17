@@ -13,6 +13,7 @@ mod store;
 mod telegram;
 mod transcribe;
 mod user_input;
+mod voice;
 
 use anyhow::Result;
 use tokio::time::{Duration, sleep};

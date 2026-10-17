@@ -25,6 +25,7 @@ class Routing(Goals):
         self.reject_next = False
         self.retire_on_reject = False
         self.rejected_turn = None
+        self.rejected_inputs = set()
         self.routed = False
         self.block_binding = False
         self.allow_native_launch = False
@@ -135,6 +136,7 @@ topic_id=8
                     with sqlite3.connect(self.root / 'state.sqlite') as db:
                         db.execute("INSERT OR REPLACE INTO bot_state(key,value) VALUES('stop_admission_epoch:100','fixture-retired-generation')")
                 send({'id': m['id'], 'error': {'code': -32600, 'message': 'Synthetic finished generation'}})
+                self.rejected_inputs.add(p['clientUserMessageId'])
             else:
                 send({'id': m['id'], 'result': {'turnId': self.runs[thread]}})
         return True
@@ -289,7 +291,12 @@ def rejected_generation(binary):
         j.reject_next = True
         j.admit('First changed requirement', topic=1, reply=original)
         j.admit('Second changed requirement', topic=1, reply=original)
-        j.wait(lambda: len(j.instructions(7)) == 3)
+        # Admission precedes native transport. End the old turn only after
+        # both matched rejection responses have actually been requeued; ending
+        # it earlier correctly yields uncertain input rather than safe replay.
+        j.wait(lambda: len(j.instructions(7)) == 3 and all(
+            row[0] in j.rejected_inputs and row[1] == 'queued'
+            for row in j.instructions(7)[1:]))
         j.broadcast('native-topic-7', 'turn/completed', {'turn': {'id': old, 'status': 'completed'}})
         j.wait(lambda: all(row[1] == 'accepted' for row in j.instructions(7)))
         docs = [json.loads(r[2]) for r in j.instructions(7)]

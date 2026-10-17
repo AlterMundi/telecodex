@@ -468,6 +468,7 @@ mod tests {
         let admitted = store
             .interaction_admit(
                 &SourceInput {
+                    transcription: None,
                     channel: "fixture".into(),
                     event_id: "1".into(),
                     update_id: Some(1),

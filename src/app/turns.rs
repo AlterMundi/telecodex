@@ -13,6 +13,11 @@ pub(super) async fn process_turn(
     registration: Option<String>,
 ) -> Result<()> {
     let shared = app.shared.clone();
+    shared.store.voice_validate(
+        queued.update_id,
+        queued.request.session_key,
+        queued.request.from_user_id,
+    )?;
     if let Some(id) = queued.interaction.as_deref() {
         let instruction = shared
             .store
@@ -478,6 +483,7 @@ pub(super) async fn process_turn(
                 let approval_cancel = cancel.clone();
                 let requester_user_id = queued.request.from_user_id;
                 let session_key = session.key;
+                let voice_update = queued.update_id;
                 let preserve_thread_binding = queued.request.review_mode.is_none();
                 let admission=queued.tribu_admission.clone();
                 let physical_turn=physical_turn.clone();
@@ -508,14 +514,15 @@ pub(super) async fn process_turn(
                                     if native!=thread_id {bail!("Attachment returned a different native thread");}
                                     shared.store.validate_owned_binding(session_key,requester_user_id,native)?;
                                 }
+                                let voice_bound=shared.store.voice_bind_native(voice_update,session_key,requester_user_id,&thread_id)?;
                                 shared.store.merge_thread(turn_id,&thread_id)?;
                                 super::nexus::thread(&shared,turn_id,&thread_id)?;
                                 if let Some(id)=admission.as_deref() {shared.store.tribu_native_thread(session_key,id,&thread_id)?;}
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
                                 if preserve_thread_binding && attach_native.is_none() {
-                                    shared
-                                        .store
-                                        .set_session_codex_thread(session_key, &thread_id)?;
+                                    if !voice_bound {
+                                        shared.store.set_session_codex_thread(session_key, &thread_id)?;
+                                    }
                                     if !routed && super::rename::sync_native_title(&shared, session_key).await.is_err() {
                                         let _ = send_markdown_message(
                                             &shared.telegram,
@@ -616,6 +623,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnSubmitting => {
+                                shared.store.voice_validate(voice_update,session_key,requester_user_id)?;
                                 if let Some(native)=attach_native.as_deref() {shared.store.validate_owned_binding(session_key,requester_user_id,native)?;}
                                 if let Some(id)=interaction.as_deref() {
                                     let instruction=shared.store.interaction_instruction(id,requester_user_id)?.context("Interaction input missing before submission")?;

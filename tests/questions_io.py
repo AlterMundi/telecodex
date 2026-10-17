@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 
 
 class Journey:
@@ -45,8 +46,8 @@ class Journey:
                     owner.native_connection(self.request)
                 except (ConnectionError, OSError):
                     pass  # Deliberate disconnect/restart scenarios.
-                except Exception as error:
-                    owner.errors.append(repr(error))
+                except Exception:
+                    owner.errors.append(traceback.format_exc())
                     owner.finished.set()
 
         class NativeServer(socketserver.ThreadingTCPServer):
@@ -56,6 +57,17 @@ class Journey:
         threading.Thread(target=self.native.serve_forever, daemon=True).start()
 
         class Telegram(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                file_id = self.path.rsplit('/', 1)[-1]
+                data = getattr(owner, 'media_files', {}).get(file_id)
+                if data is None:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
                 method = self.path.rsplit('/', 1)[-1]
@@ -67,6 +79,9 @@ class Journey:
                         result = [owner.updates.popleft()] if owner.updates else []
                     if not result:
                         time.sleep(.03)
+                elif method == 'getFile' and payload.get('file_id') in getattr(owner, 'media_files', {}):
+                    file_id = payload['file_id']
+                    result = {'file_id': file_id, 'file_unique_id': file_id, 'file_path': 'voice/'+file_id, 'file_size': len(owner.media_files[file_id])}
                 elif method == 'createForumTopic' and hasattr(owner, 'created_topic'):
                     result = owner.created_topic(payload)
                 elif method == 'sendMessage':
@@ -153,6 +168,7 @@ import_desktop_history=false
     def start(self):
         env = {'PATH': '/usr/bin:/bin', 'HOME': str(self.root), 'CODEX_HOME': str(self.root / 'codex-home'),
                'LANG': 'C.UTF-8', 'RUST_LOG': 'warn'}
+        env.update(getattr(self, 'extra_env', {}))
         self.process = subprocess.Popen([self.binary, str(self.config)], cwd=self.root, env=env,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
