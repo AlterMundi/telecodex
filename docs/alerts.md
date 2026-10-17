@@ -2,9 +2,9 @@
 
 Telecodex consumes `daimon-alerts/v1` from
 [AlterMundi/daimon-alerts](https://github.com/AlterMundi/daimon-alerts), pinned for
-qualification to `d52c72102adc66078dd458cf870b2e1ac5727b1b`. The vendored schema
+qualification to `8a7d66977d2efdfc954f8a7fad2d499e01da6973`. The vendored schema
 is `dashboard/contracts/daimon-alerts-v1.json`, SHA256
-`284d50a5548198f2bdfb578ad14195d9d818c33ffa1031982aca4af521958be2`.
+`d1a2f3773cfcbbbaccc98e9490647b0e35f0ad4233b235bce223058d06b58602`.
 Schema origin is that repository's MIT-licensed consumer contract. Keep the pin,
 schema and integration fixtures coherent when extending the protocol.
 
@@ -112,3 +112,30 @@ produce a real Telegram receipt and authenticated Sessions incident while work
 remains preserved, including with Sessions closed. Restore access and explicitly
 resume HMK; observe completion and resolution. Keep phone acceptance, another
 body's skill/resource adoption and automated tests as distinct evidence in #82.
+
+
+## Apps menu attention
+
+Explicitly enabling `alerts.menu_attention = true` projects this receiving human's
+existing authorized alert snapshot into the **existing private-chat Apps menu**.
+The menu URL and original label are retained privately for rollback. The receiver
+refuses another app selection, a changed destination, different human/bot binding
+or an externally changed label. It neither registers an app nor consumes updates.
+
+Telegram's `MenuButtonWebApp` exposes text and a URL, without an icon color or
+animation field: https://core.telegram.org/bots/api#menubuttonwebapp . The supported
+indicator is therefore a colored emoji in the label: red for error/critical, orange
+for warning, blue for information, plain Apps when clear. Only open unacknowledged
+incidents request attention. Acknowledgment does not resolve their conditions.
+Unavailable/stale/unobserved or truncated observation displays a white unknown
+indicator unless a known error/critical already warrants red. Resolved history
+does not request attention. Rendering and refresh timing depend on Telegram clients.
+
+The existing Alerts receiving loop owns this projection. Updates happen only on
+attention transitions, at most once per minute, and respect the receiving traffic
+cooldown. Menu errors are recorded independently and cannot break delivery. A lost
+setter reply is reconciled by reading the current value; there is no animated
+API polling or new notification consumer. The private `alerts/menu-attention.json`
+retains original/selected values and observed time, distinct from human observation.
+To roll back, disable the option and restore that record's original menu through
+the existing operator authority after verifying the current binding and destination.

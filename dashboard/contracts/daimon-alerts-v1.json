@@ -67,7 +67,8 @@
             "worker_stalled",
             "observation_stale",
             "observation_unreadable",
-            "notification_unavailable"
+            "notification_unavailable",
+            "storage_pressure"
           ]
         },
         "summary": {
@@ -498,6 +499,19 @@
         "source_at",
         "source_state",
         "freshness"
+      ]
+    },
+    "ObserverRetirementInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "receiving_scope": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$"
+        }
+      },
+      "required": [
+        "receiving_scope"
       ]
     },
     "Status": {
