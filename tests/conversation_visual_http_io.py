@@ -80,6 +80,8 @@ def qualify(binary):
         packet=j.worker_packets['native-topic-7'][-1];assert selected_image(packet)
         metadata=json.loads(next(p['text']for p in packet['input']if p.get('type')=='text').split('Transport provenance: ',1)[1].split('\n',1)[0])
         assert metadata['visual']==ref and metadata['input_ref']==original
+        assert 'Current selected pixel: x=20, y=30 in this 160 by 96 image.'in str(packet)
+        assert 'markers or selections pictured inside that image are captured content'in str(packet)
         requests=json.loads(j.instructions(7)[0][2])['requests']
         correction_ref=reference(data,120,30)
         correction,r=submit('Use that other selected object instead.',correction_ref);assert r.status_code==200,r.text
