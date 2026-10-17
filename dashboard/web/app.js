@@ -11,6 +11,7 @@ let snapshot,
   pendingNonce,
   pendingKind,
   controlIntent;
+let conversationMode = false;
 const acknowledgmentRequests = new Map();
 let resolvedHistoryExpanded = false;
 let alertTrailOpened = false;
@@ -63,7 +64,11 @@ async function api(route, body) {
       body: body ? JSON.stringify(body) : undefined,
     });
     const value = await response.json();
-    if (!response.ok) throw new Error(value.detail || "Request unavailable");
+    if (!response.ok) {
+      const error = new Error(value.detail || "Request unavailable");
+      error.status = response.status;
+      throw error;
+    }
     return value;
   } catch (e) {
     if (controller.signal.aborted)
@@ -450,6 +455,7 @@ function traffic(data) {
 }
 async function refresh(force = false) {
   if (refreshing || !authenticated || (document.hidden && !force)) return;
+  if (conversationMode) return conversationView?.refresh(force);
   refreshing = true;
   $("#refresh").disabled = true;
   if (!snapshot) $("#overview").textContent = "Reading native state…";
@@ -555,6 +561,14 @@ tg?.onEvent?.("activated", () => {
 });
 tg?.onEvent?.("deactivated", () => clearInterval(timer));
 tg?.ready?.();
+const conversationView = window.Conversation?.mount({
+  api,
+  headers: () => ({"Content-Type":"application/json", "X-Dashboard-CSRF":csrf || "",
+    ...(sessionToken ? {Authorization:`Bearer ${sessionToken}`} : {})}),
+  setCsrf: (value) => { csrf = value; },
+  modeChanged: (enabled, initial) => { conversationMode = enabled; if (!initial) refresh(true); },
+  telegram: tg,
+});
 (async () => {
   if (!tg?.initData) {
     $("#feedback").textContent =
@@ -571,6 +585,8 @@ tg?.ready?.();
       sessionToken = connection.session_token;
     }
     authenticated = true;
+    $("#feedback").textContent = "";
+    conversationView?.authenticated();
     // Some WebViews report hidden during launch and never emit visibilitychange.
     // Fetch the first observation once; periodic refresh still requires visibility.
     await refresh(true);

@@ -174,10 +174,13 @@ class Provider:
                 raise ProviderUnavailable('Loaded integrating entry does not match the receiving configuration')
         return result
 
-    def presentation_list(self, delivery, native):
+    def presentation_list(self, delivery, native, direction='after'):
         if type(delivery) is not int or type(native) is not int or min(delivery, native) < 0:
             raise ValueError('Invalid presentation cursor')
-        return self.presentation(f'presentation list {delivery} {native}')
+        if direction not in ('after', 'before'):
+            raise ValueError('Invalid presentation direction')
+        operation = 'before' if direction == 'before' else 'list'
+        return self.presentation(f'presentation {operation} {delivery} {native}')
 
     def presentation_part(self, source, revision, offset):
         import re

@@ -133,7 +133,7 @@ fn route(message: &Message) -> ReturnRoute {
     }
 }
 
-fn label(shared: &AppShared, key: SessionKey) -> String {
+pub(super) fn label(shared: &AppShared, key: SessionKey) -> String {
     profile(shared)
         .ok()
         .and_then(|c| c.targets.into_iter().find(|t| t.topic_id == key.thread_id))

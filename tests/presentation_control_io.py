@@ -39,6 +39,10 @@ def qualify(binary,dashboard=False):
         listing=j.read('list',0,0)['result']
         assert len(listing['items'])==3
         assert {i['kind'] for i in listing['items']}=={'worker_result','integrator_answer'}
+        assert all(i['label'] and i['sequence']>0 for i in listing['items'])
+        recent=j.read('before',0,0)['result']
+        assert {i['id'] for i in recent['items']}=={i['id'] for i in listing['items']}
+        assert recent['newest']==listing['newest'] and not recent['more']
         selected=next(i for i in listing['items'] if i['preview']=='Alpha result.')
         part=j.read('part',selected['id'],selected['revision'],0)['result']
         assert part['text']=='Alpha result.' and part['current'] and part['completed']
@@ -67,6 +71,9 @@ def qualify(binary,dashboard=False):
                     headers['x-dashboard-csrf']=client.get('/api/alerts',headers=headers).json()['csrf']
                     observed=client.get('/api/interaction',headers=headers)
                     assert observed.status_code==200,observed.text
+                    assert observed.json()['can_listen'] and observed.json()['csrf']==headers['x-dashboard-csrf']
+                    history=client.get('/api/interaction?direction=before',headers=headers)
+                    assert history.status_code==200 and len(history.json()['items'])==3
                     body={'source':selected['id'],'revision':selected['revision'],'offset':0}
                     audio=client.post('/api/interaction/audio',json=body,headers=headers)
                     assert audio.status_code==200,audio.text

@@ -148,7 +148,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             (' '+appearance+'/home-style.js' if appearance else '') +
             "; style-src 'self'" + (' '+appearance if appearance else '') +
             "; font-src 'self'" + (' '+appearance if appearance else '') +
-            "; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
+            "; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; "
             "frame-ancestors 'self' https://web.telegram.org")
         return response
 
@@ -187,7 +187,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     @app.get('/')
     def shell():
         body = (public / 'index.html').read_text()
-        for name in ('app.js', 'style.css'):
+        for name in ('app.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         if appearance:
@@ -199,7 +199,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/assets/{name}')
     def asset(name: str, request: Request):
-        if name not in ('app.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('app.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -256,15 +256,15 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         return result
 
     @app.get('/api/interaction')
-    async def interaction_sources(request: Request, delivery: int = 0, native: int = 0):
-        authorize(request)
+    async def interaction_sources(request: Request, delivery: int = 0, native: int = 0, direction: str = 'after'):
+        session = authorize(request)
         try:
             from starlette.concurrency import run_in_threadpool
-            result = await run_in_threadpool(provider.presentation_list, delivery, native)
+            result = await run_in_threadpool(provider.presentation_list, delivery, native, direction)
         except (ProviderUnavailable, OSError, ValueError):
             raise HTTPException(503, 'Integrating conversation unavailable; refresh before continuing') from None
         authorize(request)
-        return result
+        return {**result, 'csrf':session['csrf'], 'can_listen':speech is not None}
 
     @app.get('/api/interaction/part')
     async def interaction_part(request: Request, source: str, revision: str, offset: int = 0):

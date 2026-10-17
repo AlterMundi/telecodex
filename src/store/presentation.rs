@@ -27,23 +27,45 @@ impl Store {
         after_delivery: i64,
         after_native: i64,
     ) -> Result<Value> {
+        self.interaction_presentation_page(human, entry, after_delivery, after_native, false)
+    }
+
+    pub fn interaction_presentation_page(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        after_delivery: i64,
+        after_native: i64,
+        before: bool,
+    ) -> Result<Value> {
         if after_delivery < 0 || after_native < 0 {
             bail!("Invalid presentation cursor");
         }
         let conn = self.conn.lock().expect("store mutex poisoned");
         let (session, native) = entry_on(&conn, human, entry)?;
-        let mut stmt = conn.prepare(
+        let (comparison, order) = if before { ("<", "DESC") } else { (">", "ASC") };
+        let delivery_bound = if before && after_delivery == 0 {
+            i64::MAX
+        } else {
+            after_delivery
+        };
+        let native_bound = if before && after_native == 0 {
+            i64::MAX
+        } else {
+            after_native
+        };
+        let mut stmt = conn.prepare(&format!(
             "SELECT d.rowid,d.id FROM interaction_deliveries d
             JOIN interaction_requests r ON r.id=d.request_id
             JOIN interaction_sources x ON x.id=r.input_id
             JOIN sessions s ON s.id=r.session_id
-            WHERE d.rowid>?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2
+            WHERE d.rowid{comparison}?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2
             AND s.creator_user_id=?2 AND x.origin_chat=?3 AND x.origin_thread=?4
-            ORDER BY d.rowid LIMIT 9",
-        )?;
+            ORDER BY d.rowid {order} LIMIT 9"
+        ))?;
         let deliveries = stmt
             .query_map(
-                params![after_delivery, human, entry.chat_id, entry.thread_id],
+                params![delivery_bound, human, entry.chat_id, entry.thread_id],
                 |r| {
                     Ok((
                         r.get::<_, i64>(0)?,
@@ -52,26 +74,28 @@ impl Store {
                 },
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT m.rowid FROM interaction_native_messages m
-            JOIN turns t ON t.id=m.local_turn WHERE m.rowid>?1 AND t.session_id=?2
+            JOIN turns t ON t.id=m.local_turn WHERE m.rowid{comparison}?1 AND t.session_id=?2
             AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase='final_answer'
-            ORDER BY m.rowid LIMIT 9",
-        )?;
+            ORDER BY m.rowid {order} LIMIT 9"
+        ))?;
         let natives = stmt
-            .query_map(params![after_native, session, human, native], |r| {
+            .query_map(params![native_bound, session, human, native], |r| {
                 r.get::<_, i64>(0)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut items = Vec::new();
-        for (_, id) in deliveries.iter().take(8) {
+        for (sequence, id) in deliveries.iter().take(8) {
             if let Some(mut source) = source_on(&conn, human, entry, id)? {
+                source["sequence"] = json!(sequence);
                 preview(&mut source);
                 items.push(source);
             }
         }
         for row in natives.iter().take(8) {
             if let Some(mut source) = source_on(&conn, human, entry, &format!("native:{row}"))? {
+                source["sequence"] = json!(row);
                 preview(&mut source);
                 items.push(source);
             }
@@ -80,6 +104,8 @@ impl Store {
             "binding":digest(&json!([human,entry,session,native])),"items":items,
             "cursor":{"delivery":deliveries.iter().take(8).next_back().map_or(after_delivery,|r|r.0),
                       "native":natives.iter().take(8).next_back().copied().unwrap_or(after_native)},
+            "newest":{"delivery":deliveries.iter().take(8).map(|r|r.0).max().unwrap_or(0),
+                      "native":natives.iter().take(8).copied().max().unwrap_or(0)},
             "more":deliveries.len()>8 || natives.len()>8,"playback":"not_observed"}))
     }
 
@@ -472,5 +498,89 @@ mod tests {
                 .unwrap()["binding"],
             list["binding"]
         );
+    }
+
+    #[test]
+    fn recent_page_and_older_history_retain_every_parallel_reply_without_duplicates() {
+        let (_file, store, entry, _, _, _) = setup();
+        let session = store.get_session(entry).unwrap().unwrap();
+        let local = store
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: entry,
+                    from_user_id: 100,
+                    prompt: "Updates".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(local, "entry-native")
+            .unwrap();
+        for index in 0..20 {
+            store
+                .record_native_message(
+                    local,
+                    "entry-native",
+                    "entry-turn",
+                    &format!("item-{index}"),
+                    Some("final_answer"),
+                    &format!("Reply {index}"),
+                )
+                .unwrap();
+        }
+        let mut page = store
+            .interaction_presentation_page(100, entry, 0, 0, true)
+            .unwrap();
+        let first = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["kind"] == "integrator_answer")
+            .unwrap();
+        assert_eq!(first["preview"], "Reply 19");
+        let newest = page["newest"]["native"].as_i64().unwrap();
+        assert!(
+            store
+                .interaction_presentation_list(100, entry, 1, newest)
+                .unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            for item in page["items"].as_array().unwrap() {
+                assert!(seen.insert(item["id"].as_str().unwrap().to_string()));
+            }
+            if page["more"] != true {
+                break;
+            }
+            let delivery = page["cursor"]["delivery"].as_i64().unwrap();
+            let native = page["cursor"]["native"].as_i64().unwrap();
+            page = store
+                .interaction_presentation_page(100, entry, delivery, native, true)
+                .unwrap();
+        }
+        assert_eq!(seen.len(), 21); // Twenty entry answers and the routed worker result.
+        store
+            .record_native_message(
+                local,
+                "entry-native",
+                "entry-turn",
+                "new-item",
+                Some("final_answer"),
+                "New reply",
+            )
+            .unwrap();
+        let new = store
+            .interaction_presentation_list(100, entry, 1, newest)
+            .unwrap();
+        assert_eq!(new["items"].as_array().unwrap().len(), 1);
+        assert_eq!(new["items"][0]["preview"], "New reply");
     }
 }
