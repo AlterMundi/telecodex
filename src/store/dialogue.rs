@@ -8,9 +8,37 @@ pub(super) fn entry_inputs_on(
     native: &str,
     selected: Option<i64>,
 ) -> Result<Vec<crate::telegram::Update>> {
-    let mut query=conn.prepare("SELECT i.payload_json FROM incoming_updates i JOIN turns t ON t.id=i.turn_id JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN bot_state captured ON captured.key='stop_input_epoch:'||i.update_id LEFT JOIN bot_state current ON current.key='stop_admission_epoch:'||s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND t.from_user_id=?3 AND s.codex_thread_id=?4 AND t.native_thread_id=?4 AND i.status IN ('started','settled','steering') AND json_extract(i.payload_json,'$.message.from.id')=?3 AND json_extract(i.payload_json,'$.message.chat.id')=?1 AND json_extract(i.payload_json,'$.message.message_thread_id')=?2 AND json_type(i.payload_json,'$.message.text')='text' AND captured.value=COALESCE(current.value,'initial') AND (?5 IS NULL OR i.update_id=?5) ORDER BY i.update_id DESC LIMIT 12")?;
+    entry_inputs_query(conn, key, human, native, selected, false)
+}
+
+pub(super) fn committed_entry_input_on(
+    conn: &Connection,
+    key: SessionKey,
+    human: i64,
+    native: &str,
+    update: i64,
+) -> Result<Vec<crate::telegram::Update>> {
+    entry_inputs_query(conn, key, human, native, Some(update), true)
+}
+
+fn entry_inputs_query(
+    conn: &Connection,
+    key: SessionKey,
+    human: i64,
+    native: &str,
+    selected: Option<i64>,
+    committed: bool,
+) -> Result<Vec<crate::telegram::Update>> {
+    let mut query=conn.prepare("SELECT i.payload_json FROM incoming_updates i JOIN turns t ON t.id=i.turn_id JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN bot_state captured ON captured.key='stop_input_epoch:'||i.update_id LEFT JOIN bot_state current ON current.key='stop_admission_epoch:'||s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND t.from_user_id=?3 AND s.codex_thread_id=?4 AND t.native_thread_id=?4 AND (i.status IN ('started','settled','steering') OR (?6=1 AND i.status='undetermined' AND EXISTS(SELECT 1 FROM interaction_creations c WHERE c.human_id=?3 AND c.entry_chat=?1 AND c.entry_topic=?2 AND c.input_update=i.update_id))) AND json_extract(i.payload_json,'$.message.from.id')=?3 AND json_extract(i.payload_json,'$.message.chat.id')=?1 AND json_extract(i.payload_json,'$.message.message_thread_id')=?2 AND json_type(i.payload_json,'$.message.text')='text' AND captured.value=COALESCE(current.value,'initial') AND (?5 IS NULL OR i.update_id=?5) ORDER BY i.update_id DESC LIMIT 12")?;
     let rows = query.query_map(
-        params![key.chat_id, key.thread_id, human, native, selected],
+        params![
+            key.chat_id,
+            key.thread_id,
+            human,
+            native,
+            selected,
+            committed
+        ],
         |r| r.get::<_, String>(0),
     )?;
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
