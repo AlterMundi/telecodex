@@ -363,6 +363,10 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         reply_revision = request.headers.get('x-reply-revision')
         if reply_source is not None or reply_revision is not None:
             metadata['reply'] = {'source':reply_source, 'revision':reply_revision}
+            if isinstance(reply_source,str) and reply_source.startswith('context:'):
+                # Older receivers reject this source form before ASR rather
+                # than silently interpreting context as an explicit answer.
+                metadata['reply'].update(source=reply_source[8:], context_only=True)
         try:
             data = await request.body()
             from starlette.concurrency import run_in_threadpool

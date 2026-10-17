@@ -59,6 +59,20 @@ impl ConversationVoice {
 }
 impl ConversationInput {
     pub fn rendered(&self) -> String {
+        let text = self.answer_text();
+        if self.reply.as_ref().is_some_and(|r| r.context_only) {
+            format!(
+                "[Device-reported conversational context]\n{}\nThis is contextual source metadata, not a human destination or answer selection and not proof of hearing. Interpret the original input below. Use interaction_controller capabilities to inspect questions or answer the selected question from this original input only when its intent is clear; otherwise discuss or route normally. A stale source must not prevent a new topic.\n\n{}",
+                serde_json::json!({"reply":self.reply,"focus":self.focus}),
+                text
+            )
+        } else {
+            text
+        }
+    }
+    /// Preserve original speech attribution without copying device focus into
+    /// the native question's answer as if it were human speech.
+    pub fn answer_text(&self) -> String {
         match self.voice.as_ref().and_then(|v| v.transcription.as_ref()) {
             Some(proof) => format!(
                 "[Committed voice input]\nCapture: {}\nAutomatic interpretation of the original human clip, not verified written speech. Compare receiver capture order; a slow earlier transcript does not supersede later corrections.\nProvenance: {}\n\n{}",
@@ -283,7 +297,12 @@ impl Store {
             && reply
                 .as_ref()
                 .is_some_and(|r| r.source.starts_with("request:"));
-        let focus = if question_override {
+        let focus = if let Some(context) = reply.as_ref().filter(|r| r.context_only) {
+            context.validate_context()?;
+            // Device metadata is not authority. Preserve a well-formed stale
+            // hint without blocking a new human message or selecting a target.
+            super::conversation_routing::reply_on(&tx, human, entry, context).ok()
+        } else if question_override {
             None
         } else {
             reply
@@ -481,7 +500,7 @@ impl Store {
         let tx = conn.transaction()?;
         let input = read_on(&tx, id, human)?;
         if let ConversationInputEvent::Accepted { local_turn } = event
-            && input.phase == "accepted"
+            && matches!(input.phase.as_str(), "accepted" | "answered")
             && input.local_turn == Some(local_turn)
         {
             return Ok(input);

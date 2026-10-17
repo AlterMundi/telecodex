@@ -263,3 +263,58 @@ after newer ones therefore preserves the newer original's identity and precedenc
 `tests/conversation_routing_io.py` qualifies this through actual owner/native/store
 paths with synthetic peers, parallel workers, reversed correction dispatch,
 canonical results and creation/restart. It invokes no real model or provider.
+
+## Reported playback context and semantic intent
+
+A device may report the question or worker result that was playing by adding
+`context_only: true` to its original input's existing `reply` reference. That
+immutable hint is context, not a destination or an answer selection. Plain text
+and committed voice with this hint enter the integrating native conversation;
+the existing explicit `#Topic` shortcut still takes precedence. An unavailable
+or advanced reported source does not block a new human message. Its hint is
+untrusted device metadata and never establishes hearing or expands ownership.
+
+For finalized voice, `X-Reply-Source` uses `context:request:ID` or
+`context:delivery:UUID`; the dashboard decodes this to the typed contextual
+reference. Older dashboards reject this source form before ASR instead of
+silently answering a question. An ordinary `request:ID` header and the existing
+explicit composer reply keep their direct-answer behavior. Context mode is part
+of the immutable original: an uncertain clip cannot be retried under another
+mode, source or revision.
+
+The stable `interaction_controller` envelope discovers two operations:
+
+- `question_context` takes one contextual `input_ref` UUID and an optional
+  character `offset`. It reads the current owned question and says whether its
+  revision still matches the reported context. It makes no decision.
+- `answer_question` takes only that original UUID, without model-authored text
+  or a new question selector. When the actual utterance clearly answers the
+  reported question, it atomically commits the retained original text or
+  attributed transcript to that exact still-current native question. A changed
+  question, closed interpretation, retired binding, dispatched original or
+  reserved creation refuses the answer. An identical retry reads the receipt.
+
+The integrating model decides whether to answer, discuss ambiguity or use its
+existing routing/creation tools. A result being played must not force a later
+utterance into that session. Once a question consumes an original, that original
+cannot subsequently be dispatched as a new task; a committed dispatch/creation
+reservation likewise prevents answering it as well. A late native ingress ACK
+cannot reopen an answered original. Approvals are not answerable through this
+operation. Native uptake and recording an answer still do not prove task
+incorporation or human comprehension.
+
+`tests/conversation_context_http_io.py BINARY` qualifies actual HTTP/native/SQLite
+behavior with synthetic native/ASR peers: a new topic while Alpha waits, an
+original voice answer after explicit semantic tool selection, stale/unavailable
+context, competing use and idempotent receipts. It uses zero inference and does
+not establish real classification quality or same-entry blocking-question
+behavior in a live model runtime.
+
+Select the contextual-capable native controller before the matching dashboard
+and companion client. No SQL table migration is needed; old originals still
+omit the optional mode. After retaining contextual originals, an older native
+binary whose strict reply decoder lacks this field is not a compatible software
+rollback. Recover forward or retain the new decoder when reverting behavior;
+never restore an earlier input journal or reinterpret those originals as direct
+answers. An old dashboard's rejection is not permission to resend a clip under a
+new identity or mode.
