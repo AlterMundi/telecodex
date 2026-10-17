@@ -15,6 +15,12 @@ pub struct ConversationInput {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<ConversationVoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<ConversationReply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<ConversationFocus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<ConversationRouting>,
     pub phase: String,
     pub local_turn: Option<i64>,
     pub retired: bool,
@@ -86,6 +92,18 @@ pub(super) fn read_on(conn: &Connection, id: &str, human: i64) -> Result<Convers
     input.phase = phase;
     input.local_turn = local_turn;
     input.retired = retired;
+    if let Some(route) = input.routing.as_mut()
+        && let Some(instruction) = &route.instruction
+    {
+        route.phase = conn
+            .query_row(
+                "SELECT phase FROM interaction_instructions WHERE id=?1",
+                [instruction],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| "unavailable".into());
+    }
     Ok(input)
 }
 
@@ -123,12 +141,21 @@ impl Store {
             UPDATE conversation_inputs SET retired=1 WHERE session_id=NEW.id AND (native_thread IS NOT NEW.codex_thread_id OR NEW.force_fresh_thread=1 OR human_id!=NEW.creator_user_id); END;
             CREATE TRIGGER IF NOT EXISTS conversation_input_session_deleted AFTER DELETE ON sessions BEGIN UPDATE conversation_inputs SET retired=1 WHERE session_id=OLD.id; END;
             CREATE TRIGGER IF NOT EXISTS conversation_input_owner_revoked AFTER UPDATE OF allowed ON users WHEN NEW.allowed=0 BEGIN UPDATE conversation_inputs SET retired=1 WHERE human_id=NEW.tg_user_id; END;")?;
+        // A held reply may not silently adopt an unrelated native replacement or
+        // a restored ownership grant. Initial native establishment is compatible;
+        // fresh human inputs can select the current logical session after renewal.
+        conn.execute_batch("CREATE TRIGGER IF NOT EXISTS conversation_focus_binding_retired AFTER UPDATE OF codex_thread_id,force_fresh_thread,creator_user_id ON sessions
+            WHEN (OLD.codex_thread_id IS NOT NULL AND OLD.codex_thread_id IS NOT NEW.codex_thread_id) OR NEW.force_fresh_thread=1 OR OLD.creator_user_id!=NEW.creator_user_id BEGIN
+            UPDATE conversation_inputs SET doc=json_set(doc,'$.focus.retired',json('true')) WHERE json_extract(doc,'$.focus.session')=NEW.id AND phase IN ('preparing','retained','queued','awaiting_target'); END;
+            CREATE TRIGGER IF NOT EXISTS conversation_focus_session_deleted AFTER DELETE ON sessions BEGIN
+            UPDATE conversation_inputs SET doc=json_set(doc,'$.focus.retired',json('true')) WHERE json_extract(doc,'$.focus.session')=OLD.id AND phase IN ('preparing','retained','queued','awaiting_target'); END;")?;
         conn.execute("UPDATE conversation_inputs SET phase=CASE WHEN phase IN ('sending','steering') THEN 'uncertain' WHEN phase='preparing' THEN 'preparation_unconfirmed' ELSE 'retained_unsent' END WHERE instance_id!=?1 AND phase IN ('retained','queued','sending','steering','preparing')",[&self.instance_id])?;
         Ok(())
     }
 
     /// Retain exact owner-authenticated text before any native write. UUID reuse
     /// inspects the original outcome; it never authorizes another submission.
+    #[cfg(test)]
     pub fn conversation_input_capture(
         &self,
         human: i64,
@@ -137,9 +164,22 @@ impl Store {
         id: &str,
         text: &str,
     ) -> Result<(ConversationInput, bool)> {
-        self.capture_original(human, entry, binding, id, text, None, true)
+        self.conversation_input_capture_reply(human, entry, binding, id, text, None)
     }
 
+    pub fn conversation_input_capture_reply(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        text: &str,
+        reply: Option<ConversationReply>,
+    ) -> Result<(ConversationInput, bool)> {
+        self.capture_original(human, entry, binding, id, text, None, true, reply)
+    }
+
+    #[cfg(test)]
     pub fn conversation_voice_capture(
         &self,
         human: i64,
@@ -153,7 +193,43 @@ impl Store {
         if voice.transcription.is_some() {
             bail!("Transcription is produced only by the receiving adapter");
         }
-        self.capture_original(human, entry, binding, id, "", Some(voice), can_prepare)
+        self.capture_original(
+            human,
+            entry,
+            binding,
+            id,
+            "",
+            Some(voice),
+            can_prepare,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn conversation_voice_capture_reply(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        voice: ConversationVoice,
+        can_prepare: bool,
+        reply: Option<ConversationReply>,
+    ) -> Result<(ConversationInput, bool)> {
+        voice.validate()?;
+        if voice.transcription.is_some() {
+            bail!("Transcription is receiving-owned");
+        }
+        self.capture_original(
+            human,
+            entry,
+            binding,
+            id,
+            "",
+            Some(voice),
+            can_prepare,
+            reply,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -166,6 +242,7 @@ impl Store {
         text: &str,
         voice: Option<ConversationVoice>,
         can_prepare: bool,
+        reply: Option<ConversationReply>,
     ) -> Result<(ConversationInput, bool)> {
         if Uuid::parse_str(id)
             .ok()
@@ -179,7 +256,7 @@ impl Store {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
         let (session, native) = super::presentation::entry_on(&tx, human, entry)?;
-        if binding != super::presentation::entry_binding(human, entry, session, &native) {
+        if binding != super::presentation::entry_binding(&tx, human, entry, session)? {
             bail!("Selected conversation changed before input capture");
         }
         let existing: bool = tx.query_row(
@@ -190,6 +267,7 @@ impl Store {
         if existing {
             let input = read_on(&tx, id, human)?;
             if input.entry != entry
+                || input.reply != reply
                 || match (&input.voice, &voice) {
                     (None, None) => input.text != text,
                     (Some(a), Some(b)) => a.audio_sha256 != b.audio_sha256 || a.mime != b.mime,
@@ -200,6 +278,10 @@ impl Store {
             }
             return Ok((input, false));
         }
+        let focus = reply
+            .as_ref()
+            .map(|r| super::conversation_routing::reply_on(&tx, human, entry, r))
+            .transpose()?;
         let input = ConversationInput {
             id: id.into(),
             human,
@@ -209,6 +291,9 @@ impl Store {
             epoch: super::stopping::admission_epoch_on(&tx, entry)?,
             text: text.into(),
             voice: voice.clone(),
+            reply,
+            focus,
+            routing: None,
             phase: if !can_prepare
                 || super::stopping::fenced_on(&tx, entry)?
                 || super::maintenance_writer_held_on(&tx, entry)?
@@ -334,14 +419,14 @@ impl Store {
             let input = read_on(&conn, id, human)?;
             items.push(serde_json::json!({
                 "id":id,"sequence":sequence,"preview":input.text.chars().take(1000).collect::<String>(),
-                "phase":input.phase,"retired":input.retired,"voice":input.voice,
+                "phase":input.phase,"retired":input.retired,"voice":input.voice,"routing":input.routing,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
                 "native_binding_current":input.native==native,
             }));
         }
         Ok(
             serde_json::json!({"schema":"telecodex.conversation-input-list/v1",
             "entry_binding":[human,entry,session,native],
-            "binding":super::presentation::entry_binding(human,entry,session,&native),
+            "binding":super::presentation::entry_binding(&conn,human,entry,session)?,
             "cursor":rows.iter().take(8).next_back().map(|row|row.0),
             "newest":rows.iter().take(8).map(|row|row.0).max().unwrap_or(0),
             "more":rows.len()>8,"items":items}),
@@ -360,7 +445,7 @@ impl Store {
 
     pub fn conversation_input_finish(&self, human: i64, id: &str) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute("UPDATE conversation_inputs SET phase=CASE WHEN phase='queued' THEN 'retained_unsent' ELSE 'uncertain' END WHERE id=?1 AND human_id=?2 AND instance_id=?3 AND phase IN ('queued','sending','steering')",params![id,human,self.instance_id])?;
+        conn.execute("UPDATE conversation_inputs SET phase=CASE WHEN phase IN ('retained','queued') THEN 'retained_unsent' ELSE 'uncertain' END WHERE id=?1 AND human_id=?2 AND instance_id=?3 AND phase IN ('retained','queued','sending','steering')",params![id,human,self.instance_id])?;
         Ok(())
     }
 
@@ -400,7 +485,9 @@ impl Store {
                 // Select the return surface before any possible native uptake.
                 // The context may retain this input after the local turn ends,
                 // so the selection survives collectors and logical rebindings.
-                tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![human,input.native,input.id,now_string()])?;
+                if !input.native.is_empty() {
+                    tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![human,input.native,input.id,now_string()])?;
+                }
                 ("queued", None)
             }
             ConversationInputEvent::Begin { local_turn, steer }
@@ -599,6 +686,15 @@ mod tests {
                 .is_err()
         );
         let pending = Uuid::now_v7().to_string();
+        assert!(
+            store
+                .conversation_voice_capture(100, key, &binding, &pending, clip(), true)
+                .is_err()
+        );
+        let binding = store.conversation_request_binding(100, key).unwrap()["binding"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         store
             .conversation_voice_capture(100, key, &binding, &pending, clip(), true)
             .unwrap();

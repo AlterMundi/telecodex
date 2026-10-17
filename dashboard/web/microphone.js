@@ -1,11 +1,11 @@
 "use strict";
 window.VoiceInput = (() => {
-  function mount({api, headers, getBinding, onInput, pauseAudio, unauthorized, telegram}) {
+  function mount({api, headers, getBinding, onInput, getReply=()=>undefined, pauseAudio, unauthorized, telegram}) {
     const box=document.querySelector('#conversation-voice'), button=document.querySelector('#conversation-talk');
     const discard=document.querySelector('#conversation-voice-discard'), check=document.querySelector('#conversation-voice-check');
     const state=document.querySelector('#conversation-voice-state');
-    let available=false, generation=0, recorder, stream, parts=[], bytes=0, timer, pending, uploading=false, controller;
-    let phase='idle', commit=false;
+    let available=false, generation=0, recorder, stream, parts=[], bytes=0, timer, pending, latestSaved, uploading=false, controller;
+    let phase='idle', commit=false, readySelection;
     const supported=()=>!!(window.isSecureContext && window.MediaRecorder && typeof window.MediaRecorder.isTypeSupported==='function' && window.navigator?.mediaDevices?.getUserMedia && window.crypto?.subtle);
     function controls() {
       box.hidden=!available;
@@ -17,7 +17,7 @@ window.VoiceInput = (() => {
     }
     function stopTracks() {if(stream)for(const track of stream.getTracks())track.stop();stream=undefined;clearTimeout(timer);}
     function cancelRecording(message='Recording discarded. Nothing was sent.') {
-      generation++;commit=false;const old=recorder;recorder=undefined;
+      generation++;commit=false;latestSaved=undefined;const old=recorder;recorder=undefined;
       if(old && old.state!=='inactive')old.stop();stopTracks();parts=[];bytes=0;phase='idle';state.textContent=message;controls();
     }
     function reset() {
@@ -37,7 +37,8 @@ window.VoiceInput = (() => {
     async function confirmed(value,frozen) {
       if(pending!==frozen || frozen.binding!==getBinding())return;
       if(value.id!==frozen.id || value.voice?.audio_sha256!==frozen.audio_sha256)throw Error('Voice capture does not match this recording.');
-      onInput(value);pending=undefined;phase='idle';
+      latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256};
+      onInput(value,frozen.focusVersion);pending=undefined;phase='idle';
       state.textContent=value.retired?'This saved recording is no longer eligible to start work.':
         value.phase==='retained_unsent'?'Recording saved; no work was submitted. You can keep writing.':
         value.phase==='preparation_unconfirmed'?'Recording saved; transcription unconfirmed. Nothing was resubmitted.':
@@ -45,13 +46,18 @@ window.VoiceInput = (() => {
         'Recording and automatic transcript saved. Work may continue.';
       controls();
     }
+    function observe(value,message) {
+      if(!latestSaved || pending || phase!=='idle' || latestSaved.binding!==getBinding()
+        || latestSaved.id!==value.id || latestSaved.audio_sha256!==value.voice?.audio_sha256)return;
+      state.textContent='Recording saved. '+message;
+    }
     async function upload() {
       if(!pending || uploading || pending.binding!==getBinding())return;
       const frozen=pending;uploading=true;controller=new AbortController();const active=controller;
       const deadline=setTimeout(()=>active.abort(),20000);state.textContent='Saving your recording…';controls();
       try {
         const response=await fetch('api/interaction/voice',{method:'POST',credentials:'same-origin',signal:active.signal,
-          headers:{...headers(),'Content-Type':frozen.mime,'X-Input-Binding':frozen.binding,'X-Input-Id':frozen.id,'X-Audio-Sha256':frozen.audio_sha256},body:frozen.blob});
+          headers:{...headers(),...(frozen.reply?{'X-Reply-Source':frozen.reply.source,'X-Reply-Revision':frozen.reply.revision}:{}),'Content-Type':frozen.mime,'X-Input-Binding':frozen.binding,'X-Input-Id':frozen.id,'X-Audio-Sha256':frozen.audio_sha256},body:frozen.blob});
         const value=await response.json();
         if(!response.ok){const error=new Error('Recording not confirmed');error.status=response.status;throw error;}
         await confirmed(value,frozen);
@@ -61,23 +67,23 @@ window.VoiceInput = (() => {
         if(e.status===401 || e.status===403)unauthorized(e);
       } finally {clearTimeout(deadline);if(controller===active){controller=undefined;uploading=false;controls();}}
     }
-    async function finish(owned,binding,mime) {
+    async function finish(owned,binding,mime,selection) {
       if(owned!==generation)return;
       stopTracks();recorder=undefined;
       const blob=new Blob(parts,{type:mime});parts=[];bytes=0;
-      if(!commit){phase='ready';parts=[blob];state.textContent='Recording limit reached. Send this recording or discard it.';controls();return;}
+      if(!commit){phase='ready';parts=[blob];readySelection={binding,selection};state.textContent='Recording limit reached. Send this recording or discard it.';controls();return;}
       phase='finalizing';controls();
       try {
         if(!blob.size || blob.size>20*1024*1024)throw Error('Recording outside limits');
         const digest=await window.crypto.subtle.digest('SHA-256',await blob.arrayBuffer());
         if(owned!==generation || binding!==getBinding())return;
         const audio_sha256=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
-        pending={id:window.crypto.randomUUID(),binding,audio_sha256,mime,blob};phase='idle';await upload();
+        pending={id:window.crypto.randomUUID(),binding,audio_sha256,mime,blob,reply:selection?.reference,focusVersion:selection?.version};phase='idle';await upload();
       } catch(_) {if(owned===generation)cancelRecording('Recording could not be finalized. Nothing was sent.');}
     }
     async function start() {
       if(!available || !getBinding() || !supported() || document.hidden)return;
-      const owned=++generation,binding=getBinding();phase='permission';commit=false;parts=[];bytes=0;
+      const owned=++generation,binding=getBinding(),selection=getReply();latestSaved=undefined;phase='permission';commit=false;parts=[];bytes=0;
       state.textContent='Allow microphone access to begin.';pauseAudio();controls();
       try {
         const media=await window.navigator.mediaDevices.getUserMedia({audio:true,video:false});
@@ -92,7 +98,7 @@ window.VoiceInput = (() => {
           parts.push(event.data);
         });
         current.addEventListener('error',()=>{if(owned===generation)cancelRecording('Recording failed. Nothing was sent.');});
-        current.addEventListener('stop',()=>finish(owned,binding,mime));
+        current.addEventListener('stop',()=>finish(owned,binding,mime,selection));
         current.start(250);phase='recording';state.textContent='Listening. Press Send voice when you finish.';controls();
         timer=setTimeout(()=>{if(owned===generation && current.state==='recording'){phase='finalizing';current.stop();stopTracks();controls();}},120000);
       } catch(_) {if(owned===generation)cancelRecording('Microphone unavailable. You can keep writing.');}
@@ -100,7 +106,7 @@ window.VoiceInput = (() => {
     button.addEventListener('click',()=>{
       if(uploading)return;
       if(phase==='recording'){commit=true;phase='finalizing';recorder.stop();stopTracks();controls();}
-      else if(phase==='ready'){commit=true;finish(generation,getBinding(),parts[0].type);}
+      else if(phase==='ready'){commit=true;finish(generation,readySelection.binding,parts[0].type,readySelection.selection);}
       else if(pending)return upload();else return start();
     });
     discard.addEventListener('click',()=>cancelRecording());
@@ -112,7 +118,7 @@ window.VoiceInput = (() => {
     });
     document.addEventListener('visibilitychange',()=>{if(document.hidden)deactivate();});
     window.addEventListener('pagehide',deactivate);telegram?.onEvent?.('deactivated',deactivate);
-    controls();return {configure,reset,deactivate};
+    controls();return {configure,reset,deactivate,observe};
   }
   return {mount};
 })();

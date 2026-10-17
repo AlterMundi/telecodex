@@ -4,7 +4,7 @@ use super::*;
 tokio::task_local! {
     // Tokens identify exact owned executions. Never look up a newer current turn
     // when a delayed transcript finally identifies its destination.
-    static INTERRUPT_TARGETS: HashMap<SessionKey, CancellationToken>;
+    pub(super) static INTERRUPT_TARGETS: HashMap<SessionKey, CancellationToken>;
 }
 
 pub(super) fn interrupt_snapshot(target: SessionKey) -> Option<bool> {
@@ -19,6 +19,22 @@ pub(super) fn interrupt_snapshot(target: SessionKey) -> Option<bool> {
             })
         })
         .ok()
+}
+
+pub(super) async fn snapshot(app: &App) -> HashMap<SessionKey, CancellationToken> {
+    app.workers
+        .lock()
+        .await
+        .iter()
+        .filter_map(|(key, worker)| {
+            worker
+                .cancel
+                .lock()
+                .expect("cancel mutex poisoned")
+                .clone()
+                .map(|token| (*key, token))
+        })
+        .collect()
 }
 
 pub(super) async fn handle(app: &App, message: &Message, human: i64) -> Result<bool> {
@@ -55,20 +71,7 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64) -> Result<b
             return Ok(true);
         }
     };
-    let interruption_targets = {
-        let workers = app.workers.lock().await;
-        workers
-            .iter()
-            .filter_map(|(key, worker)| {
-                worker
-                    .cancel
-                    .lock()
-                    .expect("cancel mutex poisoned")
-                    .clone()
-                    .map(|token| (*key, token))
-            })
-            .collect::<HashMap<_, _>>()
-    };
+    let interruption_targets = snapshot(app).await;
     app.ensure_session(key, human)?;
     app.shared.store.voice_begin(update, key, human)?;
     let app = app.clone();

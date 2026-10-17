@@ -35,7 +35,7 @@ function boot() {
   const source = n => ({id:`native:${n}`, kind:"integrator_answer", sequence:n,
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`});
   const originals = new Map(), nativeRequests = new Map(), nativePosts = [];
-  let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, submitPhase = "accepted";
+  let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
     if (url.pathname === "/interaction/requests") return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
@@ -51,6 +51,12 @@ function boot() {
       if (losePost) { losePost=false; throw new TypeError("Lost POST acknowledgement"); }
       return value;
     }
+    if (url.pathname.endsWith("/route") && body) {
+      const id=url.pathname.split("/").at(-2);
+      const value={...originals.get(id),phase:"routed",routing:{target:{thread_id:7},label:"Alpha",instruction:"instruction-1",phase:routePhase},continuation:{source:`input:${id}`,revision:"a".repeat(64)}};
+      if(heldRoute){const held=heldRoute;heldRoute=undefined;held.started();await held.promise;}
+      originals.set(id,value);return value;
+    }
     if (url.pathname.startsWith("/interaction/inputs/")) {
       if (heldStatus) {const held=heldStatus;heldStatus=undefined;held.started();await held.promise;if(held.fail)throw new TypeError("Delayed status failure");}
       return originals.get(url.pathname.split("/").at(-1));
@@ -60,7 +66,7 @@ function boot() {
       const rows=[...originals.values()].filter(v=>direction==="after"?v.sequence>before:!before||v.sequence<before);
       rows.sort((a,b)=>direction==="after"?a.sequence-b.sequence:b.sequence-a.sequence);
       const selected=rows.slice(0,8);
-      const snapshot={binding:"fixture",csrf:"synthetic",items:selected.map(v=>({...v})),cursor:selected.at(-1)?.sequence||0,newest:Math.max(0,...selected.map(v=>v.sequence)),more:rows.length>8};
+      const snapshot={binding:"fixture",csrf:"synthetic",routing_choices:[{selector:"t7",label:"Alpha"},{selector:"t8",label:"Beta"}],items:selected.map(v=>({...v})),cursor:selected.at(-1)?.sequence||0,newest:Math.max(0,...selected.map(v=>v.sequence)),more:rows.length>8};
       if (heldInputs) {const held=heldInputs;heldInputs=undefined;held.started();await held.promise;}
       return snapshot;
     }
@@ -99,6 +105,12 @@ function boot() {
     receivingPhase(value) {submitPhase=value;},
     lose() {losePost=true;},
     offline() {offlinePost=true;},
+    routePhase(value){routePhase=value;},
+    holdRoute() {
+      let release, started;
+      const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});
+      heldRoute={promise,started};return {entered,release};
+    },
     holdStatus(fail=false) {
       let release, started;
       const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});
@@ -232,5 +244,38 @@ function boot() {
   voiceHistory.originals.set("voice-original",{id:"voice-original",sequence:1,preview:"A finalized automatic transcript",phase:"accepted",voice:{audio_sha256:"a",transcription:{capture_id:"voice-original"}}});
   await voiceHistory.ui.refresh();
   assert.equal(voiceHistory.nodes.get("#conversation-inputs").children[0].children[0].textContent,"Automatic voice transcript:\nA finalized automatic transcript","Preparing empty text cannot hide the later history transcript preview");
+  const routed=boot();
+  routed.originals.set("routing-original",{id:"routing-original",text:"#Unknown Work",sequence:1,phase:"awaiting_target"});
+  await routed.ui.refresh();
+  const routeCard=routed.nodes.get("#conversation-inputs").children[0],routeBox=routeCard.children[3];
+  assert.equal(routeBox.hidden,false);assert.equal(routeBox.children[0].value,"");
+  assert.equal(routeBox.children[1].disabled,true,"Ambiguous routing requires an explicit choice");
+  routeBox.children[0].value="t7";routeBox.children[0].handlers.change();
+  const holdRoute=routed.holdRoute(),routePost=routeBox.children[1].handlers.click();await holdRoute.entered;
+  // This GET starts after the POST but samples awaiting_target before commit.
+  const oldSnapshot=routed.holdInputs(),oldRefresh=routed.ui.refresh();await oldSnapshot.entered;
+  holdRoute.release();await routePost;
+  assert.match(routeCard.children[1].textContent,/#Alpha: sent to this session/);
+  oldSnapshot.release();await oldRefresh;
+  assert.match(routeCard.children[1].textContent,/#Alpha: sent to this session/,
+    "A later-started GET with null routing cannot erase a committed route");
+  assert.equal(routeBox.hidden,true,"A committed selection must not reopen ambiguity");
+  routeCard.children[2].children[2].handlers.click();
+  routed.nodes.get("#conversation-message").value="Amend the selected work";
+  await routed.nodes.get("#conversation-compose").handlers.submit({preventDefault(){}});
+  const amendment=[...routed.originals.values()].at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(amendment.reply)),{source:"input:routing-original",revision:"a".repeat(64)},"Reply must carry the server source identity, never client target IDs");
+  assert.equal(routed.nodes.get("#conversation-focus").hidden,true,"Accepted retention consumes one-message focus");
+  const earlierPost=boot();earlierPost.routePhase("queued");
+  earlierPost.originals.set("early-route",{id:"early-route",text:"#Unknown Held route",sequence:1,phase:"awaiting_target"});
+  await earlierPost.ui.refresh();
+  const earlyCard=earlierPost.nodes.get("#conversation-inputs").children[0],earlyBox=earlyCard.children[3];
+  earlyBox.children[0].value="t7";earlyBox.children[0].handlers.change();
+  const heldQueued=earlierPost.holdRoute(),queuedPost=earlyBox.children[1].handlers.click();await heldQueued.entered;
+  await earlierPost.ui.refresh(); // newer observation arrives first, before route commit
+  heldQueued.release();await queuedPost;
+  assert.match(earlyCard.children[1].textContent,/#Alpha: saved; waiting for this session/);
+  assert.equal(earlyBox.hidden,true,"An older-started queued route response still proves immutable destination selection");
+  assert.equal(earlyCard.children[2].children[2].hidden,false,"The retained route also carries its reply source");
   console.log("Conversation history, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });

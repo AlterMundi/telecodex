@@ -86,11 +86,13 @@ pub(super) fn original_on(
             let input = super::conversation_inputs::read_on(conn, id, human)?;
             super::conversation_inputs::eligible_on(conn, &input)?;
             let linked:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND session_id=?2 AND from_user_id=?3 AND native_thread_id=?4)",params![input.local_turn,input.session,human,native],|r|r.get(0))?;
+            let routed=input.phase=="routed" && input.routing.as_ref().and_then(|r|r.instruction.as_ref()).is_some_and(|id|conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_instructions i JOIN interaction_sources x ON x.id=i.input_id WHERE i.id=?1 AND x.channel='conversation' AND x.event_id=?2 AND x.human_id=?3)",params![id,input.id,human],|r|r.get::<_,bool>(0)).unwrap_or(false));
             let retained_creation=committed && input.phase=="uncertain" && conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4)",params![human,key.chat_id,key.thread_id,id],|r|r.get::<_,bool>(0))?;
             if input.entry != key
                 || input.native != native
-                || !linked
-                || !(matches!(input.phase.as_str(), "sending" | "steering" | "accepted")
+                || !(linked || routed)
+                || !(routed
+                    || matches!(input.phase.as_str(), "sending" | "steering" | "accepted")
                     || retained_creation)
             {
                 bail!("Original conversation input is not linked to this native entry");
@@ -178,7 +180,7 @@ impl Store {
             .into_iter()
             .map(|u| InputReference::Telegram(u.update_id))
             .collect::<Vec<_>>();
-        let mut query=conn.prepare("SELECT id FROM conversation_inputs WHERE human_id=?1 AND native_thread=?2 AND retired=0 AND phase IN ('sending','steering','accepted') ORDER BY created_at DESC LIMIT 12")?;
+        let mut query=conn.prepare("SELECT id FROM conversation_inputs WHERE human_id=?1 AND native_thread=?2 AND retired=0 AND phase IN ('sending','steering','accepted','routed') ORDER BY created_at DESC LIMIT 12")?;
         let ids = query
             .query_map(params![human, native], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -213,8 +215,14 @@ impl Store {
     ) -> Result<serde_json::Value> {
         let source = self.interaction_source(id, human)?;
         let conn = self.conn.lock().expect("store mutex poisoned");
+        let selection = if source.channel == "conversation" {
+            let original = super::conversation_inputs::read_on(&conn, &source.event_id, human)?;
+            original.routing.as_ref().map(|r|serde_json::json!({"kind":r.selection,"reply":original.reply,"target":r.target,"instruction":r.instruction}))
+        } else {
+            None
+        };
         Ok(
-            serde_json::json!({"input_ref":source_reference(&source),"capture_order":original_order_on(&conn,&source)?}),
+            serde_json::json!({"input_ref":source_reference(&source),"capture_order":original_order_on(&conn,&source)?,"selection":selection}),
         )
     }
 

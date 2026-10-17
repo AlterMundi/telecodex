@@ -210,9 +210,10 @@ class Provider:
         return self.presentation(f'input status {self.input_id(ident)}')
 
     def conversation_input_submit(self, body):
-        if not isinstance(body, dict) or set(body) != {'binding', 'id', 'text'}:
+        if not isinstance(body, dict) or set(body) not in ({'binding', 'id', 'text'}, {'binding', 'id', 'text', 'reply'}):
             raise ValueError('Select the conversation and provide one original message')
         self.input_id(body['id'])
+        self.check_reply(body.get('reply'))
         import re
         if (not isinstance(body['binding'], str) or not re.fullmatch('[a-f0-9]{64}', body['binding'])
                 or not isinstance(body['text'], str) or not body['text'].strip()
@@ -221,11 +222,31 @@ class Provider:
         # The Rust journal owns idempotency and exact-source checks. No retry.
         return self.presentation('input submit ' + json.dumps(body, ensure_ascii=False))
 
+    @classmethod
+    def check_reply(cls, value):
+        import re
+        if value is None: return
+        if (not isinstance(value, dict) or set(value) != {'source', 'revision'}
+                or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:'))
+                or not isinstance(value['revision'], str) or not re.fullmatch('[a-f0-9]{64}', value['revision'])):
+            raise ValueError('Select one retained original or worker result')
+        cls.input_id(value['source'].split(':', 1)[1])
+
+    def conversation_input_route(self, ident, body):
+        import re
+        self.input_id(ident)
+        if (not isinstance(body, dict) or set(body) != {'binding', 'selector'}
+                or not isinstance(body['binding'], str) or not re.fullmatch('[a-f0-9]{64}', body['binding'])
+                or not isinstance(body['selector'], str) or not 1 <= len(body['selector']) <= 128):
+            raise ValueError('Select one destination for this original message')
+        return self.presentation('input route '+json.dumps({**body, 'id':ident}))
+
     def conversation_voice_submit(self, metadata, data):
         import re
-        if not isinstance(metadata, dict) or set(metadata) != {'binding', 'id', 'audio_sha256', 'mime'}:
+        if not isinstance(metadata, dict) or set(metadata) not in ({'binding', 'id', 'audio_sha256', 'mime'}, {'binding', 'id', 'audio_sha256', 'mime', 'reply'}):
             raise ValueError('Select one original voice recording')
         self.input_id(metadata['id'])
+        self.check_reply(metadata.get('reply'))
         if (not isinstance(data, bytes) or not 0 < len(data) <= 20*1024*1024
                 or any(not isinstance(metadata[k], str) or not re.fullmatch('[a-f0-9]{64}', metadata[k]) for k in ('binding', 'audio_sha256'))
                 or metadata['mime'] not in ('audio/webm', 'audio/webm;codecs=opus', 'audio/ogg', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/wav', 'audio/mpeg')

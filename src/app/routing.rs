@@ -832,7 +832,7 @@ fn packet(shared: &AppShared, i: &Instruction) -> Result<String> {
     let original = shared
         .store
         .interaction_original_provenance(&i.id, i.human_id)?;
-    let provenance = serde_json::json!({"input_ref":original["input_ref"],"capture_order":original["capture_order"],"via":"interaction-controller","original_human_author":if author.is_none(){Some(i.human_id)}else{None},"authorized_human":i.human_id,"author":author,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id,"transcription":source.transcription});
+    let provenance = serde_json::json!({"input_ref":original["input_ref"],"capture_order":original["capture_order"],"selection":original["selection"],"via":"interaction-controller","original_human_author":if author.is_none(){Some(i.human_id)}else{None},"authorized_human":i.human_id,"author":author,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id,"transcription":source.transcription});
     let context = shared
         .store
         .interaction_request_inputs(&i.requests, i.human_id)?;
