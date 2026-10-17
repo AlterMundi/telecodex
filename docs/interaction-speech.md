@@ -139,6 +139,13 @@ therefore reuses a completed render. Response headers identify source, revision,
 offset, next offset, audio hash and `not_observed` playback. Receiving these bytes
 is not a playback, hearing, comprehension or worker-incorporation receipt.
 
+The first spoken part of a worker result includes its controller-certified
+session label, so an audio-only listener can distinguish concurrent results.
+Later parts retain only their selected text. Canonical text, hashes and character
+offsets remain unchanged; the renderer hashes the exact labeled spoken text in
+its existing cache. Source revalidation includes the label, so changing it during
+synthesis cannot return audio attributed to the old session.
+
 `tests/presentation_io.py` checks the HTTP/auth boundary through an actual helper
 process and private cache against a synthetic loopback speech provider, including
 reconnect reuse and corrections/revocation during a held synthesis. Rust store

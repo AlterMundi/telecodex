@@ -35,6 +35,13 @@ class Speech:
         config_bytes = speech_render.private_bytes(self.binding, 16384)
         route = speech_render.route(self.binding)
         text = source['text']
+        if source.get('kind') == 'worker_result' and source.get('offset') == 0:
+            label = source.get('label')
+            if not isinstance(label, str) or not label.strip():
+                raise SpeechUnavailable('Selected work source has no audible label')
+            # Keep canonical text/offsets intact. The certified source label is
+            # spoken once, within the renderer's existing 1,800-character bound.
+            text = label[:198] + '. ' + text
         scope = speech_render.sha(speech_render.canonical([
             source['entry_binding'], source['id'], source['offset']]))
         request = json.dumps({'scope': scope, 'text': text}).encode()
