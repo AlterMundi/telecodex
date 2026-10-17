@@ -436,3 +436,22 @@ main > #conversation { display:flex;flex:1;flex-direction:column;min-height:0; }
 #conversation-audio { width:100%;max-width:100%;margin-top:8px; }
 #conversation-audio-state { font-size:14px; }
 #conversation > .note { font-size:14px;margin-bottom:0; }
+
+#conversation-compose { margin: 12px 0; }
+#conversation-compose label { display: block; margin-bottom: 6px; font-weight: 600; }
+#conversation-message {
+  display: block; width: 100%; min-height: 88px; resize: vertical;
+  padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--ink); font: inherit;
+}
+#conversation-message:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#conversation-compose .conversation-tools { margin-top: 8px; }
+#conversation-compose .note { flex: 1; }
+#conversation-sent { border-block: 1px solid var(--line); padding-block: 10px; margin-block: 10px; }
+#conversation-sent summary { cursor: pointer; min-height: 44px; padding-block: 10px; }
+#conversation-inputs .reply { margin-block: 8px; }
+
+/* Keep replies reachable when message history or the software keyboard is open. */
+main > #conversation { overflow: auto; overscroll-behavior: contain; }
+#conversation-replies { flex: 1 0 180px; }
+#conversation-sent { flex-shrink: 0; max-height: 28dvh; overflow: auto; }

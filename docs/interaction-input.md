@@ -3,8 +3,10 @@
 The owner-local controller accepts non-Telegram text into the configured native
 integrating entry. It reuses the existing queue, native writer and active steer;
 there is no second model session or fabricated Telegram update. The entry must
-already have an owned native binding. HTTP/composer and microphone input are still being integrated; this backend
-is not yet exposed in the receiving Mini App.
+already have an owned native binding. The Mini App includes authenticated text
+input and retained-message inspection. Microphone and native question/approval
+controls are still being integrated. Receiving deployment requires the new
+canonical-return policy in every relevant active collector before exposing input.
 
 `telecodex --control CONFIG input submit JSON` accepts only `binding`, `id` and
 `text`. The binding comes from the authenticated presentation list, `id` is a
@@ -13,6 +15,39 @@ the human and integrating entry. The existing owner UID/socket protections apply
 The exact text is committed before transport. Reusing an ID inspects its original
 outcome; changed text is rejected. A lost response is inspected with
 `telecodex --control CONFIG input status UUID`, without automatic resubmission.
+
+The existing Telegram-signed dashboard session exposes `GET /api/interaction/inputs`
+with `before` and `direction=before|after` cursors, `GET /api/interaction/inputs/UUID`
+and `POST /api/interaction/inputs`. POST accepts exactly the same three fields and
+requires the live owner grant, exact Origin and CSRF token. Owner/configuration
+checks run again after control I/O, before returning private data. The Rust journal
+owns idempotency; HTTP introduces neither another original store nor a native client.
+The control request/reply bound is 256 KiB so JSON escaping can represent any valid
+32 KiB original. Only this HTTP input endpoint uses that larger body bound; other
+POST endpoints retain their 16 KiB limit, including for chunked bodies.
+
+`input list CURSOR [before|after]` returns eight bounded original previews and
+pagination metadata for the configured owned logical entry. Status returns the full
+original. History remains inspectable after native rebinding, with retired authority;
+another owner or deleted/recreated logical entry cannot inherit it. The client
+catches up forward without skipping intervening pages, separately from older history.
+Messages and credentials are not persisted in browser storage. Reload recovers
+retained messages from the owning journal.
+
+The composer preserves edits typed while a POST is pending. A lost acknowledgment
+keeps the original UUID, frozen binding and exact text in memory, with a status
+lookup and an explicit retry of that same identity. Retrying an already-retained
+UUID only inspects its outcome; it does not replay native work. A request that never
+reached the receiver can therefore recover without inventing a replacement ID.
+There is no automatic retry. Terminal native acceptance, known-unsent and retirement
+evidence survives overlapping HTTP responses. Retention or native ACK never claims
+semantic incorporation, task completion or physical hearing.
+
+`tests/conversation_http_io.py` qualifies authenticated HTTP through the actual
+owner socket, SQLite and synthetic native peer, including worst-case escaped
+32 KiB originals, pagination, deduplication, uncertainty, reopen, chunked bounds
+and revoked grants. The shipped client regression tests cover response ordering,
+offline/lost POST recovery and concurrent drafts without model calls.
 
 Queued and steering inputs retain their original owner, native context and Stop
 admission epoch. Grant revocation, binding retirement or deletion permanently

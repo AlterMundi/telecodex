@@ -161,6 +161,59 @@ impl Store {
         Ok(input)
     }
 
+    /// Recent retained originals for this owned logical entry, newest first.
+    /// Pagination never dispatches an input or invents an acceptance receipt.
+    pub fn conversation_input_page(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        cursor: i64,
+        before: bool,
+    ) -> Result<serde_json::Value> {
+        if cursor < 0 {
+            bail!("Invalid input history cursor");
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
+        let comparison = if before { "<" } else { ">" };
+        let order = if before { "DESC" } else { "ASC" };
+        let mut statement = conn.prepare(&format!(
+            "SELECT rowid,id FROM conversation_inputs WHERE human_id=?1 AND session_id=?2
+             AND rowid{comparison}?3 ORDER BY rowid {order} LIMIT 9"
+        ))?;
+        let rows = statement
+            .query_map(
+                params![
+                    human,
+                    session,
+                    if before && cursor == 0 {
+                        i64::MAX
+                    } else {
+                        cursor
+                    }
+                ],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut items = Vec::new();
+        for (sequence, id) in rows.iter().take(8) {
+            let input = read_on(&conn, id, human)?;
+            items.push(serde_json::json!({
+                "id":id,"sequence":sequence,"preview":input.text.chars().take(1000).collect::<String>(),
+                "phase":input.phase,"retired":input.retired,
+                "native_binding_current":input.native==native,
+            }));
+        }
+        Ok(
+            serde_json::json!({"schema":"telecodex.conversation-input-list/v1",
+            "entry_binding":[human,entry,session,native],
+            "binding":super::presentation::entry_binding(human,entry,session,&native),
+            "cursor":rows.iter().take(8).next_back().map(|row|row.0),
+            "newest":rows.iter().take(8).map(|row|row.0).max().unwrap_or(0),
+            "more":rows.len()>8,"items":items}),
+        )
+    }
+
     pub fn conversation_input_validate(&self, human: i64, id: &str) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let input = read_on(&conn, id, human)?;
@@ -314,6 +367,50 @@ mod tests {
             .unwrap()
             .to_string();
         (file, store, key, binding)
+    }
+
+    #[test]
+    fn input_history_is_bounded_owned_and_survives_rebinding() {
+        let (_file, store, key, binding) = setup();
+        let mut ids = Vec::new();
+        for n in 0..10 {
+            let id = Uuid::now_v7().to_string();
+            store
+                .conversation_input_capture(100, key, &binding, &id, &format!("Message {n}"))
+                .unwrap();
+            ids.push(id);
+        }
+        let page = store.conversation_input_page(100, key, 0, true).unwrap();
+        assert_eq!(page["items"].as_array().unwrap().len(), 8);
+        assert_eq!(page["items"][0]["id"], ids[9]);
+        assert_eq!(page["more"], true);
+        let prior = store
+            .conversation_input_page(100, key, page["cursor"].as_i64().unwrap(), true)
+            .unwrap();
+        assert_eq!(prior["items"].as_array().unwrap().len(), 2);
+        assert_eq!(prior["items"][1]["id"], ids[0]);
+        assert_eq!(prior["more"], false);
+        let forward = store
+            .conversation_input_page(
+                100,
+                key,
+                prior["items"][1]["sequence"].as_i64().unwrap(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(forward["items"][0]["id"], ids[1]);
+        assert_eq!(forward["items"].as_array().unwrap().len(), 8);
+        assert_eq!(forward["more"], true);
+        assert!(forward["newest"].as_i64().unwrap() < page["newest"].as_i64().unwrap());
+        assert!(store.conversation_input_page(101, key, 0, true).is_err());
+        assert!(store.conversation_input_page(100, key, -1, true).is_err());
+        store
+            .set_session_codex_thread(key, "replacement-native")
+            .unwrap();
+        let changed = store.conversation_input_page(100, key, 0, true).unwrap();
+        assert_ne!(changed["binding"], page["binding"]);
+        assert_eq!(changed["items"][0]["retired"], true);
+        assert_eq!(changed["items"][0]["native_binding_current"], false);
     }
 
     fn turn(store: &Store, key: SessionKey) -> i64 {

@@ -1,6 +1,6 @@
-"""Receiving-owned metadata, using the existing observer and Stop protocol.
+"""Receiving-owned metadata and authenticated owner-local conversation controls.
 
-No bot update consumer, native mutations, model calls or arbitrary process kill.
+No bot update consumer, independent model client or arbitrary process kill.
 """
 import hashlib
 from contextlib import closing
@@ -51,8 +51,8 @@ def control(path, nonce, command='all'):
         stream.sendall(json.dumps({'command': command, 'nonce': nonce}).encode() + b'\n')
         data = bytearray()
         while b'\n' not in data:
-            block = stream.recv(min(4096, 65537 - len(data)))
-            if not block or len(data) + len(block) > 65536:
+            block = stream.recv(min(4096, 262145 - len(data)))
+            if not block or len(data) + len(block) > 262144:
                 raise ProviderUnavailable('Receiving operation acknowledgement unavailable')
             data.extend(block)
         reply = json.loads(data)
@@ -157,7 +157,7 @@ class Provider:
             return [dict(row) for row in rows]
 
     def presentation(self, command):
-        """Read the controller's canonical sources; never duplicate its freshness rules."""
+        """Use the configured controller and verify its returned entry provenance."""
         self.assert_binding()
         profile = self.receiver.get('interaction', {})
         if profile.get('human_id') != self.human or not self.authorized(self.human):
@@ -189,6 +189,35 @@ class Provider:
                 or type(offset) is not int or not 0 <= offset <= 10**9):
             raise ValueError('Invalid presentation selection')
         return self.presentation(f'presentation part {source} {revision} {offset}')
+
+    @staticmethod
+    def input_id(ident):
+        import uuid
+        if not isinstance(ident, str) or str(uuid.UUID(ident)) != ident:
+            raise ValueError('Invalid conversation input identity')
+        return ident
+
+    def conversation_inputs(self, before=0, direction='before'):
+        if type(before) is not int or not 0 <= before <= 2**63 - 1:
+            raise ValueError('Invalid input history cursor')
+        if direction not in ('before', 'after'):
+            raise ValueError('Invalid input history direction')
+        return self.presentation(f'input list {before} {direction}')
+
+    def conversation_input_status(self, ident):
+        return self.presentation(f'input status {self.input_id(ident)}')
+
+    def conversation_input_submit(self, body):
+        if not isinstance(body, dict) or set(body) != {'binding', 'id', 'text'}:
+            raise ValueError('Select the conversation and provide one original message')
+        self.input_id(body['id'])
+        import re
+        if (not isinstance(body['binding'], str) or not re.fullmatch('[a-f0-9]{64}', body['binding'])
+                or not isinstance(body['text'], str) or not body['text'].strip()
+                or '\0' in body['text'] or len(body['text'].encode('utf-8')) > 32768):
+            raise ValueError('A message must contain text and fit within 32 KiB')
+        # The Rust journal owns idempotency and exact-source checks. No retry.
+        return self.presentation('input submit ' + json.dumps(body, ensure_ascii=False))
 
     @staticmethod
     def identity(row):

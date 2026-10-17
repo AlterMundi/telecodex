@@ -36,6 +36,13 @@
       <section id="conversation" hidden aria-label="Integrating conversation">
         <div class="conversation-tools"><button id="conversation-back" type="button">← Sessions</button><button id="conversation-refresh" type="button">Refresh replies</button></div>
         <p id="conversation-state" role="status" aria-live="polite">Connecting to your conversation…</p>
+        <form id="conversation-compose" aria-label="Message your conversation">
+          <label for="conversation-message">Your message</label>
+          <textarea id="conversation-message" rows="3" placeholder="Continue a topic, add a correction, or start something new…" disabled></textarea>
+          <div class="conversation-tools"><span class="note">You can write again while sessions work.</span><button id="conversation-send" type="submit" disabled>Send</button></div>
+          <p id="conversation-send-state" role="status" aria-live="polite"></p>
+        </form>
+        <details id="conversation-sent"><summary>Your messages</summary><div id="conversation-inputs"></div><button id="conversation-inputs-older" type="button" hidden>Earlier messages</button></details>
         <div id="conversation-replies" tabindex="-1">
           <section aria-labelledby="conversation-answers-title"><h2 id="conversation-answers-title">Conversation replies</h2><div id="conversation-answers"></div></section>
           <section aria-labelledby="conversation-results-title"><h2 id="conversation-results-title">From your sessions</h2><div id="conversation-results"></div></section>

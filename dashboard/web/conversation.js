@@ -9,6 +9,137 @@ window.Conversation = (() => {
   };
   function mount({api, headers, setCsrf, modeChanged, telegram}) {
     const cards = new Map();
+    const inputs = new Map();
+    const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
+    const sendState = $("#conversation-send-state");
+    let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0;
+    const phaseText = value => value.retired ? "Saved from an earlier conversation binding."
+      : ({retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
+          sending:"Sending to your conversation…", steering:"Sending to your conversation…",
+          accepted:"Sent to your conversation. Work may continue.",
+          retained_unsent:"Saved; not sent.", uncertain:"Saved; delivery unconfirmed. Check status."})[value.phase]
+        || "Submission unconfirmed. Check status before sending this message again.";
+    function resetInputs() {
+      inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
+      $("#conversation-inputs").replaceChildren();
+      $("#conversation-inputs-older").hidden = true;
+      draft.disabled = true; send.disabled = true;
+    }
+    function inputCard(value, observed = ++inputObservation) {
+      let card = inputs.get(value.id);
+      if (!card) {
+        const box = node("article", undefined, "reply");
+        const text = node("div", "", "reply-text"), status = node("p", "", "reply-status");
+        const check = node("button", "Check status / read message"); check.type = "button";
+        const retry = node("button", "Retry this same message"); retry.type = "button"; retry.hidden = true;
+        const actions = node("div", undefined, "reply-actions"); actions.append(check,retry);
+        box.append(text, status, actions);
+        card = {box, text, status, check, retry, value, observed}; inputs.set(value.id, card);
+        check.addEventListener("click", async () => {
+          const owned = inputGeneration, observation = ++inputObservation;
+          check.disabled = true;
+          try {
+            const result = await api(`interaction/inputs/${encodeURIComponent(value.id)}`);
+            if (owned !== inputGeneration || inputs.get(value.id) !== card) return;
+            inputCard(result, observation);
+          } catch (e) {
+            if (owned !== inputGeneration) return;
+            if (observation >= card.observed) status.textContent = phaseText(card.value) + " Status check unavailable; no resend was made.";
+            if (e.status === 401 || e.status === 403) failed(e);
+          } finally { check.disabled = false; }
+        });
+        retry.addEventListener("click", async () => {
+          if (card.value.phase || retry.disabled) return;
+          const owned = inputGeneration, observation = ++inputObservation;
+          retry.disabled = true;
+          try {
+            const result = await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text});
+            if (owned === inputGeneration) inputCard(result, observation);
+          } catch(e) {
+            if (owned !== inputGeneration) return;
+            if (observation >= card.observed) status.textContent = phaseText(card.value) + " The same message identity was used.";
+            if (e.status === 401 || e.status === 403) failed(e);
+          } finally {retry.disabled=false;}
+        });
+      }
+      if (observed < card.observed) {
+        // A request that started earlier can nevertheless observe a later commit.
+        if (["accepted","retained_unsent"].includes(value.phase)) {
+          if (!card.value.phase && draft.value === card.value.text) draft.value = "";
+          card.value.phase = value.phase;
+        }
+        card.value.retired = !!card.value.retired || !!value.retired;
+        card.status.textContent = phaseText(card.value);
+        card.retry.hidden = !!card.value.phase || !card.value.binding;
+        return card;
+      }
+      // Native acceptance and retirement cannot be undone by a late snapshot.
+      if (["accepted","retained_unsent"].includes(card.value.phase)) value = {...value,phase:card.value.phase};
+      value = {...value,retired:!!value.retired || !!card.value.retired};
+      card.observed = observed;
+      if (!card.value.phase && value.phase && draft.value === card.value.text) draft.value = "";
+      // Preserve full original text after reading it, and an unknown POST's text.
+      card.value = {...card.value, ...value};
+      card.text.textContent = card.value.text ?? card.value.preview;
+      card.status.textContent = phaseText(card.value);
+      card.retry.hidden = !!card.value.phase || !card.value.binding;
+      card.box.dataset.sequence = String(card.value.sequence ?? Number.MAX_SAFE_INTEGER);
+      const container = $("#conversation-inputs");
+      const following = [...container.children].find(item => item !== card.box
+        && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
+      container.insertBefore(card.box, following || null);
+      return card;
+    }
+    async function inputPage(before = 0, direction = "before", remember = true) {
+      const owned = inputGeneration, observation = ++inputObservation;
+      const result = await api(`interaction/inputs?before=${before}&direction=${direction}`);
+      if (owned !== inputGeneration) return;
+      if (result.binding !== binding) throw new Error("Conversation changed. Refresh before sending.");
+      if (inputBinding && inputBinding !== result.binding) resetInputs();
+      inputBinding = result.binding;
+      setCsrf(result.csrf);
+      for (const value of result.items) inputCard(value, observation);
+      if (direction === "before" && remember) {
+        inputCursor = result.cursor || 0;
+        $("#conversation-inputs-older").hidden = !result.more;
+      }
+      if (direction === "after" || (remember && !inputNewest)) inputNewest = Math.max(inputNewest, result.newest || 0);
+      draft.disabled = false; send.disabled = posting;
+      return result;
+    }
+    compose.addEventListener("submit", async event => {
+      event.preventDefault();
+      if (posting || !ready || !binding || inputBinding !== binding) return;
+      const text = draft.value;
+      if (!text.trim() || text.includes("\0") || new TextEncoder().encode(text).length > 32768) {
+        sendState.textContent = "Write a message of at most 32 KiB."; return;
+      }
+      if ([...inputs.values()].some(card => !card.value.phase && card.value.text === text)) {
+        sendState.textContent = "This message has an unconfirmed submission. Use Check status before sending it again.";
+        $("#conversation-sent").open = true; return;
+      }
+      const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation;
+      posting = true; send.disabled = true;
+      inputCard({id,text,binding}, observation); $("#conversation-sent").open = true;
+      sendState.textContent = "Sending…";
+      try {
+        const result = await api("interaction/inputs", {binding, id, text});
+        if (owned !== inputGeneration) return;
+        const confirmed = inputCard(result, observation);
+        if (draft.value === text) draft.value = "";
+        sendState.textContent = phaseText(confirmed.value);
+      } catch (e) {
+        if (owned !== inputGeneration) return;
+        sendState.textContent = "Submission unconfirmed. Check this message status; it will not be resent automatically.";
+        if (e.status === 401 || e.status === 403) failed(e);
+      } finally { posting = false; send.disabled = !inputBinding; }
+    });
+    $("#conversation-inputs-older").addEventListener("click", async () => {
+      const button = $("#conversation-inputs-older"); button.disabled = true;
+      try { await inputPage(inputCursor); } catch (e) { failed(e); }
+      finally { button.disabled = false; }
+    });
+
     const audio = $("#conversation-audio");
     audio.controls = false;
     audio.hidden = true;
@@ -64,7 +195,7 @@ window.Conversation = (() => {
     }
     function failed(error) {
       if (error.status === 401 || error.status === 403) {
-        stop(); cards.clear(); initialized = false;
+        stop(); cards.clear(); initialized = false; resetInputs();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else pause();
@@ -129,7 +260,7 @@ window.Conversation = (() => {
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        stop(); cards.clear(); initialized = false;
+        stop(); cards.clear(); initialized = false; resetInputs();
         newest = {delivery:0,native:0}; oldest = {delivery:0,native:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
@@ -178,6 +309,14 @@ window.Conversation = (() => {
         }
         $("#conversation-state").textContent = cards.size ? `${cards.size} replies available.`
           : "No replies yet. Work can continue while this view is closed.";
+        if (!inputBinding) await inputPage();
+        else {
+          let more = true;
+          for (let n=0; n<4 && more; n++) {
+            const result = await inputPage(inputNewest,"after"); more = !!result?.more;
+          }
+          await inputPage(0,"before",false);
+        }
       } catch (e) { failed(e); }
       finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false; }
     }
