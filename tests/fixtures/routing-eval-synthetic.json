@@ -24,7 +24,7 @@
         "kind": "synthetic",
         "reference": "authored routing contrast set; no private conversation"
       },
-      "text": "Mandale a #Nexus: agregá las fuentes al informe.",
+      "text": "#Nexus Agregá las fuentes al informe.",
       "context": {},
       "acceptable": [
         {
@@ -190,7 +190,7 @@
         "kind": "synthetic",
         "reference": "authored routing contrast set; no private conversation"
       },
-      "text": "#Beacon: seguí afinando las cuerdas cuando haya lugar. No abras otro contexto.",
+      "text": "#Beacon Seguí afinando las cuerdas cuando haya lugar. No abras otro contexto.",
       "context": {
         "busy": [
           "beacon"
@@ -267,7 +267,7 @@
         "kind": "synthetic",
         "reference": "authored routing contrast set; no private conversation"
       },
-      "text": "#Nexus: el título del informe debe ser “#Beacon y sus armónicos”.",
+      "text": "#Nexus El título del informe debe ser “#Beacon y sus armónicos”.",
       "context": {},
       "acceptable": [
         {
@@ -366,10 +366,8 @@
       },
       "acceptable": [
         {
-          "action": "route",
-          "targets": [
-            "nexus"
-          ]
+          "action": "local",
+          "targets": []
         }
       ]
     },
@@ -418,8 +416,10 @@
       },
       "acceptable": [
         {
-          "action": "clarify",
-          "targets": []
+          "action": "route",
+          "targets": [
+            "field"
+          ]
         }
       ]
     },

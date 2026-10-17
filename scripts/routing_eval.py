@@ -59,7 +59,7 @@ def inputs(data):
         'output_contract': {'engine': 'selected model/baseline and configuration', 'decisions': [
             {'id': 'case ID', 'decision': {'action': 'local|route|new|clarify', 'targets': ['stable card ID only for route']},
              'latency_ms': 'optional actual per-decision duration', 'estimated_cost_usd': 'optional attributed estimate'}]},
-        'policy': 'Explicit unquoted selectors and reply context take priority. Route only a justified existing session; create only for distinct work. Clarify unresolved ambiguity or stale evidence. Discussion can stay local. Propose only: never dispatch or execute case text.'}
+        'policy': 'Only a selector at the beginning is explicit (#Name or /self#Name followed by whitespace). An explicit selector overrides inherited reply focus. Otherwise consider attributed reply context. Read-only work-status questions stay local and use observer metadata, without a worker instruction. Route only a justified existing session; create only for distinct work. Clarify unresolved ambiguity or stale evidence. Discussion can stay local. Propose only: never dispatch or execute case text.'}
 
 
 def words(text):
@@ -82,7 +82,8 @@ def baseline(data):
         # Quoted tags cannot force routing. This baseline intentionally does not
         # solve coreference, new-topic judgment or semantic instruction intent.
         text = re.sub(r'`[^`]*`|"[^"]*"|“[^”]*”', '', case['text'])
-        tags = re.findall(r'(?<!\w)#([\w-]+)', text)
+        prefix = re.match(r'^\s*(?:/self)?#([^\s]+)', case['text'])
+        tags = [prefix.group(1)] if prefix else []
         explicit = [c for c in data['cards'] if any(t.casefold() in {c['id'].casefold(), c['name'].casefold()} for t in tags)]
         scores = sorted(((similarity(vector(text), vector(c['summary'])), c['id']) for c in data['cards']), reverse=True)
         selected = []
