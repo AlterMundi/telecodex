@@ -77,7 +77,11 @@ impl ConversationInput {
                 text
             )
         } else {
-            text
+            format!(
+                "[Original conversation input]\n{}\nController reference for this retained original; metadata is not human speech. Use this exact input_ref for its routing or creation, even when it is outside the recent-input window.\n\n{}",
+                serde_json::json!({"input_ref": self.id}),
+                text
+            )
         }
     }
     /// Preserve original speech attribution without copying device focus into

@@ -347,3 +347,11 @@ changing during synthesis. These results qualify the mechanism, not real-model
 interpretation or audible-device acceptance. Deploy the supporting native
 controller before its matching dashboard and client. Older source decoders
 refuse this context form; never resend an original under another identity.
+
+Each native entry input includes its immutable original UUID in controller
+metadata, including ordinary text without a playback hint. The bounded recent
+input list is navigation, not a limit on which retained input may be selected.
+The twenty-input native/controller regression routes the oldest exact original
+after it falls outside that list, including preparation-time coalescing or
+steering. Metadata does not enter the human original or worker task text.
+The fixture uses synthetic native peers and zero inference.
