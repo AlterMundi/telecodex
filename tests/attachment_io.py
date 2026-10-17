@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import sqlite3
+import pathlib
 
 from stopping_io import Stopping
 from routing_io import Routing
@@ -177,7 +178,8 @@ def changed_binding_during_resume(binary):
 
 
 if __name__ == '__main__':
-    restart_collectors(sys.argv[1])
-    refuses_changed_writer(sys.argv[1])
-    routed_return_survives(sys.argv[1])
-    changed_binding_during_resume(sys.argv[1])
+    binary=str(pathlib.Path(sys.argv[1]).resolve())
+    restart_collectors(binary)
+    refuses_changed_writer(binary)
+    routed_return_survives(binary)
+    changed_binding_during_resume(binary)
