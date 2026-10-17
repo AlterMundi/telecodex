@@ -1,0 +1,60 @@
+// Shipped microphone state machine with synthetic devices/network; no model calls.
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),crypto=require('node:crypto').webcrypto;
+const until=async fn=>{for(let n=0;n<100;n++){if(fn())return;await new Promise(yes=>setTimeout(yes,5));}throw Error('Expected microphone transition did not occur');};
+const deferred=()=>{let resolve;return {promise:new Promise(yes=>{resolve=yes;}),resolve:value=>resolve(value)};};
+function boot(){
+ const nodes=new Map(),events={},timers=[],uploads=[],originals=new Map(),received=[],devices=[];
+ const document={hidden:false,addEventListener(name,fn){events[name]=fn;},querySelector(name){if(!nodes.has(name))nodes.set(name,{hidden:false,disabled:false,textContent:'',handlers:{},setAttribute(k,v){this[k]=v;},addEventListener(n,f){this.handlers[n]=f;}});return nodes.get(name);}};
+ let binding='original-binding',mode,permission,receiptHold,uploadHold,capturePhase='preparing',captureRetired=false,paused=0,unauthorized=0;
+ class Recorder{
+  static isTypeSupported(type){return type==='audio/webm;codecs=opus';}
+  constructor(stream){this.stream=stream;this.events={};this.state='inactive';devices.push(this);}
+  addEventListener(n,fn){this.events[n]=fn;}
+  start(){this.state='recording';}
+  stop(){if(this.state==='inactive')return;this.state='inactive';queueMicrotask(()=>{this.events.dataavailable({data:new Blob(['synthetic finalized audio'])});this.events.stop();});}
+ }
+ const media=()=>({stopped:0,getTracks(){return [{stop:()=>this.stopped++}];}});
+ const window={isSecureContext:true,MediaRecorder:Recorder,crypto,addEventListener(n,fn){events[n]=fn;},navigator:{mediaDevices:{async getUserMedia(){if(permission)return permission.promise;return media();}}}};
+ async function fetch(_route,options){
+  uploads.push(options);const id=options.headers['X-Input-Id'];
+  if(mode==='before'){mode=undefined;throw Error('Offline before capture');}
+  if(mode==='denied'){mode=undefined;return {ok:false,status:403,json:async()=>({})};}
+  const result={id,phase:capturePhase,retired:captureRetired,voice:{audio_sha256:options.headers['X-Audio-Sha256']}};originals.set(id,result);
+  if(uploadHold)await uploadHold.promise;
+  if(mode==='after'){mode=undefined;throw Error('Lost acknowledgement');}
+  return {ok:true,json:async()=>result};
+ }
+ const context=vm.createContext({window,document,Blob,Uint8Array,fetch,AbortController,
+  setTimeout(fn,ms){const t={fn,ms};timers.push(t);return t;},clearTimeout(t){if(t)t.closed=true;}});
+ vm.runInContext(fs.readFileSync('dashboard/web/microphone.js','utf8'),context);
+ let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,pauseAudio(){paused++;},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
+ ui.configure(true);
+ return {ui,nodes,uploads,originals,received,devices,events,timers,media,
+  button:()=>nodes.get('#conversation-talk'),state:()=>nodes.get('#conversation-voice-state').textContent,
+  click:()=>nodes.get('#conversation-talk').handlers.click(),cancel:()=>nodes.get('#conversation-voice-discard').handlers.click(),check:()=>nodes.get('#conversation-voice-check').handlers.click(),
+  captureState:(value,retired=false)=>{capturePhase=value;captureRetired=retired;},mode:value=>{mode=value;},permission:()=>{permission=deferred();return permission;},holdReceipt:()=>{receiptHold=deferred();return receiptHold;},holdUpload:()=>{uploadHold=deferred();return uploadHold;},bind:value=>{binding=value;},paused:()=>paused,unauthorized:()=>unauthorized,
+ };
+}
+(async()=>{
+ const f=boot();await f.click();assert.equal(f.button().textContent,'Send voice');assert.equal(f.paused(),1);
+ assert.equal(f.uploads.length,0,'Partial recording cannot admit work');f.click();await until(()=>f.received.length===1);
+ assert.equal(f.uploads.length,1);assert.equal(f.uploads[0].body.type,'audio/webm;codecs=opus');assert.equal(f.devices[0].stream.stopped,1);
+ assert.equal(f.button().textContent,'Talk');assert(f.received[0].voice.audio_sha256);
+ const lost=boot();lost.mode('after');await lost.click();lost.click();await until(()=>lost.state().startsWith('Recording unconfirmed'));
+ assert.equal(lost.originals.size,1);await lost.check();assert.equal(lost.uploads.length,1,'Status inspection must not upload again');assert.equal(lost.received.length,1);
+ const offline=boot();offline.mode('before');await offline.click();offline.click();await until(()=>offline.state().startsWith('Recording unconfirmed'));
+ assert.equal(offline.originals.size,0);await offline.click();await until(()=>offline.received.length===1);
+ assert.equal(offline.uploads.length,2);assert.deepEqual(offline.uploads[0].headers,offline.uploads[1].headers);assert.equal(offline.uploads[0].body,offline.uploads[1].body,'Explicit retry preserves the exact original bytes');
+ const hidden=boot();await hidden.click();hidden.events.pagehide();await until(()=>hidden.devices[0].state==='inactive');assert.equal(hidden.uploads.length,0);assert.equal(hidden.devices[0].stream.stopped,1);
+ const delayed=boot(),permission=delayed.permission();const starting=delayed.click();delayed.cancel();const lateMedia=delayed.media();permission.resolve(lateMedia);await starting;assert.equal(lateMedia.stopped,1);assert.equal(delayed.devices.length,0);
+ const limit=boot();await limit.click();limit.timers.find(t=>t.ms===120000).fn();await until(()=>limit.button().textContent==='Send recording');assert.equal(limit.uploads.length,0,'Duration limit cannot silently commit speech');limit.click();await until(()=>limit.received.length===1);
+ for(const [phase,retired,phrase] of [['retained_unsent',false,'no work was submitted'],['preparation_unconfirmed',false,'transcription unconfirmed'],['preparing',true,'no longer eligible']]){
+  const saved=boot();saved.captureState(phase,retired);await saved.click();saved.click();await until(()=>saved.received.length===1);assert(saved.state().includes(phrase),'A receipt must show actual preparation eligibility');
+ }
+ const denied=boot();denied.mode('denied');await denied.click();denied.click();await until(()=>denied.unauthorized()===1);assert(denied.nodes.get('#conversation-voice').hidden);
+ // A late status read from an old binding cannot clear a newer upload latch.
+ const race=boot();race.mode('before');await race.click();race.click();await until(()=>race.state().startsWith('Recording unconfirmed'));
+ const hold=race.holdReceipt(),checking=race.check();race.ui.reset();race.bind('new-binding');race.ui.configure(true);await race.click();const uploading=race.holdUpload();race.click();await until(()=>race.uploads.length===2);hold.resolve();await checking;
+ assert(race.button().disabled,'An old receipt read must not unlock a newer upload');assert.equal(race.received.length,0);uploading.resolve();await until(()=>race.received.length===1);
+ console.log('Microphone UI: finalized one-button capture, playback pause, source hashing, explicit identical retry, receipt-only recovery, hidden/cancel/late permission cleanup, duration-limit review and binding reset passed; zero models.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

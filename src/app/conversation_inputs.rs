@@ -14,7 +14,7 @@ struct Submit {
 
 fn outcome(input: &ConversationInput, fresh: bool) -> Value {
     json!({"schema":"telecodex.conversation-input/v1","id":input.id,"phase":input.phase,
-        "new_input":fresh,"retired":input.retired,"text":input.text,
+        "new_input":fresh,"retired":input.retired,"text":input.text,"voice":input.voice,
         "entry_binding":[input.human,input.entry,input.session,input.native],"native_acceptance":if input.phase=="accepted" {"observed"}else{"unconfirmed"},
         "incorporation":"Not established by input retention or native acceptance"})
 }
@@ -28,6 +28,19 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         .context("Missing integrating entry")?;
     if cfg.human_id != human {
         bail!("Conversation input owner mismatch");
+    }
+    if args == "voice capabilities" {
+        let mut result = app
+            .shared
+            .store
+            .conversation_request_binding(human, cfg.entry())?;
+        result["voice_available"] = json!(app.shared.config.voice.is_some());
+        result["max_bytes"] = json!(crate::voice::MAX_BYTES);
+        result["max_seconds"] = json!(120);
+        return Ok(result);
+    }
+    if let Some(body) = args.strip_prefix("voice submit ") {
+        return voice_submit(app, human, cfg.entry(), body).await;
     }
     if let Some(page) = args.strip_prefix("list ") {
         let parts: Vec<_> = page.split_whitespace().collect();
@@ -110,7 +123,7 @@ async fn submit(app: App, input: ConversationInput) -> Result<()> {
             shared.store.conversation_input_validate(human, &id)
         })),
         client_message_id: Some(format!("conversation:{}", input.id)),
-        text: input.text.clone(),
+        text: input.rendered(),
         goal: None,
         response: send,
     };
@@ -188,7 +201,7 @@ fn enqueue(
             request: TurnRequest {
                 session_key: input.entry,
                 from_user_id: input.human,
-                prompt: input.text.clone(),
+                prompt: input.rendered(),
                 runtime_instructions: None,
                 attachments: vec![],
                 review_mode: None,
@@ -207,4 +220,132 @@ fn enqueue(
         })
         .map_err(|_| anyhow!("Conversation worker unavailable"))?;
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VoiceSubmit {
+    binding: String,
+    id: String,
+    audio_sha256: String,
+    mime: String,
+}
+
+async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> Result<Value> {
+    use crate::store::ConversationVoice;
+    let request: VoiceSubmit = serde_json::from_str(body)?;
+    let config = app
+        .shared
+        .config
+        .voice
+        .clone()
+        .context("Voice input is not configured")?;
+    if Uuid::parse_str(&request.id)
+        .ok()
+        .is_none_or(|v| v.to_string() != request.id)
+    {
+        bail!("Invalid voice capture identity");
+    }
+    let voice = ConversationVoice {
+        audio_sha256: request.audio_sha256,
+        mime: request.mime,
+        transcription: None,
+    };
+    voice.validate()?;
+    let directory =
+        std::path::PathBuf::from(format!("{}.voice", app.shared.config.db_path.display()));
+    let path = directory.join(&request.id);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let folder = std::fs::symlink_metadata(&directory)?;
+        let file = std::fs::symlink_metadata(&path)?;
+        if !folder.is_dir()
+            || folder.uid() != unsafe { libc::geteuid() }
+            || folder.mode() & 0o077 != 0
+            || !file.is_file()
+            || file.uid() != unsafe { libc::geteuid() }
+            || file.mode() & 0o077 != 0
+            || file.len() == 0
+            || file.len() > crate::voice::MAX_BYTES as u64
+        {
+            bail!("Voice capture file is not owner-private and bounded");
+        }
+    }
+    let permit = app
+        .shared
+        .voice_preparations
+        .clone()
+        .try_acquire_owned()
+        .ok();
+    let _ingress = app.shared.conversation_ingress.lock().await;
+    let (input, fresh) = app.shared.store.conversation_voice_capture(
+        human,
+        entry,
+        &request.binding,
+        &request.id,
+        voice,
+        permit.is_some(),
+    )?;
+    if fresh && input.phase == "preparing" {
+        let worker = app.clone();
+        let captured = input.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            let preparation = async {
+                worker
+                    .shared
+                    .store
+                    .conversation_voice_validate(human, &captured.id)?;
+                let expected = &captured
+                    .voice
+                    .as_ref()
+                    .context("Missing voice capture")?
+                    .audio_sha256;
+                let (text, proof) = crate::voice::transcribe_committed(
+                    &config,
+                    &path,
+                    None,
+                    Some(&captured.id),
+                    Some(expected),
+                )
+                .await?;
+                let _ingress = worker.shared.conversation_ingress.lock().await;
+                let ready = worker.shared.store.conversation_voice_commit(
+                    human,
+                    &captured.id,
+                    &text,
+                    proof,
+                )?;
+                worker
+                    .shared
+                    .store
+                    .conversation_input_event(human, &ready.id, E::Queue)?;
+                if let Err(error) = submit(worker.clone(), ready).await {
+                    worker
+                        .shared
+                        .store
+                        .conversation_input_finish(human, &captured.id)?;
+                    return Err(error);
+                }
+                Ok::<_, anyhow::Error>(())
+            };
+            let result = tokio::select! {biased;_ = worker.shared.voice_shutdown.cancelled()=>Err(anyhow!("Voice preparation ended for listener restart")),result=preparation=>result};
+            if result.is_err() {
+                let _ = worker
+                    .shared
+                    .store
+                    .conversation_voice_fail(human, &captured.id);
+                tracing::warn!(
+                    "Committed conversation voice preparation unconfirmed; no automatic retry"
+                );
+            }
+        });
+    }
+    Ok(outcome(
+        &app.shared
+            .store
+            .conversation_input_read(human, entry, &input.id)?,
+        fresh,
+    ))
 }

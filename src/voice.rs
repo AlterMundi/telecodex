@@ -44,7 +44,10 @@ impl VoiceConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptSource {
     pub audio_sha256: String,
-    pub telegram_file_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_file_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_id: Option<String>,
     pub configured_transcriber: String,
     pub committed_at: String,
     pub audio_millis: u64,
@@ -111,12 +114,28 @@ pub async fn transcribe(
     path: &Path,
     file_id: &str,
 ) -> Result<(String, TranscriptSource)> {
+    transcribe_committed(config, path, Some(file_id), None, None).await
+}
+
+pub async fn transcribe_committed(
+    config: &VoiceConfig,
+    path: &Path,
+    telegram_file_id: Option<&str>,
+    capture_id: Option<&str>,
+    expected_sha256: Option<&str>,
+) -> Result<(String, TranscriptSource)> {
+    if telegram_file_id.is_some() == capture_id.is_some() {
+        bail!("Voice requires one original identity");
+    }
     let preparation_started = std::time::Instant::now();
     let bytes = read_media(path).await?;
     if bytes.is_empty() || bytes.len() > MAX_BYTES {
         bail!("Voice media size outside bounds");
     }
     let hash = format!("{:x}", Sha256::digest(&bytes));
+    if expected_sha256.is_some_and(|expected| expected != hash) {
+        bail!("Committed voice bytes changed before preparation");
+    }
     // Decode the whole bounded clip before paid ASR. Digital silence is not speech.
     let mut decode = Command::new("ffmpeg");
     decode
@@ -154,7 +173,7 @@ pub async fn transcribe(
     if format!("{:x}", Sha256::digest(read_media(path).await?)) != hash {
         bail!("Voice source changed during preparation");
     }
-    Ok((text,TranscriptSource{audio_sha256:hash,telegram_file_id:file_id.into(),configured_transcriber:config.transcriber_label.clone(),committed_at:chrono::Utc::now().to_rfc3339(),audio_millis:(pcm.len()/4) as u64*1000/16000,preparation_millis:preparation_started.elapsed().as_millis() as u64,transcription_millis,interpretation:"Machine transcription of the original human voice clip; not exact verified written speech".into()}))
+    Ok((text,TranscriptSource{audio_sha256:hash,telegram_file_id:telegram_file_id.map(str::to_owned),capture_id:capture_id.map(str::to_owned),configured_transcriber:config.transcriber_label.clone(),committed_at:chrono::Utc::now().to_rfc3339(),audio_millis:(pcm.len()/4) as u64*1000/16000,preparation_millis:preparation_started.elapsed().as_millis() as u64,transcription_millis,interpretation:"Machine transcription of the original human voice clip; not exact verified written speech".into()}))
 }
 
 async fn read_media(path: &Path) -> Result<Vec<u8>> {

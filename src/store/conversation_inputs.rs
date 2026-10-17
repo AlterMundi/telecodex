@@ -13,9 +13,56 @@ pub struct ConversationInput {
     pub native: String,
     pub epoch: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<ConversationVoice>,
     pub phase: String,
     pub local_turn: Option<i64>,
     pub retired: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationVoice {
+    pub audio_sha256: String,
+    pub mime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcription: Option<crate::voice::TranscriptSource>,
+}
+impl ConversationVoice {
+    pub fn validate(&self) -> Result<()> {
+        if self.audio_sha256.len() != 64
+            || !self
+                .audio_sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || !matches!(
+                self.mime.as_str(),
+                "audio/webm"
+                    | "audio/webm;codecs=opus"
+                    | "audio/ogg"
+                    | "audio/ogg;codecs=opus"
+                    | "audio/mp4"
+                    | "audio/wav"
+                    | "audio/mpeg"
+            )
+        {
+            bail!("Invalid committed voice source");
+        }
+        Ok(())
+    }
+}
+impl ConversationInput {
+    pub fn rendered(&self) -> String {
+        match self.voice.as_ref().and_then(|v| v.transcription.as_ref()) {
+            Some(proof) => format!(
+                "[Committed voice input]\nCapture: {}\nAutomatic interpretation of the original human clip, not verified written speech. Compare receiver capture order; a slow earlier transcript does not supersede later corrections.\nProvenance: {}\n\n{}",
+                self.id,
+                serde_json::to_string(proof).expect("typed voice proof"),
+                self.text
+            ),
+            None => self.text.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -76,7 +123,7 @@ impl Store {
             UPDATE conversation_inputs SET retired=1 WHERE session_id=NEW.id AND (native_thread IS NOT NEW.codex_thread_id OR NEW.force_fresh_thread=1 OR human_id!=NEW.creator_user_id); END;
             CREATE TRIGGER IF NOT EXISTS conversation_input_session_deleted AFTER DELETE ON sessions BEGIN UPDATE conversation_inputs SET retired=1 WHERE session_id=OLD.id; END;
             CREATE TRIGGER IF NOT EXISTS conversation_input_owner_revoked AFTER UPDATE OF allowed ON users WHEN NEW.allowed=0 BEGIN UPDATE conversation_inputs SET retired=1 WHERE human_id=NEW.tg_user_id; END;")?;
-        conn.execute("UPDATE conversation_inputs SET phase=CASE WHEN phase IN ('sending','steering') THEN 'uncertain' ELSE 'retained_unsent' END WHERE instance_id!=?1 AND phase IN ('retained','queued','sending','steering')",[&self.instance_id])?;
+        conn.execute("UPDATE conversation_inputs SET phase=CASE WHEN phase IN ('sending','steering') THEN 'uncertain' WHEN phase='preparing' THEN 'preparation_unconfirmed' ELSE 'retained_unsent' END WHERE instance_id!=?1 AND phase IN ('retained','queued','sending','steering','preparing')",[&self.instance_id])?;
         Ok(())
     }
 
@@ -90,10 +137,40 @@ impl Store {
         id: &str,
         text: &str,
     ) -> Result<(ConversationInput, bool)> {
+        self.capture_original(human, entry, binding, id, text, None, true)
+    }
+
+    pub fn conversation_voice_capture(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        voice: ConversationVoice,
+        can_prepare: bool,
+    ) -> Result<(ConversationInput, bool)> {
+        voice.validate()?;
+        if voice.transcription.is_some() {
+            bail!("Transcription is produced only by the receiving adapter");
+        }
+        self.capture_original(human, entry, binding, id, "", Some(voice), can_prepare)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn capture_original(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        text: &str,
+        voice: Option<ConversationVoice>,
+        can_prepare: bool,
+    ) -> Result<(ConversationInput, bool)> {
         if Uuid::parse_str(id)
             .ok()
             .is_none_or(|uuid| uuid.to_string() != id)
-            || text.trim().is_empty()
+            || voice.is_none() && text.trim().is_empty()
             || text.len() > 32 * 1024
             || text.contains('\0')
         {
@@ -112,7 +189,13 @@ impl Store {
         )?;
         if existing {
             let input = read_on(&tx, id, human)?;
-            if input.entry != entry || input.text != text {
+            if input.entry != entry
+                || match (&input.voice, &voice) {
+                    (None, None) => input.text != text,
+                    (Some(a), Some(b)) => a.audio_sha256 != b.audio_sha256 || a.mime != b.mime,
+                    _ => true,
+                }
+            {
                 bail!("Original conversation input identity is immutable");
             }
             return Ok((input, false));
@@ -125,10 +208,14 @@ impl Store {
             native,
             epoch: super::stopping::admission_epoch_on(&tx, entry)?,
             text: text.into(),
-            phase: if super::stopping::fenced_on(&tx, entry)?
+            voice: voice.clone(),
+            phase: if !can_prepare
+                || super::stopping::fenced_on(&tx, entry)?
                 || super::maintenance_writer_held_on(&tx, entry)?
             {
                 "retained_unsent"
+            } else if voice.is_some() {
+                "preparing"
             } else {
                 "retained"
             }
@@ -143,6 +230,53 @@ impl Store {
         tx.execute("INSERT INTO conversation_inputs(id,human_id,session_id,native_thread,phase,doc,instance_id,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![input.id,human,session,input.native,input.phase,serde_json::to_string(&input)?,self.instance_id,now_string()])?;
         tx.commit()?;
         Ok((input, true))
+    }
+
+    pub fn conversation_voice_validate(&self, human: i64, id: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let input = read_on(&conn, id, human)?;
+        eligible_on(&conn, &input)?;
+        if input.phase != "preparing" || input.voice.is_none() {
+            bail!("Voice capture is not pending preparation");
+        }
+        Ok(())
+    }
+    pub fn conversation_voice_commit(
+        &self,
+        human: i64,
+        id: &str,
+        text: &str,
+        proof: crate::voice::TranscriptSource,
+    ) -> Result<ConversationInput> {
+        if text.trim().is_empty() || text.len() > 16000 || text.contains('\0') {
+            bail!("Invalid final voice interpretation");
+        }
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let mut input = read_on(&tx, id, human)?;
+        eligible_on(&tx, &input)?;
+        let voice = input.voice.as_mut().context("Missing voice source")?;
+        if input.phase != "preparing"
+            || proof.capture_id.as_deref() != Some(id)
+            || proof.telegram_file_id.is_some()
+            || voice.audio_sha256 != proof.audio_sha256
+            || voice.transcription.is_some()
+        {
+            bail!("Voice interpretation no longer matches this pending capture");
+        }
+        voice.transcription = Some(proof);
+        input.text = text.into();
+        input.phase = "retained".into();
+        let changed=tx.execute("UPDATE conversation_inputs SET doc=?1,phase='retained' WHERE id=?2 AND human_id=?3 AND phase='preparing' AND instance_id=?4",params![serde_json::to_string(&input)?,id,human,self.instance_id])?;
+        if changed != 1 {
+            bail!("Voice preparation instance changed");
+        }
+        tx.commit()?;
+        Ok(input)
+    }
+    pub fn conversation_voice_fail(&self, human: i64, id: &str) -> Result<()> {
+        self.conn.lock().expect("store mutex poisoned").execute("UPDATE conversation_inputs SET phase=CASE WHEN phase='preparing' THEN 'preparation_unconfirmed' ELSE 'retained_unsent' END WHERE id=?1 AND human_id=?2 AND phase IN ('preparing','retained','queued') AND instance_id=?3",params![id,human,self.instance_id])?;
+        Ok(())
     }
 
     pub fn conversation_input_read(
@@ -200,7 +334,7 @@ impl Store {
             let input = read_on(&conn, id, human)?;
             items.push(serde_json::json!({
                 "id":id,"sequence":sequence,"preview":input.text.chars().take(1000).collect::<String>(),
-                "phase":input.phase,"retired":input.retired,
+                "phase":input.phase,"retired":input.retired,"voice":input.voice,
                 "native_binding_current":input.native==native,
             }));
         }
@@ -367,6 +501,187 @@ mod tests {
             .unwrap()
             .to_string();
         (file, store, key, binding)
+    }
+
+    fn clip() -> ConversationVoice {
+        ConversationVoice {
+            audio_sha256: "a".repeat(64),
+            mime: "audio/wav".into(),
+            transcription: None,
+        }
+    }
+    fn voice_proof(id: &str) -> crate::voice::TranscriptSource {
+        crate::voice::TranscriptSource {
+            audio_sha256: "a".repeat(64),
+            telegram_file_id: None,
+            capture_id: Some(id.into()),
+            configured_transcriber: "synthetic/asr".into(),
+            committed_at: now_string(),
+            audio_millis: 100,
+            preparation_millis: 1,
+            transcription_millis: 1,
+            interpretation: "machine, not exact written speech".into(),
+        }
+    }
+    #[test]
+    fn voice_capture_precedes_later_text_and_cannot_admit_partial_or_replaced_source() {
+        let (_file, store, key, binding) = setup();
+        let id = Uuid::now_v7().to_string();
+        let (pending, fresh) = store
+            .conversation_voice_capture(100, key, &binding, &id, clip(), true)
+            .unwrap();
+        assert!(fresh);
+        assert_eq!(pending.phase, "preparing");
+        assert!(pending.text.is_empty());
+        assert!(store.conversation_input_event(100, &id, E::Queue).is_err());
+        assert!(store.conversation_input_validate(100, &id).is_err());
+        store.conversation_voice_validate(100, &id).unwrap();
+        let later = Uuid::now_v7().to_string();
+        store
+            .conversation_input_capture(100, key, &binding, &later, "Use the later correction")
+            .unwrap();
+        let mut wrong = voice_proof(&id);
+        wrong.audio_sha256 = "b".repeat(64);
+        assert!(
+            store
+                .conversation_voice_commit(100, &id, "Wrong source", wrong)
+                .is_err()
+        );
+        let ready = store
+            .conversation_voice_commit(
+                100,
+                &id,
+                "Earlier automatic interpretation",
+                voice_proof(&id),
+            )
+            .unwrap();
+        assert_eq!(ready.phase, "retained");
+        assert!(ready.rendered().contains("not verified written speech"));
+        store.conversation_input_event(100, &id, E::Queue).unwrap();
+        let original = store
+            .conversation_voice_capture(100, key, &binding, &id, clip(), true)
+            .unwrap();
+        assert!(!original.1);
+        assert_eq!(original.0.phase, "queued");
+        assert!(
+            store
+                .conversation_input_capture(
+                    100,
+                    key,
+                    &binding,
+                    &id,
+                    "Earlier automatic interpretation"
+                )
+                .is_err()
+        );
+        let mut changed = clip();
+        changed.audio_sha256 = "b".repeat(64);
+        assert!(
+            store
+                .conversation_voice_capture(100, key, &binding, &id, changed, true)
+                .is_err()
+        );
+        let order:Vec<String>=store.conn.lock().unwrap().prepare("SELECT event_id FROM original_ingress_order WHERE channel='conversation' ORDER BY id").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(order, vec![id, later]);
+    }
+    #[test]
+    fn voice_authority_retires_during_preparation_and_restart_never_replays_asr() {
+        let (file, store, key, binding) = setup();
+        let id = Uuid::now_v7().to_string();
+        store
+            .conversation_voice_capture(100, key, &binding, &id, clip(), true)
+            .unwrap();
+        store.conn.lock().unwrap().execute_batch("UPDATE users SET allowed=0 WHERE tg_user_id=100; UPDATE users SET allowed=1 WHERE tg_user_id=100;").unwrap();
+        assert!(store.conversation_voice_validate(100, &id).is_err());
+        assert!(
+            store
+                .conversation_voice_commit(100, &id, "Late result", voice_proof(&id))
+                .is_err()
+        );
+        let pending = Uuid::now_v7().to_string();
+        store
+            .conversation_voice_capture(100, key, &binding, &pending, clip(), true)
+            .unwrap();
+        let held = Uuid::now_v7().to_string();
+        assert_eq!(
+            store
+                .conversation_voice_capture(100, key, &binding, &held, clip(), false)
+                .unwrap()
+                .0
+                .phase,
+            "retained_unsent"
+        );
+        assert!(store.conversation_voice_validate(100, &held).is_err());
+        drop(store);
+        let reopened = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        assert_eq!(
+            reopened
+                .conversation_input_read(100, key, &pending)
+                .unwrap()
+                .phase,
+            "preparation_unconfirmed"
+        );
+        assert!(reopened.conversation_voice_validate(100, &pending).is_err());
+        assert!(
+            reopened
+                .conversation_voice_commit(100, &pending, "No replay", voice_proof(&pending))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn voice_cleanup_settles_post_commit_and_queued_fences_without_reversing_acceptance() {
+        let (_file, store, key, binding) = setup();
+        let ids: Vec<_> = (0..3).map(|_| Uuid::now_v7().to_string()).collect();
+        for id in &ids {
+            store
+                .conversation_voice_capture(100, key, &binding, id, clip(), true)
+                .unwrap();
+            store
+                .conversation_voice_commit(100, id, "Final interpretation", voice_proof(id))
+                .unwrap();
+        }
+        for id in &ids[1..] {
+            store.conversation_input_event(100, id, E::Queue).unwrap();
+        }
+        let local = turn(&store, key);
+        store
+            .conversation_input_event(
+                100,
+                &ids[2],
+                E::Begin {
+                    local_turn: local,
+                    steer: true,
+                },
+            )
+            .unwrap();
+        store
+            .conversation_input_event(100, &ids[2], E::Accepted { local_turn: local })
+            .unwrap();
+        store
+            .save_bot_state("native_writer_hold:100:1", "synthetic-hold")
+            .unwrap();
+        assert!(
+            store
+                .conversation_input_event(100, &ids[0], E::Queue)
+                .is_err()
+        );
+        for id in &ids {
+            store.conversation_voice_fail(100, id).unwrap();
+        }
+        for id in &ids[..2] {
+            assert_eq!(
+                store.conversation_input_read(100, key, id).unwrap().phase,
+                "retained_unsent"
+            );
+        }
+        assert_eq!(
+            store
+                .conversation_input_read(100, key, &ids[2])
+                .unwrap()
+                .phase,
+            "accepted"
+        );
     }
 
     #[test]

@@ -3,8 +3,10 @@
 Voice preparation is opt-in on the selected human's integrating entry. A finalized
 Telegram voice clip is transcribed before entering a native turn or selecting a
 worker. Text controls and other topics continue while ASR runs. This is the first
-input adapter for #118; it does not yet provide spoken output, realtime transport,
-a device button or human acceptance.
+input adapter for #118. The [canonical Mini App microphone](interaction-input.md)
+uses the same transcriber with a one-button recording flow, while the separate
+[speech player](interaction-speech.md) renders selected retained replies. Accessible
+realtime comparison and receiving device/human acceptance remain separate work.
 
 ```toml
 [voice]

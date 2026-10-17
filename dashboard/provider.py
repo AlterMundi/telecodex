@@ -15,6 +15,7 @@ import time
 import tomllib
 
 from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp
+from scripts.speech_render import sync_directory
 
 
 class ProviderUnavailable(Exception):
@@ -28,6 +29,7 @@ def receiving_authority(receiver):
         'db_path': receiver.get('db_path'),
         'session_control': receiver.get('session_control'),
         'interaction': receiver.get('interaction'),
+        'voice': receiver.get('voice'),
         'telegram': {key: telegram.get(key) for key in
                      ('api_base', 'bot_token', 'bot_token_file')},
         'native_binary': receiver.get('codex', {}).get('binary', 'codex'),
@@ -218,6 +220,52 @@ class Provider:
             raise ValueError('A message must contain text and fit within 32 KiB')
         # The Rust journal owns idempotency and exact-source checks. No retry.
         return self.presentation('input submit ' + json.dumps(body, ensure_ascii=False))
+
+    def conversation_voice_submit(self, metadata, data):
+        import re
+        if not isinstance(metadata, dict) or set(metadata) != {'binding', 'id', 'audio_sha256', 'mime'}:
+            raise ValueError('Select one original voice recording')
+        self.input_id(metadata['id'])
+        if (not isinstance(data, bytes) or not 0 < len(data) <= 20*1024*1024
+                or any(not isinstance(metadata[k], str) or not re.fullmatch('[a-f0-9]{64}', metadata[k]) for k in ('binding', 'audio_sha256'))
+                or metadata['mime'] not in ('audio/webm', 'audio/webm;codecs=opus', 'audio/ogg', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/wav', 'audio/mpeg')
+                or hashlib.sha256(data).hexdigest() != metadata['audio_sha256']):
+            raise ValueError('Invalid bounded voice recording')
+        self.assert_binding()
+        if not self.receiver.get('voice') or not self.authorized(self.human):
+            raise ProviderUnavailable('Voice input unavailable')
+        directory = Path(str(self.receiver['db_path'])+'.voice')
+        directory.mkdir(mode=0o700, parents=False, exist_ok=True)
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ProviderUnavailable('Voice recording storage unavailable')
+        # Persist the newly created directory name before retaining any clip/capture.
+        sync_directory(directory.parent)
+        import secrets
+        temporary = directory / ('.'+secrets.token_hex(16))
+        destination = directory / metadata['id']
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data); stream.flush(); os.fsync(stream.fileno())
+            try:
+                os.link(temporary, destination, follow_symlinks=False)
+            except FileExistsError:
+                fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd, 'rb') as stream:
+                    info = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                        raise ProviderUnavailable('Voice recording storage changed')
+                    if hashlib.sha256(stream.read(20*1024*1024+1)).hexdigest() != metadata['audio_sha256']:
+                        raise ValueError('Original voice identity cannot be replaced')
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+        finally:
+            temporary.unlink(missing_ok=True)
+        # The controller reserves original order/authority before asynchronous ASR.
+        # A retry names the same clip and only inspects existing capture state.
+        return self.presentation('input voice submit '+json.dumps(metadata))
 
     @staticmethod
     def request_id(ident):

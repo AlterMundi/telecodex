@@ -21,7 +21,7 @@ pub(super) fn content_on(
     let voice = m.voice.as_ref().context("No committed text or voice")?;
     let (text,raw):(String,String)=conn.query_row("SELECT v.text,v.source FROM interaction_voice_inputs v JOIN incoming_updates i ON i.update_id=v.update_id JOIN sessions binding ON binding.id=v.session_id AND binding.creator_user_id=v.human_id AND binding.codex_thread_id IS v.native JOIN users u ON u.tg_user_id=v.human_id JOIN bot_state epoch ON epoch.key='stop_input_epoch:'||i.update_id LEFT JOIN bot_state current ON current.key='stop_admission_epoch:'||v.human_id WHERE v.update_id=?1 AND v.human_id=?2 AND v.phase='committed' AND u.allowed=1 AND epoch.value=COALESCE(current.value,'initial')",params![update.update_id,human],|r|Ok((r.get(0)?,r.get(1)?)))?;
     let source: TranscriptSource = serde_json::from_str(&raw)?;
-    if source.telegram_file_id != voice.file_id {
+    if source.telegram_file_id.as_deref() != Some(voice.file_id.as_str()) {
         bail!("Original voice changed");
     }
     Ok((text, Some(source)))
@@ -104,7 +104,7 @@ impl Store {
         if original
             .message
             .and_then(|m| m.voice)
-            .is_none_or(|v| v.file_id != source.telegram_file_id)
+            .is_none_or(|v| Some(v.file_id.as_str()) != source.telegram_file_id.as_deref())
         {
             bail!("Transcription media identity changed");
         }
@@ -236,7 +236,8 @@ mod tests {
     fn proof() -> TranscriptSource {
         TranscriptSource {
             audio_sha256: "0".repeat(64),
-            telegram_file_id: "synthetic-voice-file".into(),
+            telegram_file_id: Some("synthetic-voice-file".into()),
+            capture_id: None,
             configured_transcriber: "fixture/no-inference".into(),
             committed_at: now_string(),
             audio_millis: 1000,

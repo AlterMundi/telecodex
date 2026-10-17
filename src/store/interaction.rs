@@ -102,7 +102,9 @@ pub(super) fn admit_on(
             }
         }
     }
-    if let Some(transcription) = &source.transcription {
+    if let Some(transcription) = &source.transcription
+        && source.channel != "conversation"
+    {
         let update = source
             .update_id
             .context("Voice source lacks original ingress")?;
@@ -126,7 +128,11 @@ pub(super) fn admit_on(
         super::conversation_inputs::eligible_on(tx, &original)?;
         source_epoch = Some(original.epoch.clone());
         if source.update_id.is_some()
-            || source.transcription.is_some()
+            || source.transcription
+                != original
+                    .voice
+                    .as_ref()
+                    .and_then(|v| v.transcription.clone())
             || source.origin.message_id.is_some()
             || original.entry.chat_id != source.origin.chat_id
             || original.entry.thread_id != source.origin.thread_id

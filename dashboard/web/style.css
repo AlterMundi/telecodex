@@ -465,3 +465,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .request-card form button { margin-top: 8px; }
 .request-card details summary { min-height: 44px; padding-block: 10px; cursor: pointer; }
 .request-card .reply-actions button { white-space: normal; overflow-wrap: anywhere; }
+
+#conversation-voice { flex-shrink: 0; padding-block: 8px; }
+#conversation-talk { min-width: 112px; font-weight: 600; }
+#conversation-talk[aria-pressed="true"] { border: 3px solid var(--accent); }
