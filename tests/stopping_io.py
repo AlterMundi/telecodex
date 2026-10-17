@@ -2,7 +2,7 @@
 """Scoped Stop through real Unix IPC/HTTP, native WebSocket and SQLite.
 All conversations and model output are synthetic; no live model/bot calls.
 """
-import copy,json,pathlib,subprocess,sys,time,sqlite3,socket
+import copy,json,pathlib,subprocess,sys,time,sqlite3
 from goals_io import Goals
 
 class Stopping(Goals):
@@ -13,13 +13,7 @@ class Stopping(Goals):
         self.config.write_text(self.config.read_text().replace('[telegram]',f'[session_control]\nsocket_path="{self.socket}"\nhuman_id=100\n[telegram]'))
     def start(self):
         super().start()
-        def ready():
-            try:
-                with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-                    client.connect(str(self.socket))
-                    return not hasattr(socket,'SO_PEERCRED') or int.from_bytes(client.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12)[:4],sys.byteorder)==self.process.pid
-            except OSError:return False
-        self.wait(ready)
+        self.wait_control_socket(self.socket)
     def handle_extra_rpc(self,request,send):
         p=request.get('params',{});method=request.get('method');ident=request.get('id')
         if method=='thread/list' and 'ancestorThreadId' in p:

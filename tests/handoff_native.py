@@ -17,30 +17,48 @@ from routing_native import NativeJourney
 
 
 def qualify(args):
-    assert not args.state.exists(), 'Inspect retained work; never replay this attempt'
+    retained=args.verify_retained
+    previous_report=args.state/'qualification-handoff.json'
+    if retained:
+        prior=json.loads(previous_report.read_text())
+        assert prior['success'] is False and prior.get('active_writer_survived_disconnect')
+        assert not (args.state/'qualification-collector-verification.json').exists(), 'Inspect the retained verification; never repeat it'
+        prior_artifact=(args.state/'handoff-finished').read_bytes()
+        assert prior_artifact==b'DONE'
+    else:
+        assert not args.state.exists(), 'Inspect retained work; never replay this attempt'
     args.resume = False
     assert hashlib.sha256(pathlib.Path(args.candidate).read_bytes()).hexdigest()==args.candidate_sha256, 'Candidate changed; do not run unknown source'
     old = args.binary
-    j = NativeJourney(args)
+    j = NativeJourney(args, reuse=retained)
     # The shared build cache may have another writer. Freeze both artifacts
     # before any native call; never qualify a changing executable path.
     old_snapshot = args.state/'previous-listener'
     candidate_snapshot = args.state/'candidate-listener'
-    shutil.copy2(old, old_snapshot)
-    shutil.copy2(args.candidate, candidate_snapshot)
+    if not retained:
+        shutil.copy2(old, old_snapshot)
+        shutil.copy2(args.candidate, candidate_snapshot)
+    else:
+        assert hashlib.sha256(old_snapshot.read_bytes()).hexdigest()==prior['old_sha256']
     assert hashlib.sha256(candidate_snapshot.read_bytes()).hexdigest()==args.candidate_sha256
     j.binary = str(old_snapshot.resolve())
-    config = j.config.read_text().replace('[codex]\n', '[codex]\ndefault_model="gpt-6-luna"\ndefault_reasoning_effort="low"\n')
-    socket = args.state/'control.sock'
-    config = config.replace('[telegram]', '[session_control]\nsocket_path='+json.dumps(str(socket))+'\nhuman_id=100\n[telegram]')
-    j.config.write_text(config)
+    if not retained:
+        config = j.config.read_text().replace('[codex]\n', '[codex]\ndefault_model="gpt-6-luna"\ndefault_reasoning_effort="low"\n')
+        socket = args.state/'control.sock'
+        config = config.replace('[telegram]', '[session_control]\nsocket_path='+json.dumps(str(socket))+'\nhuman_id=100\n[telegram]')
+        j.config.write_text(config)
+    socket=args.state/'control.sock'
     report = {'success': False, 'model': 'gpt-6-luna', 'effort': 'low',
               'scope': 'one new isolated goal; old consumer disconnect, collector-only exact physical turn attachment by candidate; synthetic Telegram',
               'old_sha256': hashlib.sha256(pathlib.Path(old).read_bytes()).hexdigest(),
               'candidate_sha256': args.candidate_sha256,
               'candidate_source_reference': args.candidate_source_reference,
               'live_telegram_acceptance': False}
-    output = args.state / 'qualification-handoff.json'
+    output = args.state / ('qualification-collector-verification.json' if retained else 'qualification-handoff.json')
+    marker='collector-verification' if retained else 'handoff'
+    if retained:
+        report['scope']='distinct read-only verification of retained completed artifact, same native binding; no goal resumption or replay of prior command'
+        report['prior_update']=prior['original_update']
     def save():
         output.write_text(json.dumps(report, indent=2)+'\n')
     save()
@@ -63,16 +81,23 @@ def qualify(args):
             time.sleep(.2)
     try:
         j.start()
-        update = j.admit('/goal This is one finite isolated listener-handoff qualification. Use gpt-6-luna low; no subagents, network or unrelated files. Run exactly one local Python command which writes handoff-started, then waits up to 120 seconds for handoff-release, checking every 0.2 seconds. After release, write handoff-finished with text DONE. Then mark this goal complete using the native goal tool and reply HANDOFF-COMPLETED. Do not create another goal or repeat the command. All three filenames are relative to this isolated working directory.')
+        j.wait_control_socket(socket)
+        if retained:
+            assert reader.goal(prior['native_thread'])['status']=='complete'
+            assert j.row('SELECT model,reasoning_effort FROM sessions WHERE thread_id=7')==[('gpt-6-luna','low')]
+        prompt='/goal This is one finite isolated listener-handoff qualification. Use gpt-6-luna low; no subagents, network or unrelated files. Run exactly one local Python command which writes handoff-started, then waits up to 120 seconds for handoff-release, checking every 0.2 seconds. After release, write handoff-finished with text DONE. Then mark this goal complete using the native goal tool and reply HANDOFF-COMPLETED. Do not create another goal or repeat the command. All three filenames are relative to this isolated working directory.'
+        if retained:
+            prompt="This is a distinct read-only collector verification of the previous completed task. Keep the completed goal unchanged: do not create, update or resume any goal, do not repeat prior commands or rewrite handoff-started, handoff-release or handoff-finished. No network, subagents or unrelated files. Run one local Python command that reads handoff-finished and verifies its exact contents are DONE; write only the new collector-verification-started marker; wait at most 120 seconds for collector-verification-release (checking every 0.2 seconds). When released, write the new collector-verification-finished marker with VERIFIED, then reply exactly COLLECTOR-VERIFIED DONE. This verification and its new markers are the only new work."
+        update=j.admit(prompt)
         report['original_update'] = update
-        await_effect(lambda: (args.state/'handoff-started').exists(), 'native command started')
+        await_effect(lambda: (args.state/(marker+'-started')).exists(), 'native command started')
         report['native_thread'] = j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=7')[0][0]
         before = native()
         active = [t for t in before['turns'] if t['status']=='inProgress']
         assert len(active)==1
         report['native_turn'] = active[0]['id']
         report['goal_before'] = reader.goal(report['native_thread'])
-        assert report['goal_before']['status']=='active'
+        assert report['goal_before']['status']==('complete' if retained else 'active')
         save()
         # Disconnect only this owned synthetic consumer, not the native daemon.
         j.stop()
@@ -91,7 +116,7 @@ def qualify(args):
         # notifications are deliberately absent. Poll readiness via the actual
         # admitted control response rather than a nonexistent notification.
         checkpoint = len(j.messages)
-        await_effect(lambda: socket.exists(), 'candidate owner-local control socket')
+        j.wait_control_socket(socket)
         response = subprocess.run([j.binary, '--control', str(j.config), 'attach-active', '100', '7', report['native_thread'], report['native_turn']], capture_output=True, text=True, timeout=35)
         assert response.returncode == 0, (response.stdout, response.stderr)
         report['attachment_receipt'] = json.loads(response.stdout)
@@ -105,9 +130,9 @@ def qualify(args):
         assert after_goal['tokensUsed'] >= report['goal_before']['tokensUsed'], 'Accounting must not reset'
         report['adopted_without_duplicate_turn'] = True
         save()
-        (args.state/'handoff-release').touch()
-        await_effect(lambda: (args.state/'handoff-finished').exists(), 'original native command completion')
-        await_effect(lambda: any('HANDOFF-COMPLETED' in m['text'] for m,_ in j.messages[checkpoint:]), 'candidate delivered original native answer')
+        (args.state/(marker+'-release')).touch()
+        await_effect(lambda: (args.state/(marker+'-finished')).exists(), 'original native command completion')
+        await_effect(lambda: any(('COLLECTOR-VERIFIED DONE' if retained else 'HANDOFF-COMPLETED') in m['text'] for m,_ in j.messages[checkpoint:]), 'candidate delivered original native answer')
         j.idle()
         report['goal_after'] = reader.goal(report['native_thread'])
         assert report['goal_after']['status']=='complete'
@@ -117,6 +142,11 @@ def qualify(args):
         # Native goals may legitimately continue in another physical turn;
         # that is distinct from replaying a human kickoff at adoption.
         report['retained_original_ingress'] = j.row('SELECT status FROM incoming_updates WHERE update_id=?',(update,))
+        if retained:
+            assert (args.state/'handoff-finished').read_bytes()==prior_artifact
+            assert j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=7')==[(prior['native_thread'],)]
+            report['prior_artifact_unchanged']=True
+            report['same_native_binding']=True
         report['success'] = True
     except Exception as error:
         report['failure'] = repr(error)
@@ -124,7 +154,7 @@ def qualify(args):
     finally:
         # Release the finite test command even if verification failed. Do not
         # replay, pause or interrupt a goal to make the report green.
-        (args.state/'handoff-release').touch()
+        (args.state/(marker+'-release')).touch()
         if 'native_thread' in report:
             try:
                 report['last_native_status'] = native().get('status')
@@ -146,6 +176,7 @@ if __name__ == '__main__':
     p.add_argument('--state', type=pathlib.Path, required=True)
     p.add_argument('--codex', required=True)
     p.add_argument('--native-home', required=True)
+    p.add_argument('--verify-retained', action='store_true', help='Distinct read-only verification of an already completed retained fixture; never repeat the original goal or task')
     p.add_argument('--run-native', action='store_true')
     args = p.parse_args()
     if not args.run_native:
