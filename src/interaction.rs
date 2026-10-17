@@ -95,7 +95,9 @@ impl InteractionConfig {
 /// Quoted text, code blocks and incidental mentions remain ordinary content.
 pub fn explicit_selector(text: &str) -> Option<(&str, &str)> {
     let text = text.trim_start();
-    let selected = text.strip_prefix('#')?;
+    let selected = text
+        .strip_prefix("/self#")
+        .or_else(|| text.strip_prefix('#'))?;
     let end = selected.find(char::is_whitespace).unwrap_or(selected.len());
     let selector = &selected[..end];
     if selector.is_empty()
@@ -261,11 +263,18 @@ mod tests {
             Some(("Nexus", "Continue"))
         );
         assert_eq!(explicit_selector("#t42"), Some(("t42", "")));
+        assert_eq!(
+            explicit_selector("/self#Nexus Continue"),
+            Some(("Nexus", "Continue"))
+        );
+        assert_eq!(explicit_selector("/self#t42"), Some(("t42", "")));
         for text in [
             "> #Other do work",
             "```\n#Other\n```",
             "\"#Other do work\"",
             "Discuss #Other",
+            "Discuss /self#Other",
+            "> /self#Other do work",
             "#",
         ] {
             assert_eq!(explicit_selector(text), None);

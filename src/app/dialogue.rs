@@ -44,6 +44,9 @@ pub(super) fn tool_call(
     mut request: crate::codex::DynamicToolRequest,
     closed: CancellationToken,
 ) -> oneshot::Receiver<Value> {
+    if request.tool == "interaction_controller" && super::routing::enrolled(&app.shared, key) {
+        return super::session_requests::tool_call(app, key, human, request, closed);
+    }
     if request.tool == "interaction_controller" && request.arguments.to_string().len() <= 16000 {
         if let Ok(args) = serde_json::from_value::<ControllerArgs>(request.arguments.clone()) {
             request.tool = match args.operation.as_str() {

@@ -474,3 +474,56 @@ FIFO for waiting acquisitions. A native turn keeps its permit until its local
 execution finishes, including native goal/tool waits; this is not preemptive
 round-robin scheduling. Higher-load provider costs and attention policy still
 require their selected live qualification.
+
+## Attributed requests between local work sessions
+
+A selected enrolled worker can use the stable `interaction_controller` envelope
+with its own role-specific capabilities. `inputs` identifies accepted inputs in
+that actual native execution. `session_request` selects an original human parent,
+a stable caller request ID, one existing unambiguous topic and at most 16,000
+bytes of session-authored text. It does not copy a transcript or create a topic.
+`session_requests` inspects the latest sixteen retained dependencies.
+
+A local dependency is a single level: another session's request or result cannot
+serve as a human parent. An accepted original human instruction can authorize at
+most four dependencies. Self-addressing is rejected. Reusing a request ID retains
+the same bytes, target and outcome; changing the ID to hide uncertain submission
+is not recovery. Native acceptance and worker-declared coverage remain distinct
+from observed incorporation. Existing explicit controls and known-unsent recovery
+use the same instruction journals as human routing.
+
+Admission is nonblocking. A caller can continue independent work or finish its
+turn with a dependency deferred; it must not poll or wait in a tool loop. The
+helper's first current, worker-declared completed canonical result reserves one
+context input to the original logical caller. An active caller receives it through
+steer; a caller that finished can receive a new native turn through the existing
+worker queue and capacity limit. The helper result is attributed evidence, not a
+new human instruction. Original request and return references survive logical
+session renewal, while the original native executions stay in provenance.
+
+A scoped caller interruption or goal pause/clear withdraws future continuations
+and the existing accepted parent grants. It does not undo already accepted helper
+work or erase its canonical answer. Retired input generations cannot authorize a
+new request or return. Queued withdrawn context remains known unsent; in-flight
+uncertainty is not relabeled as cancellation. Existing completed returns remain
+historical evidence.
+
+If a process stops after saving a helper answer but before reserving its return,
+`session_receive` can explicitly select that retained local request ID. It uses
+the existing canonical result and reserves the missing context once, without
+running the helper again. Already reserved or uncertain returns are inspected;
+they are not automatically replayed. Other known-unsent input recovery remains
+explicit. This adapter installs no polling or background model attention.
+
+`/self#Name` is a local conversation selector equivalent to `#Name` at the start
+of a human message; it is not a Matrix scope or an alias for `/we` or `/tribe`.
+Quoted or incidental selectors do not dispatch. Duplicate names require selection
+of the stable `t<topic_id>`; a native renewal does not silently choose a different
+logical conversation. A worker may use the same local spelling in its structured
+selected destination. This grants no cross-body routing.
+
+Native tools persist at thread creation. Newly created enrolled workers advertise
+the controller; existing native threads without that registration are not silently
+replaced. Runtime and real receiving qualification remain distinct from synthetic
+process tests. No live deployment or general twenty-model throughput follows from
+this source implementation.
