@@ -64,7 +64,7 @@ window.RequestControls = (() => {
       }
       if (observed < card.observed && !terminal(value)) return false;
       if (card.closed && !terminal(value)) return false;
-      if (!terminal(value) && (value.question_index ?? 0) < (card.meta?.question_index ?? 0)) return false;
+      if (value.state === "pending" && (value.question_index ?? 0) < (card.meta?.question_index ?? 0)) return false;
       card.observed = Math.max(card.observed, observed);
       if (card.meta && card.meta.revision !== value.revision) {
         card.reviewRequired = card.reviewRequired || card.expanded;

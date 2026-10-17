@@ -96,6 +96,10 @@ function boot(count=1) {
   assert(draft.all(dc,v=>v.textContent==='Draft for the original question').length,'Changed questions retain the unsent draft');
   await draft.read(dc);assert.equal(draft.button(dc,'Selected scope').disabled,false);
 
+  source.state='answering';source.actionable=false;source.revision='recorded-fallback';delete source.question_index;
+  await draft.ui.refresh();
+  assert(draft.all(dc,v=>v.textContent==='Response recorded. Work may continue.').length,'Recorded fallback closes question progression without an index');
+  assert(draft.button(dc,'Selected scope')?.disabled ?? true,'Recorded second question cannot remain actionable');
   source.state='expired';source.actionable=false;source.revision='expired-fallback';delete source.question_index;
   await draft.ui.refresh();
   assert(!draft.button(dc,'Dismiss').hidden,'Terminal fallback without a question index closes the second question');
