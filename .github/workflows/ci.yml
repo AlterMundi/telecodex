@@ -119,6 +119,7 @@ jobs:
       - run: python3 -B tests/pending_io.py target/release/telecodex
       - run: python3 -B tests/merge_io.py target/release/telecodex
       - run: python3 -B tests/stopping_io.py target/release/telecodex
+      - run: python3 -B tests/attachment_io.py target/release/telecodex
       - run: python3 -B tests/goals_io.py target/release/telecodex
       - run: python3 -B tests/nexus_io.py target/release/telecodex
       - run: python3 -B tests/nexus_context_io.py target/release/telecodex

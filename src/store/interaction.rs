@@ -297,6 +297,56 @@ impl Store {
         .transpose()
     }
 
+    /// Reuse an immutable accepted routed execution when its exact physical
+    /// writer is collected by a successor. Never migrate or re-accept input.
+    pub fn interaction_attachment_execution(
+        &self,
+        key: SessionKey,
+        human: i64,
+        native: &str,
+        physical: &str,
+    ) -> Result<Option<(i64, Option<String>)>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut query=conn.prepare("SELECT DISTINCT t.id FROM interaction_instructions i
+            JOIN interaction_sources o ON o.id=i.input_id
+            JOIN sessions s ON s.id=i.session_id
+            JOIN turns t ON t.id=json_extract(i.doc,'$.local_turn') AND t.session_id=s.id
+            JOIN users u ON u.tg_user_id=s.creator_user_id
+            WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1
+            AND o.human_id=?3 AND t.from_user_id=?3 AND t.native_thread_id=?4
+            AND s.codex_thread_id=?4 AND s.force_fresh_thread=0 AND i.phase='accepted'
+            AND json_extract(i.doc,'$.native_thread')=?4 AND json_extract(i.doc,'$.native_turn')=?5")?;
+        let ids = query
+            .query_map(
+                params![key.chat_id, key.thread_id, human, native, physical],
+                |r| r.get::<_, i64>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if ids.len() > 1 {
+            return Err(anyhow!(
+                "Native writer has ambiguous retained local executions"
+            ));
+        }
+        let Some(local) = ids.first().copied() else {
+            return Ok(None);
+        };
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM bot_state WHERE key=?1",
+                [format!("execution_root:{local}")],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let root:Option<String>=serde_json::from_str(&raw.context("Original execution presentation mode unavailable; inspect retained result without replay")?)?;
+        if let Some(root) = &root {
+            let valid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_instructions i JOIN interaction_sources o ON o.id=i.input_id WHERE i.id=?1 AND i.phase='accepted' AND o.human_id=?2 AND json_extract(i.doc,'$.local_turn')=?3)",params![root,human,local],|r|r.get(0))?;
+            if !valid {
+                return Err(anyhow!("Original routed execution root changed"));
+            }
+        }
+        Ok(Some((local, root)))
+    }
+
     /// Instructions associated with this actual owner execution, including
     /// routed input attached after a native goal/merge/Nexus launch.
     pub fn interaction_turn_inputs(

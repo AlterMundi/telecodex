@@ -36,6 +36,8 @@ pub struct GoalActivation {
     pub expected: Option<NativeGoal>,
     pub objective: Option<String>,
     pub replace: bool,
+    /// Collector-only attachment: never start a turn or mutate goal metadata.
+    pub attach_turn: Option<String>,
 }
 
 pub(super) fn parse_goal(response: &Value, thread_id: &str) -> Result<Option<NativeGoal>> {
@@ -135,7 +137,7 @@ pub struct GoalStopSnapshot {
 }
 #[derive(Debug, Clone)]
 pub enum GoalControl {
-    Activate(GoalActivation),
+    Activate(Box<GoalActivation>),
     Pause,
     Stop(Arc<std::sync::Mutex<GoalStopSnapshot>>),
     Clear,

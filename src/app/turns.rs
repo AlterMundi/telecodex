@@ -73,7 +73,26 @@ pub(super) async fn process_turn(
     // Additional routed inputs stay queued until the worker is actually admitted.
     let cancel = CancellationToken::new();
     *cancel_slot.lock().expect("cancel mutex poisoned") = Some(cancel.clone());
-    let _worker_lease = if registration.is_some() {
+    let attaching = queued
+        .goal
+        .as_ref()
+        .is_some_and(|g| g.attach_turn.is_some());
+    if let Some(g) = queued.goal.as_ref().filter(|g| g.attach_turn.is_some()) {
+        shared.store.validate_owned_binding(
+            queued.request.session_key,
+            queued.request.from_user_id,
+            g.native_thread
+                .as_deref()
+                .context("Attachment native binding missing")?,
+        )?;
+    }
+    let _worker_lease = if registration.is_some() && attaching {
+        Some(
+            shared
+                .worker_budget
+                .observe_existing(queued.request.session_key)?,
+        )
+    } else if registration.is_some() {
         match shared
             .worker_budget
             .acquire(queued.request.session_key, &cancel)
@@ -177,9 +196,33 @@ pub(super) async fn process_turn(
         shared.store.tribu_check_thread(&session)?;
     }
     shared.store.set_session_busy(session.key, true)?;
-    let turn_id = shared
-        .store
-        .record_turn_started(session.id, &queued.request)?;
+    let retained_execution =
+        if let Some(g) = queued.goal.as_ref().filter(|g| g.attach_turn.is_some()) {
+            shared.store.interaction_attachment_execution(
+                session.key,
+                queued.request.from_user_id,
+                g.native_thread
+                    .as_deref()
+                    .context("Attachment native binding missing")?,
+                g.attach_turn
+                    .as_deref()
+                    .context("Attachment physical turn missing")?,
+            )?
+        } else {
+            None
+        };
+    let execution_root = retained_execution
+        .as_ref()
+        .and_then(|(_, root)| root.clone())
+        .or_else(|| queued.interaction.clone());
+    let turn_id = match retained_execution {
+        Some((local, _)) => local,
+        None => shared.store.record_turn_started_mode(
+            session.id,
+            &queued.request,
+            queued.interaction.as_deref(),
+        )?,
+    };
     if let Some(id) = queued.nexus.as_deref() {
         shared.store.nexus_link(id, turn_id)?;
     }
@@ -238,7 +281,7 @@ pub(super) async fn process_turn(
     let placeholder_text = render_placeholder_html(thinking_text, turn_banner.as_deref());
     let thread_id = Some(session.key.thread_id).filter(|value| *value != 0);
     let draft_id = turn_id;
-    let routed = queued.interaction.is_some();
+    let routed = execution_root.is_some();
     let sink = if routed || !shared.config.telegram.show_unfinished_messages {
         Arc::new(Mutex::new(LiveTurnSink::new_preview(
             shared.clone(),
@@ -441,31 +484,39 @@ pub(super) async fn process_turn(
                 let stop_resume=queued.stop_resume.clone();
                 let admission_epoch=queued.admission_epoch.clone();
                 let interaction=queued.interaction.clone();
+                let result_root=execution_root.clone();
+                let attach_native=queued.goal.as_ref().filter(|g|g.attach_turn.is_some()).and_then(|g|g.native_thread.clone());
                 let routing_app=app.clone();
                 let presentation_tx=presentation_tx.clone();
                 move |event| {
                     let sink = sink.clone();
                     let shared = shared.clone();
                     let cancel = approval_cancel.clone();
+                    let attach_native=attach_native.clone();
                     let admission=admission.clone();
                     let physical_turn=physical_turn.clone();
                     let stop_resume=stop_resume.clone();
                     let admission_epoch=admission_epoch.clone();
                     let interaction=interaction.clone();
+                    let result_root=result_root.clone();
                     let routing_app=routing_app.clone();
                     let presentation_tx=presentation_tx.clone();
                     async move {
                         match event {
                             CodexEvent::ThreadStarted(thread_id) => {
+                                if let Some(native)=attach_native.as_deref() {
+                                    if native!=thread_id {bail!("Attachment returned a different native thread");}
+                                    shared.store.validate_owned_binding(session_key,requester_user_id,native)?;
+                                }
                                 shared.store.merge_thread(turn_id,&thread_id)?;
                                 super::nexus::thread(&shared,turn_id,&thread_id)?;
                                 if let Some(id)=admission.as_deref() {shared.store.tribu_native_thread(session_key,id,&thread_id)?;}
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
-                                if preserve_thread_binding {
+                                if preserve_thread_binding && attach_native.is_none() {
                                     shared
                                         .store
                                         .set_session_codex_thread(session_key, &thread_id)?;
-                                    if interaction.is_none() && super::rename::sync_native_title(&shared, session_key).await.is_err() {
+                                    if !routed && super::rename::sync_native_title(&shared, session_key).await.is_err() {
                                         let _ = send_markdown_message(
                                             &shared.telegram,
                                             session_key.chat_id,
@@ -475,7 +526,7 @@ pub(super) async fn process_turn(
                                         ).await;
                                     }
                                 }
-                                if interaction.is_none() {
+                                if !routed {
                                     if let Some(tx)=&presentation_tx {retain_presentation_gap(&shared,turn_id,tx.try_send(CodexEvent::ThreadStarted(thread_id)).is_err())?;}
                                     else {sink.lock().await.handle_event(CodexEvent::ThreadStarted(thread_id)).await?;}
                                 }
@@ -532,9 +583,9 @@ pub(super) async fn process_turn(
                             }
                             CodexEvent::NativeMessageCompleted { thread_id, turn_id: native_turn, item_id, phase, text } => {
                                 let inputs=shared.store.interaction_turn_inputs(turn_id,requester_user_id)?;
-                                let root=interaction.as_deref().or_else(||inputs.first().map(|i|i.id.as_str()));
+                                let root=result_root.as_deref().or_else(||inputs.first().map(|i|i.id.as_str()));
                                 if phase.as_deref()==Some("final_answer") && let Some(id)=root {
-                                    super::routing::result(routing_app.clone(),id,requester_user_id,turn_id,&thread_id,&native_turn,&item_id,&text,interaction.is_some())?;
+                                    super::routing::result(routing_app.clone(),id,requester_user_id,turn_id,&thread_id,&native_turn,&item_id,&text,result_root.is_some())?;
                                 } else {
                                     shared.store.record_native_message(turn_id, &thread_id, &native_turn, &item_id, phase.as_deref(), &text)?;
                                 }
@@ -545,7 +596,7 @@ pub(super) async fn process_turn(
                                 if !shared.store.nexus_local_requests(turn_id)?.is_empty() {
                                     if let Some(native)=physical_turn.lock().expect("native correlation mutex poisoned").as_deref() {shared.store.nexus_final(turn_id,native,&text)?;}
                                 }
-                                if interaction.is_none(){
+                                if !routed{
                                     let inputs=shared.store.interaction_turn_inputs(turn_id,requester_user_id)?;
                                     let text=if inputs.is_empty() { text } else {
                                         let (body,_)=crate::interaction::worker_result(&text);
@@ -557,6 +608,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnStarted(native_id) => {
+                                if let Some(native)=attach_native.as_deref() {shared.store.record_collector_attachment(turn_id,session_key,requester_user_id,native,&native_id)?;}
                                 super::routing::native_started(&routing_app,session_key,turn_id,&native_id)?;
                                 *physical_turn.lock().expect("native correlation mutex poisoned")=Some(native_id.clone());
                                 if !shared.store.nexus_local_requests(turn_id)?.is_empty() { shared.store.nexus_native_started(turn_id,&native_id)?; }
@@ -564,6 +616,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnSubmitting => {
+                                if let Some(native)=attach_native.as_deref() {shared.store.validate_owned_binding(session_key,requester_user_id,native)?;}
                                 if let Some(id)=interaction.as_deref() {
                                     let instruction=shared.store.interaction_instruction(id,requester_user_id)?.context("Interaction input missing before submission")?;
                                     if !super::routing::dispatch_allowed(&shared,&instruction)? {bail!("Interaction admission retired before native submission; input retained");}
@@ -628,7 +681,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             other => {
-                                if interaction.is_none(){
+                                if !routed{
                                     if let Some(tx)=&presentation_tx {retain_presentation_gap(&shared,turn_id,tx.try_send(other).is_err())?;}
                                     else {sink.lock().await.handle_event(other).await?;}
                                 }
