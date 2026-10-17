@@ -284,15 +284,43 @@ mode, source or revision.
 
 The stable `interaction_controller` envelope discovers two operations:
 
-- `question_context` takes one contextual `input_ref` UUID and an optional
-  character `offset`. It reads the current owned question and says whether its
-  revision still matches the reported context. It makes no decision.
-- `answer_question` takes only that original UUID, without model-authored text
-  or a new question selector. When the actual utterance clearly answers the
-  reported question, it atomically commits the retained original text or
-  attributed transcript to that exact still-current native question. A changed
-  question, closed interpretation, retired binding, dispatched original or
-  reserved creation refuses the answer. An identical retry reads the receipt.
+- `questions` takes an original `input_ref` UUID and an optional `after` cursor.
+  It pages through owned pending native questions, excluding approvals. Each
+  item reports whether its exact version was present when that original was
+  captured. Inspection does not select an answer or a destination.
+- `question_context` takes an original UUID, an optional explicit
+  `question: {id, revision}` from that catalog, and a character `offset`. Without
+  an explicit selector it reads the question reported by contextual metadata.
+  It exposes the full bounded proposal, `matches_current` and
+  `available_at_capture`; these are evidence for interpretation.
+- `answer_question` takes that original UUID and an optional explicit question
+  selector. It never accepts model-authored answer text. Without a selector, it
+  preserves the frozen contextual-question contract. With an explicit selector,
+  the controller atomically requires that exact owned question version existed
+  at capture and remains current. The answer uses only the retained human text
+  or attributed transcript. A reported playback context may point elsewhere; it
+  remains immutable context, not a destination or a veto on a clear new intent.
+
+New originals retain bounded opaque versions of up to 128 current canonical
+questions in the same capture transaction, before ASR. Bodies are not copied
+into originals. The native input envelope reports how many question versions
+were retained and prompts current catalogue inspection when the utterance could
+answer work; it does not force an answer or claim hearing. Versions bind the current proposal (including options), question
+index and owned native scope, rather than a presentation timestamp. Reopening
+unchanged controls does not invalidate an original; even an identically worded
+next step is a different question version. An advanced question, including the next part of the same native
+request, or one created after capture cannot consume an older original through
+explicit selection. Other questions advancing do not invalidate an unchanged
+question. Older originals without that capture evidence remain readable and
+keep their existing frozen-context behavior; explicit selection cannot invent
+a missing snapshot. Approval actions remain outside semantic answering.
+
+The current owner, entry/native binding, admission epochs, live responder and
+interpretation, question revision and original consumption are rechecked at
+commit. An original already routed or reserved for creation cannot also answer,
+and a consumed answer cannot later dispatch. The existing decision journal
+retains the exact original reference and actual selected question, including for
+unhinted text. Identical retries inspect that receipt without answering again.
 
 The integrating model decides whether to answer, discuss ambiguity or use its
 existing routing/creation tools. A result being played must not force a later
@@ -355,3 +383,11 @@ The twenty-input native/controller regression routes the oldest exact original
 after it falls outside that list, including preparation-time coalescing or
 steering. Metadata does not enter the human original or worker task text.
 The fixture uses synthetic native peers and zero inference.
+
+The unhinted-question native HTTP/SQLite regression covers independent questions,
+explicit interpretation despite another playback hint, unchanged native control
+reopening, identical-text next steps, late ASR, old originals without snapshots,
+approval exclusion, dispatch/creation exclusivity, exact answers and receipts
+after restart. Native/ASR peers are synthetic and no model inference or physical
+sensors are used; real interpretation quality is separate. Existing direct
+question-answer and finalized-voice journeys also pass this source.

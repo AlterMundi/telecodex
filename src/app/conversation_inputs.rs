@@ -38,17 +38,13 @@ fn response(app: &App, input: &ConversationInput, fresh: bool) -> Result<Value> 
             .conversation_request_binding(input.human, input.entry)?["binding"]
             .clone();
     }
-    if let Some(reply) = &input.reply
-        && let Some(id) = reply.source.strip_prefix("request:")
-    {
-        let decision = app.shared.store.conversation_decision_receipt(
-            input.human,
-            input.entry,
-            id,
-            &reply.revision,
-        )?;
-        if let Some(doc) = decision.filter(|doc| doc["source_input"] == input.id) {
-            value["decision"] = json!({"id":id,"revision":reply.revision,"recorded":true,"source_input":input.id,"recorded_at":doc["recorded_at"],"native_incorporation":"Not established by recording an answer"});
+    if input.phase == "answered" {
+        if let Some(doc) =
+            app.shared
+                .store
+                .conversation_answer_receipt(input.human, input.entry, &input.id)?
+        {
+            value["decision"] = json!({"id":doc["id"],"revision":doc["revision"],"recorded":true,"source_input":input.id,"recorded_at":doc["recorded_at"],"native_incorporation":"Not established by recording an answer"});
         }
     }
     value["continuation"] = json!(app.shared.store.conversation_continuation(
