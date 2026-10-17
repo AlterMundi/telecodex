@@ -80,6 +80,7 @@ impl Drop for CodexHomeGuard {
 
 fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
     Config {
+        interaction: None,
         nexus: None,
         session_control: None,
         tribu: None,
