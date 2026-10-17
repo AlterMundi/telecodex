@@ -14,7 +14,8 @@ struct Submit {
 
 fn outcome(input: &ConversationInput, fresh: bool) -> Value {
     json!({"schema":"telecodex.conversation-input/v1","id":input.id,"phase":input.phase,
-        "new_input":fresh,"retired":input.retired,"native_acceptance":if input.phase=="accepted" {"observed"}else{"unconfirmed"},
+        "new_input":fresh,"retired":input.retired,"text":input.text,
+        "entry_binding":[input.human,input.entry,input.session,input.native],"native_acceptance":if input.phase=="accepted" {"observed"}else{"unconfirmed"},
         "incorporation":"Not established by input retention or native acceptance"})
 }
 
@@ -28,6 +29,23 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     if cfg.human_id != human {
         bail!("Conversation input owner mismatch");
     }
+    if let Some(page) = args.strip_prefix("list ") {
+        let parts: Vec<_> = page.split_whitespace().collect();
+        if parts.is_empty()
+            || parts.len() > 2
+            || parts
+                .get(1)
+                .is_some_and(|value| !matches!(*value, "before" | "after"))
+        {
+            bail!("Expected input list CURSOR [before|after]");
+        }
+        return app.shared.store.conversation_input_page(
+            human,
+            cfg.entry(),
+            parts[0].parse()?,
+            parts.get(1) != Some(&"after"),
+        );
+    }
     if let Some(id) = args.strip_prefix("status ") {
         return Ok(outcome(
             &app.shared
@@ -38,7 +56,7 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     }
     let request: Submit = serde_json::from_str(
         args.strip_prefix("submit ")
-            .context("Expected input submit JSON or status UUID")?,
+            .context("Expected input submit JSON, status UUID or list cursor")?,
     )?;
     // Preserve capture/handoff order for this configured integrating entry. The
     // lock is released before native acknowledgments, so later steering proceeds.

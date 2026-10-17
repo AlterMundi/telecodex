@@ -132,10 +132,11 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             if request.headers.get('origin') not in allowed:
                 return JSONResponse({'detail': 'Wrong request origin'}, status_code=403)
             # Bound chunked bodies as well as Content-Length before parsing them.
+            bound = 262144 if request.url.path == '/api/interaction/inputs' else 16384
             data = bytearray()
             async for chunk in request.stream():
                 data.extend(chunk)
-                if len(data) > 16384:
+                if len(data) > bound:
                     return JSONResponse({'detail': 'Request too large'}, status_code=413)
             request._body = bytes(data)
         response = await call_next(request)
@@ -265,6 +266,48 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(503, 'Integrating conversation unavailable; refresh before continuing') from None
         authorize(request)
         return {**result, 'csrf':session['csrf'], 'can_listen':speech is not None}
+
+    @app.get('/api/interaction/inputs')
+    async def conversation_inputs(request: Request, before: int = 0, direction: str = 'before'):
+        session = authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_inputs, before, direction)
+        except ValueError:
+            raise HTTPException(400, 'Invalid input history cursor') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Message history unavailable; refresh to reconnect') from None
+        authorize(request)
+        return {**result, 'csrf':session['csrf']}
+
+    @app.get('/api/interaction/inputs/{ident}')
+    async def conversation_input_status(request: Request, ident: str):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_input_status, ident)
+        except ValueError:
+            raise HTTPException(400, 'Invalid message identity') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Message status unconfirmed; check again without resending') from None
+        authorize(request)
+        return result
+
+    @app.post('/api/interaction/inputs')
+    async def conversation_input_submit(request: Request):
+        session = authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        try:
+            body = await request.json()
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_input_submit, body)
+        except (ValueError, UnicodeError):
+            raise HTTPException(400, 'Provide one original message of at most 32 KiB') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Submission unconfirmed. Check this message status before sending it again') from None
+        authorize(request)
+        return result
 
     @app.get('/api/interaction/part')
     async def interaction_part(request: Request, source: str, revision: str, offset: int = 0):

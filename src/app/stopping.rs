@@ -607,7 +607,7 @@ pub(super) async fn start_control_socket(app: App) -> Result<()> {
             tokio::spawn(async move {
                 let _permit = permit;
                 let (read, mut write) = stream.into_split();
-                let mut reader = BufReader::new(read.take(65537));
+                let mut reader = BufReader::new(read.take(262145));
                 let mut raw = Vec::new();
                 let reply = match tokio::time::timeout(
                     Duration::from_secs(5),
@@ -615,7 +615,7 @@ pub(super) async fn start_control_socket(app: App) -> Result<()> {
                 )
                 .await
                 {
-                    Ok(Ok(n)) if n > 0 && n <= 65536 => {
+                    Ok(Ok(n)) if n > 0 && n <= 262144 => {
                         match serde_json::from_slice::<Value>(&raw) {
                             Ok(v) => match command(
                                 &app,
@@ -634,7 +634,7 @@ pub(super) async fn start_control_socket(app: App) -> Result<()> {
                     _ => json!({"ok":false,"error":"Control request unavailable or oversized"}),
                 };
                 let mut bytes = serde_json::to_vec(&reply).unwrap_or_default();
-                if bytes.len() > 65535 {
+                if bytes.len() > 262143 {
                     bytes = br#"{"ok":false,"error":"Control response exceeds receiving bound"}"#
                         .to_vec();
                 }

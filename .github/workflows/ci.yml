@@ -140,6 +140,11 @@ jobs:
                   failed |= result.returncode != 0
           sys.exit(1 if failed else 0)
           PYTHON
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - run: python3 -m pip install -r dashboard/requirements.lock
+      - run: python3 -B tests/conversation_http_io.py target/release/telecodex
       - run: python3 -B tests/artifacts_io.py target/release/telecodex
       - name: Qualify isolated interaction journeys
         run: |

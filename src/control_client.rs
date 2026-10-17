@@ -29,10 +29,10 @@ pub async fn run(config: &crate::config::Config, command: &str) -> Result<()> {
         request.push(b'\n');
         stream.write_all(&request).await?;
         let mut bytes = Vec::new();
-        BufReader::new(stream.take(65537))
+        BufReader::new(stream.take(262145))
             .read_until(b'\n', &mut bytes)
             .await?;
-        if bytes.len() > 65536 {
+        if bytes.len() > 262144 {
             bail!("Control reply exceeds bound");
         }
         let reply: serde_json::Value = serde_json::from_slice(&bytes)?;
