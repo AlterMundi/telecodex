@@ -78,7 +78,11 @@ def qualify(args):
         j.stop()
         disconnected = native()
         assert any(t['id']==report['native_turn'] and t['status']=='inProgress' for t in disconnected['turns'])
-        assert reader.goal(report['native_thread']) == report['goal_before']
+        disconnected_goal=reader.goal(report['native_thread'])
+        for key in ('objective','status','tokenBudget','createdAt'):
+            assert disconnected_goal[key]==report['goal_before'][key], key
+        for key in ('tokensUsed','timeUsedSeconds'):
+            assert disconnected_goal[key]>=report['goal_before'][key], key
         report['active_writer_survived_disconnect'] = True
         save()
         j.binary = str(candidate_snapshot.resolve())
