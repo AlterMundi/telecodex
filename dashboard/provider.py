@@ -186,10 +186,26 @@ class Provider:
 
     def presentation_part(self, source, revision, offset):
         import re
-        if (not isinstance(source, str) or not re.fullmatch(r'(?:delivery:[a-f0-9-]{36}|native:[1-9][0-9]{0,18})', source)
+        if (not isinstance(source, str) or not re.fullmatch(r'(?:delivery:[a-f0-9-]{36}|native:[1-9][0-9]{0,18}|request:[a-f0-9]{32})', source)
                 or not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{64}', revision)
                 or type(offset) is not int or not 0 <= offset <= 10**9):
             raise ValueError('Invalid presentation selection')
+        if source.startswith('request:'):
+            view = self.conversation_request_detail(source[8:], offset, revision)
+            if (view.get('revision') != revision or view.get('offset') != offset
+                    or view.get('kind') != 'question' or view.get('actionable') is not True):
+                raise ProviderUnavailable('Selected question is no longer current')
+            body = view['body']
+            text = body[:1500]
+            if not text.strip():
+                raise ProviderUnavailable('Selected question has no spoken text')
+            next_offset = offset + len(text) if len(body) > len(text) else view['next_offset']
+            if offset == 0:
+                text = str(view.get('label') or 'Conversation')[:200] + '. ' + text
+            return {'schema':'telecodex.presentation-part/v1', 'id':source,
+                'revision':revision, 'kind':'native_question', 'entry_binding':view['entry_binding'],
+                'text':text, 'offset':offset, 'next_offset':next_offset,
+                'current':True, 'playback':'not_observed'}
         return self.presentation(f'presentation part {source} {revision} {offset}')
 
     @staticmethod

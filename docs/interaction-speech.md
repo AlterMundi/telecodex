@@ -171,9 +171,25 @@ validated again before playback. A changed source requires a new selection.
 
 Complete audio remains in the private server cache for an authorized reconnect;
 browser audio URLs are temporary and released on Stop/page exit. No browser
-playback state is a durable hearing receipt. This view does not yet capture
-microphone input or submit new text; the existing Telegram entry remains the
-original-input route until typed browser ingress is implemented.
+playback state is a durable hearing receipt. The same view supports original
+[typed input](interaction-input.md) and finalized microphone clips through the
+existing input journal; playback never creates either input on its own.
+
+Pending native questions also support **Listen to question** when speech is
+configured. The dashboard resolves `request:ID` through the existing owned
+request-detail command, selecting its exact current revision. It reads the full
+question and option descriptions in parts of at most 1,500 Unicode characters,
+with a bounded session label on the first part. Approval requests and closed or
+changed questions are excluded. This adapter reuses the same authenticated part,
+synthesis, cache and playback paths; it does not add a native presentation verb.
+
+After the final audio part ends, the browser checks that question again and
+selects its exact reply reference for the existing composer and Talk button.
+Stop, hidden views, question advancement and a later human focus selection prevent
+that completion from replacing the current reply focus. Listening and selecting
+focus submit no answer. A subsequent original text or finalized voice input uses
+the existing native-question answer path; serving audio is no evidence that the
+human heard or understood it. Browsers may still require an explicit Play gesture.
 
 `node tests/conversation_ui.js` runs the shipped state machine against synthetic
 DOM/network, including more than forty new replies, arrivals during metadata

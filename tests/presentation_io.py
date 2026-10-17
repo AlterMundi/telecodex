@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import speech_render as fixtures
 from fastapi.testclient import TestClient
 from dashboard.app import create_app
-from dashboard.provider import ProviderUnavailable
+from dashboard.provider import Provider, ProviderUnavailable
 
 
 class Receiver:
@@ -20,6 +20,7 @@ class Receiver:
         self.allowed = True
         self.changed = False
         self.parts = 0
+        self.question = None
         self.source = {'schema':'telecodex.presentation-part/v1',
             'id':'delivery:11111111-1111-1111-1111-111111111111', 'revision':'a'*64,
             'kind':'worker_result', 'entry_binding':[100, {'chat_id':100,'thread_id':1},1,'entry-native'],
@@ -34,9 +35,22 @@ class Receiver:
         return {'schema':'telecodex.presentation-list/v1','items':[result]}
     def presentation_part(self, source, revision, offset):
         self.parts += 1
+        if source.startswith('request:'):
+            return Provider.presentation_part(self, source, revision, offset)
         if self.changed or source != self.source['id'] or revision != self.source['revision'] or offset != 0:
             raise ProviderUnavailable('Source changed')
         return copy.deepcopy(self.source)
+
+    def conversation_request_detail(self, ident, offset, revision):
+        view = copy.deepcopy(self.question)
+        if not view or ident != view['id'] or revision != view['revision'] or self.changed:
+            raise ProviderUnavailable('Question changed')
+        body = view['body']
+        if offset > len(body):
+            raise ValueError('Invalid question offset')
+        view.update(body=body[offset:offset+4000], offset=offset,
+                    next_offset=offset+4000 if offset+4000 < len(body) else None)
+        return view
 
 
 class Presentation(unittest.TestCase):
@@ -117,6 +131,61 @@ class Presentation(unittest.TestCase):
             response=pending.result(timeout=8)
         self.assertEqual(response.status_code,401)
         self.assertNotEqual(response.content,self.fixture.data)
+        self.assertEqual(len(self.fixture.calls),1)
+
+    def question(self):
+        self.provider.question = {'id':'b'*32, 'revision':'c'*64, 'kind':'question',
+            'actionable':True, 'label':'#Alfa', 'entry_binding':self.provider.source['entry_binding'],
+            'body':'¿Qué opción elegís? 🦉\n' * 230}
+        self.body = {'source':'request:'+'b'*32, 'revision':'c'*64, 'offset':0}
+
+    def test_question_parts_reconstruct_all_unicode_and_use_existing_audio_cache(self):
+        self.question()
+        self.login()
+        offset = 0
+        parts = []
+        while offset is not None:
+            selected = {**self.body,'offset':offset}
+            response = self.client.get('/api/interaction/part',params=selected,headers=self.headers)
+            self.assertEqual(response.status_code,200,response.text)
+            part = response.json()
+            self.assertEqual(part['kind'],'native_question')
+            self.assertEqual(part['playback'],'not_observed')
+            self.assertLessEqual(len(part['text']),1702)
+            parts.append(part['text'][len('#Alfa. '):] if offset==0 else part['text'])
+            audio = self.audio(selected)
+            self.assertEqual(audio.status_code,200,audio.text)
+            self.assertEqual(audio.headers['x-presentation-source'],selected['source'])
+            self.assertEqual(audio.headers['x-presentation-offset'],str(offset))
+            self.assertEqual(audio.headers['x-presentation-next-offset'],str(part['next_offset']) if part['next_offset'] is not None else '')
+            self.assertEqual(self.audio(selected).content,audio.content)
+            offset = part['next_offset']
+        self.assertEqual(''.join(parts),self.provider.question['body'])
+        self.assertEqual(len(self.fixture.calls),len(parts),'Reopening audio uses retained synthesis')
+
+    def test_closed_approval_changed_and_invalid_question_selections_never_synthesize(self):
+        self.question()
+        self.login()
+        for changes in ({'actionable':False},{'kind':'approval'},{'revision':'d'*64}):
+            original=copy.deepcopy(self.provider.question)
+            self.provider.question.update(changes)
+            self.assertEqual(self.audio().status_code,409)
+            self.provider.question=original
+        for changes in ({'offset':-1},{'offset':True},{'source':'request:bad'},{'revision':'bad'}):
+            self.assertEqual(self.audio({**self.body,**changes}).status_code,409)
+        self.assertEqual(len(self.fixture.calls),0)
+
+    def test_question_advanced_during_synthesis_cannot_return_old_question_audio(self):
+        self.question()
+        self.login()
+        self.fixture.hold=True
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pending=pool.submit(self.audio)
+            self.assertTrue(self.fixture.entered.wait(timeout=4))
+            self.provider.question['revision']='d'*64
+            self.fixture.release.set()
+            response=pending.result(timeout=8)
+        self.assertEqual(response.status_code,409)
         self.assertEqual(len(self.fixture.calls),1)
 
     def test_total_deadline_reaps_renderer_and_retains_unknown_request_without_retry(self):

@@ -8,7 +8,7 @@ window.Conversation = (() => {
     return value;
   };
   function mount({api, headers, setCsrf, modeChanged, telegram}) {
-    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus});
+    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen});
     const microphone = window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),pauseAudio:pause,unauthorized:failed,telegram});
     const cards = new Map();
     const inputs = new Map();
@@ -428,10 +428,10 @@ window.Conversation = (() => {
         } else stop("This reply changed or is unavailable. Refresh before listening.");
       }
     }
-    async function listenTo(source, offset = 0) {
+    async function listenTo(source, offset = 0, chain) {
       stop();
       const owned = generation;
-      active = {source, offset, generation:owned, auto:false};
+      active = {source, offset, generation:owned, auto:false, focusVersion:chain?.focusVersion ?? focusVersion};
       const selected = active;
       $("#conversation-player").hidden = false;
       $("#conversation-playing").textContent = source.kind === "integrator_answer" ? "Conversation reply" : source.label;
@@ -477,10 +477,21 @@ window.Conversation = (() => {
           : e.message || "Audio unavailable. Text replies remain available.";
       } finally { clearTimeout(deadline); if (requestAbort === controller) requestAbort = undefined; }
     }
-    audio.addEventListener("ended", () => {
+    audio.addEventListener("ended", async () => {
       if (!audio.ended || !active || active.verifying || !active.auto || document.hidden || !enabled) return;
-      if (active.next !== null) listenTo(active.source, active.next);
-      else { audioState("End of reply."); toggle.textContent = "Play audio again"; }
+      const selected=active, owned=generation;
+      if (selected.next !== null) return listenTo(selected.source, selected.next, selected);
+      audioState("End of reply."); toggle.textContent = "Play audio again";
+      if(selected.source.kind!=="native_question" || selected.finished)return;
+      selected.finished=true;
+      try {
+        await part(selected.source, selected.offset);
+        if(active!==selected || generation!==owned || !selected.auto || document.hidden || !enabled || focusVersion!==selected.focusVersion)return;
+        selectFocus({source:selected.source.id,revision:selected.source.revision},selected.source.label);
+        audioState("Question finished. Press Talk to answer.");
+      } catch (_) {
+        if(active===selected && generation===owned)stop("This question changed. Refresh before answering.");
+      }
     });
     toggle.addEventListener("click", () => {
       if (audio.paused) { if (audio.ended) audio.currentTime = 0; startPlayback(); }

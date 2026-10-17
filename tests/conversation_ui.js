@@ -21,7 +21,7 @@ function boot() {
         const at = this.children.indexOf(before);
         this.children.splice(at < 0 ? this.children.length : at, 0, child);
       },
-      before() {}, pause() { this.paused = true; }, load() {},
+      before() {}, pause() { this.paused = true; }, play() {this.paused=false;this.ended=false;return Promise.resolve();}, load() {},
     };
   }
   const document = {
@@ -31,7 +31,7 @@ function boot() {
       return nodes.get(selector);
     },
   };
-  let count = 8, arriveDuringRecent = false, heldValidation;
+  let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false;
   const source = n => ({id:`native:${n}`, kind:"integrator_answer", sequence:n,
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`});
   const originals = new Map(), nativeRequests = new Map(), nativePosts = [];
@@ -88,19 +88,31 @@ function boot() {
   };
   const context = vm.createContext({window:{addEventListener() {}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
-    URL, URLSearchParams, AbortController, setTimeout, clearTimeout, TextEncoder, crypto:require("node:crypto"),
-    fetch:(_route, options) => new Promise((_resolve, reject) => {
+    URL, URLSearchParams, AbortController, setTimeout, clearTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
+    fetch:(_route, options) => {
+      if(renderAudio){
+        const selected=JSON.parse(options.body),data=Buffer.from('synthetic audio'),hash=require('node:crypto').createHash('sha256').update(data).digest('hex');
+        return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':multipart&&selected.offset===0?'1500':'','x-audio-sha256':hash}}));
+      }
+      return new Promise((_resolve, reject) => {
       options.signal.addEventListener("abort", () => reject(new Error("Aborted")), {once:true});
-    }),
+    });},
   });
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   const ui = context.window.Conversation.mount({api,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals, nativePosts,
+  return {ui, nodes, requests, originals, nativePosts,audio(parts=false){renderAudio=true;multipart=parts;},
     nativeRequest() {
       nativeRequests.set("native-request",{id:"native-request",binding:"fixture",revision:"native-revision",state:"pending",actionable:true,kind:"question",title:"Scope",label:"Conversation",body:"Choose scope",choices:[{label:"Selected scope",action:{kind:"option",index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:1,recorded_revisions:[]});
+    },
+    holdPart() {
+      let release,started;
+      const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});
+      heldValidation={promise,started:false};
+      Object.defineProperty(heldValidation,'started',{set(value){if(value)started();}});
+      return {entered,release};
     },
     receivingPhase(value) {submitPhase=value;},
     lose() {losePost=true;},
@@ -162,6 +174,41 @@ function boot() {
     "Failure of A must not hide B's player");
   assert.equal(fixture.nodes.get("#conversation-audio-state").textContent, "Preparing audio…");
   fixture.ui.stop();
+  // Shipped playback completion selects a question only after current-source validation.
+  const spoken=boot();spoken.nativeRequest();spoken.audio(true);await spoken.ui.refresh();
+  const findButton=(root,text)=>root.children.flatMap(child=>[child,...descendants(child)]).find(el=>el.textContent===text);
+  function descendants(root){return root.children.flatMap(child=>[child,...descendants(child)]);}
+  const question=spoken.nodes.get('#conversation-request-cards').children[0];
+  await findButton(question,'Read request').handlers.click();
+  await findButton(question,'Listen to question').handlers.click();
+  const player=spoken.nodes.get('#conversation-audio');
+  player.ended=true;await player.handlers.ended();
+  assert(!spoken.nodes.get('#conversation-focus-label')?.textContent,'A partial spoken question cannot select its answer focus');
+  player.ended=true;await player.handlers.ended();
+  assert.match(spoken.nodes.get('#conversation-focus-label').textContent,/Reply to Conversation · Scope/);
+  assert.equal(spoken.nodes.get('#conversation-audio-state').textContent,'Question finished. Press Talk to answer.');
+  assert.equal(spoken.originals.size,0);assert.equal(spoken.nativePosts.length,0);
+  const draftAnswer=spoken.nodes.get('#conversation-message');draftAnswer.value='My original answer';
+  await spoken.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+  assert.deepEqual(JSON.parse(JSON.stringify([...spoken.originals.values()][0].reply)),{source:'request:native-request',revision:'native-revision'});
+  spoken.ui.stop();
+
+  const interrupted=boot();interrupted.nativeRequest();interrupted.audio();await interrupted.ui.refresh();
+  const iq=interrupted.nodes.get('#conversation-request-cards').children[0];
+  await findButton(iq,'Read request').handlers.click();await findButton(iq,'Listen to question').handlers.click();
+  const ip=interrupted.nodes.get('#conversation-audio');ip.ended=true;
+  const heldEnd=interrupted.holdPart(),end=ip.handlers.ended();await heldEnd.entered;
+  interrupted.ui.stop();heldEnd.release();await end;
+  assert.doesNotMatch(interrupted.nodes.get('#conversation-focus-label')?.textContent || '',/Reply to/,'Stopped audio cannot replace human reply focus after a delayed completion check');
+
+  const advanced=boot();advanced.nativeRequest();advanced.audio();await advanced.ui.refresh();
+  const aq=advanced.nodes.get('#conversation-request-cards').children[0];
+  await findButton(aq,'Read request').handlers.click();await findButton(aq,'Listen to question').handlers.click();
+  const rejectEnd=advanced.hold(),ap=advanced.nodes.get('#conversation-audio');ap.ended=true;
+  const staleEnd=ap.handlers.ended();rejectEnd(new Error('Question advanced'));await staleEnd;
+  assert.doesNotMatch(advanced.nodes.get('#conversation-focus-label')?.textContent || '',/Reply to/);
+  assert.equal(advanced.nodes.get('#conversation-audio-state').textContent,'This question changed. Refresh before answering.');
+
   const sending = boot(); await sending.ui.refresh();
   const draft=sending.nodes.get("#conversation-message"), form=sending.nodes.get("#conversation-compose");
   draft.value="  Original message.  ";
