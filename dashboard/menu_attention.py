@@ -9,6 +9,9 @@ class MenuUnavailable(ValueError):
     pass
 
 
+SYMBOLS = {'clear':'', 'info':'🔵', 'warning':'🟠', 'error':'🔴', 'unknown':'⚪'}
+
+
 def attention(view):
     ranks = {'info': 1, 'warning': 2, 'error': 3, 'critical': 3}
     pending = [row['projection'] for row in view.get('incidents', [])
@@ -19,6 +22,19 @@ def attention(view):
     if view.get('state') != 'available' or view.get('observer_state') != 'healthy' or view.get('truncated'):
         return 'unknown'
     return {0:'clear', 1:'info', 2:'warning'}[rank]
+
+
+def attention_projection(view):
+    """One safe, authenticated attention projection for menu, launcher and Sessions."""
+    level = attention(view)
+    pending = [r['projection'] for r in view.get('incidents', [])
+               if r['projection']['processing_state'] == 'open' and not r.get('acknowledgments')]
+    ranks = {'critical':4, 'error':3, 'warning':2, 'info':1}
+    pending.sort(key=lambda p: ranks.get(p['severity'], 0), reverse=True)
+    return {'schema':'telecodex.alert-attention/v1', 'level':level, 'symbol':SYMBOLS[level],
+            'count':len(pending), 'observed_at':view.get('observed_at'),
+            'summaries':[{'symbol':SYMBOLS['error' if p['severity'] in ('error','critical') else p['severity']],
+                          'summary':p['summary']} for p in pending[:3]]}
 
 
 class MenuAttention:
@@ -64,7 +80,7 @@ class MenuAttention:
                 raise MenuUnavailable('selected_apps_menu_unavailable')
             record = {'binding': self.binding, 'original': current, 'selected': current}
             write_json(self.path, record)
-        prefix = {'clear':'', 'info':'🔵 ', 'warning':'🟠 ', 'error':'🔴 ', 'unknown':'⚪ '}[level]
+        prefix = SYMBOLS[level] + ' ' if SYMBOLS[level] else ''
         selected = {**record['original'], 'text':prefix+self.label}
         # Read before writing and refuse a third party's different label or destination.
         # After an ambiguous setter, the selected desired state is safe to observe/reconcile.

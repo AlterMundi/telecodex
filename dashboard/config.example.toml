@@ -26,6 +26,7 @@ Development = "/your-development-mount"
 # receiving_scope = "your-receiving-scope"
 # adapter_id = "your-telegram-adapter"
 # interval_seconds = 15
+# launcher_origins = ["https://apps.example.org"] # Read-only signed-launch attention only.
 # menu_attention = false # Opt-in colored emoji in this human's existing Apps menu label.
 # deliver = false # Enable after qualifying this bot/destination and service grants.
 

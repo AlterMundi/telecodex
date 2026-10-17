@@ -118,6 +118,34 @@ class Receiving(unittest.TestCase):
     def incident(self):
         return self.client.call('GET', '/v1/incidents/fixture/credit-1', 'Incident')
 
+    def test_launcher_attention_is_signed_read_only_and_origin_scoped(self):
+        config = {**self.config, 'bot_username':'TestBot', 'miniapp_short_name':'sessions',
+                  'alerts':{**self.config['alerts'], 'launcher_origins':['https://apps.example.test']}}
+        app = create_app(config, self.provider, lambda raw, bot: int(raw), alerts=self.receiver)
+        client = TestClient(app, base_url='https://example.test')
+        self.addCleanup(client.close)
+        self.receiver.tick()
+        endpoint = '/api/alerts/attention'
+        headers = {'origin':'https://apps.example.test'}
+        self.assertEqual(client.get(endpoint).status_code, 405)
+        self.assertEqual(client.post(endpoint, json={'init_data':'100'}).status_code, 403)
+        self.assertEqual(client.post(endpoint, headers=headers, json={'init_data':'bad'}).status_code, 401)
+        self.assertEqual(client.post(endpoint, headers=headers, json={'init_data':'101'}).status_code, 403)
+        response = client.post(endpoint, headers=headers, json={'init_data':'100'})
+        self.assertEqual(response.status_code, 200)
+        value = response.json()
+        self.assertEqual(value['symbol'], '🔴')
+        self.assertEqual(value['count'], 1)
+        self.assertEqual(value['app_url'], 'https://t.me/TestBot/sessions?mode=compact')
+        self.assertNotIn('session_token', value)
+        self.assertNotIn('csrf', value)
+        self.assertNotIn('set-cookie', response.headers)
+        self.assertEqual(set(value['summaries'][0]), {'symbol','summary'})
+        # Launcher origins are not accepted on the session/control surfaces.
+        self.assertEqual(client.post('/api/session', headers=headers, json={'init_data':'100'}).status_code, 403)
+        self.provider.allowed = False
+        self.assertEqual(client.post(endpoint, headers=headers, json={'init_data':'100'}).status_code, 403)
+
     def test_storage_pressure_contract_and_receiving_projection(self):
         value = dict(self.projection, incident_id='storage-1', phase='storage', problem_code='storage_pressure',
                      resource_ref='fictional-host', severity='critical',

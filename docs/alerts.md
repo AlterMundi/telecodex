@@ -139,3 +139,26 @@ API polling or new notification consumer. The private `alerts/menu-attention.jso
 retains original/selected values and observed time, distinct from human observation.
 To roll back, disable the option and restore that record's original menu through
 the existing operator authority after verifying the current binding and destination.
+
+## Follow attention from Apps to the incident
+
+The same `attention_projection` drives the Telegram menu, launcher card/banner
+and Sessions summary. Only open unacknowledged incidents contribute. The compact
+projection includes a count, at most three safe producer summaries and matching
+severity symbols. Resolved history and acknowledgment remain separate from recovery.
+
+An explicit `alerts.launcher_origins` list enables **only** the read-only
+`POST /api/alerts/attention` route for selected exact HTTPS origins. It validates
+Telegram's current signed launch for this receiving bot and rechecks the existing
+human grant before and after reading the snapshot. It issues no session/control
+credential, cookie or write capability. Other Sessions routes retain their original
+Origin/authentication requirements. Proxies must expose only this exact POST route,
+limit bodies, preserve Origin and prevent ambient credential forwarding. No private
+attention enters the public app catalog, browser storage, URLs or logs.
+
+Signed launches retain the existing five-minute validity budget. An expired launch,
+revoked grant, unavailable route or stale observation cannot certify clear state:
+the launcher removes summaries and shows unknown, inviting the user to reopen or
+check Sessions. Non-Telegram anonymous browsing carries no private alert summary.
+The current receiving adoption is CompAII-only; another bot needs its own configured
+route and signature/grant verification, not reuse of this body's credentials.
