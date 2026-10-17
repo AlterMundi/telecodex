@@ -21,6 +21,7 @@ use uuid::Uuid;
 mod attention;
 mod auth;
 mod conversation_inputs;
+mod conversation_requests;
 mod creation;
 mod dialogue;
 mod forum;
@@ -272,6 +273,8 @@ impl HistoryPageCache {
 }
 
 struct PendingApproval {
+    local_turn: Option<i64>,
+    request: crate::codex::CodexApprovalRequest,
     requester_user_id: i64,
     responder: oneshot::Sender<CodexApprovalDecision>,
 }
@@ -756,8 +759,18 @@ impl App {
                 let mut approvals = self.shared.pending_approvals.lock().await;
                 match approvals.remove(&token) {
                     Some(pending)
-                        if pending.requester_user_id == callback.from.id
-                            || user.role == UserRole::Admin =>
+                        if (pending.requester_user_id == callback.from.id
+                            || user.role == UserRole::Admin)
+                            && pending.local_turn.is_none_or(|local| {
+                                self.shared
+                                    .store
+                                    .native_request_pending(
+                                        pending.requester_user_id,
+                                        &token,
+                                        local,
+                                    )
+                                    .unwrap_or(false)
+                            }) =>
                     {
                         Some(pending)
                     }

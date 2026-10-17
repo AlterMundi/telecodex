@@ -220,6 +220,61 @@ class Provider:
         return self.presentation('input submit ' + json.dumps(body, ensure_ascii=False))
 
     @staticmethod
+    def request_id(ident):
+        import re
+        if not isinstance(ident, str) or not re.fullmatch('[a-f0-9]{32}', ident):
+            raise ValueError('Invalid native request identity')
+        return ident
+
+    def conversation_requests(self, after=0):
+        if type(after) is not int or not 0 <= after <= 2**63 - 1:
+            raise ValueError('Invalid native request cursor')
+        return self.presentation(f'requests list {after}')
+
+    def conversation_request_detail(self, ident, offset=0, revision=None):
+        import re
+        self.request_id(ident)
+        if type(offset) is not int or not 0 <= offset <= 10**9:
+            raise ValueError('Invalid request text offset')
+        if revision is not None and (not isinstance(revision, str) or not re.fullmatch('[a-f0-9]{64}', revision)):
+            raise ValueError('Invalid request revision')
+        if offset and revision is None:
+            raise ValueError('Select the request revision before continuing')
+        suffix = ' ' + revision if revision is not None else ''
+        return self.presentation(f'requests detail {ident} {offset}{suffix}')
+
+    def conversation_decision_receipt(self, ident, revision):
+        import re
+        self.request_id(ident)
+        if not isinstance(revision, str) or not re.fullmatch('[a-f0-9]{64}', revision):
+            raise ValueError('Invalid decision revision')
+        return self.presentation(f'requests receipt {ident} {revision}')
+
+    def conversation_request_decide(self, ident, body):
+        import re
+        self.request_id(ident)
+        if not isinstance(body, dict) or set(body) != {'binding', 'revision', 'action'}:
+            raise ValueError('Select one exact request decision')
+        for key in ('binding', 'revision'):
+            if not isinstance(body[key], str) or not re.fullmatch('[a-f0-9]{64}', body[key]):
+                raise ValueError('Invalid request binding or revision')
+        action = body['action']
+        if not isinstance(action, dict):
+            raise ValueError('Invalid request action')
+        kind = action.get('kind')
+        valid = (
+            kind == 'answer' and set(action) == {'kind', 'text'}
+            and isinstance(action['text'], str) and action['text'].strip()
+            and '\0' not in action['text'] and len(action['text'].encode('utf-8')) <= 32768
+            or kind == 'option' and set(action) == {'kind', 'index'}
+            and type(action['index']) is int and 0 <= action['index'] < 10
+            or kind == 'approval' and set(action) == {'kind', 'choice'} and action['choice'] in ('a','s','d','c')
+            or kind == 'cancel' and set(action) == {'kind'})
+        if not valid:
+            raise ValueError('Invalid request action')
+        return self.presentation('requests decide ' + json.dumps({**body, 'id':ident}, ensure_ascii=False))
+
+    @staticmethod
     def identity(row):
         return hashlib.sha256(json.dumps([row['id'], row['chat_id'], row['thread_id'],
                                           row['codex_thread_id']]).encode()).hexdigest()[:24]

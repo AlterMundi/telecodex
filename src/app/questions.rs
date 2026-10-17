@@ -6,17 +6,36 @@ pub(super) struct PendingDialogue {
     pub local_turn_id: i64,
     pub request_id: NativeRequestId,
     session: SessionKey,
-    native_session: SessionKey,
+    pub(super) native_session: SessionKey,
     return_parent: Option<i64>,
-    requester: i64,
-    request: UserInputRequest,
-    index: usize,
+    pub(super) requester: i64,
+    pub(super) request: UserInputRequest,
+    pub(super) index: usize,
     message_id: i64,
     message_ids: Vec<i64>,
     awaiting_text: bool,
-    answers: UserInputResponse,
+    pub(super) answers: UserInputResponse,
     pub(super) closed: CancellationToken,
     pub(super) responder: oneshot::Sender<UserInputDecision>,
+}
+
+impl PendingDialogue {
+    pub(super) fn retire_telegram_controls(&mut self) {
+        self.message_id = 0;
+        self.message_ids.clear();
+        self.awaiting_text = false;
+    }
+
+    pub(super) fn apply_answer(&mut self, value: String) {
+        self.answers.answers.insert(
+            self.request.questions[self.index].id.clone(),
+            QuestionAnswer {
+                answers: vec![value],
+            },
+        );
+        self.index += 1;
+        self.awaiting_text = false;
+    }
 }
 
 async fn show_question(
@@ -32,9 +51,7 @@ async fn show_question(
         .store
         .conversation_turn_return(pending.local_turn_id)?
     {
-        pending.message_id = 0;
-        pending.message_ids.clear();
-        pending.awaiting_text = false;
+        pending.retire_telegram_controls();
         // Keep the same pending native responder and durable human interaction.
         // Retain its response channel for the canonical owner interface.
         return Ok(());
@@ -299,6 +316,13 @@ async fn answer(
         return Ok(());
     }
     interactions::disarm_text(&shared, pending.session, pending.requester).await;
+    if !shared
+        .store
+        .native_request_pending(pending.requester, &token, pending.local_turn_id)?
+    {
+        shared.pending_questions.lock().await.insert(token, pending);
+        return Ok(());
+    }
     if let Ok(update_id) = HUMAN_UPDATE_ID.try_with(|id| *id) {
         shared.store.begin_question_answer(
             update_id,
@@ -306,22 +330,21 @@ async fn answer(
             &pending.request_id,
         )?;
     }
-    pending.answers.answers.insert(
-        pending.request.questions[pending.index].id.clone(),
-        QuestionAnswer {
-            answers: vec![value],
-        },
-    );
-    pending.index += 1;
-    pending.awaiting_text = false;
-    if pending.index == pending.request.questions.len() {
-        shared.store.transition_interaction(
+    let final_answer = pending.index + 1 == pending.request.questions.len();
+    if final_answer
+        && !shared.store.transition_interaction(
             pending.native_session,
             pending.requester,
             &token,
             "pending",
             "answering",
-        )?;
+        )?
+    {
+        shared.pending_questions.lock().await.insert(token, pending);
+        return Ok(());
+    }
+    pending.apply_answer(value);
+    if final_answer {
         // Send once. A closed native connection must never cause a new turn/replay.
         let _ = pending
             .responder
@@ -361,7 +384,11 @@ pub(super) async fn handle_callback(
         let key = SessionKey::new(message.chat.id, message.message_thread_id);
         let mut guard = shared.pending_questions.lock().await;
         let valid = guard.get(token).is_some_and(|p| {
-            p.session == key
+            shared
+                .store
+                .native_request_pending(p.requester, token, p.local_turn_id)
+                .unwrap_or(false)
+                && p.session == key
                 && p.requester == user
                 && !p.closed.is_cancelled()
                 && !p.responder.is_closed()
@@ -400,6 +427,10 @@ pub(super) async fn handle_callback(
     let mut guard = shared.pending_questions.lock().await;
     let valid = guard.get(token).is_some_and(|p| {
         belongs(p, key, user, message.message_id)
+            && shared
+                .store
+                .native_request_pending(p.requester, token, p.local_turn_id)
+                .unwrap_or(false)
             && Some(p.index) == index
             && parts.next().is_none()
     });
@@ -525,8 +556,12 @@ pub(super) async fn handle_text_answer(
     let mut guard = shared.pending_questions.lock().await;
     let token = guard
         .iter()
-        .find(|(_, p)| {
-            p.session == key
+        .find(|(token, p)| {
+            shared
+                .store
+                .native_request_pending(p.requester, token, p.local_turn_id)
+                .unwrap_or(false)
+                && p.session == key
                 && p.requester == user
                 && !p.responder.is_closed()
                 && !p.closed.is_cancelled()
@@ -564,8 +599,12 @@ pub(super) async fn handle_text_answer(
     let mut guard = shared.pending_questions.lock().await;
     let token = guard
         .iter()
-        .find(|(_, p)| {
-            p.session == key
+        .find(|(token, p)| {
+            shared
+                .store
+                .native_request_pending(p.requester, token, p.local_turn_id)
+                .unwrap_or(false)
+                && p.session == key
                 && p.requester == user
                 && p.awaiting_text
                 && !p.closed.is_cancelled()

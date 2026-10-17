@@ -132,7 +132,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             if request.headers.get('origin') not in allowed:
                 return JSONResponse({'detail': 'Wrong request origin'}, status_code=403)
             # Bound chunked bodies as well as Content-Length before parsing them.
-            bound = 262144 if request.url.path == '/api/interaction/inputs' else 16384
+            bound = 262144 if (request.url.path == '/api/interaction/inputs' or re.fullmatch(r'/api/interaction/requests/[a-f0-9]{32}',request.url.path)) else 16384
             data = bytearray()
             async for chunk in request.stream():
                 data.extend(chunk)
@@ -306,6 +306,61 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Provide one original message of at most 32 KiB') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Submission unconfirmed. Check this message status before sending it again') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/requests')
+    async def conversation_requests(request: Request, after: int = 0):
+        session = authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_requests, after)
+        except ValueError:
+            raise HTTPException(400, 'Invalid request cursor') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Pending requests unavailable; refresh to reconnect') from None
+        authorize(request)
+        return {**result, 'csrf':session['csrf']}
+
+    @app.get('/api/interaction/requests/{ident}')
+    async def conversation_request_detail(request: Request, ident: str, offset: int = 0, revision: str | None = None):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_request_detail, ident, offset, revision)
+        except ValueError:
+            raise HTTPException(400, 'Invalid native request selection') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(409, 'Request changed or is unavailable; refresh its current state') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/requests/{ident}/receipt')
+    async def conversation_decision_receipt(request: Request, ident: str, revision: str):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_decision_receipt, ident, revision)
+        except ValueError:
+            raise HTTPException(400, 'Invalid decision selection') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(409, 'Decision recording unconfirmed; no repeat was submitted') from None
+        authorize(request)
+        return result
+
+    @app.post('/api/interaction/requests/{ident}')
+    async def conversation_request_decide(request: Request, ident: str):
+        session = authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        try:
+            body = await request.json()
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_request_decide, ident, body)
+        except ValueError:
+            raise HTTPException(400, 'Select one exact native request decision') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(409, 'Decision unconfirmed or request changed. Check its current state before trying again') from None
         authorize(request)
         return result
 

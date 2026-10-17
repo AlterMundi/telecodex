@@ -90,7 +90,7 @@ pub(super) fn approval_decision_status(decision: CodexApprovalDecision) -> &'sta
     }
 }
 
-fn approval_button_text(decision: CodexApprovalDecision) -> &'static str {
+pub(super) fn approval_button_text(decision: CodexApprovalDecision) -> &'static str {
     match decision {
         CodexApprovalDecision::Accept => "Allow once",
         CodexApprovalDecision::AcceptForSession => "Allow session",
@@ -99,7 +99,7 @@ fn approval_button_text(decision: CodexApprovalDecision) -> &'static str {
     }
 }
 
-fn approval_button_code(decision: CodexApprovalDecision) -> &'static str {
+pub(super) fn approval_button_code(decision: CodexApprovalDecision) -> &'static str {
     match decision {
         CodexApprovalDecision::Accept => "a",
         CodexApprovalDecision::AcceptForSession => "s",
@@ -246,6 +246,8 @@ pub(super) async fn request_telegram_approval(
     shared.pending_approvals.lock().await.insert(
         token.clone(),
         PendingApproval {
+            local_turn,
+            request: request.clone(),
             requester_user_id,
             responder: sender,
         },
