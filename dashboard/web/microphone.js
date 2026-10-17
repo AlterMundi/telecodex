@@ -1,6 +1,6 @@
 "use strict";
 window.VoiceInput = (() => {
-  function mount({api, headers, getBinding, onInput, getReply=()=>undefined, pauseAudio, unauthorized, telegram}) {
+  function mount({api, headers, getBinding, onInput, getReply=()=>undefined, getVisual=()=>undefined, onVisualSent=()=>{}, pauseAudio, unauthorized, telegram}) {
     const box=document.querySelector('#conversation-voice'), button=document.querySelector('#conversation-talk');
     const discard=document.querySelector('#conversation-voice-discard'), check=document.querySelector('#conversation-voice-check');
     const state=document.querySelector('#conversation-voice-state');
@@ -37,8 +37,9 @@ window.VoiceInput = (() => {
     async function confirmed(value,frozen) {
       if(pending!==frozen || frozen.binding!==getBinding())return;
       if(value.id!==frozen.id || value.voice?.audio_sha256!==frozen.audio_sha256)throw Error('Voice capture does not match this recording.');
+      if(!!frozen.visual!==!!value.visual||frozen.visual&&Object.keys(frozen.visual).some(k=>JSON.stringify(frozen.visual[k])!==JSON.stringify(value.visual[k])))throw Error('Visual capture does not match this recording.');
       latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256};
-      onInput(value,frozen.focusVersion);pending=undefined;phase='idle';
+      onInput(value,frozen.focusVersion);onVisualSent(frozen.visual);pending=undefined;phase='idle';
       state.textContent=value.phase==='answered'?'Recording and automatic transcript saved; answer recorded for the selected question.':value.retired?'This saved recording is no longer eligible to start work.':
         value.phase==='retained_unsent'?'Recording saved; no work was submitted. You can keep writing.':
         value.phase==='preparation_unconfirmed'?'Recording saved; transcription unconfirmed. Nothing was resubmitted.':
@@ -53,16 +54,25 @@ window.VoiceInput = (() => {
     }
     async function upload() {
       if(!pending || uploading || pending.binding!==getBinding())return;
+      if(pending.needsVisualSelection&&!pending.uncertainSubmission){
+        try{const original=pending,visual=await getVisual();if(pending!==original||original.binding!==getBinding())return;pending={...original,id:window.crypto.randomUUID(),visual,needsVisualSelection:false};}
+        catch(_){state.textContent='Point again or remove the image before retrying this recording.';return;}
+      }
       const frozen=pending;uploading=true;controller=new AbortController();const active=controller;
       const deadline=setTimeout(()=>active.abort(),20000);state.textContent='Saving your recording…';controls();
       try {
         const response=await fetch('api/interaction/voice',{method:'POST',credentials:'same-origin',signal:active.signal,
-          headers:{...headers(),...(frozen.reply?{'X-Reply-Source':frozen.reply.source,'X-Reply-Revision':frozen.reply.revision}:{}),'Content-Type':frozen.mime,'X-Input-Binding':frozen.binding,'X-Input-Id':frozen.id,'X-Audio-Sha256':frozen.audio_sha256},body:frozen.blob});
+          headers:{...headers(),...(frozen.reply?{'X-Reply-Source':frozen.reply.source,'X-Reply-Revision':frozen.reply.revision}:{}),...(frozen.visual?{'X-Visual-Reference':JSON.stringify(frozen.visual)}:{}),'Content-Type':frozen.mime,'X-Input-Binding':frozen.binding,'X-Input-Id':frozen.id,'X-Audio-Sha256':frozen.audio_sha256},body:frozen.blob});
         const value=await response.json();
-        if(!response.ok){const error=new Error('Recording not confirmed');error.status=response.status;throw error;}
+        if(!response.ok){const error=new Error('Recording not confirmed');error.status=response.status;if(value.code==='visual_reselection'&&value.submission_attempted===false)error.visualReselection=true;throw error;}
         await confirmed(value,frozen);
       } catch(e) {
         if(pending!==frozen)return;
+        if(e.visualReselection){
+          if(frozen.uncertainSubmission){pending={...frozen,needsVisualSelection:false};state.textContent='An earlier submission is still unconfirmed. Keep this recording identity and check its status before starting another attempt.';return;}
+          pending={...frozen,needsVisualSelection:true};state.textContent='This attempt did not submit the recording. Point again or remove the image, then retry this recording.';return;
+        }
+        pending={...frozen,uncertainSubmission:true};
         state.textContent='Recording unconfirmed. Check its status or retry this same recording. Nothing is resent automatically.';
         if(e.status===401 || e.status===403)unauthorized(e);
       } finally {clearTimeout(deadline);if(controller===active){controller=undefined;uploading=false;controls();}}
@@ -78,7 +88,7 @@ window.VoiceInput = (() => {
         const digest=await window.crypto.subtle.digest('SHA-256',await blob.arrayBuffer());
         if(owned!==generation || binding!==getBinding())return;
         const audio_sha256=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
-        pending={id:window.crypto.randomUUID(),binding,audio_sha256,mime,blob,reply:selection?.reference,focusVersion:selection?.version};phase='idle';await upload();
+        pending={id:window.crypto.randomUUID(),binding,audio_sha256,mime,blob,reply:selection?.reference,focusVersion:selection?.version,visual:selection?.visual};phase='idle';await upload();
       } catch(_) {if(owned===generation)cancelRecording('Recording could not be finalized. Nothing was sent.');}
     }
     async function start() {
@@ -86,6 +96,11 @@ window.VoiceInput = (() => {
       const owned=++generation,binding=getBinding(),selection=getReply();latestSaved=undefined;phase='permission';commit=false;parts=[];bytes=0;
       state.textContent='Allow microphone access to begin.';pauseAudio();controls();
       try {
+        let selectedVisual;
+        try {const candidate=getVisual();selectedVisual=candidate?.then?await candidate:candidate;}
+        catch(_){if(owned===generation)cancelRecording('Selected image unavailable. Choose another image or remove it before recording.');return;}
+        if(owned!==generation||binding!==getBinding()||document.hidden)return;
+        const frozenSelection={...selection,visual:selectedVisual};
         const media=await window.navigator.mediaDevices.getUserMedia({audio:true,video:false});
         if(owned!==generation || binding!==getBinding() || document.hidden){for(const track of media.getTracks())track.stop();return;}
         stream=media;
@@ -98,7 +113,7 @@ window.VoiceInput = (() => {
           parts.push(event.data);
         });
         current.addEventListener('error',()=>{if(owned===generation)cancelRecording('Recording failed. Nothing was sent.');});
-        current.addEventListener('stop',()=>finish(owned,binding,mime,selection));
+        current.addEventListener('stop',()=>finish(owned,binding,mime,frozenSelection));
         current.start(250);phase='recording';state.textContent='Listening. Press Send voice when you finish.';controls();
         timer=setTimeout(()=>{if(owned===generation && current.state==='recording'){phase='finalizing';current.stop();stopTracks();controls();}},120000);
       } catch(_) {if(owned===generation)cancelRecording('Microphone unavailable. You can keep writing.');}

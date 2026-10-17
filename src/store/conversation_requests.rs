@@ -312,7 +312,7 @@ impl Store {
                                 || f.native.as_deref() != Some(current.item.native_thread.as_str())
                         })
                     }
-                    || action != &json!({"kind":"answer","text":input.answer_text()})
+                    || action != &json!({"kind":"answer","text":input.question_answer_text(std::path::Path::new(tx.path().unwrap_or("")))})
                     || current.item.source["kind"] != "question"
                 {
                     bail!("Original answer source or selected question changed");

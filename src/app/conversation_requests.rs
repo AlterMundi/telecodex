@@ -318,7 +318,7 @@ pub(super) async fn answer_original(
         id: id.into(),
         revision: selected.revision.clone(),
         action: Action::Answer {
-            text: input.answer_text(),
+            text: input.question_answer_text(&app.shared.config.db_path),
         },
     };
     decide(app, input.human, input.entry, d, Some(&input.id), None).await?;
@@ -441,7 +441,7 @@ pub(super) async fn interpret_context(
         id: id.into(),
         revision: selected_revision.into(),
         action: Action::Answer {
-            text: input.answer_text(),
+            text: input.question_answer_text(&app.shared.config.db_path),
         },
     };
     decide(

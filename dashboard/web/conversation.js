@@ -9,7 +9,8 @@ window.Conversation = (() => {
   };
   function mount({api, headers, setCsrf, modeChanged, telegram}) {
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen});
-    const microphone = window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),pauseAudio:pause,unauthorized:failed,telegram});
+    const visual = window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
+    const microphone = window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:pause,unauthorized:failed,telegram});
     const cards = new Map();
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
@@ -20,7 +21,7 @@ window.Conversation = (() => {
       : value.routing ? routeText(value.routing) : ({awaiting_target:"Choose the session for this saved message.",preparing:"Recording saved; preparing its automatic transcript.", preparation_unconfirmed:"Recording saved; transcription unconfirmed. No work was submitted automatically.", retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
           sending:"Sending to your conversation…", steering:"Sending to your conversation…",
           accepted:"Sent to your conversation. Work may continue.",
-          answered:"Answer recorded for the selected question. Work may continue.",
+          reselection:"This attempt did not submit the message. Select the image again, then send.", answered:"Answer recorded for the selected question. Work may continue.",
           retained_unsent:"Saved; not sent.", uncertain:"Saved; delivery unconfirmed. Check status."})[value.phase]
         || "Submission unconfirmed. Check status before sending this message again.";
     function routeText(route) {
@@ -80,8 +81,23 @@ window.Conversation = (() => {
         const continueButton=node("button","Reply to this session");continueButton.type="button";continueButton.hidden=true;actions.append(continueButton);
         const routeBox=node("div",undefined,"reply-route"),select=node("select"),routeButton=node("button","Send to session"),routeNote=node("p","","reply-error");
         select.setAttribute("aria-label","Destination session");routeButton.type="button";routeBox.hidden=true;routeBox.append(select,routeButton,routeNote);
-        box.append(text, status, actions,routeBox);
-        card = {box, text, status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote};
+        const imageButton=node("button","Show selected image"),imageView=node("canvas");imageButton.type="button";imageButton.hidden=true;imageView.hidden=true;imageView.className="input-visual";imageView.setAttribute("role","img");
+        imageButton.addEventListener("click",async()=>{
+          if(!imageView.hidden){imageView.hidden=true;imageView.width=imageView.height=0;imageButton.textContent="Show selected image";return;}
+          const owned=inputGeneration,controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);imageButton.disabled=true;imageButton.textContent="Loading selected image…";
+          try{
+            const response=await fetch(`api/interaction/inputs/${encodeURIComponent(card.value.id)}/image`,{headers:headers(),credentials:"same-origin",signal:controller.signal});
+            if(!response.ok)throw Object.assign(Error("Image unavailable"),{status:response.status});
+            const bitmap=await createImageBitmap(await response.blob());
+            if(owned!==inputGeneration){bitmap.close();return;}
+            const ref=card.value.visual;imageView.width=bitmap.width;imageView.height=bitmap.height;const context=imageView.getContext("2d");context.drawImage(bitmap,0,0);bitmap.close();
+            context.strokeStyle="#fff";context.lineWidth=Math.max(3,ref.width/200);context.beginPath();context.arc(ref.point.x,ref.point.y,Math.max(6,ref.width/80),0,2*Math.PI);context.stroke();
+            imageView.setAttribute("aria-label",`Captured image. Selected point X ${ref.point.x}, Y ${ref.point.y}.`);imageView.hidden=false;imageButton.textContent="Hide selected image";
+          }catch(e){status.textContent="Selected image unavailable. The message was not resent.";if([401,403].includes(e.status))failed(e);}
+          finally{clearTimeout(deadline);imageButton.disabled=false;if(imageView.hidden)imageButton.textContent="Show selected image";}
+        });
+        box.append(text,status,actions,routeBox,imageButton,imageView);
+        card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote};
         continueButton.addEventListener("click",()=>card.value.continuation&&selectFocus(card.value.continuation,`#${card.value.routing?.label||"session"}`));
         select.addEventListener("change",()=>renderRoute(card));
         routeButton.addEventListener("click",()=>routeInput(card,card.routePending||{binding,selector:select.value})); inputs.set(value.id, card);
@@ -103,7 +119,7 @@ window.Conversation = (() => {
           const owned = inputGeneration, observation = ++inputObservation;
           retry.disabled = true;
           try {
-            const result = await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{})});
+            const result = await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{})});
             if (owned === inputGeneration) inputCard(result, observation);
           } catch(e) {
             if (owned !== inputGeneration) return;
@@ -144,6 +160,7 @@ window.Conversation = (() => {
       if (!card.value.phase && value.phase && draft.value === card.value.text) draft.value = "";
       // Preserve full original text after reading it, and an unknown POST's text.
       card.value = {...card.value, ...value};
+      card.imageButton.hidden=!card.value.visual;
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
       microphone?.observe(card.value,phaseText(card.value));
@@ -163,7 +180,7 @@ window.Conversation = (() => {
       const result = await api(`interaction/inputs?before=${before}&direction=${direction}`);
       if (owned !== inputGeneration) return;
       if (result.binding !== binding) throw new Error("Conversation changed. Refresh before sending.");
-      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); microphone?.reset();}
+      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();}
       inputBinding = result.binding;
       setCsrf(result.csrf);routingChoices=result.routing_choices||[];
       for (const value of result.items) inputCard(value, observation);
@@ -186,20 +203,26 @@ window.Conversation = (() => {
         sendState.textContent = "This message has an unconfirmed submission. Use Check status before sending it again.";
         $("#conversation-sent").open = true; return;
       }
+      let selectedVisual;
+      posting=true;send.disabled=true;
+      try {if(visual)selectedVisual=await visual.capture();}
+      catch(e){posting=false;send.disabled=!inputBinding;sendState.textContent=e.message||"Select your image again.";return;}
       const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation, focusAtSubmit=focusVersion;
       const reply=replyFocus?.reference&&JSON.parse(JSON.stringify(replyFocus.reference));
       posting = true; send.disabled = true; latestComposerId = id;
-      inputCard({id,text,binding,reply,focusVersion:focusAtSubmit}, observation); $("#conversation-sent").open = true;
+      inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); $("#conversation-sent").open = true;
       sendState.textContent = "Sending…";
       try {
-        const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{})});
+        const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{}),...(selectedVisual?{visual:selectedVisual}:{})});
         if (owned !== inputGeneration) return;
         const confirmed = inputCard(result, observation);
+        visual?.consumed(selectedVisual);
         if(focusAtSubmit===focusVersion)clearFocus();
         if (draft.value === text) draft.value = "";
         sendState.textContent = phaseText(confirmed.value);
       } catch (e) {
         if (owned !== inputGeneration) return;
+        if(e.visualReselection){inputCard({id,phase:"reselection"},observation);sendState.textContent="Select the image again, then send. This attempt did not submit the message.";return;}
         const retained = inputs.get(id)?.value;
         if (id === latestComposerId) sendState.textContent = retained?.phase ? phaseText(retained)
           : "Submission unconfirmed. Check this message status; it will not be resent automatically.";
@@ -267,7 +290,7 @@ window.Conversation = (() => {
     }
     function failed(error) {
       if (error.status === 401 || error.status === 403) {
-        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset();
+        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else pause();
@@ -334,7 +357,7 @@ window.Conversation = (() => {
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset();
+        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         newest = {delivery:0,native:0}; oldest = {delivery:0,native:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }

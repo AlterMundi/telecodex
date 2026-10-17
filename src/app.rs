@@ -2515,6 +2515,7 @@ impl App {
         if active
             .sender
             .send(CodexSteerRequest {
+                images: vec![],
                 admission_check: Some({
                     let shared = self.shared.clone();
                     Arc::new(move || {

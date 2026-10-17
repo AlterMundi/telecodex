@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
 from init_data_py import errors, validate_by_signature
 
 from .provider import Provider, ProviderUnavailable
+from .visual import VisualSelectionInvalid
 from .alerts import Receiver as AlertsReceiver, AlertsUnavailable
 from .traffic import Traffic
 from .menu_attention import attention_projection
@@ -141,14 +142,14 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             if request.headers.get('origin') not in allowed:
                 return JSONResponse({'detail': 'Wrong request origin'}, status_code=403)
             # Bound chunked bodies as well as Content-Length before parsing them.
-            if request.url.path == '/api/interaction/voice':
+            if request.url.path in ('/api/interaction/voice','/api/interaction/visual'):
                 try:
                     selected = authorize(request)
                     if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), selected['csrf']):
                         raise HTTPException(403, 'Action token missing')
                 except HTTPException as exc:
                     return JSONResponse({'detail':exc.detail}, status_code=exc.status_code)
-                bound = 20*1024*1024
+                bound = 2*1024*1024 if request.url.path.endswith('/visual') else 20*1024*1024
             else:
                 bound = 262144 if (request.url.path == '/api/interaction/inputs' or re.fullmatch(r'/api/interaction/requests/[a-f0-9]{32}',request.url.path)) else 16384
             data = bytearray()
@@ -213,7 +214,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     @app.get('/')
     def shell():
         body = (public / 'index.html').read_text()
-        for name in ('app.js', 'requests.js', 'microphone.js', 'conversation.js', 'style.css'):
+        for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         if appearance:
@@ -225,7 +226,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/assets/{name}')
     def asset(name: str, request: Request):
-        if name not in ('app.js', 'requests.js', 'microphone.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -328,6 +329,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             body = await request.json()
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_input_submit, body)
+        except VisualSelectionInvalid:
+            return JSONResponse({'detail':'Select the captured image again. This attempt did not submit a message.','code':'visual_reselection','submission_attempted':False},status_code=400)
         except (ValueError, UnicodeError):
             raise HTTPException(400, 'Provide one original message of at most 32 KiB') from None
         except (ProviderUnavailable, OSError):
@@ -351,6 +354,30 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         authorize(request)
         return result
 
+    @app.post('/api/interaction/visual')
+    async def conversation_visual(request: Request):
+        session=authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf',''),session['csrf']):
+            raise HTTPException(403,'Action token missing')
+        if request.headers.get('content-type')!='image/png':raise HTTPException(400,'Select one PNG image')
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.conversation_visual_upload,await request.body(),request.headers.get('x-image-sha256',''))
+        except ValueError:raise HTTPException(400,'Image unavailable or invalid. Select a still image of at most 2 MiB and 4 megapixels.') from None
+        except (ProviderUnavailable,OSError):raise HTTPException(503,'Image upload unconfirmed. No conversation work was admitted.') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/inputs/{ident}/image')
+    async def conversation_visual_image(request: Request,ident:str):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            data=await run_in_threadpool(provider.conversation_visual_image,ident)
+        except (ValueError,ProviderUnavailable,OSError):raise HTTPException(409,'Selected image unavailable; do not substitute another view') from None
+        authorize(request)
+        return Response(content=data,media_type='image/png')
+
     @app.post('/api/interaction/voice')
     async def conversation_voice(request: Request):
         session = authorize(request)
@@ -367,10 +394,16 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 # Older receivers reject this source form before ASR rather
                 # than silently interpreting context as an explicit answer.
                 metadata['reply'].update(source=reply_source[8:], context_only=True)
+        visual=request.headers.get('x-visual-reference')
+        if visual is not None:
+            try:metadata['visual']=json.loads(visual)
+            except (ValueError,TypeError):raise HTTPException(400,'Select one captured visual reference') from None
         try:
             data = await request.body()
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_voice_submit, metadata, data)
+        except VisualSelectionInvalid:
+            return JSONResponse({'detail':'Select the captured image again. This attempt did not submit a recording.','code':'visual_reselection','submission_attempted':False},status_code=400)
         except (ValueError, UnicodeError):
             raise HTTPException(400, 'Provide one finalized recording of at most 20 MiB') from None
         except (ProviderUnavailable, OSError):

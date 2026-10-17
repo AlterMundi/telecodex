@@ -472,3 +472,15 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 
 #conversation-focus { margin-bottom: 8px; padding: 8px; border-inline-start: 3px solid var(--accent); }
 .reply-route select { width: 100%; min-height: 44px; margin-block: 8px; font: inherit; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+
+#conversation-visual { margin-block: 10px; padding: 8px; border: 1px solid var(--line); border-radius: var(--dm-radius, 8px); }
+#conversation-visual summary { cursor: pointer; min-height: 44px; padding-block: 10px; }
+#conversation-image { max-width: 100%; min-height: 44px; font: inherit; }
+.visual-preview { max-height: 320px; overflow: auto; margin-block: 8px; }
+#conversation-image-view { display: block; max-width: 100%; height: auto; cursor: crosshair; }
+#conversation-image-view[hidden] { display: none; }
+#conversation-image-view:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+#conversation-visual input[type="number"] { width: 90px; min-height: 44px; padding: 8px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+
+.input-visual { display: block; max-width: 100%; height: auto; margin-block: 8px; }
+.input-visual[hidden] { display: none; }

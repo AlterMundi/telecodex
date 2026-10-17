@@ -67,6 +67,7 @@ async function api(route, body) {
     if (!response.ok) {
       const error = new Error(value.detail || "Request unavailable");
       error.status = response.status;
+      if(value.code==="visual_reselection"&&value.submission_attempted===false)error.visualReselection=true;
       throw error;
     }
     return value;
