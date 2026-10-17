@@ -463,6 +463,7 @@ mod tests {
             human_id: 100,
             chat_id: 100,
             topic_id: 1,
+            max_active_workers: 2,
             targets: vec![Target {
                 name: "Alpha".into(),
                 topic_id: 7,

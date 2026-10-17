@@ -12,6 +12,8 @@ pub struct InteractionConfig {
     pub topic_id: i64,
     #[serde(default)]
     pub targets: Vec<Target>,
+    #[serde(default = "default_active_workers")]
+    pub max_active_workers: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -21,15 +23,23 @@ pub struct Target {
     pub topic_id: i64,
 }
 
+fn default_active_workers() -> usize {
+    2
+}
+
 impl InteractionConfig {
     pub fn entry(&self) -> SessionKey {
         SessionKey::new(self.chat_id, Some(self.topic_id))
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.human_id <= 0 || self.chat_id == 0 || self.topic_id <= 0 || self.targets.len() > 64
+        if self.human_id <= 0
+            || self.chat_id == 0
+            || self.topic_id <= 0
+            || self.targets.len() > 64
+            || !(1..=64).contains(&self.max_active_workers)
         {
-            bail!("Invalid interaction owner, entry or target count");
+            bail!("Invalid interaction owner, entry, target count or active worker limit");
         }
         let mut ids = std::collections::HashSet::new();
         for target in &self.targets {
@@ -268,6 +278,7 @@ mod tests {
             human_id: 100,
             chat_id: 100,
             topic_id: 1,
+            max_active_workers: 2,
             targets: vec![
                 Target {
                     name: "Nexus".into(),
@@ -280,6 +291,14 @@ mod tests {
             ],
         };
         cfg.validate().unwrap();
+        for limit in [0, 65, usize::MAX] {
+            cfg.max_active_workers = limit;
+            assert!(cfg.validate().is_err());
+        }
+        for limit in [1, 64, 2] {
+            cfg.max_active_workers = limit;
+            cfg.validate().unwrap();
+        }
         assert_eq!(cfg.resolve("nexus").len(), 2);
         assert_eq!(cfg.resolve("t3"), vec![SessionKey::new(100, Some(3))]);
         assert_eq!(cfg.target(1), None);
