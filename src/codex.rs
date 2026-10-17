@@ -42,6 +42,7 @@ pub struct CodexRunner {
     bounded_turn: Option<BoundedTurn>,
     goal_activation: Option<GoalActivation>,
     client_message_id: Option<String>,
+    dynamic_tools: Vec<Value>,
 }
 
 #[derive(Clone)]
@@ -109,8 +110,26 @@ pub enum CodexEvent {
         request: UserInputRequest,
         closed: CancellationToken,
     },
+    DynamicToolRequest {
+        request: DynamicToolRequest,
+    },
     UserInputClosed(NativeRequestId),
     UserInputAnswered(NativeRequestId),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicToolRequest {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub tool: String,
+    pub namespace: Option<String>,
+    pub arguments: Value,
+}
+
+pub fn dynamic_tool_result(success: bool, text: String) -> Value {
+    json!({"success":success,"contentItems":[{"type":"inputText","text":text}]})
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +158,7 @@ pub enum CodexEventOutcome {
     None,
     Approval(oneshot::Receiver<CodexApprovalDecision>),
     UserInput(oneshot::Receiver<UserInputDecision>),
+    DynamicTool(oneshot::Receiver<Value>),
 }
 
 /// Only a definite rejection permits submitting the input as a new turn.
@@ -432,10 +452,15 @@ impl CodexRunner {
             bounded_turn: None,
             goal_activation: None,
             client_message_id: None,
+            dynamic_tools: vec![],
         }
     }
     pub fn with_shared_app_server(mut self, shared: bool) -> Self {
         self.shared_app_server = shared;
+        self
+    }
+    pub fn with_dynamic_tools(mut self, tools: Vec<Value>) -> Self {
+        self.dynamic_tools = tools;
         self
     }
     pub fn with_bounded_turn(mut self, bounded: BoundedTurn) -> Self {
@@ -835,6 +860,7 @@ impl CodexRunner {
             self.bounded_turn.as_ref(),
             self.goal_activation.as_ref(),
             self.client_message_id.as_deref(),
+            &self.dynamic_tools,
             session,
             request,
             cancel,
@@ -927,6 +953,7 @@ async fn run_app_server_turn<F, Fut>(
     bounded: Option<&BoundedTurn>,
     goal_activation: Option<&GoalActivation>,
     client_message_id: Option<&str>,
+    dynamic_tools: &[Value],
     session: &SessionRecord,
     request: &TurnRequest,
     cancel: CancellationToken,
@@ -974,7 +1001,7 @@ where
         "native turn preparation"
     );
     let (thread_id, native_model) = process
-        .start_or_resume_thread(session, request, bounded.is_some())
+        .start_or_resume_thread(session, request, bounded.is_some(), dynamic_tools)
         .await?;
     tracing::debug!(
         stage = "thread_bound",
@@ -1168,6 +1195,12 @@ where
     let mut pending_inputs = FuturesUnordered::<PendingInput>::new();
     let mut open_inputs = HashMap::<NativeRequestId, CancellationToken>::new();
     let mut submitted_inputs = HashSet::new();
+    type PendingTool =
+        Pin<Box<dyn std::future::Future<Output = (NativeRequestId, String, Value)> + Send>>;
+    let mut pending_tools = FuturesUnordered::<PendingTool>::new();
+    let mut open_tools = HashSet::new();
+    let mut seen_tool_requests = HashSet::new();
+    let mut seen_tool_calls = HashSet::new();
     loop {
         if turn_completed && goal_snapshot_request_id.is_some() {
             goal_snapshot_deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
@@ -1195,6 +1228,11 @@ where
                     process.send_result(&id, json!({"decision":approval_decision_value(decision)})).await?;
                 }
             }
+          }
+          Some((id, turn, result)) = pending_tools.next(), if !pending_tools.is_empty() => {
+              if open_tools.remove(&id) && !cancelled && !cancel.is_cancelled() && active_turn_id.as_deref()==Some(turn.as_str()) {
+                  process.send_result(&id,result).await?;
+              }
           }
           Some((id, decision)) = pending_inputs.next(), if !pending_inputs.is_empty() => {
             if open_inputs.remove(&id).is_some() && !cancelled && !cancel.is_cancelled() {
@@ -1299,6 +1337,7 @@ where
                 } else if method == "serverRequest/resolved" {
                     if let Some(id) = params.get("requestId") {
                         let id: NativeRequestId = serde_json::from_value(id.clone())?;
+                        open_tools.remove(&id);
                         if let Some(closed) = open_approvals.remove(&id) { closed.cancel(); }
                         if submitted_inputs.remove(&id) && !cancelled {
                             let _=on_event(CodexEvent::UserInputAnswered(id.clone())).await?;
@@ -1312,7 +1351,29 @@ where
               }
               RpcMessage::ServerRequest{id,method,params}=>{
                 if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
-                if method == "item/tool/requestUserInput" {
+                if method == "item/tool/call" {
+                    // A duplicate server request must not run another observer
+                    // read. Different RPC IDs for an existing call get a retained
+                    // status instead of starting another operation.
+                    if !seen_tool_requests.insert(id.clone()) {continue;}
+                    let request: DynamicToolRequest = serde_json::from_value(params)?;
+                    if request.thread_id!=thread_id || active_turn_id.as_deref()!=Some(request.turn_id.as_str()) {continue;}
+                    if !seen_tool_calls.insert((request.turn_id.clone(),request.call_id.clone())) {
+                        process.send_result(&id,dynamic_tool_result(false,"This tool call was already observed; it was not repeated.".into())).await?;
+                        continue;
+                    }
+                    let turn=request.turn_id.clone();
+                    match on_event(CodexEvent::DynamicToolRequest{request}).await? {
+                        CodexEventOutcome::DynamicTool(receiver) => {
+                            open_tools.insert(id.clone());
+                            pending_tools.push(Box::pin(async move {
+                                let result=receiver.await.unwrap_or_else(|_|dynamic_tool_result(false,"Tool result unavailable; no automatic retry.".into()));
+                                (id,turn,result)
+                            }));
+                        },
+                        _ => process.send_result(&id,dynamic_tool_result(false,"This client does not handle that tool.".into())).await?,
+                    }
+                } else if method == "item/tool/requestUserInput" {
                     if open_inputs.contains_key(&id) || submitted_inputs.contains(&id) { continue; }
                     let input: UserInputRequest = serde_json::from_value(params)
                         .context("unsupported native user-input schema")?;
@@ -1780,7 +1841,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -2407,8 +2468,14 @@ impl AppServerProcess {
         session: &SessionRecord,
         _request: &TurnRequest,
         bounded: bool,
+        dynamic_tools: &[Value],
     ) -> Result<(String, Option<String>)> {
         let (method, mut params) = build_thread_request(session);
+        // Tools are declared only for a new thread. Native rollout metadata
+        // restores them on resume; existing bindings are never replaced here.
+        if method == "thread/start" && !dynamic_tools.is_empty() {
+            params["dynamicTools"] = json!(dynamic_tools);
+        }
         if bounded {
             params["config"]["features.goals"] = json!(false);
             params["config"]["features.multi_agent"] = json!(false);
