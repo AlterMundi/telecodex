@@ -5,8 +5,38 @@ integrating entry. It reuses the existing queue, native writer and active steer;
 there is no second model session or fabricated Telegram update. The entry must
 already have an owned native binding. The Mini App includes authenticated text
 input, retained-message inspection and native question/approval controls.
-Microphone input is still being integrated. Receiving deployment requires the new
+Microphone recording uses the same journal and writer. Receiving deployment requires the new
 canonical-return policy in every relevant active collector before exposing input.
+
+The optional microphone uses the existing receiving `[voice]` configuration and
+its bounded ASR command. Talk starts microphone capture and pauses reply playback;
+Send voice finalizes the clip. Discard, hidden/deactivated views and late permission
+responses stop device tracks without submitting partial speech or cancelling work.
+The 120-second limit stops recording for explicit send/discard rather than silently
+submitting it. Unsupported browsers retain text input. Browser device access uses
+[MediaRecorder](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder) and
+[getUserMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
+feature detection; actual Telegram client microphone permissions require receiving
+qualification.
+
+`POST /api/interaction/voice` takes bounded raw audio with `X-Input-Id`,
+`X-Input-Binding`, `X-Audio-Sha256` and its supported audio Content-Type, plus the
+existing Origin/authentication/CSRF checks before buffering a large upload.
+The owner-private immutable file is retained before `input voice submit JSON`
+reserves the original UUID, audio identity, owner/native/epoch and capture order
+in the existing conversation journal. Up to two preparations run asynchronously;
+text and independent workers remain responsive. The existing FFmpeg/ASR adapter
+accepts final interpretations only. Its transcript and source hash are distinct
+from verified written human speech and are attributed in both integrator and
+routed-worker input. No Telegram file/update identity is fabricated.
+
+Later text retains later receiver capture order even if the earlier voice ASR
+finishes last. Grant/binding retirement and admission fences apply before and
+after preparation and again at native write. Restart retains preparation
+uncertainty without ASR or native replay. A lost upload acknowledgment is inspected
+with the original input status; explicit retry preserves the same blob/hash/UUID,
+and existing captures never start ASR again. Browser memory holds an unconfirmed
+recording, never localStorage. Original audio remains receiving-local.
 
 `telecodex --control CONFIG input submit JSON` accepts only `binding`, `id` and
 `text`. The binding comes from the authenticated presentation list, `id` is a

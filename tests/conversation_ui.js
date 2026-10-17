@@ -35,7 +35,7 @@ function boot() {
   const source = n => ({id:`native:${n}`, kind:"integrator_answer", sequence:n,
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`});
   const originals = new Map(), nativeRequests = new Map(), nativePosts = [];
-  let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus;
+  let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
     if (url.pathname === "/interaction/requests") return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
@@ -45,7 +45,7 @@ function boot() {
     }
     if (url.pathname === "/interaction/inputs" && body) {
       if (offlinePost) {offlinePost=false;throw new TypeError("Offline before HTTP delivery");}
-      const value = {...body,sequence:originals.size+1,phase:"accepted",new_input:!originals.has(body.id)};
+      const value = {...body,sequence:originals.size+1,phase:submitPhase,new_input:!originals.has(body.id)};
       originals.set(body.id,value);
       if (heldPost) { heldPost.started=true; await heldPost.promise; }
       if (losePost) { losePost=false; throw new TypeError("Lost POST acknowledgement"); }
@@ -88,6 +88,7 @@ function boot() {
     }),
   });
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
+  vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   const ui = context.window.Conversation.mount({api,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
@@ -95,6 +96,7 @@ function boot() {
     nativeRequest() {
       nativeRequests.set("native-request",{id:"native-request",binding:"fixture",revision:"native-revision",state:"pending",actionable:true,kind:"question",title:"Scope",label:"Conversation",body:"Choose scope",choices:[{label:"Selected scope",action:{kind:"option",index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:1,recorded_revisions:[]});
     },
+    receivingPhase(value) {submitPhase=value;},
     lose() {losePost=true;},
     offline() {offlinePost=true;},
     holdStatus(fail=false) {
@@ -210,5 +212,25 @@ function boot() {
   assert.equal(answer.value,"Keep this draft during conversation refresh");assert(!retry.hidden);
   await retry.handlers.click();
   assert.deepEqual(integrated.nativePosts[0],integrated.nativePosts[1],"Conversation refresh must preserve the frozen unresolved decision");
+  const composerState=boot();await composerState.ui.refresh();composerState.receivingPhase("queued");
+  composerState.nodes.get("#conversation-message").value="Newest composer message";
+  await composerState.nodes.get("#conversation-compose").handlers.submit({preventDefault(){}});
+  const sent=[...composerState.originals.values()][0];
+  assert.match(composerState.nodes.get("#conversation-send-state").textContent,/waiting to send/);
+  sent.phase="accepted";await composerState.ui.refresh();
+  assert.match(composerState.nodes.get("#conversation-send-state").textContent,/Sent to your conversation/,"Composer progress follows later native acceptance");
+  sent.phase="queued";await composerState.ui.refresh();
+  assert.match(composerState.nodes.get("#conversation-send-state").textContent,/Sent to your conversation/,"Older source observations cannot regress acceptance");
+  const composerLoss=boot();await composerLoss.ui.refresh();composerLoss.lose();const releaseLoss=composerLoss.holdPost();
+  composerLoss.nodes.get("#conversation-message").value="Accepted before the POST acknowledgment was lost";
+  const uncertainPost=composerLoss.nodes.get("#conversation-compose").handlers.submit({preventDefault(){}});
+  assert(composerLoss.posting());await composerLoss.ui.refresh();releaseLoss();await uncertainPost;
+  assert.match(composerLoss.nodes.get("#conversation-send-state").textContent,/Sent to your conversation/,"A lost POST response cannot erase acceptance already observed through history");
+  const voiceHistory=boot();
+  voiceHistory.originals.set("voice-original",{id:"voice-original",sequence:1,text:"",phase:"preparing",voice:{audio_sha256:"a"}});
+  await voiceHistory.ui.refresh();
+  voiceHistory.originals.set("voice-original",{id:"voice-original",sequence:1,preview:"A finalized automatic transcript",phase:"accepted",voice:{audio_sha256:"a",transcription:{capture_id:"voice-original"}}});
+  await voiceHistory.ui.refresh();
+  assert.equal(voiceHistory.nodes.get("#conversation-inputs").children[0].children[0].textContent,"Automatic voice transcript:\nA finalized automatic transcript","Preparing empty text cannot hide the later history transcript preview");
   console.log("Conversation history, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -132,7 +132,16 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             if request.headers.get('origin') not in allowed:
                 return JSONResponse({'detail': 'Wrong request origin'}, status_code=403)
             # Bound chunked bodies as well as Content-Length before parsing them.
-            bound = 262144 if (request.url.path == '/api/interaction/inputs' or re.fullmatch(r'/api/interaction/requests/[a-f0-9]{32}',request.url.path)) else 16384
+            if request.url.path == '/api/interaction/voice':
+                try:
+                    selected = authorize(request)
+                    if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), selected['csrf']):
+                        raise HTTPException(403, 'Action token missing')
+                except HTTPException as exc:
+                    return JSONResponse({'detail':exc.detail}, status_code=exc.status_code)
+                bound = 20*1024*1024
+            else:
+                bound = 262144 if (request.url.path == '/api/interaction/inputs' or re.fullmatch(r'/api/interaction/requests/[a-f0-9]{32}',request.url.path)) else 16384
             data = bytearray()
             async for chunk in request.stream():
                 data.extend(chunk)
@@ -188,7 +197,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     @app.get('/')
     def shell():
         body = (public / 'index.html').read_text()
-        for name in ('app.js', 'requests.js', 'conversation.js', 'style.css'):
+        for name in ('app.js', 'requests.js', 'microphone.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         if appearance:
@@ -200,7 +209,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/assets/{name}')
     def asset(name: str, request: Request):
-        if name not in ('app.js', 'requests.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('app.js', 'requests.js', 'microphone.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -265,7 +274,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         except (ProviderUnavailable, OSError, ValueError):
             raise HTTPException(503, 'Integrating conversation unavailable; refresh before continuing') from None
         authorize(request)
-        return {**result, 'csrf':session['csrf'], 'can_listen':speech is not None}
+        return {**result, 'csrf':session['csrf'], 'can_listen':speech is not None,
+                'can_speak':bool(getattr(provider, 'receiver', {}).get('voice'))}
 
     @app.get('/api/interaction/inputs')
     async def conversation_inputs(request: Request, before: int = 0, direction: str = 'before'):
@@ -306,6 +316,25 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Provide one original message of at most 32 KiB') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Submission unconfirmed. Check this message status before sending it again') from None
+        authorize(request)
+        return result
+
+    @app.post('/api/interaction/voice')
+    async def conversation_voice(request: Request):
+        session = authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        metadata = {key:request.headers.get(header, '') for key, header in
+                    (('binding', 'x-input-binding'), ('id', 'x-input-id'),
+                     ('audio_sha256', 'x-audio-sha256'), ('mime', 'content-type'))}
+        try:
+            data = await request.body()
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_voice_submit, metadata, data)
+        except (ValueError, UnicodeError):
+            raise HTTPException(400, 'Provide one finalized recording of at most 20 MiB') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Voice capture unconfirmed; check its status before retrying this recording') from None
         authorize(request)
         return result
 

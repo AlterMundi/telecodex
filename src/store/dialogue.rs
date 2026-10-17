@@ -97,7 +97,7 @@ pub(super) fn original_on(
             }
             Ok((
                 SourceInput {
-                    transcription: None,
+                    transcription: input.voice.as_ref().and_then(|v| v.transcription.clone()),
                     channel: "conversation".into(),
                     event_id: id.clone(),
                     update_id: None,

@@ -9,19 +9,21 @@ window.Conversation = (() => {
   };
   function mount({api, headers, setCsrf, modeChanged, telegram}) {
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed});
+    const microphone = window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:inputCard,pauseAudio:pause,unauthorized:failed,telegram});
     const cards = new Map();
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
     const sendState = $("#conversation-send-state");
-    let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0;
+    let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0, latestComposerId;
     const phaseText = value => value.retired ? "Saved from an earlier conversation binding."
-      : ({retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
+      : ({preparing:"Recording saved; preparing its automatic transcript.", preparation_unconfirmed:"Recording saved; transcription unconfirmed. No work was submitted automatically.", retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
           sending:"Sending to your conversation…", steering:"Sending to your conversation…",
           accepted:"Sent to your conversation. Work may continue.",
           retained_unsent:"Saved; not sent.", uncertain:"Saved; delivery unconfirmed. Check status."})[value.phase]
         || "Submission unconfirmed. Check status before sending this message again.";
     function resetInputs() {
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
+      latestComposerId = undefined; sendState.textContent = "";
       $("#conversation-inputs").replaceChildren();
       $("#conversation-inputs-older").hidden = true;
       draft.disabled = true; send.disabled = true;
@@ -72,6 +74,7 @@ window.Conversation = (() => {
         card.value.retired = !!card.value.retired || !!value.retired;
         card.status.textContent = phaseText(card.value);
         card.retry.hidden = !!card.value.phase || !card.value.binding;
+        if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
         return card;
       }
       // Native acceptance and retirement cannot be undone by a late snapshot.
@@ -81,8 +84,9 @@ window.Conversation = (() => {
       if (!card.value.phase && value.phase && draft.value === card.value.text) draft.value = "";
       // Preserve full original text after reading it, and an unknown POST's text.
       card.value = {...card.value, ...value};
-      card.text.textContent = card.value.text ?? card.value.preview;
+      card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
+      if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
       card.retry.hidden = !!card.value.phase || !card.value.binding;
       card.box.dataset.sequence = String(card.value.sequence ?? Number.MAX_SAFE_INTEGER);
       const container = $("#conversation-inputs");
@@ -96,7 +100,7 @@ window.Conversation = (() => {
       const result = await api(`interaction/inputs?before=${before}&direction=${direction}`);
       if (owned !== inputGeneration) return;
       if (result.binding !== binding) throw new Error("Conversation changed. Refresh before sending.");
-      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset();}
+      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); microphone?.reset();}
       inputBinding = result.binding;
       setCsrf(result.csrf);
       for (const value of result.items) inputCard(value, observation);
@@ -120,7 +124,7 @@ window.Conversation = (() => {
         $("#conversation-sent").open = true; return;
       }
       const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation;
-      posting = true; send.disabled = true;
+      posting = true; send.disabled = true; latestComposerId = id;
       inputCard({id,text,binding}, observation); $("#conversation-sent").open = true;
       sendState.textContent = "Sending…";
       try {
@@ -131,7 +135,9 @@ window.Conversation = (() => {
         sendState.textContent = phaseText(confirmed.value);
       } catch (e) {
         if (owned !== inputGeneration) return;
-        sendState.textContent = "Submission unconfirmed. Check this message status; it will not be resent automatically.";
+        const retained = inputs.get(id)?.value;
+        if (id === latestComposerId) sendState.textContent = retained?.phase ? phaseText(retained)
+          : "Submission unconfirmed. Check this message status; it will not be resent automatically.";
         if (e.status === 401 || e.status === 403) failed(e);
       } finally { posting = false; send.disabled = !inputBinding; }
     });
@@ -191,12 +197,12 @@ window.Conversation = (() => {
         history.replaceState(null, "", url);
       }
       try { telegram?.BackButton?.[enabled ? "show" : "hide"]?.(); } catch (_) {}
-      if (!enabled) pause();
+      if (!enabled) {pause(); microphone?.deactivate();}
       modeChanged(enabled, initial);
     }
     function failed(error) {
       if (error.status === 401 || error.status === 403) {
-        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset();
+        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else pause();
@@ -261,11 +267,12 @@ window.Conversation = (() => {
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset();
+        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset();
         newest = {delivery:0,native:0}; oldest = {delivery:0,native:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
       binding = value.binding;
+      microphone?.configure(value.can_speak);
       setCsrf(value.csrf);
       canListen = value.can_listen;
       for (const source of value.items) upsert(source);

@@ -21,7 +21,7 @@ mod routing;
 mod session_requests;
 mod stopping;
 mod voice;
-pub use conversation_inputs::{ConversationInput, ConversationInputEvent};
+pub use conversation_inputs::{ConversationInput, ConversationInputEvent, ConversationVoice};
 pub use stopping::{StopOperation, StopTarget};
 mod nexus;
 mod observer;
