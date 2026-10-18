@@ -121,7 +121,7 @@ def qualify(binary):
         long_text='Bounded trace '+('\x01'*32000)
         long_input,_=submit(long_text)
         j.wait(lambda:read(long_input['id'])['phase']=='accepted')
-        j.call('trace-long-dispatch','dispatch',{'input_ref':long_input['id'],'destinations':[{'selector':name,'relation':'new','requests':[]}for name in ('Alpha','Beta')]})
+        j.call('route-trace-long-dispatch','dispatch',{'input_ref':long_input['id'],'destinations':[{'selector':name,'relation':'new','requests':[]}for name in ('Alpha','Beta')]})
         def long_trace():
             response=client.get('/api/interaction/inputs/'+long_input['id']+'/trace',headers=headers)
             assert response.status_code==200,response.text
