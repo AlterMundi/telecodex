@@ -375,14 +375,21 @@ class AdapterTests(unittest.TestCase):
             },
         )
         broker = self.make_broker(self.sender, self.scope, task=task)
-        broker._instruction = replace(
+        instruction = replace(
             broker._instruction,
             instruction_id="x" * 200,
             revision=2**53 - 1,
             predecessor="a" * 64,
         )
+        broker = MatrixExecutionBroker(instruction, task, broker._client)
         result = broker.submit(self.scope, {"text": "ñ" * 7000}, 1)
         self.assertTrue(result["semantic"]["terminal"])
+        relay = json.loads(
+            self.receiver.message(result["message_id"])["payload"]["body"]["text"]
+        )
+        self.assertEqual(
+            relay["execution_ref"], {"id": "x" * 200, "revision": 2**53 - 1}
+        )
 
     def test_signed_malformed_relation_is_refused_before_receiving_execution(self):
         relay = {
