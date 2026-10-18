@@ -1,8 +1,46 @@
 # Integrating conversation controller
 
 Owning plan: [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
-Implementation: #109–#119. The controller is being built in the existing listener;
-the configuration below is not yet a qualified receiving deployment.
+Implementation: #109–#119. The controller runs inside the existing listener.
+The single-body native controller and browser monitor have a qualified receiving
+deployment, recorded in [#170](https://github.com/AlterMundi/telecodex/issues/170).
+A deployment record establishes that receiver's selected source and observed
+behavior; it does not enroll another body or certify every end-to-end scenario.
+
+Current delivery is one body with multiple native work sessions. Cross-body
+activation is deferred. The parent plan still owns combined parallel voice
+acceptance, genuine human routing feedback and the remaining attention evaluation.
+
+## Using the integrating conversation
+
+Open Conversation in the authenticated Sessions app, or use an operator-enrolled
+Talk device. Text and committed voice clips enter the same retained conversation.
+Talk starts a recording; a second press sends it. Holding the button discards the
+current recording. Work continues while the device is disconnected.
+
+Discuss normally, name the work you want to continue, or deliberately begin a
+message with #Name. A reply to a returned result carries that session's context.
+A new leading selector overrides that reply focus. If multiple requests fit,
+clarify which work you mean; the controller does not infer a new task merely
+because the intended correction is unclear. Existing context can keep progressing
+while that decision is unresolved.
+
+Later input reaches a selected running worker through native steering. Input
+retention, native acceptance, declared incorporation and verified task behavior
+remain different facts. Stopping spoken playback does not cancel the worker.
+Use the selected work session's explicit controls to change its execution.
+
+Expand **Routing monitor · your inputs and destinations** to inspect the retained
+original text or voice transcript, actual destinations, exact forwarded originals
+and correlated session results. Long text has read-more controls. A message that
+has not been routed remains visible without an invented destination. Refreshing
+this view never transcribes, dispatches, retries or renders speech.
+
+For a selected desktop/device display, an operator can enroll a separate expiring
+read-only credential and open ?view=monitor without Telegram. This reuses the
+same renderer and gives no message, question-answer, audio or session-control
+authority. See [standalone monitor setup](interaction-companion.md#standalone-read-only-routing-monitor).
+The ordinary Talk credential does not grant inspection access.
 
 The integrating conversation retains conversational continuity while independently
 running native sessions retain their own work. Native input identity, request
@@ -94,8 +132,17 @@ attributed. Canonical worker answers also retain their own authorship.
 owned native conversation. Replying to an original admitted message or returned
 result inherits its request and target; an explicit selector overrides that
 focus. Direct text in an enrolled worker topic uses the same controller. Plain
-unselected entry text remains ordinary conversation. Semantic routing is a later
-extension; this adapter does not pretend an explicit selector is a classifier.
+unselected entry text enters the native integrating conversation. Its controller
+tool can inspect authorized observer cards and retained originals, propose an
+existing destination or a justified new session, or ask for clarification.
+Deterministic explicit/reply selection remains independent of that model.
+
+For a correction, the integrator can inspect target_inputs to discover retained
+request IDs and relations before dispatching an amendment. An unresolved parent
+is a reason to clarify, never to silently downgrade the correction to a new
+request. Model-written interpretation does not replace the original human text.
+Specialized classifiers remain evaluation candidates rather than a selected
+production dependency.
 
 An ambiguous or unknown name retains the original source without dispatch and
 asks for a stable selector. Replying with that selector resolves the original
