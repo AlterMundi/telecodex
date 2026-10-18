@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-function boot() {
+function boot(readOnly=false) {
   const nodes = new Map(), requests = [];
   function element() {
     return {
@@ -118,7 +118,7 @@ function boot() {
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
-  const ui = context.window.Conversation.mount({api,headers:() => ({}),setCsrf() {},modeChanged() {}});
+  const ui = context.window.Conversation.mount({api,readOnly,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
   return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audio(parts=false){renderAudio=true;multipart=parts;},
     nativeRequest() {
@@ -392,5 +392,15 @@ function boot() {
   mixed.telegramOriginals.set('telegram:11',{id:'telegram:11',text:'New Telegram ingress',phase:'completed',sequence:11,capture_order:12,origin_kind:'telegram',read_only:true});
   await mixed.ui.refresh();assert.equal(mixed.nodes.get('#conversation-inputs').children[0].children[0].textContent,'New Telegram ingress');
   assert(mixed.requests.filter(r=>r.telegram||r.trace).every(r=>r.body===undefined),'All observation requests remain GET only');
+  const viewer=boot(true);
+  viewer.originals.set('view-only',{id:'view-only',text:'#Missing Inspect only',sequence:1,phase:'awaiting_target',binding:'fixture'});
+  await viewer.ui.refresh();
+  const viewCard=viewer.nodes.get('#conversation-inputs').children[0];
+  assert.equal(viewCard.children[3].hidden,true,'Read-only viewer cannot resolve a pending route');
+  assert.equal(viewCard.children[2].children[0].hidden,true);
+  assert.equal(viewer.nodes.get('#conversation-message').disabled,true);
+  viewer.nodes.get('#conversation-message').value='Do not send';
+  await viewer.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+  assert.equal(viewer.originals.size,1);
   console.log("Conversation history, routing trace, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });

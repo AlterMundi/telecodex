@@ -30,6 +30,7 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
   const context = vm.createContext({
     document,
     window: { Telegram: { WebApp: { initData: "synthetic", ready() {} } } },
+    URL, location:{href:"https://fixture.invalid/sessions/"},
     AbortController,
     crypto: { randomUUID: () => "synthetic-action-nonce" },
     fetch(route, options) {

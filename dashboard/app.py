@@ -181,7 +181,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 grant = companions.authenticate(device.group(1))
                 if grant is None:
                     raise HTTPException(401, 'Companion access is unavailable; operator enrollment required')
-                if not companion_permitted(request.method, request.url.path):
+                if not companion_permitted(request.method, request.url.path, grant['scope']):
                     raise HTTPException(403, 'Companion access is limited to the integrating conversation')
                 return grant
             # A restricted WebView may omit cookies. Never downgrade an invalid

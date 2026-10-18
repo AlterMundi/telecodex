@@ -81,6 +81,43 @@ class Companion(unittest.TestCase):
         self.assertEqual(self.client.get('/api/interaction',headers=duplicate).status_code,401)
         self.assertEqual(len(self.speech.calls),0)
 
+    def test_monitor_grant_is_read_only_and_never_inherits_ambient_owner(self):
+        from dashboard.companion import permitted
+        output=self.root/'monitor.json'
+        receipt=self.grants.enroll('Selected monitor',output,3600,scope='monitor_readonly')
+        credential=read_json(output)
+        self.assertEqual(receipt['scope'],'monitor_readonly')
+        self.assertEqual(credential['scope'],'monitor_readonly')
+        login=self.client.post('/api/session',json={'init_data':'100'},headers={'origin':self.config['origin']})
+        headers={'origin':self.config['origin'],'authorization':credential['authorization'],
+                 'cookie':'telecodex_dashboard='+login.json()['session_token']}
+        self.assertEqual(self.client.get('/api/interaction',headers=headers).status_code,200)
+        self.provider.conversation_telegram_inputs=lambda before,direction:{'items':[],'read_only':True}
+        response=self.client.get('/api/interaction/telegram-inputs',headers=headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.provider.conversation_input_trace=lambda ident:{'id':ident,'read_only':True}
+        path='/api/interaction/inputs/telegram:123/trace'
+        self.assertEqual(self.client.get(path,headers=headers).status_code,200)
+        allowed=['/api/interaction','/api/interaction/inputs','/api/interaction/part',
+                 '/api/interaction/telegram-inputs',path,path+'/original',
+                 '/api/interaction/inputs/'+'a'*36+'/trace/'+'b'*36]
+        for selected in allowed:
+            self.assertTrue(permitted('GET',selected,'monitor_readonly'),selected)
+            for method in ('POST','PUT','DELETE'):
+                self.assertFalse(permitted(method,selected,'monitor_readonly'))
+        for selected in ('/api/state','/api/stop','/api/resume','/api/traffic','/api/alerts',
+                         '/api/interaction/requests','/api/session','/api/interaction/audio',
+                         '/api/interaction/voice','/api/interaction/visual','/api/interaction/inputs',
+                         '/api/interaction/inputs/'+'a'*36+'/route'):
+            if selected!='/api/interaction/inputs':
+                self.assertEqual(self.client.get(selected,headers=headers).status_code,403,selected)
+            self.assertEqual(self.client.post(selected,json={},headers=headers).status_code,403,selected)
+        # Existing interaction credentials do not silently gain monitor access.
+        self.assertEqual(self.client.get(path,headers=self.headers).status_code,403)
+        self.grants.revoke(receipt['grant_id'])
+        self.assertEqual(self.client.get(path,headers=headers).status_code,401)
+        self.assertEqual(len(self.speech.calls),0)
+
     def test_origin_csrf_and_browser_chosen_speech_rejected_before_provider(self):
         self.assertEqual(self.client.post('/api/interaction/audio',json=self.body,headers={**self.headers,'origin':'https://other.test'}).status_code,403)
         self.assertEqual(self.client.post('/api/interaction/audio',json=self.body,headers={**self.headers,'x-dashboard-csrf':'wrong'}).status_code,403)
