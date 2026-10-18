@@ -181,7 +181,7 @@ def _prune_audio(config, *, exclude=None, now=None):
                 candidates.append((used, job, audio.st_size))
             except (OSError, ValueError, KeyError, TypeError, RenderError):
                 continue
-        remaining = sum(size for _, _, size in candidates)
+        remaining = audio_occupancy(root)
         for used, job, size in sorted(candidates):
             if now - used < 300 or (now - used < age and remaining <= limit):
                 continue  # A bounded grace protects a renderer's immediate reader.
@@ -203,31 +203,36 @@ def _prune_audio(config, *, exclude=None, now=None):
                     removed += size
             except (OSError, ValueError, KeyError, TypeError, RenderError):
                 continue
-    return {'removed_audio_bytes': removed, 'retained_audio_bytes': remaining,
+    return {'removed_audio_bytes': removed, 'accounted_audio_bytes': remaining,
             'receipts_preserved': True, 'provider_calls': 0}
+
+
+def audio_occupancy(root):
+    used = 0
+    for job in root.iterdir():
+        if not re.fullmatch(r'[a-f0-9]{64}', job.name) or job.is_symlink() or not job.is_dir():
+            continue
+        audio = job / 'audio.wav'
+        if audio.exists() or audio.is_symlink():
+            info = audio.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise RenderError('unsafe-audio-budget-artifact')
+            used += info.st_size
+        else:
+            try:
+                prior = json.loads(private_bytes(job / 'state.json', 32768))
+                if prior.get('phase') == 'intent':
+                    used += MAX_AUDIO
+            except FileNotFoundError:
+                pass
+    return used
 
 
 def reserve_audio(config, state_file, state):
     """Bound payloads plus in-flight maximum sizes before a provider request."""
     root = Path(config['cache_root'])
     with lock(root / '.audio-budget.lock'):
-        used = 0
-        for job in root.iterdir():
-            if not re.fullmatch(r'[a-f0-9]{64}', job.name) or job.is_symlink() or not job.is_dir():
-                continue
-            audio = job / 'audio.wav'
-            if audio.exists() or audio.is_symlink():
-                info = audio.lstat()
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-                    raise RenderError('unsafe-audio-budget-artifact')
-                used += info.st_size
-            else:
-                try:
-                    prior = json.loads(private_bytes(job / 'state.json', 32768))
-                    if prior.get('phase') == 'intent':
-                        used += MAX_AUDIO
-                except FileNotFoundError:
-                    pass
+        used = audio_occupancy(root)
         if used + MAX_AUDIO > config.get('audio_cache_max_bytes', 256 * 1024 * 1024):
             raise RenderError('audio-cache-capacity-text-remains-available')
         atomic(state_file, canonical(state))

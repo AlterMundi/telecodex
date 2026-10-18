@@ -137,7 +137,7 @@ class Render(unittest.TestCase):
         result=speech.prune_audio({**self.config,'audio_cache_max_bytes':speech.MAX_AUDIO})
         self.assertFalse(Path(first['audio_path']).exists())
         self.assertTrue(Path(second['audio_path']).exists())
-        self.assertLessEqual(result['retained_audio_bytes'],speech.MAX_AUDIO)
+        self.assertLessEqual(result['accounted_audio_bytes'],speech.MAX_AUDIO)
         self.assertEqual(len(self.calls),2)
 
     def test_audio_budget_refuses_new_synthesis_before_storage_can_grow(self):
@@ -147,6 +147,30 @@ class Render(unittest.TestCase):
         with self.assertRaisesRegex(speech.RenderError,'audio-cache-capacity'):
             self.render({**self.request,'scope':'new-part'})
         self.assertEqual(len(self.calls),1,'A full protected budget must not spend another provider call')
+
+    def test_capacity_pruning_counts_protected_payloads_and_intent_reservations(self):
+        stream=io.BytesIO()
+        with wave.open(stream,'wb') as output:
+            output.setparams((1,2,22050,0,'NONE','not compressed'))
+            output.writeframes(b'\x01\x00'*(22050*100))
+        self.data=stream.getvalue()
+        protected=speech.directory(self.root/'cache'/('f'*64))
+        for phase in ('unconfirmed','intent'):
+            with self.subTest(phase=phase):
+                first=self.render();self.age_audio(first,600)
+                speech.atomic(protected/'state.json',speech.canonical({'phase':phase}))
+                if phase=='unconfirmed':
+                    speech.atomic(protected/'audio.wav',b'\x00'*speech.MAX_AUDIO)
+                else:
+                    (protected/'audio.wav').unlink()
+                before=len(self.calls)
+                # The next maximum-sized render needs8MiB of free capacity in
+                # a16MiB budget; protected occupancy must trigger eligible GC.
+                result=speech.prune_audio({**self.config,'audio_cache_max_bytes':speech.MAX_AUDIO})
+                self.assertFalse(Path(first['audio_path']).exists())
+                self.assertEqual(json.loads((protected/'state.json').read_text())['phase'],phase)
+                self.assertEqual(result['accounted_audio_bytes'],speech.MAX_AUDIO)
+                self.assertEqual(len(self.calls),before)
 
     def test_success_restart_cache_scope_and_no_playback_claim(self):
         first = self.render()
