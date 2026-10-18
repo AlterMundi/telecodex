@@ -98,6 +98,75 @@ def baseline(data):
     return {'engine': 'sparse-tfidf-policy-baseline/v1; uncalibrated thresholds .25/.10', 'decisions': rows}
 
 
+def embedding_inputs(data):
+    """Exact unlabeled inputs for independently retained passage/query batches."""
+    projection = inputs(data)
+    encode = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)
+    return {'schema': 'telecodex.routing-embedding-inputs/v1',
+            'passages': [{'id': card['id'], 'text': encode(card)} for card in projection['cards']],
+            'queries': [{'id': case['id'], 'text': encode(case)} for case in projection['cases']]}
+
+
+def embedding_baseline(data, retained):
+    """Offline candidate retrieval; no inference, fitting or production selection.
+
+    Thresholds intentionally match the existing sparse reference and are not
+    calibrated for this vector space. Scores are similarities, not probabilities.
+    This candidate cannot decide new work versus discussion or multi-target work.
+    """
+    projection = embedding_inputs(data)
+    if not projection['passages']:
+        raise ValueError('At least one candidate card is required')
+    digest = hashlib.sha256(json.dumps(projection, sort_keys=True).encode()).hexdigest()
+    if (retained.get('schema') != 'telecodex.routing-embeddings/v1'
+            or retained.get('inputs_sha256') != digest
+            or not isinstance(retained.get('engine'), str) or not retained['engine'].strip()):
+        raise ValueError('Retained embedding engine and exact unlabeled input hash required')
+    dimensions = set()
+    def vectors(name, expected):
+        rows = retained.get(name)
+        if not isinstance(rows, list) or len(rows) != len(expected):
+            raise ValueError('One vector for each exact input required')
+        result = {}
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {'id','embedding'} or not isinstance(row['id'],str) or row['id'] in result:
+                raise ValueError('Unique closed embedding rows required')
+            vector = row['embedding']
+            if (not isinstance(vector, list) or not 1 <= len(vector) <= 65536
+                    or any(type(v) not in (int,float) or not math.isfinite(v) for v in vector)):
+                raise ValueError('Finite nonempty vectors required')
+            norm = math.hypot(*vector)
+            if not math.isfinite(norm) or not norm:
+                raise ValueError('Finite nonzero vector norm required')
+            dimensions.add(len(vector))
+            result[row['id']] = [v/norm for v in vector]
+        if set(result) != {row['id'] for row in expected}:
+            raise ValueError('Embedding identities differ from exact inputs')
+        return result
+    passages = vectors('passages', projection['passages'])
+    queries = vectors('queries', projection['queries'])
+    if len(dimensions) != 1:
+        raise ValueError('All vectors must use one consistent model/dimension')
+    rows = []
+    for case in inputs(data)['cases']:
+        prefix = re.match(r'^\s*(?:/self)?#([^\s]+)', case['text'])
+        explicit = [] if not prefix else [card for card in data['cards']
+            if prefix.group(1).casefold() in {card['id'].casefold(),card['name'].casefold()}]
+        scores = sorted(((sum(a*b for a,b in zip(queries[case['id']],vector)), identity)
+                         for identity,vector in passages.items()), reverse=True)
+        selected = []
+        if len(explicit) == 1 and not explicit[0].get('stale',False):
+            selected = [explicit[0]['id']]
+        elif not prefix and scores[0][0] >= .25 and (len(scores) == 1 or scores[0][0]-scores[1][0] >= .10):
+            chosen = next(card for card in data['cards'] if card['id'] == scores[0][1])
+            if not chosen.get('stale',False):
+                selected = [chosen['id']]
+        rows.append({'id':case['id'], 'decision':{'action':'route' if selected else 'clarify','targets':selected},
+                     'candidate_similarities': [{'target':identity,'cosine':value} for value,identity in scores]})
+    return {'engine': retained['engine']+'; cosine-policy-baseline/v1; uncalibrated thresholds .25/.10; encoding batch timings separate',
+            'decisions':rows}
+
+
 def score(data, predictions):
     targets = {c['id'] for c in data['cards']}
     if not isinstance(predictions.get('engine'), str) or not predictions['engine'].strip():
@@ -142,8 +211,17 @@ def main():
     group.add_argument('--export-inputs', action='store_true')
     group.add_argument('--baseline', action='store_true')
     group.add_argument('--decisions', type=pathlib.Path)
+    group.add_argument('--export-embedding-inputs', action='store_true')
+    group.add_argument('--embeddings', type=pathlib.Path)
     args = parser.parse_args(); data = load(args.dataset)
-    result = inputs(data) if args.export_inputs else score(data, baseline(data) if args.baseline else json.loads(args.decisions.read_text()))
+    if args.export_inputs:
+        result = inputs(data)
+    elif args.export_embedding_inputs:
+        result = embedding_inputs(data)
+    elif args.embeddings:
+        result = score(data, embedding_baseline(data,json.loads(args.embeddings.read_text())))
+    else:
+        result = score(data, baseline(data) if args.baseline else json.loads(args.decisions.read_text()))
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

@@ -2,6 +2,8 @@
 """Evaluation integrity: missing rows or bad metadata cannot become good scores."""
 import copy
 import importlib.util
+import hashlib
+import json
 import pathlib
 import unittest
 
@@ -58,6 +60,46 @@ class Integrity(unittest.TestCase):
         report = evaluation.score(self.data, evaluation.baseline(self.data))
         self.assertEqual(report['cases'], len(self.data['cases']))
         self.assertEqual(report['latency_ms']['measured_cases'], report['cases'])
+
+    def embeddings(self):
+        projection = evaluation.embedding_inputs(self.data)
+        return {'schema':'telecodex.routing-embeddings/v1','engine':'synthetic vectors; no learned inference',
+            'inputs_sha256':hashlib.sha256(json.dumps(projection,sort_keys=True).encode()).hexdigest(),
+            'passages':[{'id':row['id'],'embedding':[int(j==i) for j in range(3)]}
+                        for i,row in enumerate(projection['passages'])],
+            'queries':[{'id':row['id'],'embedding':[1,0,0]} for row in projection['queries']]}
+
+    def test_embedding_projection_excludes_labels_and_scorer_never_fits_them(self):
+        projection = evaluation.embedding_inputs(self.data)
+        serialized = json.dumps(projection)
+        self.assertNotIn('acceptable',serialized)
+        self.assertNotIn('source',projection)
+        retained = self.embeddings()
+        original = evaluation.embedding_baseline(self.data,retained)
+        changed = copy.deepcopy(self.data)
+        for case in changed['cases']:case['acceptable'] = [{'action':'new','targets':[]}]
+        self.assertEqual(evaluation.embedding_baseline(changed,retained),original)
+        self.assertEqual(len(original['decisions']),24)
+        report = evaluation.score(self.data,original)
+        self.assertEqual(report['dispatches'],0)
+        self.assertIsNone(report['latency_ms']['median'])
+        self.assertIsNone(report['api_cost_estimate_usd']['sum'])
+        first = original['decisions'][0]
+        self.assertEqual(first['decision'],{'action':'route','targets':['nexus']})
+
+    def test_embedding_identity_shape_and_numeric_corruption_reject(self):
+        for change in ('hash','missing','duplicate','unknown','dimension','zero','nan','boolean'):
+            retained = self.embeddings()
+            if change == 'hash':retained['inputs_sha256']='0'*64
+            elif change == 'missing':retained['queries'].pop()
+            elif change == 'duplicate':retained['queries'][1]['id']=retained['queries'][0]['id']
+            elif change == 'unknown':retained['queries'][0]['id']='not-a-case'
+            elif change == 'dimension':retained['queries'][0]['embedding']=[1,0]
+            elif change == 'zero':retained['queries'][0]['embedding']=[0,0,0]
+            elif change == 'nan':retained['queries'][0]['embedding']=[float('nan'),0,0]
+            else:retained['queries'][0]['embedding']=[True,0,0]
+            with self.subTest(change=change),self.assertRaises(ValueError):
+                evaluation.embedding_baseline(self.data,retained)
 
 
 if __name__ == '__main__':
