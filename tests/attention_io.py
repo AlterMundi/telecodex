@@ -3,6 +3,9 @@
 Qualifies control/return behavior, not real-model throughput or monetary cost.
 """
 import json
+import html
+import threading
+import time
 import pathlib
 import re
 import sys
@@ -47,20 +50,72 @@ class Load(Routing):
         return super().answer(topic,text,**kwargs)
 
 
+
+def attention_snapshot(j, label):
+    before=len(j.messages)
+    j.admit('/interaction attention',topic=1)
+    j.wait(lambda:any('Interaction attention (current listener instance)' in m['text'] for m,_ in j.messages[before:]))
+    message=next(m['text'] for m,_ in j.messages[before:] if 'Interaction attention (current listener instance)' in m['text'])
+    value=json.loads(html.unescape(re.sub(r'<[^>]+>','',message.split('\n',1)[1])))
+    # The human Telegram formatter strips underscore markup, as in the existing
+    # waitingtopics assertion below. Normalize that presentation spelling only.
+    value={k.replace('_',''):v for k,v in value.items()}
+    return {'stage':label,**{k:value[k.replace('_','')] for k in ('limit','active','waiting','started','peak','total_wait_ms','max_wait_ms')},
+            'queued_by_session':dict(j.row("SELECT s.thread_id,count(*) FROM interaction_instructions i JOIN sessions s ON s.id=i.session_id WHERE i.phase='queued' GROUP BY s.thread_id"))}
+
+
 def retained_load(binary):
     j=Load(binary)
     try:
         j.prepare_load()
+        metrics={"schema":"telecodex.attention-qualification/v1","synthetic":True,"model_calls":0,"retained_contexts":20,"snapshots":[]}
         for topic in (7,8):j.admit('#'+('Alpha' if topic==7 else 'Beta')+' Begin the selected task.',topic=1)
         j.wait(lambda:all(j.instructions(n) and j.instructions(n)[0][1]=='accepted' for n in (7,8)))
+        metrics['snapshots'].append(attention_snapshot(j,'two'))
         for topic in range(9,12):j.admit(f'#Work{topic} Begin the selected task.',topic=1)
         j.wait(lambda:all(j.instructions(n) for n in range(7,12)))
         assert len(j.runs)==2
+        metrics['snapshots'].append(attention_snapshot(j,'five'))
         for topic in range(12,27):j.admit(f'#Work{topic} Begin the selected task.',topic=1)
         j.wait(lambda:all(j.instructions(n) for n in range(7,27)))
         assert len(j.runs)==2
-        j.admit('#Alpha Correct the active task to 17.',topic=1)
-        j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
+        metrics['snapshots'].append(attention_snapshot(j,'twenty'))
+        # Native approval remains unresolved while sustained progress, steering
+        # and front dialogue compete. These peers perform no inference.
+        worker=next(send for thread,send in list(j.clients.values()) if thread=='native-topic-8')
+        worker({'id':900,'method':'item/commandExecution/requestApproval','params':{
+            'threadId':'native-topic-8','turnId':j.runs['native-topic-8'],'itemId':'attention-approval',
+            'command':'synthetic command only','reason':'Keep this request pending during load',
+            'availableDecisions':['accept','decline']}})
+        j.wait(lambda:j.row("SELECT count(*) FROM human_interactions WHERE state='pending' AND json_extract(payload_json,'$.source.kind')='approval'")==[(1,)])
+        stop=threading.Event();progress=[];errors=[]
+        def emit():
+            try:
+                for n in range(1000):
+                    if stop.is_set():break
+                    j.broadcast('native-topic-7','item/completed',{'turnId':j.runs['native-topic-7'],'item':{
+                        'id':'attention-progress-'+str(n),'type':'agentMessage','phase':'commentary','text':'Work remains in progress '+str(n)}})
+                    progress.append(n);time.sleep(.01)
+            except BaseException as error:errors.append(error)
+        burst=threading.Thread(target=emit,daemon=True);burst.start()
+        try:
+            j.wait(lambda:len(progress)>=5)
+            clock=time.monotonic()
+            j.admit('#Alpha Correct the active task to 17.',topic=1)
+            j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted',seconds=3)
+            metrics['active_steer_ms']=round((time.monotonic()-clock)*1000,3)
+            clock=time.monotonic()
+            j.admit('Can we still discuss the work here?',topic=1)
+            j.wait(lambda:j.has('Front remains responsive.',1),seconds=3)
+            metrics['front_dialogue_ms']=round((time.monotonic()-clock)*1000,3)
+            assert burst.is_alive(),'Sustained progress ended before controls were observed'
+            assert j.row("SELECT count(*) FROM human_interactions WHERE state='pending' AND json_extract(payload_json,'$.source.kind')='approval'")==[(1,)]
+            assert not j.answers,'Load automatically answered an unselected approval'
+        finally:
+            stop.set();burst.join(timeout=3)
+        assert not burst.is_alive() and not errors,errors
+        metrics['progress_events']=len(progress);metrics['approval_still_pending']=True
+        j.broadcast('native-topic-8','serverRequest/resolved',{'requestId':900})
         j.admit('#Work9 Correct the waiting task to 23.',topic=1)
         j.wait(lambda:len(j.instructions(9))==2)
         assert all(row[1]=='queued' for row in j.instructions(9))
@@ -93,6 +148,10 @@ def retained_load(binary):
         assert j.instructions(26)[0][1]=='retained_unsent'
         assert len(j.runs)==19
         assert all(j.has(f'Completed worker {n}',1) for n in range(7,26))
+        metrics['snapshots'].append(attention_snapshot(j,'completed'))
+        assert metrics['snapshots'][-1]['active']==metrics['snapshots'][-1]['waiting']==0
+        assert all(v['peak']<=2 for v in metrics['snapshots'])
+        print('METRICS '+json.dumps(metrics,sort_keys=True))
         print('PASS 2→5→20 retained contexts with two active native workers, active and waiting corrections, scoped waiting cancellation, independent front, reverse completion and acknowledged correlated returns; synthetic concurrency only')
     finally:j.close()
 
