@@ -14,6 +14,7 @@ pub struct InteractionConfig {
     pub targets: Vec<Target>,
     #[serde(default)]
     pub matrix_targets: Vec<MatrixTarget>,
+    pub matrix_transport: Option<MatrixTransportConfig>,
     #[serde(default = "default_active_workers")]
     pub max_active_workers: usize,
 }
@@ -23,6 +24,15 @@ pub struct InteractionConfig {
 pub struct Target {
     pub name: String,
     pub topic_id: i64,
+}
+
+/// Explicit owner setup for technical sends; never a model-selected command.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixTransportConfig {
+    pub command: Vec<String>,
+    pub source: MatrixDestination,
+    pub timeout_seconds: u64,
 }
 
 /// Explicit receiving configuration; labels never establish social authority.
@@ -110,6 +120,24 @@ impl InteractionConfig {
             {
                 bail!("Interaction targets require distinct topic IDs and single-token selectors");
             }
+        }
+        if let Some(transport) = &self.matrix_transport {
+            transport.source.validate()?;
+            if !matches!(transport.source, MatrixDestination::Body { .. })
+                || self.matrix_targets.is_empty()
+                || transport.command.is_empty()
+                || transport.command.len() > 32
+                || !std::path::Path::new(&transport.command[0]).is_absolute()
+                || transport
+                    .command
+                    .iter()
+                    .any(|arg| arg.is_empty() || arg.len() > 4096 || arg.contains('\0'))
+                || !(1..=60).contains(&transport.timeout_seconds)
+            {
+                bail!("Invalid explicit bounded Matrix host transport configuration");
+            }
+            #[cfg(not(unix))]
+            bail!("Matrix host transport currently requires Unix process groups");
         }
         if self.matrix_targets.len() > 16 {
             bail!("Too many explicitly selected Matrix targets");
@@ -407,6 +435,7 @@ mod tests {
             topic_id: 1,
             max_active_workers: 2,
             matrix_targets: vec![],
+            matrix_transport: None,
             targets: vec![
                 Target {
                     name: "Nexus".into(),

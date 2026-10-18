@@ -88,7 +88,7 @@ pub(super) fn tool_call(
                 return Ok(capabilities);
             }
             if matches!(request.tool.as_str(),"interaction_matrix_request"|"interaction_matrix_status") {
-                return super::matrix::tool(&app,key,human,&request.thread_id,request.arguments,&closed,request.tool=="interaction_matrix_request");
+                return super::matrix::tool(&app,key,human,&request.thread_id,request.arguments,&closed,request.tool=="interaction_matrix_request").await;
             }
             if request.tool=="interaction_inputs" {
                 if request.arguments!=json!({}) {bail!("Unexpected input query arguments");}

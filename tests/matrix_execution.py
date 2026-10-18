@@ -11,6 +11,7 @@ import sys
 import time
 import unittest
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,6 +30,7 @@ from matrix_execution import (
     parent_from_verified_sdk,
     validate_task,
 )
+from matrix_operator import NativeOwnerClient, configured_client
 from tests.test_execution_instruction import request
 
 from tests import test_dm025_client as client_fixtures
@@ -603,6 +605,74 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(ExecutionDenied):
             context.native(self.scope, {"text": "must not escape cancellation"})
         self.assertEqual(len(self.receiver.page(after=0, limit=10)), 1)
+
+
+class HostClientTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = client_fixtures.ClientFixture()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.addCleanup(self.fixture.tearDown)
+
+    def test_separate_source_capability_uses_same_runtime_and_absolute_deadline(self):
+        client = self.fixture.client()
+        connections = []
+
+        def observe(*args):
+            connections.append(args)
+            return nullcontext()
+
+        observation = replace(client, connection_observer=observe)
+        host = NativeOwnerClient(
+            client, observation, deadline_ns=time.monotonic_ns() + 2_000_000_000
+        )
+        _, result = host.invoke("runtime.status", {})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["result"]["schema"], "dm.runtime.status/v1")
+        self.assertEqual(len(connections), 1)
+        with self.assertRaisesRegex(MatrixExecutionError, "Unsupported technical"):
+            host.invoke("messaging.inbox", {})
+        wrong = replace(
+            client, config=replace(client.config, runtime_id="unselected-runtime")
+        )
+        with self.assertRaisesRegex(MatrixExecutionError, "one authenticated runtime"):
+            NativeOwnerClient(client, wrong)
+        wrong = replace(client, socket_path=client.socket_path.with_name("other.sock"))
+        with self.assertRaisesRegex(MatrixExecutionError, "one authenticated runtime"):
+            NativeOwnerClient(client, wrong)
+
+    def test_owner_binding_rejects_observation_capability_for_messaging(self):
+        root = self.fixture.state_root
+        key = root / "host-test-capability.key"
+        key.write_bytes(bytes(self.fixture.capability.key))
+        key.chmod(0o600)
+        reference = {
+            "socket": str(self.fixture.runtime.socket_path),
+            "client_config": str(self.fixture.config_path),
+            "client_key": str(key),
+        }
+        source = {
+            "being_ref": "dm:being:v1:" + "A" * 43,
+            "embodiment_id": self.fixture.origins["legion"]["embodiment_id"],
+        }
+        path = root / "host-test-binding.json"
+        path.write_text(
+            canonical(
+                {
+                    "schema": "telecodex.matrix-host-binding/v1",
+                    "source": source,
+                    "messaging": reference,
+                    "observation": reference,
+                }
+            )
+        )
+        path.chmod(0o600)
+        with self.assertRaisesRegex(MatrixExecutionError, "messaging-only capability"):
+            configured_client(path, source)
+        with self.assertRaisesRegex(
+            MatrixExecutionError, "differs from selected source"
+        ):
+            configured_client(path, {**source, "embodiment_id": "other-body"})
 
 
 class AuthenticatedSourceTests(unittest.TestCase):

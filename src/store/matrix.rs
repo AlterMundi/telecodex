@@ -218,6 +218,85 @@ impl Store {
         Ok(result)
     }
 
+    /// Claim one selected technical send before any external effect. A lost host
+    /// outcome remains submitting/uncertain and is never automatically replayed.
+    pub fn interaction_matrix_claim(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        binding: &str,
+        closed: &tokio_util::sync::CancellationToken,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let selected = owned_on(&tx, human, entry, id)?;
+        if selected["request"]["binding"] != binding
+            || selected["current"] != true
+            || closed.is_cancelled()
+        {
+            bail!("Selected Matrix send changed, closed or fenced before admission");
+        }
+        if selected["phase"] != "awaiting_execution" {
+            return Ok(false);
+        }
+        let changed = tx.execute("UPDATE interaction_matrix_requests SET phase='submitting' WHERE id=?1 AND phase='awaiting_execution'", [id])?;
+        tx.commit()?;
+        Ok(changed == 1)
+    }
+
+    pub fn interaction_matrix_uncertain(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        owned_on(&conn, human, entry, id)?;
+        // A late failed host observation must not erase a verified reply.
+        conn.execute("UPDATE interaction_matrix_requests SET phase='submission_uncertain' WHERE id=?1 AND phase='submitting'", [id])?;
+        Ok(())
+    }
+
+    pub fn interaction_matrix_submitted(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        binding: &str,
+        source: &MatrixAuthor,
+        value: &MatrixSubmission,
+    ) -> Result<Value> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let selected = owned_on(&tx, human, entry, id)?;
+        let expected_send = Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            format!("telecodex.matrix/request:{id}").as_bytes(),
+        )
+        .to_string();
+        if selected["request"]["binding"] != binding
+            || !matches!(
+                selected["phase"].as_str(),
+                Some("submitting" | "submission_uncertain" | "submitted" | "reply_received")
+            )
+            || serde_json::to_value(&value.destination)? != selected["request"]["destination"]
+            || value.author != *source
+            || value.send_id != expected_send
+            || value.thread_id != id
+            || !canonical_uuid(&value.message_id)
+            || !hash(&value.message_hash)
+            || !selected["submission"].is_null()
+                && selected["submission"] != serde_json::to_value(value)?
+        {
+            bail!("Matrix host outcome differs from the claimed original and fixed source");
+        }
+        tx.execute("UPDATE interaction_matrix_requests SET submission=?2,phase=CASE WHEN phase='reply_received' THEN phase ELSE 'submitted' END WHERE id=?1", params![id,serde_json::to_string(value)?])?;
+        tx.commit()?;
+        drop(conn);
+        self.interaction_matrix_status(human, entry, id)
+    }
+
     pub fn interaction_matrix_message_status(
         &self,
         human: i64,
@@ -471,6 +550,101 @@ mod tests {
             text: "The actual canonical external answer".into(),
         }
     }
+    #[test]
+    fn technical_claim_survives_duplicates_restart_and_uncertain_outcome() {
+        let (file, store, entry) = setup();
+        let reference = original(&store, entry, 81);
+        let selected = prepare(&store, entry, &reference);
+        let id = selected["request"]["id"].as_str().unwrap();
+        let binding = selected["request"]["binding"].as_str().unwrap();
+        let closed = CancellationToken::new();
+        closed.cancel();
+        assert!(
+            store
+                .interaction_matrix_claim(100, entry, id, binding, &closed)
+                .is_err()
+        );
+        let open = CancellationToken::new();
+        assert!(
+            store
+                .interaction_matrix_claim(100, entry, id, binding, &open)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .interaction_matrix_claim(100, entry, id, binding, &open)
+                .unwrap()
+        );
+        assert_eq!(
+            store.interaction_matrix_status(100, entry, id).unwrap()["phase"],
+            "submitting"
+        );
+        store.interaction_matrix_uncertain(100, entry, id).unwrap();
+        drop(store);
+        let reopened =
+            Store::open(file.path(), &[100, 101], &super::super::tests::defaults()).unwrap();
+        assert_eq!(
+            reopened.interaction_matrix_status(100, entry, id).unwrap()["phase"],
+            "submission_uncertain"
+        );
+        assert!(
+            !reopened
+                .interaction_matrix_claim(100, entry, id, binding, &open)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn technical_outcome_binds_source_and_cannot_erase_an_early_reply() {
+        let (_file, store, entry) = setup();
+        let selected = prepare(&store, entry, &original(&store, entry, 82));
+        let id = selected["request"]["id"].as_str().unwrap();
+        let binding = selected["request"]["binding"].as_str().unwrap();
+        store
+            .interaction_matrix_claim(100, entry, id, binding, &CancellationToken::new())
+            .unwrap();
+        let mut response = reply(&selected["request"]);
+        response.submission.send_id = Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            format!("telecodex.matrix/request:{id}").as_bytes(),
+        )
+        .to_string();
+        response.submission.thread_id = id.to_owned();
+        let source = response.submission.author.clone();
+        let mut wrong = response.submission.clone();
+        wrong.author.embodiment_id = "another-body".into();
+        assert!(
+            store
+                .interaction_matrix_submitted(100, entry, id, binding, &source, &wrong)
+                .is_err()
+        );
+        assert!(
+            store
+                .interaction_matrix_submitted(
+                    100,
+                    entry,
+                    id,
+                    "changed",
+                    &source,
+                    &response.submission
+                )
+                .is_err()
+        );
+        let submitted = store
+            .interaction_matrix_submitted(100, entry, id, binding, &source, &response.submission)
+            .unwrap();
+        assert_eq!(submitted["phase"], "submitted");
+        store
+            .interaction_matrix_return(100, entry, &response)
+            .unwrap();
+        store.interaction_matrix_uncertain(100, entry, id).unwrap();
+        let late = store
+            .interaction_matrix_submitted(100, entry, id, binding, &source, &response.submission)
+            .unwrap();
+        assert_eq!(late["phase"], "reply_received");
+        assert_eq!(late["results"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn selected_original_return_binding_and_native_identity_are_not_model_rewrites() {
         let (_file, store, entry) = setup();

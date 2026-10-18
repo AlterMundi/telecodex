@@ -9,7 +9,9 @@ not qualify a real receiving model, human account, participant or funding grant.
 import importlib.util
 import json
 import sys
+import threading
 from dataclasses import replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -21,7 +23,8 @@ spec = importlib.util.spec_from_file_location(
 adapter = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = adapter
 spec.loader.exec_module(adapter)
-from matrix_execution import make_conversation_task, make_received_task
+from matrix_execution import MatrixConversationTransport, make_received_task
+from matrix_operator import send as operator_send
 
 
 def qualify(binary):
@@ -29,6 +32,34 @@ def qualify(binary):
     sdk.setUp()
     j = ColdEntry(str(Path(binary).resolve()))
     b = None
+    observed = []
+    mode = {"drop": False}
+    source_author = {
+        "being_ref": sdk.sender.lane.being_ref,
+        "embodiment_id": sdk.sender.lane.local_embodiment_id,
+    }
+
+    class Host(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            value = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            assert value["source"] == source_author
+            client = adapter.SignedGroupClient(sdk.fixture, sdk.sender)
+            outcome = operator_send(value, client, timeout=1)
+            observed.append((value, outcome))
+            if mode["drop"]:
+                self.close_connection = True
+                return
+            raw = json.dumps(outcome).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+    host = ThreadingHTTPServer(("127.0.0.1", 0), Host)
+    threading.Thread(target=host.serve_forever, daemon=True).start()
     try:
         j.prepare()
         j.stop()
@@ -39,6 +70,30 @@ def qualify(binary):
             + ",embodiment_id="
             + json.dumps(target["embodiment_id"])
             + "}}]"
+        )
+        command = j.root / "configured-matrix-host.py"
+        command.write_text(
+            "import sys,urllib.request\n"
+            + "raw=sys.stdin.buffer.read(65537)\n"
+            + "request=urllib.request.Request("
+            + repr("http://127.0.0.1:" + str(host.server_port))
+            + ",data=raw,headers={'content-type':'application/json'})\n"
+            + "with urllib.request.urlopen(request,timeout=12)as response: sys.stdout.buffer.write(response.read(65537))\n"
+        )
+        argv = json.dumps([sys.executable, "-B", str(command)])
+        source = (
+            '{kind="body",being_ref='
+            + json.dumps(source_author["being_ref"])
+            + ",embodiment_id="
+            + json.dumps(source_author["embodiment_id"])
+            + "}"
+        )
+        configured += (
+            "\nmatrix_transport={command="
+            + argv
+            + ",source="
+            + source
+            + ",timeout_seconds=15}"
         )
         j.config.write_text(
             j.config.read_text().replace(
@@ -64,11 +119,36 @@ def qualify(binary):
         request = selected["request"]
         assert request["original"]["text"] == original
         assert b.status(ident)["phase"] == "matrix_requested"
-        task = make_conversation_task(selected, sdk.scope)
-        broker = sdk.make_broker(sdk.sender, sdk.scope, task=task)
-        sent = broker.submit(sdk.scope, {"text": original}, 1)
+        assert selected["phase"] == "submitted", {
+            "phase": selected["phase"],
+            "host_calls": len(observed),
+        }
+        assert len(observed) == 1
+        snapshot, outcome = observed[0]
+        broker = MatrixConversationTransport(
+            snapshot["status"],
+            source_author,
+            adapter.SignedGroupClient(sdk.fixture, sdk.sender),
+        )
+        sent = sdk.sender.inspect(
+            client_id="test", send_id=outcome["submission"]["send_id"]
+        )
+        assert selected["submission"]["message_id"] == sent["message_id"]
+        duplicate = j.call(
+            "duplicate-matrix-selection",
+            "matrix_request",
+            {
+                "input_ref": ident,
+                "selector": "SelectedPeer",
+                "relation": "new",
+                "requests": [],
+            },
+        )
+        assert duplicate["phase"] == "submitted" and len(observed) == 1
         message = sdk.receiver.message(sent["message_id"])
-        reply_scope = replace(sdk.scope, tool="messaging_reply", action="reply")
+        reply_scope = replace(
+            sdk.scope, thread=sent["thread_id"], tool="messaging_reply", action="reply"
+        )
         receiving_task = make_received_task(message, reply_scope)
         responder = sdk.make_broker(sdk.receiver, reply_scope, task=receiving_task)
         returned = responder.submit(
@@ -114,6 +194,12 @@ def qualify(binary):
             },
         )
         assert amended["request"]["parents"][0]["text"] == original
+        assert amended["phase"] == "submitted" and len(observed) == 2
+        amendment = sdk.receiver.message(amended["submission"]["message_id"])
+        assert json.loads(amendment["payload"]["body"]["text"])["relation"] == {
+            "kind": "amends",
+            "requests": [request["id"]],
+        }
         current = b.get("/api/interaction?matrix=0")
         old = next(v for v in current["items"] if v["kind"] == "matrix_result")
         assert old["correction_pending"] and not old["current"]
@@ -130,13 +216,37 @@ def qualify(binary):
         )
         assert j.row("SELECT count(*) FROM interaction_instructions") == [(0,)]
         assert not j.messages
+        # The native journal retains the actual send when the child loses its
+        # response; normal controller retries and restart never submit it again.
+        lost, _ = b.text("Distinct original whose host response will be lost.")
+        j.wait(lambda: b.status(lost)["phase"] == "accepted")
+        mode["drop"] = True
+        args = {
+            "input_ref": lost,
+            "selector": "SelectedPeer",
+            "relation": "new",
+            "requests": [],
+        }
+        uncertain = j.call("matrix-lost-host-response", "matrix_request", args)
+        assert uncertain["phase"] == "submission_uncertain" and len(observed) == 3
+        lost_id = uncertain["request"]["id"]
+        assert sdk.receiver.message(observed[-1][1]["submission"]["message_id"])
+        duplicate = j.call("matrix-no-uncertain-replay", "matrix_request", args)
+        assert duplicate["phase"] == "submission_uncertain" and len(observed) == 3
+        j.stop()
+        j.start()
+        j.wait_control_socket(j.socket)
+        retained = j.read("matrix", "status", lost_id)["result"]
+        assert retained["phase"] == "submission_uncertain" and len(observed) == 3
         print(
-            "PASS actual HTTP/native controller/SQLite original -> signed SDK request/reply -> owner callback -> canonical HTTP result, duplicate receipt, independent cursor, explicit correction context and local-plan exclusion; zero inference."
+            "PASS actual HTTP/native controller automatically invokes configured host -> signed SDK technical send -> owner callback -> canonical HTTP; duplicate reservation, explicit signed amendment, lost child response/restart without replay, independent cursor and local exclusion; zero inference. Receiving native work/automatic return attachment remain unqualified."
         )
     finally:
         if b:
             b.client.close()
         j.close()
+        host.shutdown()
+        host.server_close()
         sdk.doCleanups()
 
 
