@@ -480,6 +480,7 @@ mod tests {
             topic_id: 1,
             max_active_workers: 2,
             matrix_targets: vec![],
+            matrix_transport: None,
             targets: vec![Target {
                 name: "Alpha".into(),
                 topic_id: 7,

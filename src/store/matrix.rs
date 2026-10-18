@@ -62,7 +62,7 @@ fn owned_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Resul
         bail!("Canonical Matrix request UUID required");
     }
     let (session, _) = super::presentation::entry_on(conn, human, entry)?;
-    let (raw,phase,submission):(String,String,Option<String>)=conn.query_row("SELECT doc,phase,submission FROM interaction_matrix_requests WHERE id=?1 AND human_id=?2 AND entry_session=?3",params![id,human,session],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).context("Selected Matrix request unavailable")?;
+    let (raw,phase,submission,claimed_source):(String,String,Option<String>,Option<String>)=conn.query_row("SELECT doc,phase,submission,claimed_source FROM interaction_matrix_requests WHERE id=?1 AND human_id=?2 AND entry_session=?3",params![id,human,session],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).context("Selected Matrix request unavailable")?;
     let request: Value = serde_json::from_str(&raw)?;
     let current = super::presentation::entry_binding(conn, human, entry, session)?
         == request["entry_generation"]
@@ -70,6 +70,7 @@ fn owned_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Resul
         && !super::stopping::fenced_on(conn, entry)?
         && !super::maintenance_writer_held_on(conn, entry)?;
     Ok(json!({"request":request,"phase":phase,"current":current,
+        "claimed_source":claimed_source.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,
         "submission":submission.map(|s|serde_json::from_str::<Value>(&s)).transpose()?,
         "execution":"Not authorized by retention or transport; receiving admission remains Matrix-owned"}))
 }
@@ -86,6 +87,13 @@ impl Store {
                 message_id TEXT PRIMARY KEY,request_id TEXT NOT NULL REFERENCES interaction_matrix_requests(id),
                 human_id INTEGER NOT NULL,doc TEXT NOT NULL,created_at TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS interaction_matrix_result_request ON interaction_matrix_results(request_id);"
+        )?;
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        super::add_column_if_missing(
+            &conn,
+            "interaction_matrix_requests",
+            "claimed_source",
+            "TEXT",
         )?;
         Ok(())
     }
@@ -218,6 +226,97 @@ impl Store {
         Ok(result)
     }
 
+    /// Claim one selected technical send before any external effect. A lost host
+    /// outcome remains submitting/uncertain and is never automatically replayed.
+    pub fn interaction_matrix_claim(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        binding: &str,
+        source: &MatrixAuthor,
+        closed: &tokio_util::sync::CancellationToken,
+    ) -> Result<bool> {
+        MatrixDestination::Body {
+            being_ref: source.being_ref.clone(),
+            embodiment_id: source.embodiment_id.clone(),
+        }
+        .validate()?;
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let selected = owned_on(&tx, human, entry, id)?;
+        if selected["request"]["binding"] != binding
+            || selected["current"] != true
+            || closed.is_cancelled()
+        {
+            bail!("Selected Matrix send changed, closed or fenced before admission");
+        }
+        if !selected["claimed_source"].is_null()
+            && selected["claimed_source"] != serde_json::to_value(source)?
+        {
+            bail!("Selected Matrix source is already frozen for this original");
+        }
+        if selected["phase"] != "awaiting_execution" {
+            return Ok(false);
+        }
+        let changed = tx.execute("UPDATE interaction_matrix_requests SET phase='submitting',claimed_source=?2 WHERE id=?1 AND phase='awaiting_execution' AND claimed_source IS NULL", params![id,serde_json::to_string(source)?])?;
+        tx.commit()?;
+        Ok(changed == 1)
+    }
+
+    pub fn interaction_matrix_uncertain(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        owned_on(&conn, human, entry, id)?;
+        // A late failed host observation must not erase a verified reply.
+        conn.execute("UPDATE interaction_matrix_requests SET phase='submission_uncertain' WHERE id=?1 AND phase='submitting'", [id])?;
+        Ok(())
+    }
+
+    pub fn interaction_matrix_submitted(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        binding: &str,
+        source: &MatrixAuthor,
+        value: &MatrixSubmission,
+    ) -> Result<Value> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let selected = owned_on(&tx, human, entry, id)?;
+        let expected_send = Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            format!("telecodex.matrix/request:{id}").as_bytes(),
+        )
+        .to_string();
+        if selected["request"]["binding"] != binding
+            || !matches!(
+                selected["phase"].as_str(),
+                Some("submitting" | "submission_uncertain" | "submitted" | "reply_received")
+            )
+            || serde_json::to_value(&value.destination)? != selected["request"]["destination"]
+            || selected["claimed_source"] != serde_json::to_value(source)?
+            || value.author != *source
+            || value.send_id != expected_send
+            || value.thread_id != id
+            || !canonical_uuid(&value.message_id)
+            || !hash(&value.message_hash)
+            || !selected["submission"].is_null()
+                && selected["submission"] != serde_json::to_value(value)?
+        {
+            bail!("Matrix host outcome differs from the claimed original and fixed source");
+        }
+        tx.execute("UPDATE interaction_matrix_requests SET submission=?2,phase=CASE WHEN phase='reply_received' THEN phase ELSE 'submitted' END WHERE id=?1", params![id,serde_json::to_string(value)?])?;
+        tx.commit()?;
+        drop(conn);
+        self.interaction_matrix_status(human, entry, id)
+    }
+
     pub fn interaction_matrix_message_status(
         &self,
         human: i64,
@@ -331,6 +430,19 @@ impl Store {
             || value.text.len() > 16000
         {
             bail!("Matrix return differs from the immutable selected origin and recipient");
+        }
+        if !selected["claimed_source"].is_null() {
+            let expected_send = Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("telecodex.matrix/request:{}", value.request).as_bytes(),
+            )
+            .to_string();
+            if selected["claimed_source"] != serde_json::to_value(&value.submission.author)?
+                || value.submission.send_id != expected_send
+                || value.submission.thread_id != value.request
+            {
+                bail!("Matrix return differs from the retained technical claim");
+            }
         }
         let submission = serde_json::to_string(&value.submission)?;
         if !selected["submission"].is_null()
@@ -471,6 +583,124 @@ mod tests {
             text: "The actual canonical external answer".into(),
         }
     }
+    #[test]
+    fn technical_claim_survives_duplicates_restart_and_uncertain_outcome() {
+        let (file, store, entry) = setup();
+        let reference = original(&store, entry, 81);
+        let selected = prepare(&store, entry, &reference);
+        let id = selected["request"]["id"].as_str().unwrap();
+        let binding = selected["request"]["binding"].as_str().unwrap();
+        let source = reply(&selected["request"]).submission.author;
+        let closed = CancellationToken::new();
+        closed.cancel();
+        assert!(
+            store
+                .interaction_matrix_claim(100, entry, id, binding, &source, &closed)
+                .is_err()
+        );
+        let open = CancellationToken::new();
+        assert!(
+            store
+                .interaction_matrix_claim(100, entry, id, binding, &source, &open)
+                .unwrap()
+        );
+        assert!(
+            !store
+                .interaction_matrix_claim(100, entry, id, binding, &source, &open)
+                .unwrap()
+        );
+        assert_eq!(
+            store.interaction_matrix_status(100, entry, id).unwrap()["phase"],
+            "submitting"
+        );
+        store.interaction_matrix_uncertain(100, entry, id).unwrap();
+        drop(store);
+        let reopened =
+            Store::open(file.path(), &[100, 101], &super::super::tests::defaults()).unwrap();
+        assert_eq!(
+            reopened.interaction_matrix_status(100, entry, id).unwrap()["phase"],
+            "submission_uncertain"
+        );
+        assert!(
+            !reopened
+                .interaction_matrix_claim(100, entry, id, binding, &source, &open)
+                .unwrap()
+        );
+        let retained = reopened.interaction_matrix_status(100, entry, id).unwrap();
+        assert_eq!(
+            retained["claimed_source"],
+            serde_json::to_value(&source).unwrap()
+        );
+        let mut other = source.clone();
+        other.embodiment_id = "new-owner-body".into();
+        assert!(
+            reopened
+                .interaction_matrix_claim(100, entry, id, binding, &other, &open)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn technical_outcome_binds_source_and_cannot_erase_an_early_reply() {
+        let (_file, store, entry) = setup();
+        let selected = prepare(&store, entry, &original(&store, entry, 82));
+        let id = selected["request"]["id"].as_str().unwrap();
+        let binding = selected["request"]["binding"].as_str().unwrap();
+        let source = reply(&selected["request"]).submission.author;
+        store
+            .interaction_matrix_claim(100, entry, id, binding, &source, &CancellationToken::new())
+            .unwrap();
+        let mut response = reply(&selected["request"]);
+        response.submission.send_id = Uuid::new_v5(
+            &Uuid::NAMESPACE_URL,
+            format!("telecodex.matrix/request:{id}").as_bytes(),
+        )
+        .to_string();
+        response.submission.thread_id = id.to_owned();
+        let source = response.submission.author.clone();
+        let mut early = response.clone();
+        early.submission.author.embodiment_id = "wrong-early-source".into();
+        assert!(store.interaction_matrix_return(100, entry, &early).is_err());
+        early = response.clone();
+        early.submission.send_id = Uuid::now_v7().to_string();
+        assert!(store.interaction_matrix_return(100, entry, &early).is_err());
+        early = response.clone();
+        early.submission.thread_id = Uuid::now_v7().to_string();
+        assert!(store.interaction_matrix_return(100, entry, &early).is_err());
+        let mut wrong = response.submission.clone();
+        wrong.author.embodiment_id = "another-body".into();
+        assert!(
+            store
+                .interaction_matrix_submitted(100, entry, id, binding, &source, &wrong)
+                .is_err()
+        );
+        assert!(
+            store
+                .interaction_matrix_submitted(
+                    100,
+                    entry,
+                    id,
+                    "changed",
+                    &source,
+                    &response.submission
+                )
+                .is_err()
+        );
+        store
+            .interaction_matrix_return(100, entry, &response)
+            .unwrap();
+        let submitted = store
+            .interaction_matrix_submitted(100, entry, id, binding, &source, &response.submission)
+            .unwrap();
+        assert_eq!(submitted["phase"], "reply_received");
+        store.interaction_matrix_uncertain(100, entry, id).unwrap();
+        let late = store
+            .interaction_matrix_submitted(100, entry, id, binding, &source, &response.submission)
+            .unwrap();
+        assert_eq!(late["phase"], "reply_received");
+        assert_eq!(late["results"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn selected_original_return_binding_and_native_identity_are_not_model_rewrites() {
         let (_file, store, entry) = setup();

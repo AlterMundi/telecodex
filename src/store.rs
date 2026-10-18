@@ -23,7 +23,7 @@ mod interaction;
 mod interactions;
 mod matrix;
 mod merging;
-pub use matrix::MatrixReturn;
+pub use matrix::{MatrixAuthor, MatrixReturn, MatrixSubmission};
 mod routing;
 mod session_requests;
 mod stopping;

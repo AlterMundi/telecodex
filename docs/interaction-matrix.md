@@ -21,10 +21,11 @@ and use `broker.controller(approved_store, qualified_runner)` to create the exis
 `ReviewController` with an exact instruction/task admission guard. A Scope alone
 does not bind the recipient; do not reuse the broker with an unpinned controller.
 The broker implements the existing `NativeBroker` interface; the model never
-receives this Python object or native credentials. Before mutation, the same
-authenticated client must report the approved being
-and body through `runtime.status`, within the same absolute deadline. The client
-configuration must already select the approved body. The SDK must support an
+receives this Python object or native credentials. Before mutation, authenticated source observation must report the approved being
+and body through `runtime.status`, within the same absolute deadline. Both native
+clients must select the same runtime, server origin and socket. The SDK keeps
+messaging-only and observation capabilities separate; the host adapter routes
+each purpose through its existing capability rather than creating a mixed one. The SDK must support an
 absolute `deadline_ns` as well as a per-operation socket timeout. The qualified
 source is Matrix `9b2b8ec2c455d3bf316bc00dc9e1bac44e9d5094`.
 
@@ -74,9 +75,63 @@ receiver preparation already accepts it; third-party consumers may require an
 update.
 
 This removes sender-side inference admission from the technical transport. The
-normal controller's automatic host attachment and the selected receiving native
+normal controller's return attachment and the selected receiving native
 owner remain separate unfinished integration work; importing or constructing the
 class installs neither listener nor peer activation.
+
+## Normal-controller technical submission
+
+An optional `[interaction.matrix_transport]` connects `matrix_request` to the
+selected host command. Without it, request retention preserves the previous
+passive behavior. With it, the normal integrating tool first atomically claims
+the retained original, then invokes the configured argv through bounded stdin
+and stdout. Commands, source identity and socket/credential references come only
+from owner setup, never model text. No second native writer, inbox poller,
+execution store or paid admission is introduced.
+
+```toml
+[interaction.matrix_transport]
+command = ["/path/to/python", "-B", "/path/to/matrix_operator.py", "--binding", "/path/to/private/host-binding.json"]
+source = {kind = "body", being_ref = "SOURCE_BEING_REF", embodiment_id = "SOURCE_EMBODIMENT_ID"}
+timeout_seconds = 15
+```
+
+Replace placeholders with the explicitly selected existing source and recipients;
+this example is not an enrollment or activation. The owner-only binding uses
+`schema: telecodex.matrix-host-binding/v1`, the exact `source` object with
+`being_ref` and `embodiment_id`, and two purpose references named `messaging` and
+`observation`. Each reference has only absolute `socket`, `client_config` and
+`client_key` paths to existing owner-local SDK material. The SDK verifies their
+capabilities; the host requires matching runtime ID, expected server and socket.
+The messaging capability stays messaging-only and permits `messaging.send`;
+observation separately permits `runtime.status`. The adapter never loads the
+runtime outside its daemon or creates credentials. Its two calls share one
+absolute deadline. Do not use a combined capability: the SDK rejects mixed
+messaging and observation profiles.
+
+The existing request row freezes the selected source author as `claimed_source`
+and records `submitting` atomically before the command can have an effect.
+That source survives a lost ACK, restart or later owner configuration change.
+Both the host ACK and an early canonical callback must match the retained source,
+request-derived native send ID and request UUID thread. A different source cannot
+establish the submission by returning before its ACK. Legacy passive rows without
+a technical claim retain their existing verified-callback contract. A valid fixed-source/request/destination submission becomes `submitted`;
+that proves the SDK-authenticated authored outcome, not receiving incorporation,
+completion or a particular delivery receipt. The original, binding and minimal
+native submission are retained; signed receipts remain owned by the SDK journal.
+Concurrent or later repeated tool calls never claim an already submitting,
+submitted or uncertain original again. A lost response, bounded-process failure
+or cancellation remains `submission_uncertain`; a crash can leave `submitting`
+with unknown outcome. Restart does not resend either state. Inspect the stable
+native send identity and its actual journal before further recovery. Child
+termination affects only that command's own process group and does not establish
+that an SDK effect was cancelled. An early verified canonical reply cannot be
+erased by a later submission ACK or failed host observation.
+
+This wires the normal controller's outbound technical send. The existing
+SDK-verified owner callback retains canonical returns; automatic return attachment
+and actual receiving native steering remain unfinished. No configured host or
+participant is enabled by default, and technical arrivals never admit inference.
 
 ## Retained conversation requests and returns
 
