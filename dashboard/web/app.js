@@ -588,7 +588,7 @@ const conversationView = window.Conversation?.mount({
       monitorAuthorization=value.authorization;
       await api('interaction/inputs');
       sessionStorage.setItem('routing-monitor',JSON.stringify(value));
-      authenticated=true;conversationView?.authenticated();feedback.replaceChildren(label,el('p','Read-only access. Inputs, playback and session controls are disabled.'));await refresh(true);schedule();
+      authenticated=true;conversationView?.authenticated();feedback.replaceChildren(label,el('p','Read-only access until '+new Date(value.expires*1000).toLocaleString()+'. Inputs, playback and session controls are disabled.'));await refresh(true);schedule();
     }
     file.addEventListener('change',async()=>{
       try{const selected=file.files?.[0];if(!selected || selected.size>4096)throw Error('Select the small operator-issued monitor credential');await openCredential(JSON.parse(await selected.text()));}
