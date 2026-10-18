@@ -333,6 +333,19 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         authorize(request)
         return result
 
+    @app.get('/api/interaction/inputs/{ident}/trace/{source}')
+    async def conversation_trace_text(request: Request, ident: str, source: str, offset: int = 0):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_trace_text, ident, source, offset)
+        except ValueError:
+            raise HTTPException(400, 'Invalid trace text selection') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Saved text unavailable; the input was not resent') from None
+        authorize(request)
+        return result
+
     @app.post('/api/interaction/inputs')
     async def conversation_input_submit(request: Request):
         session = authorize(request)

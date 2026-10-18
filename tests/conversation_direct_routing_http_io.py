@@ -9,6 +9,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 from dashboard.app import create_app
 from dashboard.provider import Provider
+from dashboard.companion import Grants
 from conversation_routing_io import CanonicalRouting
 
 
@@ -22,7 +23,7 @@ def qualify(binary):
         j.stop();j.config.write_text(j.config.read_text()+j.target_config)
         j.start();j.wait_control_socket(j.socket);j.routing=True
         journal=j.row('SELECT count(*) FROM incoming_updates');j.messages.clear();j.telegram_methods.clear()
-        config={'receiver_config':str(j.config),'state_dir':str(j.root/'dashboard'),'origin':'https://example.test','bot_id':123}
+        config={'receiver_config':str(j.config),'state_dir':str(j.root/'dashboard'),'origin':'https://example.test','bot_id':123,'companion':{'enabled':True,'grants_dir':str(j.root/'trace-grants')}}
         client=TestClient(create_app(config,Provider(config),lambda raw,bot:int(raw)),base_url=config['origin'])
         headers={'origin':config['origin']}
         token=client.post('/api/session',json={'init_data':'100'},headers=headers).json()['session_token'];headers['authorization']='Bearer '+token
@@ -69,6 +70,10 @@ def qualify(binary):
         assert not step['results'] and j.row('SELECT count(*) FROM turns')==before_trace
         assert client.get(trace_url).status_code==401
         assert client.get('/api/interaction/inputs/not-a-uuid/trace',headers=headers).status_code==400
+        grant_file=j.root/'trace-device.json'
+        Grants(config,Provider(config)).enroll('Trace scope regression',grant_file,60)
+        credential=json.loads(grant_file.read_text())
+        assert client.get(trace_url,headers={'origin':config['origin'],'authorization':credential['authorization']}).status_code==403
         packet=j.worker_packets['native-topic-7'][-1]['input'][0]['text']
         assert 'Replace requirement13 with requirement17.' in packet
         provenance=json.loads(next(line.removeprefix('Transport provenance: ') for line in packet.splitlines() if line.startswith('Transport provenance: ')))
@@ -111,6 +116,31 @@ def qualify(binary):
         front,_=submit('The quoted #Alpha label is ordinary discussion.')
         j.wait(lambda:j.row('SELECT phase FROM conversation_inputs WHERE id=?',(front['id'],))==[('accepted',)])
         assert len(j.packets)==1
+        # Valid escaped originals must remain readable within the existing
+        # owner-control frame, even when sent to multiple destinations.
+        long_text='Bounded trace '+('\x01'*32000)
+        long_input,_=submit(long_text)
+        j.wait(lambda:read(long_input['id'])['phase']=='accepted')
+        j.call('trace-long-dispatch','dispatch',{'input_ref':long_input['id'],'destinations':[{'selector':name,'relation':'new','requests':[]}for name in ('Alpha','Beta')]})
+        def long_trace():
+            response=client.get('/api/interaction/inputs/'+long_input['id']+'/trace',headers=headers)
+            assert response.status_code==200,response.text
+            return response.json()
+        j.wait(lambda:len(long_trace()['routes'])==2)
+        observation=long_trace()
+        assert len(json.dumps(observation).encode())<262144
+        before_read=j.row('SELECT count(*) FROM turns')
+        def complete_text(source,part,next_offset):
+            while next_offset is not None:
+                response=client.get('/api/interaction/inputs/'+long_input['id']+'/trace/'+source,params={'offset':next_offset},headers=headers)
+                assert response.status_code==200,response.text
+                selected=response.json();assert selected['offset']==next_offset
+                part+=selected['text'];next_offset=selected['next_offset']
+            return part
+        assert complete_text('original',observation['text'],observation['text_next_offset'])==long_text
+        for step in observation['routes']:
+            assert complete_text(step['instruction'],step['forwarded_original'],step['forwarded_next_offset'])==long_text
+        assert j.row('SELECT count(*) FROM turns')==before_read
         assert j.row('SELECT count(*) FROM incoming_updates')==journal
         assert not j.messages,'Canonical direct routing fabricated Telegram publication'
         print('PASS actual HTTP/owner/SQLite/native direct selectors, busy-worker amendments, explicit override, immutable ambiguous choice, reversed results/reply, unavailable cancellation scope and ordinary integrator ingress; zero models.')

@@ -403,7 +403,8 @@ In Sessions → Interaction, open **Routing monitor · your inputs and destinati
 and **Show routing path** for a message. The monitor reads its complete retained
 original text or automatic voice transcript, every selected work-session route,
 request relation, exact forwarded original, native acceptance and correlated
-result evidence. Open paths refresh with the existing view; **Refresh route**
+result evidence. Long originals and forwarded text use **Read more saved text**
+with exact immutable chunks to stay within the owner-control response bound. Open paths refresh with the existing view; **Refresh route**
 performs only another read. It never dispatches, retries, calls a model or
 prepares speech.
 

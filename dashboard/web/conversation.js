@@ -81,12 +81,14 @@ window.Conversation = (() => {
         if(value.id!==card.value.id || value.schema!=="telecodex.conversation-trace/v1")throw new Error("Wrong routing observation");
         const original=node("section");
         original.append(node("h3",value.voice?"Voice transcript":"Original text"),node("p",value.text||"No transcript is confirmed yet.","reply-text"));
+        traceTextMore(card,original,original.children[1],"original",value.text_next_offset);
         const stages=[original];
         for(const route of value.routes) {
           const step=node("section",undefined,"route-step");
           const relation=({new:"New task",amends:"Correction",context:"Additional context"})[route.relation?.kind]||"Related input";
           step.append(node("h3",`→ #${route.label} · ${relation}`),node("p",routeText({...route,phase:route.transport_phase}),"reply-status"));
           step.append(node("p","Exact original forwarded to this session:","note"),node("p",route.forwarded_original,"reply-text"));
+          traceTextMore(card,step,step.children[3],route.instruction,route.forwarded_next_offset);
           if(!route.target_available)step.append(node("p","This session is no longer available in your current scope. Its response is not exposed.","note"));
           for(const result of route.results) {
             const state=!result.current?"Earlier result; a later correction may apply.":result.correction_pending?"A correction is still pending.":result.instruction_covered&&result.completed?"Session declared this input incorporated and the request completed.":"The session has not declared this input fully incorporated and completed.";
@@ -106,6 +108,26 @@ window.Conversation = (() => {
         card.traceState.textContent="Routing observation unavailable. Previous evidence is retained; nothing was resent.";
         if([401,403].includes(e.status))failed(e);
       } finally {card.traceBusy=false;card.traceRefresh.disabled=false;}
+    }
+    function traceTextMore(card,section,text,source,nextOffset) {
+      const cached=card.traceText.get(source);
+      if(cached && cached.text.startsWith(text.textContent)) {
+        text.textContent=cached.text;nextOffset=cached.nextOffset;
+      } else card.traceText.set(source,{text:text.textContent,nextOffset});
+      if(nextOffset===null || nextOffset===undefined)return;
+      const more=node("button","Read more saved text");more.type="button";section.append(more);
+      more.addEventListener("click",async()=>{
+        const owned=inputGeneration,offset=nextOffset;more.disabled=true;
+        try {
+          const value=await api(`interaction/inputs/${encodeURIComponent(card.value.id)}/trace/${encodeURIComponent(source)}?offset=${offset}`);
+          if(owned!==inputGeneration || inputs.get(card.value.id)!==card)return;
+          if(value.id!==card.value.id || value.source!==source || value.offset!==offset)throw new Error("Wrong saved text");
+          text.textContent+=value.text;nextOffset=value.next_offset;
+          card.traceText.set(source,{text:text.textContent,nextOffset});
+          more.hidden=nextOffset===null;more.textContent="Read more saved text";
+        }catch(e){more.textContent="Read unavailable; try again";if([401,403].includes(e.status))failed(e);}
+        finally{more.disabled=false;}
+      });
     }
     function inputCard(value, observed = ++inputObservation) {
       let card = inputs.get(value.id);
@@ -136,7 +158,7 @@ window.Conversation = (() => {
         const trace=node("details",undefined,"routing-trace"),traceSummary=node("summary","Show routing path"),traceState=node("p","","note"),traceContent=node("div"),traceRefresh=node("button","Refresh route");
         traceRefresh.type="button";traceState.setAttribute("role","status");trace.append(traceSummary,traceState,traceContent,traceRefresh);
         box.append(text,status,actions,routeBox,imageButton,imageView,trace);
-        card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote,trace,traceState,traceContent,traceRefresh};
+        card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote,trace,traceState,traceContent,traceRefresh,traceText:new Map()};
         trace.addEventListener("toggle",()=>trace.open&&readTrace(card));
         traceRefresh.addEventListener("click",()=>readTrace(card));
         continueButton.addEventListener("click",()=>card.value.continuation&&selectFocus(card.value.continuation,`#${card.value.routing?.label||"session"}`));

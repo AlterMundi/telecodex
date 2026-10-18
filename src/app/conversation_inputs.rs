@@ -146,6 +146,19 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         page["routing_choices"] = choices(app)?;
         return Ok(page);
     }
+    if let Some(args) = args.strip_prefix("trace-text ") {
+        let fields: Vec<_> = args.split_whitespace().collect();
+        let [id, source, offset] = fields.as_slice() else {
+            bail!("Expected original, trace source and offset");
+        };
+        return app.shared.store.conversation_trace_text(
+            human,
+            cfg.entry(),
+            id,
+            source,
+            offset.parse()?,
+        );
+    }
     if let Some(id) = args.strip_prefix("trace ") {
         let mut trace = app
             .shared

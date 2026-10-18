@@ -520,7 +520,7 @@ impl Store {
              LEFT JOIN sessions s ON s.id=i.session_id
              LEFT JOIN users u ON u.tg_user_id=s.creator_user_id
              WHERE o.human_id=?1 AND o.channel='conversation' AND o.event_id=?2
-               AND i.human_id=?1 ORDER BY i.sequence LIMIT 6",
+             ORDER BY i.sequence LIMIT 6",
         )?;
         let rows = query
             .query_map(params![human, id], |row| {
@@ -535,8 +535,12 @@ impl Store {
             bail!("Trace exceeds selected destination bound");
         }
         let mut routes = Vec::new();
+        let mut result_budget = 24_000;
         for (raw, phase, available) in rows {
             let instruction: Instruction = serde_json::from_str(&raw)?;
+            if instruction.human_id != human {
+                bail!("Trace instruction owner changed");
+            }
             let mut results = Vec::new();
             let mut more_results = false;
             if available {
@@ -559,28 +563,77 @@ impl Store {
                         &delivery.covered,
                         delivery.declared,
                     )?;
-                    results.push(json!({"source":format!("delivery:{}",delivery.id),
-                        "phase":delivery_phase,"text_excerpt":delivery.body.chars().take(4000).collect::<String>(),
-                        "text_bounded":delivery.body.chars().count()>4000,
+                    let result = json!({"source":format!("delivery:{}",delivery.id),
+                        "phase":delivery_phase,"text_excerpt":delivery.body.chars().take(500).collect::<String>(),
+                        "text_bounded":delivery.body.chars().count()>500,
                         "instruction_covered":delivery.covered.contains(&instruction.id),
                         "declared":delivery.declared,"completed":delivery.completed,
-                        "current":current,"correction_pending":pending}));
+                        "current":current,"correction_pending":pending});
+                    let size = serde_json::to_vec(&result)?.len();
+                    if size > result_budget {
+                        more_results = true;
+                        break;
+                    }
+                    result_budget -= size;
+                    results.push(result);
                 }
             }
             routes.push(
                 json!({"instruction":instruction.id,"target":instruction.target,
                 "relation":instruction.relation,"requests":instruction.requests,
-                "forwarded_original":instruction.text,"transport_phase":phase,
+                "forwarded_original":instruction.text.chars().take(2048).collect::<String>(),
+                "forwarded_next_offset":(instruction.text.chars().count()>2048).then_some(2048),"transport_phase":phase,
                 "native_acceptance":phase=="accepted","target_available":available,
                 "results":results,"more_results":more_results}),
             );
         }
         Ok(
             json!({"schema":"telecodex.conversation-trace/v1","id":input.id,
-            "entry_binding":[human,entry,session,native],"text":input.text,"voice":input.voice,
-            "phase":input.phase,"retired":input.retired,"routing":input.routing,"answer":answer,
+            "entry_binding":[human,entry,session,native],"text":input.text.chars().take(2048).collect::<String>(),
+            "text_next_offset":(input.text.chars().count()>2048).then_some(2048),
+            "voice":input.voice.as_ref().map(|v|json!({"audio_sha256":v.audio_sha256,"mime":v.mime})),
+            "phase":input.phase,"retired":input.retired,"routing":input.routing,
+            "answer":answer.map(|a|json!({"id":a["id"],"revision":a["revision"],"recorded":true})),
             "routes":routes,"read_only":true,
             "evidence":"Forwarded originals are exact retained controller text, not reconstructed native relay envelopes. Native acceptance and worker coverage declarations are separate evidence."}),
+        )
+    }
+
+    pub fn conversation_trace_text(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        source: &str,
+        offset: usize,
+    ) -> Result<serde_json::Value> {
+        use crate::interaction::Instruction;
+        use serde_json::json;
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
+        let input = read_on(&conn, id, human)?;
+        if input.entry != entry || input.session != session {
+            bail!("Input belongs to another conversation");
+        }
+        let text = if source == "original" {
+            input.text
+        } else {
+            let raw:String=conn.query_row("SELECT i.doc FROM interaction_instructions i JOIN interaction_sources o ON o.id=i.input_id WHERE i.id=?1 AND o.channel='conversation' AND o.event_id=?2 AND o.human_id=?3",params![source,id,human],|r|r.get(0))?;
+            let instruction: Instruction = serde_json::from_str(&raw)?;
+            if instruction.human_id != human {
+                bail!("Trace instruction owner changed");
+            }
+            instruction.text
+        };
+        let length = text.chars().count();
+        if offset > length {
+            bail!("Invalid trace text offset");
+        }
+        let part = text.chars().skip(offset).take(2048).collect::<String>();
+        Ok(
+            json!({"schema":"telecodex.conversation-trace-text/v1","id":id,"source":source,
+            "entry_binding":[human,entry,session,native],"offset":offset,"text":part,
+            "next_offset":(offset+2048<length).then_some(offset+2048),"read_only":true}),
         )
     }
 

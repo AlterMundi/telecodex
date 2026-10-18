@@ -38,10 +38,14 @@ function boot() {
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
+    if(url.pathname.endsWith('/trace/original')) {
+      const id=url.pathname.split('/').at(-3),offset=Number(url.searchParams.get('offset'));
+      return {id,source:'original',offset,text:originals.get(id).text.slice(offset),next_offset:null};
+    }
     if(url.pathname.endsWith('/trace')) {
       const id=url.pathname.split('/').at(-2),original=originals.get(id);
       requests.push({trace:id,body});
-      return {schema:'telecodex.conversation-trace/v1',id,text:original.text,phase:original.phase,read_only:true,
+      return {schema:'telecodex.conversation-trace/v1',id,text:original.longTrace?original.text.slice(0,2):original.text,text_next_offset:original.longTrace?2:null,phase:original.phase,read_only:true,
         routes:[{label:'Alpha',instruction:'retained-instruction',requests:['parent-request'],relation:{kind:'amends'},transport_phase:'accepted',forwarded_original:'Exact correction <script>literal</script>',target_available:true,results:[]}],
         evidence:'Receiver-retained original; native acceptance is not incorporation.'};
     }
@@ -358,5 +362,11 @@ function boot() {
   assert.equal(monitor.requests.filter(r=>r.trace).length,1);
   assert.equal(monitor.requests.find(r=>r.trace).body,undefined,'Trace reads cannot submit or retry an input');
   assert.equal(monitor.originals.size,1);
+  const paginated=boot();paginated.originals.set('long-trace',{id:'long-trace',text:'Complete immutable original',longTrace:true,sequence:1,phase:'accepted'});
+  await paginated.ui.refresh();const longPath=paginated.nodes.get('#conversation-inputs').children[0].children[6];
+  longPath.open=true;await longPath.children[3].handlers.click();
+  const longOriginal=longPath.children[2].children[0];assert.equal(longOriginal.children[1].textContent,'Co');
+  await longOriginal.children[2].handlers.click();assert.equal(longOriginal.children[1].textContent,'Complete immutable original');
+  await paginated.ui.refresh();assert.equal(longPath.children[2].children[0].children[1].textContent,'Complete immutable original','Read-only refresh preserves expanded immutable text');
   console.log("Conversation history, routing trace, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });

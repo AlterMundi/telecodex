@@ -243,6 +243,12 @@ class Provider:
     def conversation_input_trace(self, ident):
         return self.presentation(f'input trace {self.input_id(ident)}')
 
+    def conversation_trace_text(self, ident, source, offset):
+        if type(offset) is not int or not 0 <= offset <= 32768:
+            raise ValueError('Invalid trace text offset')
+        selected = 'original' if source == 'original' else self.input_id(source)
+        return self.presentation(f'input trace-text {self.input_id(ident)} {selected} {offset}')
+
     @classmethod
     def clarification_source(cls, value, choices=None, entry_binding=None, binding=None):
         if (value.get('clarifiable') is not True or value.get('phase')!='awaiting_target'
