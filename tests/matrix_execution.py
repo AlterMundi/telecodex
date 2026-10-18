@@ -31,6 +31,7 @@ from matrix_execution import (
     validate_task,
 )
 from matrix_operator import NativeOwnerClient, configured_client
+from matrix_operator import send as operator_send
 from tests.test_execution_instruction import request
 
 from tests import test_dm025_client as client_fixtures
@@ -605,6 +606,140 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(ExecutionDenied):
             context.native(self.scope, {"text": "must not escape cancellation"})
         self.assertEqual(len(self.receiver.page(after=0, limit=10)), 1)
+
+
+class AuthenticatedGroupHostTests(unittest.TestCase):
+    def test_separate_capabilities_send_through_actual_authenticated_group_service(
+        self,
+    ):
+        import socketserver
+        import tempfile
+        import threading
+
+        from daimon_matrix.client import CLIENT_CONFIG_SCHEMA_V3
+        from daimon_matrix.daemon import serve_connection
+        from daimon_matrix.local_api import create_capability
+        from daimon_matrix.service import HostedWeave, MessagingServiceContext
+
+        sdk = AdapterTests()
+        sdk.setUp()
+        self.addCleanup(sdk.doCleanups)
+        group = sdk.sender
+        now = group.lane.clock()
+        observe = create_capability(
+            b"o" * 32,
+            client_id="observe-test",
+            methods=["runtime.status"],
+            not_before_ms=now - 1000,
+            not_after_ms=now + 60000,
+        )
+        messaging = create_capability(
+            b"m" * 32,
+            client_id="messaging-test",
+            methods=["messaging.send", "messaging.delivery"],
+            not_before_ms=now - 1000,
+            not_after_ms=now + 60000,
+        )
+        service = HostedWeave(
+            ledger=group.ledger,
+            signer=group.signer,
+            capabilities={c.capability_id: c for c in (observe, messaging)},
+            clock=group.lane.clock,
+            runtime_id="dm:runtime:v1:" + "T" * 43,
+            runtime_label="matrix-host-test",
+            messaging=MessagingServiceContext(
+                channels={"tribe": group},
+                deliveries={"tribe": group},
+                client_channels={messaging.client_id: frozenset({"tribe"})},
+            ),
+        )
+
+        # Real owner-UID, frame/HMAC, service authorization and signed native
+        # delivery; only the keys, recipient and operational clock are synthetic.
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self):
+                serve_connection(SimpleNamespace(service=service), self.request)
+
+        class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+            daemon_threads = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sdk.sock"
+            server = Server(str(path), Handler)
+            path.chmod(0o600)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                source = {
+                    "being_ref": group.lane.being_ref,
+                    "embodiment_id": group.lane.local_embodiment_id,
+                }
+                references = {}
+                for purpose, capability in (
+                    ("messaging", messaging),
+                    ("observation", observe),
+                ):
+                    config_path = Path(directory) / (purpose + ".json")
+                    key_path = Path(directory) / (purpose + ".key")
+                    config_path.write_text(
+                        canonical(
+                            {
+                                "schema": CLIENT_CONFIG_SCHEMA_V3,
+                                "capability": capability.descriptor,
+                                "expected_server": group.ledger.local_origin,
+                                "runtime_id": service.runtime_id,
+                                "runtime_label": service.runtime_label,
+                            }
+                        )
+                    )
+                    key_path.write_bytes(capability.key)
+                    config_path.chmod(0o600)
+                    key_path.chmod(0o600)
+                    references[purpose] = {
+                        "socket": str(path),
+                        "client_config": str(config_path),
+                        "client_key": str(key_path),
+                    }
+                binding = Path(directory) / "host.json"
+                binding.write_text(
+                    canonical(
+                        {
+                            "schema": "telecodex.matrix-host-binding/v1",
+                            "source": source,
+                            **references,
+                        }
+                    )
+                )
+                binding.chmod(0o600)
+                loaded = configured_client(binding, source)
+                # Match the synthetic authority's fixed operational clock. No
+                # verification, service authorization or socket I/O is mocked.
+                host = replace(
+                    loaded,
+                    messaging=replace(loaded.messaging, clock=group.lane.clock),
+                    observation=replace(loaded.observation, clock=group.lane.clock),
+                )
+                status = sdk.technical_status()
+                outcome = operator_send({"status": status, "source": source}, host)
+                transport = MatrixConversationTransport(status, source, host)
+                sent = transport.inspect()
+                self.assertEqual(
+                    outcome["submission"]["message_id"], sent["message_id"]
+                )
+                self.assertEqual(
+                    outcome["submission"]["destination"],
+                    status["request"]["destination"],
+                )
+                for endpoint in sdk.fixture.servers:
+                    endpoint._threads.join()
+                message = sdk.receiver.message(sent["message_id"])
+                relay = json.loads(message["payload"]["body"]["text"])
+                self.assertEqual(relay["text"], status["request"]["original"]["text"])
+                self.assertIsNone(relay["execution_ref"])
+                self.assertEqual(sent["author"], source)
+                self.assertEqual(transport.inspect()["message_id"], sent["message_id"])
+            finally:
+                server.shutdown()
+                server.server_close()
 
 
 class HostClientTests(unittest.TestCase):
