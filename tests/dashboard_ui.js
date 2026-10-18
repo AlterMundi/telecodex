@@ -65,17 +65,21 @@ const hung = (options) => new Promise((resolve, reject) => {
 });
 
 (async () => {
-  const monitor=boot(()=>Promise.resolve({ok:true,json:async()=>({binding:"fixture"})}),undefined,true);
+  const monitor=boot(()=>Promise.resolve({ok:true,json:async()=>({binding:"fixture",viewer:{label:"TEST <fixture>",expires:1900000000}})}),undefined,true);
   await settle();
   assert.equal(monitor.requests.length,0,"An unopened monitor must not use ambient owner cookies");
   assert.throws(()=>monitor.headers(),/monitor credential/);
   const upload=monitor.nodes.get("#feedback").children[0].children[0];
   const credential={scope:"monitor_readonly",origin:"https://fixture.invalid",prefix:"/sessions",expires:Date.now()/1000+3600,authorization:"Companion "+"m".repeat(43)};
   upload.files=[{size:400,text:async()=>JSON.stringify(credential)}];await upload.handlers.change();
+  assert.equal(monitor.context.document.title,"Routing monitor · TEST <fixture>");
+  assert.equal(monitor.nodes.get("#feedback").children[2].children[0].textContent,"Change monitor access");
+  assert.equal(monitor.nodes.get("#feedback").children[0].textContent,"Source: TEST <fixture>");
   assert.equal(monitor.headers().Authorization,credential.authorization,"Direct image reads use the same restricted grant");
   assert.equal(monitor.requests[0].options.headers.Authorization,credential.authorization);
   assert(monitor.requests.every(r=>r.options.method==="GET"));
   upload.files=[{size:400,text:async()=>JSON.stringify({...credential,scope:"interaction_only"})}];await upload.handlers.change();
+  assert.equal(monitor.context.document.title,"Routing monitor");
   assert.throws(()=>monitor.headers(),/monitor credential/,"A failed selection cannot restore ambient cookie authority");
   const before=monitor.requests.length;
   await assert.rejects(vm.runInContext('api("interaction/inputs")',monitor.context),/monitor credential/);

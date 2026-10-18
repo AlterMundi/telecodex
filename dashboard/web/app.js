@@ -582,22 +582,25 @@ const conversationView = window.Conversation?.mount({
 });
 (async () => {
   if(monitorOnly){
-    const feedback=$('#feedback'),label=el('label','Open a monitor credential '),file=document.createElement('input');
+    const feedback=$('#feedback'),label=el('label','Monitor access file '),file=document.createElement('input');
     file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Monitor credential');label.append(file);feedback.replaceChildren(label);
     async function openCredential(value){
       if(value?.scope!=='monitor_readonly' || value.origin!==location.origin || value.prefix!==location.pathname.replace(/\/$/,'') || !/^Companion [A-Za-z0-9_-]{43}$/.test(value.authorization) || !(value.expires>Date.now()/1000))throw Error('Select a current monitor credential for this receiver');
       monitorAuthorization=value.authorization;
-      await api('interaction/inputs');
+      const source=await api('interaction/inputs');
+      const sourceLabel=source.viewer?.label || 'Selected receiver';
+      document.title='Routing monitor · '+sourceLabel;
       sessionStorage.setItem('routing-monitor',JSON.stringify(value));
-      authenticated=true;conversationView?.authenticated();feedback.replaceChildren(label,el('p','Read-only access until '+new Date(value.expires*1000).toLocaleString()+'. Inputs, playback and session controls are disabled.'));await refresh(true);schedule();
+      const access=el('details');access.append(el('summary','Change monitor access'),label);
+      authenticated=true;conversationView?.authenticated();feedback.replaceChildren(el('p','Source: '+sourceLabel),el('p','Read-only access until '+new Date((source.viewer?.expires || value.expires)*1000).toLocaleString()+'. Inputs, playback and session controls are disabled.'),access);await refresh(true);schedule();
     }
     file.addEventListener('change',async()=>{
       try{const selected=file.files?.[0];if(!selected || selected.size>4096)throw Error('Select the small operator-issued monitor credential');await openCredential(JSON.parse(await selected.text()));}
-      catch(error){monitorAuthorization=undefined;authenticated=false;sessionStorage.removeItem('routing-monitor');feedback.replaceChildren(label,el('p',error.message));}
+      catch(error){monitorAuthorization=undefined;authenticated=false;document.title='Routing monitor';sessionStorage.removeItem('routing-monitor');feedback.replaceChildren(label,el('p',error.message));}
       finally{file.value='';}
     });
     try{const saved=sessionStorage.getItem('routing-monitor');if(saved)await openCredential(JSON.parse(saved));}
-    catch(_){monitorAuthorization=undefined;authenticated=false;sessionStorage.removeItem('routing-monitor');}
+    catch(_){monitorAuthorization=undefined;authenticated=false;document.title='Routing monitor';sessionStorage.removeItem('routing-monitor');}
     return;
   }
   if (!tg?.initData) {

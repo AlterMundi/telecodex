@@ -305,7 +305,13 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Message history unavailable; refresh to reconnect') from None
         authorize(request)
-        return {**result, 'csrf':session['csrf']}
+        viewer = {}
+        if isinstance(session, dict) and session.get('scope') == 'monitor_readonly':
+            label = session.get('label')
+            if not isinstance(label, str) or not 1 <= len(label) <= 64 or any(ord(c) < 32 for c in label):
+                label = 'Selected receiver'
+            viewer = {'viewer': {'label': label, 'expires': session['expires']}}
+        return {**result, 'csrf':session['csrf'], **viewer}
 
     @app.get('/api/interaction/telegram-inputs')
     async def conversation_telegram_inputs(request: Request, before: int = 0, direction: str = 'before'):
