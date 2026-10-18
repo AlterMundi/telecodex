@@ -57,9 +57,16 @@ configured `selector`, and a `new`, `amends` or `context` relation. It cannot su
 replacement text. Selection atomically freezes the original, recipient, entry
 generation, admission epoch and up to four explicitly selected same-entry,
 same-recipient parent originals. Parent text and authorship remain separate from
-the current human text or committed machine transcript. Serialized selected
-content is bounded to 15360 UTF-8 bytes, reserving 1024 bytes for the SDK relay's
-fixed metadata and bounded execution reference. Oversized JSON-escaped context
+the current human text or committed machine transcript. The explicit relation
+(`new`, `amends` or `context`) and its exact selected request IDs also travel into
+the receiving task, protected by the approved task hash. A relation cannot name
+parents outside that package or add a recipient selector. Older relays without
+a relation remain unclassified; absence does not mean an amendment or grant
+execution. The receiving native owner still owns actual steering and admission.
+Deploy a matching receiving host: the previous closed parser rejects the new
+relation field, even though the signed Matrix transport itself accepts the text.
+Serialized selected content is bounded to 15360 UTF-8 bytes, reserving 1024 bytes
+for the SDK relay's fixed metadata, relation and bounded execution reference. Oversized JSON-escaped context
 is refused before consuming the original. A Matrix selection excludes local
 routing, creation and implicit native-question answers for that same original.
 
