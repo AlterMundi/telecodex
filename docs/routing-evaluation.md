@@ -78,3 +78,65 @@ The response contract and reasoning settings were checked against the official
 [Groq API reference](https://console.groq.com/docs/api-reference) and
 [Qwen model interface](https://console.groq.com/docs/model/qwen/qwen3.8-27b).
 These text requests establish text-model access, not Qwen realtime voice access.
+
+## Learned embedding candidate — 2026-10-18
+
+The same normalized 24-case dataset was evaluated with the already configured
+NVIDIA `nvidia/nemotron-3-embed-1b` API. Three card passages and 24 input queries
+were encoded in two bounded calls, with separate `passage` and `query` input types,
+2048-dimensional float outputs and no truncation. The export includes the same
+unlabeled cards, text and dialogue context as the general-model comparison;
+labels and source annotations are excluded. Exact requests, responses, indices,
+engine, input hash, timing and provider usage were retained. No prior general-model
+request was repeated, and no worker task was dispatched.
+
+| Candidate | Exact acceptable decisions | Wrong target | Unnecessary clarification |
+| --- | ---: | ---: | ---: |
+| Previously retained sparse TF-IDF reference | 10/24 | 1 | 12 |
+| Previously retained GPT-OSS-20B, low | 18/24 | 0 | 4 |
+| Previously retained Qwen3.8-27B, none | 24/24 | 0 | 0 |
+| Nemotron-3-Embed-1B cosine reference | 14/24 | 3 | 7 |
+
+The embedding reference uses the same **uncalibrated** `.25` minimum and `.10`
+margin as the sparse reference, plus deliberate prefix selection and stale-card
+refusal. These thresholds were frozen before encoding and were not fitted to
+this set. The encoder is learned; the decision rule is a zero-shot retrieval
+baseline, **not** a trained conversation classifier. It can propose one existing
+candidate or clarification; it cannot decide discussion versus new work or
+multi-target work. Including context in its query does not implement instruction
+intent or coreference reasoning.
+
+The three wrong routes were a quoted selector in a discussion, a question about
+whether a busy worker justifies creation, and discussion about a possible new
+research topic. This specific retrieval rule is insufficient as sole dispatch
+selector. Keep the current integrating dialogue responsible for semantic
+selection; embeddings remain a possible candidate-ranking optimization requiring
+independent evaluation. This does not establish that learned classifiers cannot
+work, that Qwen generalizes, or that any production provider should change.
+
+Encoding took 0.390 seconds for the three passages and 0.774 seconds for the
+24-query batch on this one run. The API reported 138 and 912 input tokens,
+respectively. These are batch timings, **not** per-message latency or verified
+billing. Passage encoding could be reused until cards change; that optimization
+was not measured here. Human correction examples and calibrated evaluation on a
+separate dataset remain open.
+
+The official [model description](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-embed-1b)
+and [API reference](https://docs.api.nvidia.com/nim/reference/nvidia-nemotron-3-embed-1b-infer)
+describe the embedding interface. Successful access here proves only this
+small public-synthetic text experiment, not paid receiving execution or a voice
+service.
+
+To reproduce scoring without another API request:
+
+```sh
+python3 -B scripts/routing_eval.py tests/fixtures/routing-eval-synthetic.json --export-embedding-inputs
+python3 -B scripts/routing_eval.py tests/fixtures/routing-eval-synthetic.json --embeddings /private/retained-embeddings.json
+```
+
+The retained artifact uses `telecodex.routing-embeddings/v1`, an engine string,
+the SHA-256 of `json.dumps(export, sort_keys=True).encode()`, and `passages`/`queries`
+arrays of `{id, embedding}`. Each exact input must have one finite, nonzero vector
+with a common dimension. The scorer rejects changed exports, missing/duplicate
+IDs and malformed vectors. It never fits thresholds, reads credentials, calls an
+encoder or dispatches a proposal. Similarity values are not probabilities.
