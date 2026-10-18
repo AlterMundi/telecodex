@@ -535,3 +535,13 @@ the controller; existing native threads without that registration are not silent
 replaced. Runtime and real receiving qualification remain distinct from synthetic
 process tests. No live deployment or general twenty-model throughput follows from
 this source implementation.
+
+The integrating controller's `target_inputs` operation reads up to sixteen recent
+inputs for one explicitly selected owned target. It returns receiver-retained
+request IDs, relations, source references, bounded attributed excerpts and transport
+states without a native read, summary synthesis or dispatch. These records are
+separate from observer interpretations and do not certify task completion. Use
+these IDs to link corrections with `amends` or additional material with `context`.
+If the intended earlier request is absent or ambiguous, ask rather than inventing
+an ID or turning the correction into a new task. Existing native conversations
+can discover this operation through the stable controller's `capabilities` call.
