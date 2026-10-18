@@ -44,6 +44,40 @@ refund or new execution. `accept_verified_reply` correlates an already verified
 selected event to the original message ID, digest, author, thread and recipient.
 It does not perform signature verification itself or read an inbox.
 
+## Technical original transport
+
+`MatrixConversationTransport(authenticated_status, selected_author, authenticated_client)`
+relays an already retained human original without a model call, synthetic execution
+instruction or per-message execution approval. The selected host supplies the
+source `{being_ref, embodiment_id}` from owner setup and reads the status through
+the authenticated controller. This class is not exposed to a model, does not
+read an inbox, and offers no execution controller. It shares the broker's exact
+source/client checks, absolute deadline, immutable original and recipient, signed
+native send identity, delivery inspection and verified-return correlation.
+
+The outgoing thread is the retained request UUID; the stable send identity uses
+the same original-derived namespace as the existing broker. `send()` relays only
+the exact original, its attribution and selected lineage. It emits
+`execution_ref: null`: this is a technical transport event, not an assertion that
+an inference cycle was approved. `make_received_task` can prepare this verified
+request, but only the receiver's independently admitted execution path may run a
+model or produce its work result. Transport cannot mint fuel or paid approval.
+Worker replies still require their actual execution reference.
+
+Reconstructing the transport from the same retained current status retains the
+native journal identity. Do not automatically retry an uncertain operation;
+inspect the same send. Switching a previously authored original between execution
+and technical modes cannot alter its old relay: the journal rejects changed
+parameters under the same identity. This is a matching host capability; deploy
+receiving parsers that accept the explicit null transport reference. The pinned
+receiver preparation already accepts it; third-party consumers may require an
+update.
+
+This removes sender-side inference admission from the technical transport. The
+normal controller's automatic host attachment and the selected receiving native
+owner remain separate unfinished integration work; importing or constructing the
+class installs neither listener nor peer activation.
+
 ## Retained conversation requests and returns
 
 Add `matrix_targets` under the existing `[interaction]` profile only for explicitly

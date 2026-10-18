@@ -19,6 +19,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from daimon_matrix.execution_instruction import Instruction, Scope
 from matrix_execution import (
+    MatrixConversationTransport,
     MatrixExecutionBroker,
     MatrixExecutionError,
     canonical,
@@ -144,6 +145,95 @@ class AdapterTests(unittest.TestCase):
         return self.broker.submit(
             self.scope, {"text": "What changed in the synthetic task?"}, 1
         )
+
+    def technical_status(self):
+        retained = {
+            "schema": "telecodex.matrix-request/v1",
+            "id": self.input_ref,
+            "human": 100,
+            "entry": {"chat_id": 100, "thread_id": 1},
+            "original": {
+                "human_id": 100,
+                "origin": {"chat_id": 100, "thread_id": 1},
+                "text": "  Exact retained human input.\nNo inference needed.  ",
+                "transcription": None,
+            },
+            "destination": self.target,
+            "parents": [],
+            "relation": {"kind": "new"},
+        }
+        retained["binding"] = hashlib.sha256(canonical(retained).encode()).hexdigest()
+        return {"request": retained, "current": True, "phase": "awaiting_execution"}
+
+    def technical_transport(self, status=None, author=None):
+        return MatrixConversationTransport(
+            status or self.technical_status(),
+            author
+            or {
+                "being_ref": self.sender.lane.being_ref,
+                "embodiment_id": self.sender.lane.local_embodiment_id,
+            },
+            SignedGroupClient(self.fixture, self.sender),
+        )
+
+    def test_technical_original_without_execution_approval_has_verified_return(self):
+        status = self.technical_status()
+        transport = self.technical_transport(status)
+        self.assertFalse(hasattr(transport, "controller"))
+        self.assertFalse(hasattr(transport, "_instruction"))
+        sent = transport.send()
+        received = self.receiver.message(sent["message_id"])
+        relay = json.loads(received["payload"]["body"]["text"])
+        self.assertIsNone(relay["execution_ref"])
+        self.assertEqual(relay["text"], status["request"]["original"]["text"])
+        self.assertEqual(relay["relation"], {"kind": "new"})
+        self.assertEqual(relay["input_kind"], "human_text")
+        self.assertEqual(sent["thread_id"], self.input_ref)
+        reply_scope = Scope("tribe", self.input_ref, "messaging_reply", "reply")
+        # Technical receipt only prepares a task. Independent receiving approval
+        # is still required before a runner can act or return model output.
+        task = make_received_task(received, reply_scope)
+        responder = self.make_broker(self.receiver, reply_scope, task=task)
+        returned = responder.submit(
+            reply_scope, {"text": "Independently admitted answer."}, 1
+        )
+        answer = self.sender.message(returned["message_id"])
+        callback = transport.conversation_return(sent, answer)
+        self.assertEqual(callback["binding"], status["request"]["binding"])
+        self.assertEqual(callback["text"], "Independently admitted answer.")
+        self.assertEqual(transport.inspect()["message_id"], sent["message_id"])
+        # Rebuilding from the same retained status cannot create a second send.
+        self.assertEqual(
+            self.technical_transport(status).send()["message_id"], sent["message_id"]
+        )
+        self.assertEqual(transport.send_id, self.broker.send_id)
+        with self.assertRaisesRegex(MatrixExecutionError, "model-rewritten"):
+            transport.submit(transport._scope, {"text": "Rewritten input"}, 1)
+
+    def test_technical_transport_rejects_stale_binding_and_mismatched_source(self):
+        status = self.technical_status()
+        status["current"] = False
+        with self.assertRaisesRegex(MatrixExecutionError, "current and pending"):
+            self.technical_transport(status)
+        status["current"] = True
+        status["request"]["original"]["text"] = "Mutated original"
+        with self.assertRaisesRegex(MatrixExecutionError, "binding"):
+            self.technical_transport(status)
+        transport = self.technical_transport(
+            author={
+                "being_ref": self.receiver.lane.being_ref,
+                "embodiment_id": self.sender.lane.local_embodiment_id,
+            }
+        )
+        before = self.sender.records.page(after=0, limit=100)
+        with self.assertRaisesRegex(MatrixExecutionError, "unconfirmed"):
+            transport.send()
+        self.assertEqual(before, self.sender.records.page(after=0, limit=100))
+        # Switching from an already authored execution relay to technical mode
+        # does not get a new send identity or silently replace its wire bytes.
+        self.send()
+        with self.assertRaisesRegex(MatrixExecutionError, "unconfirmed"):
+            self.technical_transport().send()
 
     def test_signed_request_and_exact_parent_return_preserve_provenance(self):
         first = self.send()

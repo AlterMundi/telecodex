@@ -1,8 +1,9 @@
 """Host adapter between approved ExecutionStore cycles and the selected Matrix SDK.
 
 No client, journal, scheduler, inbox reader or model is created by this module.
-Only a trusted host passes the immutable approved task and authenticated SDK
-client to the existing ReviewController. This object is never a model tool or
+A trusted host can relay an authenticated retained human original as a technical
+send. Model execution separately requires the immutable approved task and
+existing ReviewController. This object is never a model tool or
 an OS isolation boundary. SDK native journals own send identity and receipts;
 ExecutionStore owns approval, admission, fuel and uncertainty. Provenance text
 never authorizes receiving inference. A paid cross-body trial still requires its
@@ -387,36 +388,27 @@ def make_received_task(message, scope):
     )
 
 
-class MatrixExecutionBroker:
-    def __init__(self, instruction, task, native_client):
+class _NativeMatrixTransport:
+    """Fixed authenticated native route; no inference or execution admission."""
+
+    def __init__(self, task, scope, author, native_client, execution_ref):
         value = validate_task(task)
-        if (
-            instruction.mode != "manual"
-            or instruction.max_cycles != 1
-            or len(instruction.scope) != 1
-            or hashlib.sha256(task.encode()).hexdigest() != instruction.task_sha256
-        ):
-            raise MatrixExecutionError(
-                "One approved manual task and exact digest required"
-            )
+        closed(author, ("being_ref", "embodiment_id"))
+        destination({"kind": "body", **author})
         parent = value["parent"]
         if parent is not None:
             selected = parent["destination"]
-            if (
-                selected["being_ref"] != instruction.being
-                or selected["kind"] == "body"
-                and selected["embodiment_id"] != instruction.embodiment
+            if selected["being_ref"] != author["being_ref"] or (
+                selected["kind"] == "body"
+                and selected["embodiment_id"] != author["embodiment_id"]
             ):
                 raise MatrixExecutionError(
                     "Reply parent was addressed to another source"
                 )
-        scope = instruction.scope[0]
         if value["scope"] != {
             k: getattr(scope, k) for k in ("channel", "thread", "tool", "action")
         }:
-            raise MatrixExecutionError(
-                "Task route differs from approved execution scope"
-            )
+            raise MatrixExecutionError("Task route differs from selected native scope")
         if not is_dataclass(native_client) or "deadline_ns" not in {
             f.name for f in fields(native_client)
         }:
@@ -424,18 +416,14 @@ class MatrixExecutionBroker:
                 "Selected SDK must support an absolute client deadline"
             )
         server = getattr(getattr(native_client, "config", None), "expected_server", {})
-        if server.get("embodiment_id") != instruction.embodiment:
+        if server.get("embodiment_id") != author["embodiment_id"]:
             raise MatrixExecutionError(
-                "Selected client differs from approved source body"
+                "Selected client differs from selected source body"
             )
-        self._instruction, self._scope, self._task, self._client = (
-            instruction,
-            scope,
-            value,
-            native_client,
-        )
-        # Independent of recipient, native session generation and instruction
-        # renewal. The SDK rejects changed parameters under this same send ID.
+        self._scope, self._task, self._client = scope, value, native_client
+        self._author, self._execution_ref = dict(author), execution_ref
+        # The native journal owns idempotency even across host restart. A changed
+        # recipient, payload or execution reference cannot reuse this send ID.
         role = "request" if scope.tool == "messaging_send" else "result"
         self.send_id = str(
             uuid.uuid5(
@@ -444,46 +432,9 @@ class MatrixExecutionBroker:
             )
         )
 
-    def controller(self, store, runner, **options):
-        """Create the only supported host controller, pinned to this approval.
-
-        Scope alone omits the recipient. Never reuse this broker with an
-        unpinned ReviewController or a cycle from another approved task.
-        """
-        from daimon_matrix.execution_instruction import ExecutionDenied
-        from daimon_matrix.review_runner import ReviewController
-
-        broker = self
-        instruction = self._instruction
-        if store.store_id != instruction.store_id:
-            raise MatrixExecutionError("Execution store differs from approved root")
-
-        class PinnedController(ReviewController):
-            def run_due_once(self, identity, revision, task):
-                if (
-                    identity != instruction.instruction_id
-                    or revision != instruction.revision
-                    or hashlib.sha256(task.encode()).hexdigest()
-                    != instruction.task_sha256
-                ):
-                    raise ExecutionDenied(
-                        "Controller is pinned to another approved task"
-                    )
-                try:
-                    retained = self.store.get_instruction(identity, revision)
-                except ExecutionDenied:
-                    return super().run_due_once(identity, revision, task)
-                if retained.sha256 != instruction.sha256:
-                    raise ExecutionDenied(
-                        "Controller instruction differs from approved root"
-                    )
-                return super().run_due_once(identity, revision, task)
-
-        return PinnedController(store, runner, broker, **options)
-
     def authorize(self, scope):
-        # ExecutionStore rechecks signed approval/window/cancellation. The SDK
-        # separately rechecks current group membership and transport authority.
+        # This is route matching only, never execution approval. An admitted
+        # runner separately uses ExecutionStore; the SDK rechecks authority.
         return scope == self._scope
 
     def _invoke(self, method, params, timeout):
@@ -503,20 +454,20 @@ class MatrixExecutionBroker:
                 source = status.get("result", {}) if status.get("ok") is True else {}
                 if (
                     source.get("schema") != "dm.runtime.status/v1"
-                    or source.get("being_ref") != self._instruction.being
+                    or source.get("being_ref") != self._author["being_ref"]
                     or source.get("local_origin", {}).get("embodiment_id")
-                    != self._instruction.embodiment
+                    != self._author["embodiment_id"]
                 ):
                     raise MatrixExecutionError(
-                        "Authenticated source differs from approved root"
+                        "Authenticated source differs from selected source"
                     )
             _, response = client.invoke(method, params)
             if not isinstance(response, dict) or response.get("ok") is not True:
                 raise MatrixExecutionError("Native response not successful")
             return self._validate_result(response["result"])
         except Exception:
-            # CycleContext retains/charges ambiguity. Never mint another send,
-            # retry, substitute a recipient or interpret this as nondelivery.
+            # Native journals retain uncertainty. An execution cycle additionally
+            # keeps its charge. Never substitute a send, recipient or refund.
             raise MatrixExecutionError(
                 "Native outcome unconfirmed; inspect the same send ID"
             ) from None
@@ -529,8 +480,8 @@ class MatrixExecutionBroker:
             or result.get("thread_id") != self._scope.thread
             or result.get("author")
             != {
-                "being_ref": self._instruction.being,
-                "embodiment_id": self._instruction.embodiment,
+                "being_ref": self._author["being_ref"],
+                "embodiment_id": self._author["embodiment_id"],
             }
         ):
             raise MatrixExecutionError("Native outcome does not match the fixed route")
@@ -586,10 +537,7 @@ class MatrixExecutionBroker:
                 if scope.tool == "messaging_send"
                 else "worker_result",
                 "input_ref": self._task["input_ref"],
-                "execution_ref": {
-                    "id": self._instruction.instruction_id,
-                    "revision": self._instruction.revision,
-                },
+                "execution_ref": self._execution_ref,
                 "text": text(payload["text"]),
             }
         )
@@ -672,8 +620,8 @@ class MatrixExecutionBroker:
         wanted = {
             "message_id": request_result["message_id"],
             "message_hash": request_result["message_hash"],
-            "sender_being_ref": self._instruction.being,
-            "sender_embodiment_id": self._instruction.embodiment,
+            "sender_being_ref": self._author["being_ref"],
+            "sender_embodiment_id": self._author["embodiment_id"],
         }
         target = self._task["destination"]
         if (
@@ -706,3 +654,84 @@ class MatrixExecutionBroker:
         if type(reference["revision"]) is not int or reference["revision"] < 1:
             raise MatrixExecutionError("Positive execution revision required")
         return text(relay["text"])
+
+
+class MatrixExecutionBroker(_NativeMatrixTransport):
+    """One independently approved execution cycle's fixed native broker."""
+
+    def __init__(self, instruction, task, native_client):
+        if (
+            instruction.mode != "manual"
+            or instruction.max_cycles != 1
+            or len(instruction.scope) != 1
+            or hashlib.sha256(task.encode()).hexdigest() != instruction.task_sha256
+        ):
+            raise MatrixExecutionError(
+                "One approved manual task and exact digest required"
+            )
+        self._instruction = instruction
+        super().__init__(
+            task,
+            instruction.scope[0],
+            {"being_ref": instruction.being, "embodiment_id": instruction.embodiment},
+            native_client,
+            {"id": instruction.instruction_id, "revision": instruction.revision},
+        )
+
+    def controller(self, store, runner, **options):
+        """Create the only supported host controller, pinned to this approval.
+
+        Scope alone omits the recipient. Never reuse this broker with an
+        unpinned ReviewController or a cycle from another approved task.
+        """
+        from daimon_matrix.execution_instruction import ExecutionDenied
+        from daimon_matrix.review_runner import ReviewController
+
+        broker = self
+        instruction = self._instruction
+        if store.store_id != instruction.store_id:
+            raise MatrixExecutionError("Execution store differs from approved root")
+
+        class PinnedController(ReviewController):
+            def run_due_once(self, identity, revision, task):
+                if (
+                    identity != instruction.instruction_id
+                    or revision != instruction.revision
+                    or hashlib.sha256(task.encode()).hexdigest()
+                    != instruction.task_sha256
+                ):
+                    raise ExecutionDenied(
+                        "Controller is pinned to another approved task"
+                    )
+                try:
+                    retained = self.store.get_instruction(identity, revision)
+                except ExecutionDenied:
+                    return super().run_due_once(identity, revision, task)
+                if retained.sha256 != instruction.sha256:
+                    raise ExecutionDenied(
+                        "Controller instruction differs from approved root"
+                    )
+                return super().run_due_once(identity, revision, task)
+
+        return PinnedController(store, runner, broker, **options)
+
+
+class MatrixConversationTransport(_NativeMatrixTransport):
+    """Relay an authenticated retained human original without running a model.
+
+    Construct only in the trusted selected host, never from model/peer JSON.
+    Source pins come from owner setup; status comes from the authenticated
+    controller. No approval, funding, listener or receiving turn is created.
+    """
+
+    def __init__(self, status, author, native_client):
+        from daimon_matrix.execution_instruction import Scope
+
+        scope = Scope(
+            "tribe", identifier(status["request"]["id"]), "messaging_send", "send"
+        )
+        task = make_conversation_task(status, scope)
+        super().__init__(task, scope, author, native_client, None)
+
+    def send(self, timeout=1.0):
+        return self.submit(self._scope, {"text": self._task["question"]}, timeout)
