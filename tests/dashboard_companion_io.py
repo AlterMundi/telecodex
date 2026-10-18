@@ -92,6 +92,11 @@ class Companion(unittest.TestCase):
         headers={'origin':self.config['origin'],'authorization':credential['authorization'],
                  'cookie':'telecodex_dashboard='+login.json()['session_token']}
         self.assertEqual(self.client.get('/api/interaction',headers=headers).status_code,200)
+        self.provider.conversation_inputs=lambda before,direction:{'items':[]}
+        response=self.client.get('/api/interaction/inputs',headers=headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['viewer'],{'label':'Selected monitor','expires':credential['expires']})
+        self.assertNotIn('viewer',self.client.get('/api/interaction/inputs',headers=self.headers).json())
         self.provider.conversation_telegram_inputs=lambda before,direction:{'items':[],'read_only':True}
         response=self.client.get('/api/interaction/telegram-inputs',headers=headers)
         self.assertEqual(response.status_code,200,response.text)
