@@ -46,6 +46,13 @@ const elapsed = (n) =>
     : n < 60
       ? `${n}s`
       : `${Math.floor(n / 60)}m ${n % 60}s`;
+function authorizationHeaders() {
+  if(monitorOnly){
+    if(!monitorAuthorization)throw new Error('Open a current monitor credential');
+    return {Authorization:monitorAuthorization};
+  }
+  return sessionToken ? {Authorization:'Bearer '+sessionToken} : {};
+}
 async function api(route, body) {
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -57,9 +64,7 @@ async function api(route, body) {
       ? { "Content-Type": "application/json", "X-Dashboard-CSRF": csrf || "" }
       : {};
     if(monitorOnly && body)throw new Error('This monitor is read-only');
-    if(monitorAuthorization)headers.Authorization=monitorAuthorization;
-    if (sessionToken && route !== "session")
-      headers.Authorization = `Bearer ${sessionToken}`;
+    if(route!=="session")Object.assign(headers,authorizationHeaders());
     const response = await fetch(`api/${route}`, {
       signal: controller.signal,
       method: body ? "POST" : "GET",
@@ -568,8 +573,7 @@ tg?.onEvent?.("deactivated", () => clearInterval(timer));
 tg?.ready?.();
 const conversationView = window.Conversation?.mount({
   api,
-  headers: () => ({"Content-Type":"application/json", "X-Dashboard-CSRF":csrf || "",
-    ...(sessionToken ? {Authorization:`Bearer ${sessionToken}`} : {})}),
+  headers: () => ({"Content-Type":"application/json", "X-Dashboard-CSRF":csrf || "",...authorizationHeaders()}),
   setCsrf: (value) => { csrf = value; },
   modeChanged: (enabled, initial) => { conversationMode = enabled; if (!initial) refresh(true); },
   telegram: tg,

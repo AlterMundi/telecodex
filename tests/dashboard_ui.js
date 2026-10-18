@@ -6,9 +6,10 @@ const vm = require("node:vm");
 const source = fs.readFileSync("dashboard/web/app.js", "utf8");
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf"})})) {
+function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf"})}), monitor=false) {
   const nodes = new Map(), requests = [], timers = new Map();
-  let nextTimer = 0;
+  let nextTimer = 0, monitorHeaders;
+  const saved = new Map();
   const element = () => ({
     style: {}, setAttribute(name, value) { this[name] = value; }, textContent: "", disabled: false, handlers: {}, children: [], dataset: {},
     addEventListener(name, handler) { this.handlers[name] = handler; },
@@ -29,8 +30,10 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
   };
   const context = vm.createContext({
     document,
-    window: { Telegram: { WebApp: { initData: "synthetic", ready() {} } } },
-    URL, location:{href:"https://fixture.invalid/sessions/"},
+    window: { Telegram: { WebApp: { initData: "synthetic", ready() {} } },
+      ...(monitor?{Conversation:{mount(options){monitorHeaders=options.headers;options.modeChanged(true,true);return {authenticated(){},refresh:async()=>{}};}}}:{}) },
+    sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},
+    URL, location:{href:"https://fixture.invalid/sessions/"+(monitor?"?view=monitor":""),origin:"https://fixture.invalid",pathname:"/sessions/"},
     AbortController,
     crypto: { randomUUID: () => "synthetic-action-nonce" },
     fetch(route, options) {
@@ -49,7 +52,7 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
     clearInterval() {},
   });
   vm.runInContext(source, context);
-  return { context, nodes, requests, timers };
+  return { context, nodes, requests, timers, headers:()=>monitorHeaders(), saved };
 }
 
 const fixtureToken = "f".repeat(43);
@@ -62,6 +65,21 @@ const hung = (options) => new Promise((resolve, reject) => {
 });
 
 (async () => {
+  const monitor=boot(()=>Promise.resolve({ok:true,json:async()=>({binding:"fixture"})}),undefined,true);
+  await settle();
+  assert.equal(monitor.requests.length,0,"An unopened monitor must not use ambient owner cookies");
+  assert.throws(()=>monitor.headers(),/monitor credential/);
+  const upload=monitor.nodes.get("#feedback").children[0].children[0];
+  const credential={scope:"monitor_readonly",origin:"https://fixture.invalid",prefix:"/sessions",expires:Date.now()/1000+3600,authorization:"Companion "+"m".repeat(43)};
+  upload.files=[{size:400,text:async()=>JSON.stringify(credential)}];await upload.handlers.change();
+  assert.equal(monitor.headers().Authorization,credential.authorization,"Direct image reads use the same restricted grant");
+  assert.equal(monitor.requests[0].options.headers.Authorization,credential.authorization);
+  assert(monitor.requests.every(r=>r.options.method==="GET"));
+  upload.files=[{size:400,text:async()=>JSON.stringify({...credential,scope:"interaction_only"})}];await upload.handlers.change();
+  assert.throws(()=>monitor.headers(),/monitor credential/,"A failed selection cannot restore ambient cookie authority");
+  const before=monitor.requests.length;
+  await assert.rejects(vm.runInContext('api("interaction/inputs")',monitor.context),/monitor credential/);
+  assert.equal(monitor.requests.length,before);
   // Regression: previously this bootstrap skipped state and stayed on Reading….
   const launch = boot((route) => route === "api/session" ? ok() : unavailable());
   await settle();
