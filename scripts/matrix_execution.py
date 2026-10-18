@@ -101,7 +101,20 @@ def parent_from_verified_sdk(message):
     The SDK retains/verifies signatures and audience. Extracting these fields is
     not independent signature validation or execution approval.
     """
+    selected = message["payload"]["body"].get("destination")
+    if not isinstance(selected, dict):
+        raise MatrixExecutionError("A directed parent is required for a private return")
+    selected = {
+        key: selected[key]
+        for key in (
+            ("kind", "being_ref", "embodiment_id")
+            if selected.get("kind") == "body"
+            else ("kind", "being_ref")
+        )
+    }
+    destination(selected)
     return {
+        "destination": selected,
         "message_id": identifier(message["event_id"]),
         "message_hash": message["content_hash"],
         "sender_being_ref": message["being_ref"],
@@ -138,8 +151,10 @@ def validate_task(task):
                 "sender_being_ref",
                 "sender_embodiment_id",
                 "thread_id",
+                "destination",
             ),
         )
+        destination(parent["destination"])
         identifier(parent["message_id"])
         if not isinstance(parent["message_hash"], str) or not re.fullmatch(
             "[a-f0-9]{64}", parent["message_hash"]
@@ -190,6 +205,17 @@ class MatrixExecutionBroker:
             raise MatrixExecutionError(
                 "One approved manual task and exact digest required"
             )
+        parent = value["parent"]
+        if parent is not None:
+            selected = parent["destination"]
+            if (
+                selected["being_ref"] != instruction.being
+                or selected["kind"] == "body"
+                and selected["embodiment_id"] != instruction.embodiment
+            ):
+                raise MatrixExecutionError(
+                    "Reply parent was addressed to another source"
+                )
         scope = instruction.scope[0]
         if value["scope"] != {
             k: getattr(scope, k) for k in ("channel", "thread", "tool", "action")
@@ -323,17 +349,18 @@ class MatrixExecutionBroker:
         wanted_parent = (
             None
             if parent is None
-            else {k: v for k, v in parent.items() if k != "thread_id"}
-        )
-        target = (
-            self._task["destination"]
-            if parent is None
             else {
-                "kind": "body",
-                "being_ref": parent["sender_being_ref"],
-                "embodiment_id": parent["sender_embodiment_id"],
+                k: v for k, v in parent.items() if k not in ("thread_id", "destination")
             }
         )
+        target = self._task["destination"]
+        if parent is not None:
+            target = {
+                "kind": parent["destination"]["kind"],
+                "being_ref": parent["sender_being_ref"],
+            }
+            if target["kind"] == "body":
+                target["embodiment_id"] = parent["sender_embodiment_id"]
         actual = result.get("destination")
         if (
             not isinstance(actual, dict)

@@ -10,7 +10,9 @@ The trusted host constructs one closed task with `make_task`, including the
 original input UUID, exact execution scope and explicit being/body destination.
 The task hash is part of the existing externally approved instruction. For a
 reply, the host instead selects an SDK-verified native parent; the SDK derives
-the destination from that parent's authenticated origin. Model output supplies
+the destination from that parent's authenticated origin. The parent's directed
+being/body kind is frozen in the task and preserved on return; broadcast parents
+are rejected before mutation. Model output supplies
 only text. It cannot override destination, channel, parent, tool or authority.
 
 Construct `broker = MatrixExecutionBroker(instruction, task, authenticated_client)`

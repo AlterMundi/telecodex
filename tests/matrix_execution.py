@@ -168,6 +168,40 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(MatrixExecutionError):
             self.broker.accept_verified_reply(first, wrong)
 
+    def test_being_directed_reply_preserves_kind_and_rejects_broadcast_parent(self):
+        requester = self.make_broker(
+            self.sender,
+            self.scope,
+            target={"kind": "being", "being_ref": self.receiver.lane.being_ref},
+        )
+        first = requester.submit(
+            self.scope, {"text": "Being-directed synthetic task"}, 1
+        )
+        received = self.receiver.message(first["message_id"])
+        scope = replace(self.scope, tool="messaging_reply", action="reply")
+        parent = parent_from_verified_sdk(received)
+        responder = self.make_broker(self.receiver, scope, parent=parent)
+        returned = responder.submit(scope, {"text": "Being-directed response"}, 1)
+        self.assertTrue(returned["semantic"]["terminal"])
+        self.assertEqual(returned["destination"]["kind"], "being")
+        self.assertEqual(
+            requester.accept_verified_reply(
+                first, self.sender.message(returned["message_id"])
+            ),
+            "Being-directed response",
+        )
+        broadcast = copy.deepcopy(received)
+        broadcast["payload"]["body"].pop("destination")
+        with patch.object(
+            SignedGroupClient, "invoke", side_effect=AssertionError("must not invoke")
+        ):
+            with self.assertRaises(MatrixExecutionError):
+                parent_from_verified_sdk(broadcast)
+            with self.assertRaises(MatrixExecutionError):
+                self.make_broker(
+                    self.receiver, scope, parent=parent | {"destination": None}
+                )
+
     def test_retained_identity_prevents_renewal_reroute_and_changed_content(self):
         first = self.send()
         self.assertEqual(self.broker.inspect()["message_id"], first["message_id"])
