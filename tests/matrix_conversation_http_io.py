@@ -124,6 +124,7 @@ def qualify(binary):
             "host_calls": len(observed),
         }
         assert len(observed) == 1
+        assert selected["claimed_source"] == source_author
         snapshot, outcome = observed[0]
         broker = MatrixConversationTransport(
             snapshot["status"],
@@ -135,7 +136,7 @@ def qualify(binary):
         )
         assert selected["submission"]["message_id"] == sent["message_id"]
         duplicate = j.call(
-            "duplicate-matrix-selection",
+            "route-duplicate-matrix-selection",
             "matrix_request",
             {
                 "input_ref": ident,
@@ -227,17 +228,18 @@ def qualify(binary):
             "relation": "new",
             "requests": [],
         }
-        uncertain = j.call("matrix-lost-host-response", "matrix_request", args)
+        uncertain = j.call("route-matrix-lost-host-response", "matrix_request", args)
         assert uncertain["phase"] == "submission_uncertain" and len(observed) == 3
         lost_id = uncertain["request"]["id"]
         assert sdk.receiver.message(observed[-1][1]["submission"]["message_id"])
-        duplicate = j.call("matrix-no-uncertain-replay", "matrix_request", args)
+        duplicate = j.call("route-matrix-no-uncertain-replay", "matrix_request", args)
         assert duplicate["phase"] == "submission_uncertain" and len(observed) == 3
         j.stop()
         j.start()
         j.wait_control_socket(j.socket)
         retained = j.read("matrix", "status", lost_id)["result"]
         assert retained["phase"] == "submission_uncertain" and len(observed) == 3
+        assert retained["claimed_source"] == source_author
         print(
             "PASS actual HTTP/native controller automatically invokes configured host -> signed SDK technical send -> owner callback -> canonical HTTP; duplicate reservation, explicit signed amendment, lost child response/restart without replay, independent cursor and local exclusion; zero inference. Receiving native work/automatic return attachment remain unqualified."
         )

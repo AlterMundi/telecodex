@@ -109,8 +109,13 @@ runtime outside its daemon or creates credentials. Its two calls share one
 absolute deadline. Do not use a combined capability: the SDK rejects mixed
 messaging and observation profiles.
 
-The existing request row records `submitting` before the command can have an
-effect. A valid fixed-source/request/destination submission becomes `submitted`;
+The existing request row freezes the selected source author as `claimed_source`
+and records `submitting` atomically before the command can have an effect.
+That source survives a lost ACK, restart or later owner configuration change.
+Both the host ACK and an early canonical callback must match the retained source,
+request-derived native send ID and request UUID thread. A different source cannot
+establish the submission by returning before its ACK. Legacy passive rows without
+a technical claim retain their existing verified-callback contract. A valid fixed-source/request/destination submission becomes `submitted`;
 that proves the SDK-authenticated authored outcome, not receiving incorporation,
 completion or a particular delivery receipt. The original, binding and minimal
 native submission are retained; signed receipts remain owned by the SDK journal.

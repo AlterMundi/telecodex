@@ -1,5 +1,5 @@
-//! Selected cross-body plans. This path retains correlation only; it neither
-//! starts receiving inference nor runs a Matrix inbox consumer.
+//! Retained cross-body requests and explicitly configured technical submission.
+//! This path neither starts receiving inference nor runs a Matrix inbox consumer.
 use super::*;
 use crate::interaction::MatrixDestination;
 use serde::Deserialize;
@@ -103,13 +103,6 @@ pub(super) async fn tool(
     let binding = selected["request"]["binding"]
         .as_str()
         .context("Missing Matrix original binding")?;
-    if !app
-        .shared
-        .store
-        .interaction_matrix_claim(human, key, id, binding, closed)?
-    {
-        return app.shared.store.interaction_matrix_status(human, key, id);
-    }
     let MatrixDestination::Body {
         being_ref,
         embodiment_id,
@@ -121,6 +114,13 @@ pub(super) async fn tool(
         being_ref: being_ref.clone(),
         embodiment_id: embodiment_id.clone(),
     };
+    if !app
+        .shared
+        .store
+        .interaction_matrix_claim(human, key, id, binding, &source, closed)?
+    {
+        return app.shared.store.interaction_matrix_status(human, key, id);
+    }
     let outcome = tokio::select! {
         biased;
         _ = closed.cancelled() => Err(anyhow!("Matrix host request closed; inspect its retained send")),
@@ -180,7 +180,7 @@ struct HostOutcome {
     schema: String,
     request: String,
     binding: String,
-    submission: Value,
+    submission: crate::store::MatrixSubmission,
 }
 
 #[cfg(unix)]
@@ -251,19 +251,7 @@ async fn host_send(
         {
             bail!("Matrix host outcome differs from the selected request");
         }
-        let keys = [
-            "send_id",
-            "message_id",
-            "message_hash",
-            "thread_id",
-            "author",
-            "destination",
-        ];
-        let submission = keys
-            .into_iter()
-            .map(|key| (key.to_owned(), outcome.submission[key].clone()))
-            .collect::<serde_json::Map<_, _>>();
-        Ok(serde_json::from_value(Value::Object(submission))?)
+        Ok(outcome.submission)
     })
     .await;
     drop(group);
