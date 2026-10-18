@@ -7,10 +7,10 @@ window.Conversation = (() => {
     if (cls) value.className = cls;
     return value;
   };
-  function mount({api, headers, setCsrf, modeChanged, telegram}) {
+  function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false}) {
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen});
-    const visual = window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:pause,unauthorized:failed,telegram});
+    const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:pause,unauthorized:failed,telegram});
     const cards = new Map();
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
@@ -37,7 +37,7 @@ window.Conversation = (() => {
     }
     $("#conversation-focus-clear").addEventListener("click",clearFocus);
     async function routeInput(card,frozen) {
-      if(card.routeBusy || inputs.get(card.value.id)!==card)return;
+      if(readOnly || card.routeBusy || inputs.get(card.value.id)!==card)return;
       card.routePending=frozen;card.routeBusy=true;renderRoute(card);
       const owned=inputGeneration,observation=++inputObservation;
       try {
@@ -58,11 +58,11 @@ window.Conversation = (() => {
         card.select.value=routingChoices.some(c=>c.selector===selected)?selected:"";card.choiceVersion=JSON.stringify(routingChoices);
       }
       if(card.value.routing){card.routePending=undefined;card.routeNote.textContent="";}
-      card.routeBox.hidden=card.value.read_only || card.value.phase!=="awaiting_target";
+      card.routeBox.hidden=readOnly || card.value.read_only || card.value.phase!=="awaiting_target";
       card.select.disabled=!!card.routePending || card.routeBusy || card.value.retired;
       card.routeButton.textContent=card.routePending?"Retry this selection":"Send to session";
       card.routeButton.disabled=card.routeBusy || card.value.retired || (!card.routePending && !card.select.value);
-      card.continueButton.hidden=card.value.read_only || !card.value.continuation;
+      card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
     }
     function resetInputs() {
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
@@ -181,7 +181,7 @@ window.Conversation = (() => {
           } finally { check.disabled = false; }
         });
         retry.addEventListener("click", async () => {
-          if (card.value.phase || retry.disabled) return;
+          if (readOnly || card.value.phase || retry.disabled) return;
           const owned = inputGeneration, observation = ++inputObservation;
           retry.disabled = true;
           try {
@@ -209,7 +209,7 @@ window.Conversation = (() => {
         if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
         card.status.textContent = phaseText(card.value);
         microphone?.observe(card.value,phaseText(card.value));
-        card.retry.hidden = !!card.value.phase || !card.value.binding;
+        card.retry.hidden = readOnly || !!card.value.phase || !card.value.binding;
         if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
         renderRoute(card);return card;
       }
@@ -231,11 +231,11 @@ window.Conversation = (() => {
       card.imageButton.hidden=!card.value.visual;
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
-      card.check.hidden=card.value.read_only===true;
+      card.check.hidden=readOnly || card.value.read_only===true;
       microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
       if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
-      card.retry.hidden = !!card.value.phase || !card.value.binding;
+      card.retry.hidden = readOnly || !!card.value.phase || !card.value.binding;
       renderRoute(card);
       card.box.dataset.sequence = String(card.value.capture_order ?? (card.value.ordering_unknown?Number.MIN_SAFE_INTEGER:card.value.sequence ?? Number.MAX_SAFE_INTEGER));
       const container = $("#conversation-inputs");
@@ -258,7 +258,7 @@ window.Conversation = (() => {
         $("#conversation-inputs-older").hidden = !result.more;
       }
       if (direction === "after" || (remember && !inputNewest)) inputNewest = Math.max(inputNewest, result.newest || 0);
-      draft.disabled = false; send.disabled = posting;
+      draft.disabled = readOnly; send.disabled = readOnly || posting;
       return result;
     }
     async function telegramPage(before=0,direction="before",remember=true) {
@@ -294,7 +294,7 @@ window.Conversation = (() => {
     });
     compose.addEventListener("submit", async event => {
       event.preventDefault();
-      if (posting || !ready || !binding || inputBinding !== binding) return;
+      if (readOnly || posting || !ready || !binding || inputBinding !== binding) return;
       const text = draft.value;
       if (!text.trim() || text.includes("\0") || new TextEncoder().encode(text).length > 32768) {
         sendState.textContent = "Write a message of at most 32 KiB."; return;
@@ -346,7 +346,7 @@ window.Conversation = (() => {
     let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
     let initialized = false, active, generation = 0, requestAbort, blobUrl;
     const audioState = (text) => { $("#conversation-audio-state").textContent = text; };
-    const initialMode = () => new URL(location.href).searchParams.get("view") === "conversation"
+    const initialMode = () => readOnly || new URL(location.href).searchParams.get("view") === "conversation"
       || new URLSearchParams(telegram?.initData || "").get("start_param") === "conversation";
 
     function stop(text = "Audio stopped.") {
@@ -376,9 +376,9 @@ window.Conversation = (() => {
       enabled = value;
       document.body.classList.toggle("conversation-mode", enabled);
       $("#conversation").hidden = !enabled;
-      $(".identity h1").textContent = enabled ? "Conversation" : "Sessions";
+      $(".identity h1").textContent = readOnly ? "Routing monitor" : enabled ? "Conversation" : "Sessions";
       document.title = `${enabled ? "Conversation" : "Sessions"} · Telecodex`;
-      if (navigate) {
+      if (navigate && !readOnly) {
         const url = new URL(location.href);
         if (enabled) url.searchParams.set("view", "conversation");
         else url.searchParams.delete("view");
@@ -413,7 +413,7 @@ window.Conversation = (() => {
         const read = node("button", "Read reply"); read.type = "button";
         const listen = node("button", "Listen"); listen.type = "button";
         const error = node("p", "", "reply-error"); error.setAttribute("role", "status");
-        const reply=node("button","Reply to this session");reply.type="button";reply.hidden=!["worker_result","matrix_result"].includes(source.kind);
+        const reply=node("button","Reply to this session");reply.type="button";reply.hidden=readOnly || !["worker_result","matrix_result"].includes(source.kind);
         actions.append(read, listen,reply); box.append(title, status, body, actions, error);
         box.dataset.sequence = String(source.sequence);
         const following = [...container.children].find((item) => Number(item.dataset.sequence) < source.sequence);
@@ -436,7 +436,7 @@ window.Conversation = (() => {
           } catch (e) { error.textContent = e.message; if (e.status === 401 || e.status === 403) failed(e); }
           finally { read.disabled = false; }
         });
-        listen.addEventListener("click", () => listenTo(card.source));
+        listen.hidden=readOnly;listen.addEventListener("click", () => !readOnly && listenTo(card.source));
       } else if (card.source.text_sha256 !== source.text_sha256) {
         card.body.textContent = source.preview;
         card.offset = 0; card.expanded = false; card.read.hidden = false;
@@ -465,7 +465,7 @@ window.Conversation = (() => {
       binding = value.binding;
       microphone?.configure(value.can_speak);
       setCsrf(value.csrf);
-      canListen = value.can_listen;
+      canListen = !readOnly && value.can_listen;
       for (const source of value.items) upsert(source);
       for (const card of cards.values()) card.listen.hidden = !canListen;
       if (direction === "before" && rememberHistory) {
@@ -517,7 +517,7 @@ window.Conversation = (() => {
           }
           await inputPage(0,"before",false);
         }
-        await requestControls.refresh();
+        if(!readOnly)await requestControls.refresh();
         await refreshTelegram();
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);
       } catch (e) { failed(e); }
@@ -644,6 +644,7 @@ window.Conversation = (() => {
     window.addEventListener("online", () => { if (enabled && ready && !document.hidden) refresh(true); });
     telegram?.onEvent?.("deactivated", pause);
     telegram?.BackButton?.onClick?.(() => setMode(false));
+    if(readOnly){document.body.classList.toggle("monitor-mode",true);$("#conversation-sent").open=true;}
     setMode(initialMode(), true, false);
     return {refresh, pause, stop,
       authenticated() { ready = true; $("#conversation-open").disabled = false; }};

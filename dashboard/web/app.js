@@ -1,6 +1,8 @@
 "use strict";
 const $ = (selector) => document.querySelector(selector);
-const tg = window.Telegram?.WebApp;
+const monitorOnly = new URL(location.href).searchParams.get('view') === 'monitor';
+const tg = monitorOnly ? undefined : window.Telegram?.WebApp;
+let monitorAuthorization;
 let snapshot,
   csrf,
   filter = "attention",
@@ -44,6 +46,13 @@ const elapsed = (n) =>
     : n < 60
       ? `${n}s`
       : `${Math.floor(n / 60)}m ${n % 60}s`;
+function authorizationHeaders() {
+  if(monitorOnly){
+    if(!monitorAuthorization)throw new Error('Open a current monitor credential');
+    return {Authorization:monitorAuthorization};
+  }
+  return sessionToken ? {Authorization:'Bearer '+sessionToken} : {};
+}
 async function api(route, body) {
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -54,8 +63,8 @@ async function api(route, body) {
     const headers = body
       ? { "Content-Type": "application/json", "X-Dashboard-CSRF": csrf || "" }
       : {};
-    if (sessionToken && route !== "session")
-      headers.Authorization = `Bearer ${sessionToken}`;
+    if(monitorOnly && body)throw new Error('This monitor is read-only');
+    if(route!=="session")Object.assign(headers,authorizationHeaders());
     const response = await fetch(`api/${route}`, {
       signal: controller.signal,
       method: body ? "POST" : "GET",
@@ -565,13 +574,32 @@ tg?.onEvent?.("deactivated", () => clearInterval(timer));
 tg?.ready?.();
 const conversationView = window.Conversation?.mount({
   api,
-  headers: () => ({"Content-Type":"application/json", "X-Dashboard-CSRF":csrf || "",
-    ...(sessionToken ? {Authorization:`Bearer ${sessionToken}`} : {})}),
+  headers: () => ({"Content-Type":"application/json", "X-Dashboard-CSRF":csrf || "",...authorizationHeaders()}),
   setCsrf: (value) => { csrf = value; },
   modeChanged: (enabled, initial) => { conversationMode = enabled; if (!initial) refresh(true); },
   telegram: tg,
+  readOnly: monitorOnly,
 });
 (async () => {
+  if(monitorOnly){
+    const feedback=$('#feedback'),label=el('label','Open a monitor credential '),file=document.createElement('input');
+    file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Monitor credential');label.append(file);feedback.replaceChildren(label);
+    async function openCredential(value){
+      if(value?.scope!=='monitor_readonly' || value.origin!==location.origin || value.prefix!==location.pathname.replace(/\/$/,'') || !/^Companion [A-Za-z0-9_-]{43}$/.test(value.authorization) || !(value.expires>Date.now()/1000))throw Error('Select a current monitor credential for this receiver');
+      monitorAuthorization=value.authorization;
+      await api('interaction/inputs');
+      sessionStorage.setItem('routing-monitor',JSON.stringify(value));
+      authenticated=true;conversationView?.authenticated();feedback.replaceChildren(label,el('p','Read-only access until '+new Date(value.expires*1000).toLocaleString()+'. Inputs, playback and session controls are disabled.'));await refresh(true);schedule();
+    }
+    file.addEventListener('change',async()=>{
+      try{const selected=file.files?.[0];if(!selected || selected.size>4096)throw Error('Select the small operator-issued monitor credential');await openCredential(JSON.parse(await selected.text()));}
+      catch(error){monitorAuthorization=undefined;authenticated=false;sessionStorage.removeItem('routing-monitor');feedback.replaceChildren(label,el('p',error.message));}
+      finally{file.value='';}
+    });
+    try{const saved=sessionStorage.getItem('routing-monitor');if(saved)await openCredential(JSON.parse(saved));}
+    catch(_){monitorAuthorization=undefined;authenticated=false;sessionStorage.removeItem('routing-monitor');}
+    return;
+  }
   if (!tg?.initData) {
     $("#feedback").textContent =
       "Open Sessions from this bot’s Telegram menu to authenticate. Private data is not available in an ordinary browser.";

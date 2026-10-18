@@ -19,7 +19,11 @@ def authority(config, provider):
         separators=(',', ':')).encode()).hexdigest()
 
 
-def permitted(method, path):
+def permitted(method, path, scope='interaction_only'):
+    if scope == 'monitor_readonly':
+        return method == 'GET' and re.fullmatch(r'/api/interaction(?:/(?:part|telegram-inputs|inputs(?:/(?:[a-f0-9-]{36}|telegram:[0-9]+)(?:/trace(?:/(?:original|[a-f0-9-]{36}))?|/image)?)?))?', path) is not None
+    if scope != 'interaction_only':
+        return False
     if method == 'GET':
         return re.fullmatch(r'/api/interaction(?:/(?:part|inputs(?:/[a-f0-9-]{36}(?:/image)?)?|requests(?:/[a-f0-9]{32}(?:/receipt)?)?))?', path) is not None
     if method == 'POST':
@@ -49,7 +53,7 @@ class Grants:
                 return None
             now = time.time()
             if (grant.get('schema') != 'telecodex.companion-grant/v1'
-                    or grant.get('scope') != 'interaction_only'
+                    or grant.get('scope') not in ('interaction_only','monitor_readonly')
                     or grant.get('authority') != authority(self.config, self.provider)
                     or type(grant.get('human')) is not int
                     or type(grant.get('expires')) is not int
@@ -62,8 +66,8 @@ class Grants:
         except (OSError, ValueError, KeyError, TypeError):
             return None
 
-    def enroll(self, label, output, seconds):
-        if (self.root is None or not isinstance(label, str) or not 1 <= len(label) <= 64
+    def enroll(self, label, output, seconds, *, scope='interaction_only'):
+        if (scope not in ('interaction_only','monitor_readonly') or self.root is None or not isinstance(label, str) or not 1 <= len(label) <= 64
                 or any(ord(c) < 32 for c in label)
                 or type(seconds) is not int or not 60 <= seconds <= 30 * 86400):
             raise ValueError('Enabled companion route, bounded label and lifetime required')
@@ -79,13 +83,15 @@ class Grants:
         self.provider.presentation_list(0, 0)
         token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         ident = hashlib.sha256(token.encode()).hexdigest()
-        grant = {'schema':'telecodex.companion-grant/v1', 'scope':'interaction_only',
+        grant = {'schema':'telecodex.companion-grant/v1', 'scope':scope,
             'label':label, 'human':human, 'authority':authority(self.config, self.provider),
             'expires':int(time.time()) + seconds, 'csrf':csrf}
         credential = {'schema':'telecodex.companion-device/v1',
             'origin':self.config['origin'], 'prefix':self.config.get('prefix', '/sessions'),
             'authorization':'Companion ' + token, 'csrf':csrf,
             'expires':grant['expires'], 'grant_id':ident}
+        if scope == 'monitor_readonly':
+            credential['scope'] = scope
         self.provider.assert_binding()
         if not self.provider.authorized(human):
             raise ValueError('Receiving human grant changed during enrollment')
@@ -108,7 +114,7 @@ class Grants:
             record.unlink()
             sync_directory(self.root)
             raise
-        return {'grant_id':ident, 'scope':'interaction_only', 'expires':grant['expires']}
+        return {'grant_id':ident, 'scope':scope, 'expires':grant['expires']}
 
     def revoke(self, ident):
         if self.root is None or not re.fullmatch(r'[a-f0-9]{64}', ident):
@@ -131,6 +137,7 @@ def main():
     enroll.add_argument('--label', required=True)
     enroll.add_argument('--output', required=True, type=Path)
     enroll.add_argument('--seconds', type=int, default=86400)
+    enroll.add_argument('--scope', choices=['interaction_only','monitor_readonly'], default='interaction_only')
     revoke = commands.add_parser('revoke')
     revoke.add_argument('grant_id')
     args = parser.parse_args()
@@ -140,7 +147,7 @@ def main():
         config = tomllib.loads(args.config.read_text())
         provider = Provider(config)
         grants = Grants(config, provider)
-        result = grants.enroll(args.label, args.output, args.seconds) if args.command == 'enroll' else grants.revoke(args.grant_id)
+        result = grants.enroll(args.label, args.output, args.seconds, scope=args.scope) if args.command == 'enroll' else grants.revoke(args.grant_id)
         print(json.dumps(result))  # Never emit the credential or its private path.
     except (OSError, ValueError, KeyError, RenderError):
         parser.exit(2, 'Companion operation unavailable; inspect owner-local configuration and grant.\n')

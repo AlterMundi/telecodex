@@ -73,3 +73,27 @@ text and a committed voice question answer. An unlisted destination remains
 unrouted; revoked requests are refused before voice buffering or ASR. Both
 fixtures use zero inference. They do not prove a physical button, audible output
 or real Telegram device acceptance.
+
+## Standalone read-only routing monitor
+
+The existing browser UI also supports ?view=monitor without Telegram. An
+operator enrolls a separate, expiring monitor_readonly credential using the
+same receiving grant service:
+
+    python -m dashboard.companion --config /absolute/dashboard.toml enroll \
+      --label "Selected monitor" --scope monitor_readonly \
+      --seconds 86400 --output /absolute/private/monitor.json
+
+Open the configured Sessions URL with ?view=monitor, then select that private
+credential file. It must belong to the exact origin and receiving prefix. The
+browser keeps it in the current tab's session storage so a reload can reconnect;
+it is never put into a URL, query string or public artifact. Keep the file private
+and use the existing revoke command to withdraw access.
+
+This mode reuses the Conversation renderer for retained originals, Telegram
+transcripts, exact routing traces and correlated replies. It has no message,
+route-selection, question-answer, playback or session-control authority. The
+server rejects every write and administrative route even if the browser also
+has an owner cookie. Existing interaction-only device grants remain unchanged
+and cannot inspect routing traces. Enrollment does not start media, models or a
+browser; opening a selected monitor is an explicit operator action.

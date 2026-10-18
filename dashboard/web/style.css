@@ -490,3 +490,12 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .routing-trace .route-step { margin: 14px 0; border-left: 3px solid var(--accent); padding-left: 12px; }
 .route-identity { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
 #conversation-sent[open] { max-height: none; overflow: visible; }
+
+/* The enrolled standalone monitor shares the conversation renderer. */
+.monitor-mode #conversation-compose,
+.monitor-mode #conversation-back,
+.monitor-mode #conversation-open,
+.monitor-mode #conversation-stop,
+.monitor-mode #conversation-play,
+.monitor-mode #conversation-audio-state,
+.monitor-mode #conversation-requests { display:none !important; }
