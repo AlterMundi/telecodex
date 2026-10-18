@@ -132,6 +132,9 @@ if sys.argv[1:]==['login','status']:
     print('Logged in using synthetic local auth'); sys.exit(0)
 if sys.argv[1:]!=['app-server','proxy']: sys.exit(7)
 s=socket.create_connection(('127.0.0.1',{self.native.server_address[1]}),timeout=30)
+# Bound connection setup, not an idle native conversation. The owning fixture
+# retains its observation deadline and explicitly terminates this proxy.
+s.settimeout(None)
 def upload():
     while True:
         data=os.read(0,8192)
