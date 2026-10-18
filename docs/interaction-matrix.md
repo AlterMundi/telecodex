@@ -184,6 +184,37 @@ to the integrator; the integrator explicitly selects its relation and recipient.
 Two-cursor clients retain their local-only behavior. Device-client adoption and
 production receiving execution remain separate qualification requirements.
 
+## Retained return correlation
+
+`MatrixConversationReceipt(authenticated_status, authenticated_client)` rebuilds
+read-only correlation from an acknowledged technical request. The status must
+retain `claimed_source` and the closed native `submission`, with phase `submitted`
+or `reply_received`. It validates the immutable original binding, frozen author,
+recipient and request-derived send/thread IDs. It can inspect that same SDK
+submission and correlate an already SDK-verified selected reply through the
+existing `conversation_return` callback. The inspected outcome must exactly match
+the acknowledged message ID/hash and route; a different native result cannot
+replace the recorded submission.
+
+A historical `current: false` request remains readable. Reconstruction neither
+changes its phase nor recreates pending admission: the object has no sender or
+execution controller, and its `submit` method always refuses effects. The
+canonical callback leaves current-generation/Stop checks to the existing owner
+store. This is a trusted host API, not independent signature verification or OS
+isolation; pass only authenticated owner status and SDK-verified events.
+
+An uncertain send without a known ACK is insufficient to reconstruct this
+receipt. Delivery inspection can show that some native send exists under an ID,
+but is not proof that its full original wire content matched this retained human
+request. Preserve that uncertainty and inspect the original SDK evidence rather
+than fabricate a submission, reset the phase, resend or select another body.
+Legacy manually approved relays retain their existing broker correlation path.
+
+This component supplies restart/late-return correlation. Automatic selected-event
+intake still needs the SDK's selected-thread read path and an explicitly selected
+host attachment; constructing the receipt does not read an inbox, install a
+listener or activate a receiving model.
+
 ## Qualification and remaining integration
 
 Run the zero-inference suite using the pinned SDK checkout and its test helpers:

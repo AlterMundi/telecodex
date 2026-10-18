@@ -314,6 +314,11 @@ def make_conversation_task(status, scope):
         raise MatrixExecutionError(
             "Selected conversation request is not current and pending"
         )
+    return _retained_conversation_task(status, scope)
+
+
+def _retained_conversation_task(status, scope):
+    """Validate immutable owner-retained content without claiming new admission."""
     request = status["request"]
     if request.get("schema") != "telecodex.matrix-request/v1":
         raise MatrixExecutionError("Authenticated retained Matrix request required")
@@ -476,6 +481,13 @@ class _NativeMatrixTransport:
         if (
             not isinstance(result, dict)
             or result.get("schema") != "dm.tribe.direct-delivery/v1"
+        ):
+            raise MatrixExecutionError("Authenticated native delivery result required")
+        return self._validate_submission(result)
+
+    def _validate_submission(self, result):
+        if (
+            not isinstance(result, dict)
             or result.get("send_id") != self.send_id
             or result.get("thread_id") != self._scope.thread
             or result.get("author")
@@ -735,3 +747,65 @@ class MatrixConversationTransport(_NativeMatrixTransport):
 
     def send(self, timeout=1.0):
         return self.submit(self._scope, {"text": self._task["question"]}, timeout)
+
+
+class MatrixConversationReceipt(_NativeMatrixTransport):
+    """Read-only correlation of an acknowledged retained technical submission.
+
+    Trusted owner status and SDK-verified messages only. Historical/current-false
+    requests remain correlatable without reviving admission. An uncertain send
+    without a known submission is not evidence of the original wire contents.
+    This class is a host API, not OS isolation or independent signature checking.
+    """
+
+    def __init__(self, status, native_client):
+        from daimon_matrix.execution_instruction import Scope
+
+        if status.get("phase") not in ("submitted", "reply_received"):
+            raise MatrixExecutionError(
+                "Acknowledged retained technical submission required"
+            )
+        author = closed(status.get("claimed_source"), ("being_ref", "embodiment_id"))
+        submission = closed(
+            status.get("submission"),
+            (
+                "send_id",
+                "message_id",
+                "message_hash",
+                "thread_id",
+                "author",
+                "destination",
+            ),
+        )
+        destination(submission["destination"])
+        scope = Scope(
+            "tribe", identifier(status["request"]["id"]), "messaging_send", "send"
+        )
+        task = _retained_conversation_task(status, scope)
+        super().__init__(task, scope, author, native_client, None)
+        self._validate_submission(submission)
+        self._retained_submission = strict_json(canonical(submission))
+
+    def submit(self, scope, payload, timeout):
+        raise MatrixExecutionError("Receipt correlation cannot author a native message")
+
+    def _validate_result(self, result):
+        super()._validate_result(result)
+        selected = result["destination"]
+        actual = {
+            key: result[key]
+            for key in ("send_id", "message_id", "message_hash", "thread_id", "author")
+        }
+        actual["destination"] = {
+            key: selected[key]
+            for key in (
+                ("kind", "being_ref", "embodiment_id")
+                if selected["kind"] == "body"
+                else ("kind", "being_ref")
+            )
+        }
+        if actual != self._retained_submission:
+            raise MatrixExecutionError(
+                "Native outcome differs from acknowledged submission"
+            )
+        return result

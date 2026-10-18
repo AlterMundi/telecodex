@@ -20,6 +20,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from daimon_matrix.execution_instruction import Instruction, Scope
 from matrix_execution import (
+    MatrixConversationReceipt,
     MatrixConversationTransport,
     MatrixExecutionBroker,
     MatrixExecutionError,
@@ -237,6 +238,113 @@ class AdapterTests(unittest.TestCase):
         self.send()
         with self.assertRaisesRegex(MatrixExecutionError, "unconfirmed"):
             self.technical_transport().send()
+
+    def acknowledged_status(self):
+        pending = self.technical_status()
+        transport = self.technical_transport(pending)
+        sent = transport.send()
+        status = {
+            **pending,
+            "current": False,
+            "phase": "submitted",
+            "claimed_source": sent["author"],
+            "submission": {
+                key: sent[key]
+                for key in (
+                    "send_id",
+                    "message_id",
+                    "message_hash",
+                    "thread_id",
+                    "author",
+                )
+            },
+        }
+        status["submission"]["destination"] = self.target
+        # Match the owner RPC's JSON snapshot, with no shared Python aliases.
+        return json.loads(canonical(status)), sent
+
+    def test_historical_acknowledged_receipt_correlates_without_reviving_send(self):
+        status, sent = self.acknowledged_status()
+        receipt = MatrixConversationReceipt(
+            status, SignedGroupClient(self.fixture, self.sender)
+        )
+        self.assertFalse(hasattr(receipt, "controller"))
+        self.assertFalse(hasattr(receipt, "send"))
+        self.assertEqual(receipt.inspect()["message_id"], sent["message_id"])
+        with patch.object(
+            SignedGroupClient, "invoke", side_effect=AssertionError("no native effect")
+        ):
+            with self.assertRaisesRegex(MatrixExecutionError, "cannot author"):
+                receipt.submit(receipt._scope, {"text": "must not send"}, 1)
+        message = self.receiver.message(sent["message_id"])
+        reply_scope = replace(
+            self.scope, thread=sent["thread_id"], tool="messaging_reply", action="reply"
+        )
+        responder = self.make_broker(
+            self.receiver, reply_scope, task=make_received_task(message, reply_scope)
+        )
+        returned = responder.submit(
+            reply_scope, {"text": "A late independently admitted answer."}, 1
+        )
+        answer = self.sender.message(returned["message_id"])
+        callback = receipt.conversation_return(receipt.inspect(), answer)
+        self.assertEqual(callback["request"], status["request"]["id"])
+        self.assertEqual(callback["binding"], status["request"]["binding"])
+        self.assertEqual(callback["submission"], status["submission"])
+        self.assertEqual(callback["text"], "A late independently admitted answer.")
+        self.assertNotIn("current", callback)
+        self.assertFalse(status["current"])
+        self.assertEqual(status["phase"], "submitted")
+        changed = copy.deepcopy(sent)
+        changed["message_hash"] = "e" * 64
+        with self.assertRaisesRegex(MatrixExecutionError, "acknowledged submission"):
+            receipt.conversation_return(changed, answer)
+        status["phase"] = "reply_received"
+        self.assertEqual(
+            MatrixConversationReceipt(
+                status, SignedGroupClient(self.fixture, self.sender)
+            ).inspect()["message_id"],
+            sent["message_id"],
+        )
+
+    def test_receipt_requires_retained_ack_source_and_immutable_original(self):
+        status, _ = self.acknowledged_status()
+        client = SignedGroupClient(self.fixture, self.sender)
+        cases = []
+        unknown = copy.deepcopy(status)
+        unknown["phase"] = "submission_uncertain"
+        unknown["submission"] = None
+        cases.append(unknown)
+        unknown = copy.deepcopy(status)
+        unknown["phase"] = "submitting"
+        cases.append(unknown)
+        changed = copy.deepcopy(status)
+        changed["claimed_source"] = None
+        cases.append(changed)
+        changed = copy.deepcopy(status)
+        changed["claimed_source"]["being_ref"] = self.receiver.lane.being_ref
+        cases.append(changed)
+        changed = copy.deepcopy(status)
+        changed["submission"]["send_id"] = str(uuid.uuid4())
+        cases.append(changed)
+        changed = copy.deepcopy(status)
+        changed["submission"]["thread_id"] = str(uuid.uuid4())
+        cases.append(changed)
+        changed = copy.deepcopy(status)
+        changed["request"]["original"]["text"] = "Changed after admission"
+        cases.append(changed)
+        with patch.object(
+            SignedGroupClient,
+            "invoke",
+            side_effect=AssertionError("constructor must not call SDK"),
+        ):
+            for index, case in enumerate(cases):
+                with self.subTest(index=index, phase=case["phase"]):
+                    with self.assertRaises(MatrixExecutionError):
+                        MatrixConversationReceipt(case, client)
+        # The ordinary sender still requires actual current/pending admission.
+        with self.assertRaisesRegex(MatrixExecutionError, "current and pending"):
+            MatrixConversationTransport(status, status["claimed_source"], client)
 
     def test_signed_request_and_exact_parent_return_preserve_provenance(self):
         first = self.send()
