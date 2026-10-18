@@ -125,6 +125,10 @@ def first_voice(binary):
     try:
         j.prepare(history=True);b=Browser(j);clip,_=b.voice()
         j.wait(lambda:b.status(clip)['phase']=='accepted')
+        trace=b.get('/api/interaction/inputs/'+clip+'/trace')
+        assert trace['voice'] and trace['text']=='Continue requirement17 in this selected work.'
+        assert trace['routes']==[] and trace['read_only']
+        assert len((j.root/'asr-calls').read_text().splitlines())==1,'Trace inspection repeated ASR'
         assert len(j.packets)==1 and '[Committed voice input]' in str(j.packets[0])
         assert j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=1')[0][0]!='unrelated-cwd-history'
         assert b.get('/api/interaction')['binding']==b.binding

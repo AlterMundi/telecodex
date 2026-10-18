@@ -146,6 +146,47 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         page["routing_choices"] = choices(app)?;
         return Ok(page);
     }
+    if let Some(args) = args.strip_prefix("trace-text ") {
+        let fields: Vec<_> = args.split_whitespace().collect();
+        let [id, source, offset] = fields.as_slice() else {
+            bail!("Expected original, trace source and offset");
+        };
+        return app.shared.store.conversation_trace_text(
+            human,
+            cfg.entry(),
+            id,
+            source,
+            offset.parse()?,
+        );
+    }
+    if let Some(args) = args.strip_prefix("telegram-list ") {
+        let fields: Vec<_> = args.split_whitespace().collect();
+        let [cursor, direction] = fields.as_slice() else {
+            bail!("Expected Telegram cursor and direction");
+        };
+        if !matches!(*direction, "before" | "after") {
+            bail!("Invalid Telegram direction");
+        }
+        return app.shared.store.conversation_telegram_page(
+            human,
+            cfg.entry(),
+            cursor.parse()?,
+            *direction == "before",
+        );
+    }
+    if let Some(id) = args.strip_prefix("trace ") {
+        let mut trace = app
+            .shared
+            .store
+            .conversation_input_trace(human, cfg.entry(), id)?;
+        if let Some(routes) = trace["routes"].as_array_mut() {
+            for route in routes {
+                let target: SessionKey = serde_json::from_value(route["target"].clone())?;
+                route["label"] = json!(super::routing::label(&app.shared, target));
+            }
+        }
+        return Ok(trace);
+    }
     if let Some(id) = args.strip_prefix("status ") {
         return response(
             app,

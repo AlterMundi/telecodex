@@ -240,6 +240,30 @@ class Provider:
     def conversation_input_status(self, ident):
         return self.decorate_input(self.presentation(f'input status {self.input_id(ident)}'))
 
+    def conversation_input_trace(self, ident):
+        return self.presentation(f'input trace {self.trace_id(ident)}')
+
+    @classmethod
+    def trace_id(cls, ident):
+        if isinstance(ident,str) and ident.startswith('telegram:'):
+            value=ident.removeprefix('telegram:')
+            if (not value.isascii() or not value.isdigit() or str(int(value))!=value
+                    or not 0 <= int(value) <= 2**63-1):
+                raise ValueError('Invalid Telegram trace identity')
+            return ident
+        return cls.input_id(ident)
+
+    def conversation_telegram_inputs(self, before=0, direction='before'):
+        if type(before) is not int or not 0 <= before <= 2**63-1 or direction not in ('before','after'):
+            raise ValueError('Invalid Telegram observation cursor')
+        return self.presentation(f'input telegram-list {before} {direction}')
+
+    def conversation_trace_text(self, ident, source, offset):
+        if type(offset) is not int or not 0 <= offset <= 32768:
+            raise ValueError('Invalid trace text offset')
+        selected = 'original' if source == 'original' else self.input_id(source)
+        return self.presentation(f'input trace-text {self.trace_id(ident)} {selected} {offset}')
+
     @classmethod
     def clarification_source(cls, value, choices=None, entry_binding=None, binding=None):
         if (value.get('clarifiable') is not True or value.get('phase')!='awaiting_target'

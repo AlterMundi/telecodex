@@ -396,3 +396,24 @@ Selected still-image context uses the same original-input journal and native
 routing/steering path; see [selected visual context](interaction-visual.md).
 The optional browser selector captures a point in immutable evidence and does
 not open a camera or introduce another conversation owner.
+
+### Routing monitor
+
+In Sessions → Interaction, open **Routing monitor · your inputs and destinations**
+and **Show routing path** for a message. The monitor reads its complete retained
+original text or automatic voice transcript, every selected work-session route,
+request relation, exact forwarded original, native acceptance and correlated
+result evidence. Long originals and forwarded text use **Read more saved text**
+with exact immutable chunks to stay within the owner-control response bound. Open paths refresh with the existing view; **Refresh route**
+performs only another read. It never dispatches, retries, calls a model or
+prepares speech.
+
+Forwarded originals are the controller's retained text. They are not a
+reconstruction of the complete historical native relay envelope, which can also
+contain attributed context and controller instructions. Acceptance is distinct
+from a worker's coverage/completion declaration. Result freshness is recomputed
+from the current request state so a later correction remains visible. Response
+excerpts are bounded; complete replies remain in the conversation's reply view.
+Unrouted originals and unavailable target responses remain explicit. The monitor
+uses the existing authenticated owner surface; interaction-only device grants
+do not gain this inspection endpoint.

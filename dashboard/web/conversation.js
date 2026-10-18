@@ -17,7 +17,8 @@ window.Conversation = (() => {
     const sendState = $("#conversation-send-state");
     let replyFocus, focusVersion = 0, routingChoices = [];
     let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0, latestComposerId;
-    const phaseText = value => value.retired ? "Saved from an earlier conversation binding."
+    let telegramCursor=0,telegramNewest=0,telegramLoaded=false,telegramReading=false;
+    const phaseText = value => value.origin_kind==="telegram" ? `Telegram input retained (${value.phase}). Inspect its routing path for delivery evidence.${value.ordering_unknown?" Historical capture order unavailable.":""}` : value.retired ? "Saved from an earlier conversation binding."
       : value.routing ? routeText(value.routing) : ({awaiting_target:"Choose the session for this saved message.",preparing:"Recording saved; preparing its automatic transcript.", preparation_unconfirmed:"Recording saved; transcription unconfirmed. No work was submitted automatically.", retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
           sending:"Sending to your conversation…", steering:"Sending to your conversation…",
           accepted:"Sent to your conversation. Work may continue.", matrix_requested:"Saved for the selected daimon; awaiting its authorized execution and reply.",
@@ -57,18 +58,79 @@ window.Conversation = (() => {
         card.select.value=routingChoices.some(c=>c.selector===selected)?selected:"";card.choiceVersion=JSON.stringify(routingChoices);
       }
       if(card.value.routing){card.routePending=undefined;card.routeNote.textContent="";}
-      card.routeBox.hidden=card.value.phase!=="awaiting_target";
+      card.routeBox.hidden=card.value.read_only || card.value.phase!=="awaiting_target";
       card.select.disabled=!!card.routePending || card.routeBusy || card.value.retired;
       card.routeButton.textContent=card.routePending?"Retry this selection":"Send to session";
       card.routeButton.disabled=card.routeBusy || card.value.retired || (!card.routePending && !card.select.value);
-      card.continueButton.hidden=!card.value.continuation;
+      card.continueButton.hidden=card.value.read_only || !card.value.continuation;
     }
     function resetInputs() {
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
+      telegramCursor=0;telegramNewest=0;telegramLoaded=false;
       $("#conversation-inputs").replaceChildren();
       $("#conversation-inputs-older").hidden = true;
+      $("#conversation-telegram-older").hidden=true;$("#conversation-telegram-state").textContent="";
       draft.disabled = true; send.disabled = true;
+    }
+    async function readTrace(card) {
+      if (card.traceBusy) return;
+      const owned=inputGeneration;
+      card.traceBusy=true;card.traceRefresh.disabled=true;
+      card.traceState.textContent="Reading saved routing evidence…";
+      try {
+        const value=await api(`interaction/inputs/${encodeURIComponent(card.value.id)}/trace`);
+        if(owned!==inputGeneration || inputs.get(card.value.id)!==card)return;
+        if(value.id!==card.value.id || value.schema!=="telecodex.conversation-trace/v1")throw new Error("Wrong routing observation");
+        const original=node("section");
+        original.append(node("h3",value.voice?"Voice transcript":"Original text"),node("p",value.text||"No transcript is confirmed yet.","reply-text"));
+        traceTextMore(card,original,original.children[1],"original",value.text_next_offset);
+        const stages=[original];
+        for(const route of value.routes) {
+          const step=node("section",undefined,"route-step");
+          const relation=({new:"New task",amends:"Correction",context:"Additional context"})[route.relation?.kind]||"Related input";
+          step.append(node("h3",`→ #${route.label} · ${relation}`),node("p",routeText({...route,phase:route.transport_phase}),"reply-status"));
+          step.append(node("p","Exact original forwarded to this session:","note"),node("p",route.forwarded_original,"reply-text"));
+          traceTextMore(card,step,step.children[3],route.instruction,route.forwarded_next_offset);
+          if(!route.target_available)step.append(node("p","This session is no longer available in your current scope. Its response is not exposed.","note"));
+          for(const result of route.results) {
+            const state=!result.current?"Earlier result; a later correction may apply.":result.correction_pending?"A correction is still pending.":result.instruction_covered&&result.completed?"Session declared this input incorporated and the request completed.":"The session has not declared this input fully incorporated and completed.";
+            step.append(node("p",state,"reply-status"),node("p",result.text_excerpt,"reply-text"));
+            if(result.text_bounded)step.append(node("p","Response excerpt; read the complete reply under From your sessions.","note"));
+          }
+          if(route.more_results)step.append(node("p","Earlier related results remain in reply history.","note"));
+          const identity=node("details"),summary=node("summary","Request references");
+          identity.append(summary,node("p",`Instruction: ${route.instruction}\nRequests: ${route.requests.join(", ")}`,"route-identity"));step.append(identity);stages.push(step);
+        }
+        if(!value.routes.length)stages.push(node("p",value.answer?"Recorded as an answer to a session question; recording an answer does not prove incorporation.":value.routing?routeText(value.routing):"No work-session dispatch is recorded. The input may remain with the integrator or await clarification.","note"));
+        stages.push(node("p",value.evidence,"note"));
+        card.traceContent.replaceChildren(...stages);
+        card.traceState.textContent=`Saved input: ${value.phase}. Observation only; no message was resent.`;
+      } catch(e) {
+        if(owned!==inputGeneration || inputs.get(card.value.id)!==card)return;
+        card.traceState.textContent="Routing observation unavailable. Previous evidence is retained; nothing was resent.";
+        if([401,403].includes(e.status))failed(e);
+      } finally {card.traceBusy=false;card.traceRefresh.disabled=false;}
+    }
+    function traceTextMore(card,section,text,source,nextOffset) {
+      const cached=card.traceText.get(source);
+      if(cached && cached.text.startsWith(text.textContent)) {
+        text.textContent=cached.text;nextOffset=cached.nextOffset;
+      } else card.traceText.set(source,{text:text.textContent,nextOffset});
+      if(nextOffset===null || nextOffset===undefined)return;
+      const more=node("button","Read more saved text");more.type="button";section.append(more);
+      more.addEventListener("click",async()=>{
+        const owned=inputGeneration,offset=nextOffset;more.disabled=true;
+        try {
+          const value=await api(`interaction/inputs/${encodeURIComponent(card.value.id)}/trace/${encodeURIComponent(source)}?offset=${offset}`);
+          if(owned!==inputGeneration || inputs.get(card.value.id)!==card)return;
+          if(value.id!==card.value.id || value.source!==source || value.offset!==offset)throw new Error("Wrong saved text");
+          text.textContent+=value.text;nextOffset=value.next_offset;
+          card.traceText.set(source,{text:text.textContent,nextOffset});
+          more.hidden=nextOffset===null;more.textContent="Read more saved text";
+        }catch(e){more.textContent="Read unavailable; try again";if([401,403].includes(e.status))failed(e);}
+        finally{more.disabled=false;}
+      });
     }
     function inputCard(value, observed = ++inputObservation) {
       let card = inputs.get(value.id);
@@ -96,8 +158,12 @@ window.Conversation = (() => {
           }catch(e){status.textContent="Selected image unavailable. The message was not resent.";if([401,403].includes(e.status))failed(e);}
           finally{clearTimeout(deadline);imageButton.disabled=false;if(imageView.hidden)imageButton.textContent="Show selected image";}
         });
-        box.append(text,status,actions,routeBox,imageButton,imageView);
-        card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote};
+        const trace=node("details",undefined,"routing-trace"),traceSummary=node("summary","Show routing path"),traceState=node("p","","note"),traceContent=node("div"),traceRefresh=node("button","Refresh route");
+        traceRefresh.type="button";traceState.setAttribute("role","status");trace.append(traceSummary,traceState,traceContent,traceRefresh);
+        box.append(text,status,actions,routeBox,imageButton,imageView,trace);
+        card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote,trace,traceState,traceContent,traceRefresh,traceText:new Map()};
+        trace.addEventListener("toggle",()=>trace.open&&readTrace(card));
+        traceRefresh.addEventListener("click",()=>readTrace(card));
         continueButton.addEventListener("click",()=>card.value.continuation&&selectFocus(card.value.continuation,`#${card.value.routing?.label||"session"}`));
         select.addEventListener("change",()=>renderRoute(card));
         routeButton.addEventListener("click",()=>routeInput(card,card.routePending||{binding,selector:select.value})); inputs.set(value.id, card);
@@ -165,12 +231,13 @@ window.Conversation = (() => {
       card.imageButton.hidden=!card.value.visual;
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
+      card.check.hidden=card.value.read_only===true;
       microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
       if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
       card.retry.hidden = !!card.value.phase || !card.value.binding;
       renderRoute(card);
-      card.box.dataset.sequence = String(card.value.sequence ?? Number.MAX_SAFE_INTEGER);
+      card.box.dataset.sequence = String(card.value.capture_order ?? (card.value.ordering_unknown?Number.MIN_SAFE_INTEGER:card.value.sequence ?? Number.MAX_SAFE_INTEGER));
       const container = $("#conversation-inputs");
       const following = [...container.children].find(item => item !== card.box
         && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
@@ -194,6 +261,37 @@ window.Conversation = (() => {
       draft.disabled = false; send.disabled = posting;
       return result;
     }
+    async function telegramPage(before=0,direction="before",remember=true) {
+      const owned=inputGeneration,observation=++inputObservation;
+      const result=await api(`interaction/telegram-inputs?before=${before}&direction=${direction}`);
+      if(owned!==inputGeneration)return;
+      if(result.binding!==binding || result.schema!=="telecodex.telegram-input-list/v1")throw new Error("Telegram observation binding changed");
+      for(const value of result.items)inputCard(value,observation);
+      if(direction==="before" && remember){telegramCursor=result.cursor||0;$("#conversation-telegram-older").hidden=!result.more;}
+      if(direction==="after" || !telegramLoaded)telegramNewest=Math.max(telegramNewest,result.newest||0);
+      telegramLoaded=true;
+      return result;
+    }
+    async function refreshTelegram() {
+      if(telegramReading || !enabled || !ready || !$("#conversation-sent").open)return;
+      const owned=inputGeneration;telegramReading=true;
+      try {
+        if(!telegramLoaded)await telegramPage();
+        else {
+          let more=true;
+          for(let n=0;n<4 && more;n++){const page=await telegramPage(telegramNewest,"after",false);more=!!page?.more;}
+          if(owned===inputGeneration)await telegramPage(0,"before",false);
+        }
+        if(owned===inputGeneration)$("#conversation-telegram-state").textContent="Telegram and app/device inputs share the retained capture order. Historical inputs without that order are labelled separately.";
+      }catch(e){if(owned===inputGeneration)$("#conversation-telegram-state").textContent="Telegram observation unavailable. Saved app/device inputs remain visible; nothing was resent.";if([401,403].includes(e.status))failed(e);}
+      finally{telegramReading=false;}
+    }
+    $("#conversation-sent").addEventListener("toggle",()=>refreshTelegram());
+    $("#conversation-telegram-older").addEventListener("click",async()=>{
+      const button=$("#conversation-telegram-older");button.disabled=true;
+      try{await telegramPage(telegramCursor);}catch(e){$("#conversation-telegram-state").textContent="Earlier Telegram inputs unavailable; nothing was resent.";if([401,403].includes(e.status))failed(e);}
+      finally{button.disabled=false;}
+    });
     compose.addEventListener("submit", async event => {
       event.preventDefault();
       if (posting || !ready || !binding || inputBinding !== binding) return;
@@ -420,6 +518,8 @@ window.Conversation = (() => {
           await inputPage(0,"before",false);
         }
         await requestControls.refresh();
+        await refreshTelegram();
+        for(const card of inputs.values())if(card.trace.open)await readTrace(card);
       } catch (e) { failed(e); }
       finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false; }
     }

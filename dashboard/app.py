@@ -307,6 +307,19 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         authorize(request)
         return {**result, 'csrf':session['csrf']}
 
+    @app.get('/api/interaction/telegram-inputs')
+    async def conversation_telegram_inputs(request: Request, before: int = 0, direction: str = 'before'):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.conversation_telegram_inputs,before,direction)
+        except ValueError:
+            raise HTTPException(400,'Invalid Telegram observation cursor') from None
+        except (ProviderUnavailable,OSError):
+            raise HTTPException(503,'Telegram observation unavailable; no input was resent') from None
+        authorize(request)
+        return result
+
     @app.get('/api/interaction/inputs/{ident}')
     async def conversation_input_status(request: Request, ident: str):
         authorize(request)
@@ -317,6 +330,32 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid message identity') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Message status unconfirmed; check again without resending') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/inputs/{ident}/trace')
+    async def conversation_input_trace(request: Request, ident: str):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_input_trace, ident)
+        except ValueError:
+            raise HTTPException(400, 'Invalid message identity') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Routing observation unavailable; the input was not resent') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/inputs/{ident}/trace/{source}')
+    async def conversation_trace_text(request: Request, ident: str, source: str, offset: int = 0):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_trace_text, ident, source, offset)
+        except ValueError:
+            raise HTTPException(400, 'Invalid trace text selection') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Saved text unavailable; the input was not resent') from None
         authorize(request)
         return result
 
