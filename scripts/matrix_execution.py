@@ -1,0 +1,433 @@
+"""Host adapter between approved ExecutionStore cycles and the selected Matrix SDK.
+
+No client, journal, scheduler, inbox reader or model is created by this module.
+Only a trusted host passes the immutable approved task and authenticated SDK
+client to the existing ReviewController. This object is never a model tool or
+an OS isolation boundary. SDK native journals own send identity and receipts;
+ExecutionStore owns approval, admission, fuel and uncertainty. Provenance text
+never authorizes receiving inference. A paid cross-body trial still requires its
+selected participants, qualified runner, provider accounting and human approval.
+"""
+
+from dataclasses import replace, fields, is_dataclass
+import hashlib
+import json
+import math
+import re
+import time
+import uuid
+
+TASK_SCHEMA = "telecodex.matrix-task/v1"
+RELAY_SCHEMA = "telecodex.matrix-relay/v1"
+MAX_TEXT_BYTES = 16384
+
+
+class MatrixExecutionError(ValueError):
+    pass
+
+
+def canonical(value):
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def strict_json(text):
+    def pairs(rows):
+        result = {}
+        for key, value in rows:
+            if key in result:
+                raise MatrixExecutionError("Duplicate JSON member")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=pairs,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError()),
+        )
+    except (ValueError, TypeError) as error:
+        raise MatrixExecutionError("Closed JSON required") from error
+
+
+def closed(value, names):
+    if not isinstance(value, dict) or set(value) != set(names):
+        raise MatrixExecutionError("Closed routing selection required")
+    return value
+
+
+def identifier(value):
+    try:
+        valid = isinstance(value, str) and str(uuid.UUID(value)) == value
+    except ValueError:
+        valid = False
+    if not valid:
+        raise MatrixExecutionError("Canonical UUID required")
+    return value
+
+
+def text(value, maximum=MAX_TEXT_BYTES):
+    if not isinstance(value, str) or not value.strip() or len(value.encode()) > maximum:
+        raise MatrixExecutionError("Bounded nonempty text required")
+    return value
+
+
+def destination(value):
+    if not isinstance(value, dict) or value.get("kind") not in ("being", "body"):
+        raise MatrixExecutionError("Select an explicit Matrix recipient")
+    closed(
+        value,
+        ("kind", "being_ref", "embodiment_id")
+        if value["kind"] == "body"
+        else ("kind", "being_ref"),
+    )
+    if not isinstance(value["being_ref"], str) or not re.fullmatch(
+        r"dm:being:v1:[A-Za-z0-9_-]{43}", value["being_ref"]
+    ):
+        raise MatrixExecutionError("Signed being reference required")
+    if value["kind"] == "body":
+        text(value["embodiment_id"], 240)
+    return dict(value)
+
+
+def parent_from_verified_sdk(message):
+    """Call only on an SDK-authenticated selected message, never wire/model JSON.
+
+    The SDK retains/verifies signatures and audience. Extracting these fields is
+    not independent signature validation or execution approval.
+    """
+    return {
+        "message_id": identifier(message["event_id"]),
+        "message_hash": message["content_hash"],
+        "sender_being_ref": message["being_ref"],
+        "sender_embodiment_id": message["origin"]["embodiment_id"],
+        "thread_id": identifier(message["payload"]["intent"]["thread_id"]),
+    }
+
+
+def validate_task(task):
+    value = closed(
+        strict_json(task),
+        ("schema", "question", "input_ref", "scope", "destination", "parent"),
+    )
+    if value["schema"] != TASK_SCHEMA:
+        raise MatrixExecutionError("Unsupported task schema")
+    text(value["question"])
+    identifier(value["input_ref"])
+    scope = closed(value["scope"], ("channel", "thread", "tool", "action"))
+    identifier(scope["thread"])
+    # Current receiving profiles use one membership channel. Archived bilateral
+    # channels cannot become a fallback for an unavailable selected recipient.
+    if scope["channel"] != "tribe":
+        raise MatrixExecutionError("Selected membership-group channel required")
+    if (scope["tool"], scope["action"]) == ("messaging_send", "send"):
+        destination(value["destination"])
+        if value["parent"] is not None:
+            raise MatrixExecutionError("Send cannot override a reply parent")
+    elif (scope["tool"], scope["action"]) == ("messaging_reply", "reply"):
+        parent = closed(
+            value["parent"],
+            (
+                "message_id",
+                "message_hash",
+                "sender_being_ref",
+                "sender_embodiment_id",
+                "thread_id",
+            ),
+        )
+        identifier(parent["message_id"])
+        if not isinstance(parent["message_hash"], str) or not re.fullmatch(
+            "[a-f0-9]{64}", parent["message_hash"]
+        ):
+            raise MatrixExecutionError("Verified parent digest required")
+        if parent["thread_id"] != scope["thread"] or value["destination"] is not None:
+            raise MatrixExecutionError("Reply must inherit its exact parent route")
+        destination(
+            {
+                "kind": "body",
+                "being_ref": parent["sender_being_ref"],
+                "embodiment_id": parent["sender_embodiment_id"],
+            }
+        )
+    else:
+        raise MatrixExecutionError("Only one selected request or reply is supported")
+    return value
+
+
+def make_task(
+    question, input_ref, scope, *, selected_destination=None, verified_parent=None
+):
+    task = canonical(
+        {
+            "schema": TASK_SCHEMA,
+            "question": question,
+            "input_ref": input_ref,
+            "scope": {
+                k: getattr(scope, k) for k in ("channel", "thread", "tool", "action")
+            },
+            "destination": selected_destination,
+            "parent": verified_parent,
+        }
+    )
+    validate_task(task)
+    return task
+
+
+class MatrixExecutionBroker:
+    def __init__(self, instruction, task, native_client):
+        value = validate_task(task)
+        if (
+            instruction.mode != "manual"
+            or instruction.max_cycles != 1
+            or len(instruction.scope) != 1
+            or hashlib.sha256(task.encode()).hexdigest() != instruction.task_sha256
+        ):
+            raise MatrixExecutionError(
+                "One approved manual task and exact digest required"
+            )
+        scope = instruction.scope[0]
+        if value["scope"] != {
+            k: getattr(scope, k) for k in ("channel", "thread", "tool", "action")
+        }:
+            raise MatrixExecutionError(
+                "Task route differs from approved execution scope"
+            )
+        if not is_dataclass(native_client) or "deadline_ns" not in {
+            f.name for f in fields(native_client)
+        }:
+            raise MatrixExecutionError(
+                "Selected SDK must support an absolute client deadline"
+            )
+        server = getattr(getattr(native_client, "config", None), "expected_server", {})
+        if server.get("embodiment_id") != instruction.embodiment:
+            raise MatrixExecutionError(
+                "Selected client differs from approved source body"
+            )
+        self._instruction, self._scope, self._task, self._client = (
+            instruction,
+            scope,
+            value,
+            native_client,
+        )
+        # Independent of recipient, native session generation and instruction
+        # renewal. The SDK rejects changed parameters under this same send ID.
+        role = "request" if scope.tool == "messaging_send" else "result"
+        self.send_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                "telecodex.matrix/" + role + ":" + value["input_ref"],
+            )
+        )
+
+    def controller(self, store, runner, **options):
+        """Create the only supported host controller, pinned to this approval.
+
+        Scope alone omits the recipient. Never reuse this broker with an
+        unpinned ReviewController or a cycle from another approved task.
+        """
+        from daimon_matrix.execution_instruction import ExecutionDenied
+        from daimon_matrix.review_runner import ReviewController
+
+        broker = self
+        instruction = self._instruction
+        if store.store_id != instruction.store_id:
+            raise MatrixExecutionError("Execution store differs from approved root")
+
+        class PinnedController(ReviewController):
+            def run_due_once(self, identity, revision, task):
+                if (
+                    identity != instruction.instruction_id
+                    or revision != instruction.revision
+                    or hashlib.sha256(task.encode()).hexdigest()
+                    != instruction.task_sha256
+                ):
+                    raise ExecutionDenied(
+                        "Controller is pinned to another approved task"
+                    )
+                try:
+                    retained = self.store.get_instruction(identity, revision)
+                except ExecutionDenied:
+                    return super().run_due_once(identity, revision, task)
+                if retained.sha256 != instruction.sha256:
+                    raise ExecutionDenied(
+                        "Controller instruction differs from approved root"
+                    )
+                return super().run_due_once(identity, revision, task)
+
+        return PinnedController(store, runner, broker, **options)
+
+    def authorize(self, scope):
+        # ExecutionStore rechecks signed approval/window/cancellation. The SDK
+        # separately rechecks current group membership and transport authority.
+        return scope == self._scope
+
+    def _invoke(self, method, params, timeout):
+        if (
+            type(timeout) not in (int, float)
+            or not math.isfinite(timeout)
+            or not 0.05 <= timeout <= 60
+        ):
+            raise MatrixExecutionError("Bounded native timeout required")
+        deadline = time.monotonic_ns() + int(timeout * 1_000_000_000)
+        client = replace(self._client, timeout_seconds=timeout, deadline_ns=deadline)
+        try:
+            if method in ("messaging.send", "messaging.reply"):
+                # Same authenticated client and absolute deadline for both
+                # observations. Origin is bound before any authored effect.
+                _, status = client.invoke("runtime.status", {})
+                source = status.get("result", {}) if status.get("ok") is True else {}
+                if (
+                    source.get("schema") != "dm.runtime.status/v1"
+                    or source.get("being_ref") != self._instruction.being
+                    or source.get("local_origin", {}).get("embodiment_id")
+                    != self._instruction.embodiment
+                ):
+                    raise MatrixExecutionError(
+                        "Authenticated source differs from approved root"
+                    )
+            _, response = client.invoke(method, params)
+            if not isinstance(response, dict) or response.get("ok") is not True:
+                raise MatrixExecutionError("Native response not successful")
+            return self._validate_result(response["result"])
+        except Exception:
+            # CycleContext retains/charges ambiguity. Never mint another send,
+            # retry, substitute a recipient or interpret this as nondelivery.
+            raise MatrixExecutionError(
+                "Native outcome unconfirmed; inspect the same send ID"
+            ) from None
+
+    def _validate_result(self, result):
+        if (
+            not isinstance(result, dict)
+            or result.get("schema") != "dm.tribe.direct-delivery/v1"
+            or result.get("send_id") != self.send_id
+            or result.get("thread_id") != self._scope.thread
+            or result.get("author")
+            != {
+                "being_ref": self._instruction.being,
+                "embodiment_id": self._instruction.embodiment,
+            }
+        ):
+            raise MatrixExecutionError("Native outcome does not match the fixed route")
+        identifier(result.get("message_id"))
+        if not isinstance(result.get("message_hash"), str) or not re.fullmatch(
+            "[a-f0-9]{64}", result["message_hash"]
+        ):
+            raise MatrixExecutionError("Native message digest required")
+        parent = self._task["parent"]
+        wanted_parent = (
+            None
+            if parent is None
+            else {k: v for k, v in parent.items() if k != "thread_id"}
+        )
+        target = (
+            self._task["destination"]
+            if parent is None
+            else {
+                "kind": "body",
+                "being_ref": parent["sender_being_ref"],
+                "embodiment_id": parent["sender_embodiment_id"],
+            }
+        )
+        actual = result.get("destination")
+        if (
+            not isinstance(actual, dict)
+            or any(actual.get(k) != v for k, v in target.items())
+            or result.get("response_context") != wanted_parent
+        ):
+            raise MatrixExecutionError(
+                "Native recipient or parent differs from approved route"
+            )
+        return result
+
+    def submit(self, scope, payload, timeout):
+        if not self.authorize(scope):
+            raise MatrixExecutionError("Outside selected scope")
+        closed(payload, ("text",))
+        body = canonical(
+            {
+                "schema": RELAY_SCHEMA,
+                "via": "interaction-controller",
+                "kind": "session_request"
+                if scope.tool == "messaging_send"
+                else "worker_result",
+                "input_ref": self._task["input_ref"],
+                "execution_ref": {
+                    "id": self._instruction.instruction_id,
+                    "revision": self._instruction.revision,
+                },
+                "text": text(payload["text"]),
+            }
+        )
+        text(body)
+        params = {"channel_id": scope.channel, "send_id": self.send_id, "text": body}
+        if scope.tool == "messaging_send":
+            params.update(thread_id=scope.thread, destination=self._task["destination"])
+        else:
+            params.update(
+                received_channel_id=scope.channel,
+                message_id=self._task["parent"]["message_id"],
+            )
+        return self._invoke("messaging." + scope.action, params, timeout)
+
+    def inspect(self, timeout=1.0):
+        """Explicit host observation, not a model operation or execution recovery.
+
+        Does not refund an ambiguous cycle, send again or create another root.
+        Call only under human-authorized status inspection, never an intake hook.
+        """
+        return self._invoke(
+            "messaging.delivery",
+            {"channel_id": self._scope.channel, "send_id": self.send_id},
+            timeout,
+        )
+
+    def accept_verified_reply(self, request_result, message):
+        """Correlate an already SDK-verified selected event, without inference."""
+        if self._scope.tool != "messaging_send":
+            raise MatrixExecutionError("Outgoing request required")
+        self._validate_result(request_result)
+        body = message["payload"]["body"]
+        parent = body.get("response_context")
+        wanted = {
+            "message_id": request_result["message_id"],
+            "message_hash": request_result["message_hash"],
+            "sender_being_ref": self._instruction.being,
+            "sender_embodiment_id": self._instruction.embodiment,
+        }
+        target = self._task["destination"]
+        if (
+            request_result.get("send_id") != self.send_id
+            or request_result.get("thread_id") != self._scope.thread
+            or parent != wanted
+            or message["payload"]["intent"]["thread_id"] != self._scope.thread
+            or message["being_ref"] != target["being_ref"]
+            or target["kind"] == "body"
+            and message["origin"]["embodiment_id"] != target["embodiment_id"]
+        ):
+            raise MatrixExecutionError(
+                "Reply is not from the selected request and recipient"
+            )
+        relay = closed(
+            strict_json(body["text"]),
+            ("schema", "via", "kind", "input_ref", "execution_ref", "text"),
+        )
+        if (
+            relay["schema"] != RELAY_SCHEMA
+            or relay["via"] != "interaction-controller"
+            or relay["kind"] != "worker_result"
+            or relay["input_ref"] != self._task["input_ref"]
+        ):
+            raise MatrixExecutionError(
+                "Reply provenance does not match the original input"
+            )
+        reference = closed(relay["execution_ref"], ("id", "revision"))
+        text(reference["id"], 240)
+        if type(reference["revision"]) is not int or reference["revision"] < 1:
+            raise MatrixExecutionError("Positive execution revision required")
+        return text(relay["text"])
