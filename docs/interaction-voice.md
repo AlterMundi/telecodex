@@ -71,3 +71,37 @@ parent remains AlterMundi/daimon-matrix#313.
 
 The separate [speech rendering component](interaction-speech.md) provides a
 durable exact-text provider adapter. The canonical conversation player renders selected retained replies through that adapter.
+
+
+## Disposable interaction preparation
+
+`scripts/interaction_asr.py --binding /private/adapter.json AUDIO` wraps the
+existing owner-selected foreground voice-note helper with durable final text
+and isolated disposable preparation. It does not change provider, model,
+transcription behavior, the original input API or the supplied recording.
+
+```json
+{
+  "schema": "telecodex.interaction-asr/v1",
+  "helper": "/absolute/voice_note.py",
+  "route_binding": "/private/audio-transcription-route.json",
+  "cache_root": "/private/interaction-asr-cache",
+  "max_cache_bytes": 134217728
+}
+```
+
+The final transcript and its helper result survive before verified manifest-listed
+source/chunk copies are removed. A later exact audio/route/helper lookup returns
+that final text without calling the helper again. Cleanup interrupted after the
+completed receipt can finish on the same lookup. Changed bytes, unsafe paths and
+unconfirmed operations cannot become disposable audio or automatic provider
+retries. The adapter does not recursively clear the generic transcription cache
+or unrelated notes, interviews and recordings.
+
+A private per-job lock and shared capacity reservation precede helper execution.
+The default cache budget is 128 MiB and each pending/uncertain preparation reserves
+32 MiB, covering the existing 20 MiB source limit and bounded prepared PCM. Full
+protected storage refuses new ASR while ordinary text remains available. The
+native caller retains its process-group deadline and owns original-capture
+retirement after native transcript commit. Selecting this adapter is an explicit
+owner configuration change; merely installing it does not alter the live route.

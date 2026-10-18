@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Durable transcript/disposable preparation contracts; no provider or sensor."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'scripts'))
+spec=importlib.util.spec_from_file_location('interaction_asr_adapter',ROOT/'scripts/interaction_asr.py')
+asr=importlib.util.module_from_spec(spec);spec.loader.exec_module(asr)
+
+HELPER='''import hashlib,json
+from pathlib import Path
+
+def process(source,binding):
+    route=json.loads(Path(binding).read_text())
+    root=Path(route['cache_root']);job=root/'source-identity'/'route-identity'
+    job.mkdir(mode=0o700,parents=True,exist_ok=True)
+    calls=Path(__file__).with_suffix('.calls')
+    calls.write_text((calls.read_text() if calls.exists() else '')+'call\\n')
+    if source.read_bytes()==b'failed operation':raise RuntimeError('simulated uncertain provider')
+    media=job/'source.media';media.write_bytes(source.read_bytes())
+    chunks=job/'chunks';chunks.mkdir(mode=0o700,exist_ok=True)
+    chunk=chunks/'00000.wav';chunk.write_bytes(b'prepared pcm')
+    digest=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
+    (job/'manifest.json').write_text(json.dumps({'sources':[{'path':str(media),'sha256':digest(media)}],
+        'chunks':[{'file':'chunks/00000.wav','sha256':digest(chunk)}]}))
+    output=job/'responses'/'request';output.mkdir(mode=0o700,parents=True,exist_ok=True)
+    draft=output/'draft.json';draft.write_text(json.dumps({'processing_complete':True,'segments':[{'text':'Final words'}]}))
+    return {'text':'Final words','segments':[{'text':'Final words'}],
+        'received_duration_seconds':1,'review_status':'unreviewed','draft_path':str(draft)}
+'''
+
+class Retention(unittest.TestCase):
+    def setUp(self):
+        self.previous_umask=os.umask(0o077)
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        self.source=self.root/'original.wav';self.source.write_bytes(b'original private audio')
+        self.helper=self.root/'voice_note.py';self.helper.write_text(HELPER)
+        self.route=self.root/'route.json';self.route.write_text(json.dumps({'schema':'audio-transcription.route/v1','provider':'fictional'}))
+        self.binding=self.root/'adapter.json'
+        self.cfg={'schema':'telecodex.interaction-asr/v1','helper':str(self.helper),
+            'route_binding':str(self.route),'cache_root':str(self.root/'cache')}
+        self.write_config()
+        self.probe=patch.object(asr,'probe_duration',return_value=1);self.probe.start()
+    def tearDown(self):self.probe.stop();self.temp.cleanup();os.umask(self.previous_umask)
+    def write_config(self):self.binding.write_text(json.dumps(self.cfg))
+    def calls(self):
+        path=self.helper.with_suffix('.calls');return len(path.read_text().splitlines()) if path.exists() else 0
+    def run_asr(self):return asr.process(self.source,self.binding)
+    def test_completed_text_reused_after_media_disposal_without_paid_replay(self):
+        first=self.run_asr();self.assertEqual(first,{'text':'Final words','final':True})
+        self.assertEqual(self.calls(),1);self.assertTrue(self.source.exists())
+        self.assertFalse(list((self.root/'cache').rglob('source.media')))
+        self.assertFalse(list((self.root/'cache').rglob('*.wav')))
+        self.assertTrue(list((self.root/'cache').rglob('draft.json')))
+        self.assertEqual(self.run_asr(),first);self.assertEqual(self.calls(),1)
+    def test_cleanup_interruption_recovers_from_completed_receipt(self):
+        with patch.object(asr,'retire_preparation',side_effect=OSError('crash seam')):
+            self.run_asr()
+        self.assertTrue(list((self.root/'cache').rglob('source.media')))
+        self.run_asr();self.assertEqual(self.calls(),1)
+        self.assertFalse(list((self.root/'cache').rglob('source.media')))
+    def test_uncertain_helper_is_never_automatically_retried(self):
+        self.source.write_bytes(b'failed operation')
+        for _ in range(2):
+            with self.assertRaises(asr.RenderError):self.run_asr()
+        self.assertEqual(self.calls(),1)
+        states=[json.loads(p.read_text()) for p in (self.root/'cache').glob('*/state.json')]
+        self.assertEqual(states[0]['phase'],'unconfirmed')
+    def test_protected_reservation_blocks_new_audio_before_helper(self):
+        self.cfg['max_cache_bytes']=asr.MAX_JOB;self.write_config()
+        self.source.write_bytes(b'failed operation')
+        with self.assertRaises(asr.RenderError):self.run_asr()
+        self.source.write_bytes(b'another original')
+        with self.assertRaisesRegex(asr.RenderError,'capacity'):self.run_asr()
+        self.assertEqual(self.calls(),1)
+    def test_changed_derivative_is_protected_and_text_still_available(self):
+        with patch.object(asr,'retire_preparation',side_effect=OSError('defer')):self.run_asr()
+        media=next((self.root/'cache').rglob('source.media'));media.write_bytes(b'changed')
+        self.assertEqual(self.run_asr()['text'],'Final words')
+        self.assertTrue(media.exists());self.assertEqual(self.calls(),1)
+    def test_corrupt_completed_result_cannot_become_replay(self):
+        self.run_asr();state=next((self.root/'cache').glob('*/state.json'))
+        value=json.loads(state.read_text());value['result']['text']='changed';state.write_text(json.dumps(value))
+        with self.assertRaises(asr.RenderError):self.run_asr()
+        self.assertEqual(self.calls(),1)
+    def test_cli_completes_and_reopens_with_only_final_text_stdout(self):
+        probe=self.root/'ffprobe';probe.write_text('#!'+sys.executable+'\nprint('+repr(json.dumps({'format':{'duration':'1.0'}}))+')\n');probe.chmod(0o700)
+        environment={**os.environ,'PATH':str(self.root)+os.pathsep+os.environ['PATH']}
+        command=[sys.executable,str(ROOT/'scripts/interaction_asr.py'),'--binding',str(self.binding),str(self.source)]
+        for _ in range(2):
+            outcome=subprocess.run(command,capture_output=True,text=True,check=True,env=environment)
+            self.assertEqual(json.loads(outcome.stdout),{'text':'Final words','final':True})
+        self.assertEqual(self.calls(),1)
+    def test_real_long_compressed_source_refused_before_helper_preparation(self):
+        self.probe.stop()
+        self.source=self.root/'long.flac'
+        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=16000:cl=mono',
+            '-t','121','-c:a','flac',str(self.source)],check=True)
+        self.assertLess(self.source.stat().st_size,asr.MAX_SOURCE)
+        with self.assertRaisesRegex(asr.RenderError,'duration'):self.run_asr()
+        self.assertEqual(self.calls(),0)
+        self.assertFalse(list((self.root/'cache').rglob('*.wav')))
+        self.assertFalse(list((self.root/'cache').glob('*/state.json')))
+
+    def test_stream_and_container_duration_disagreement_cannot_expand_preparation(self):
+        self.probe.stop()
+        for stream,container in ((121,1),(1,121),(float('nan'),1)):
+            metadata={'streams':[{'duration':str(stream)}],'format':{'duration':str(container)}}
+            with patch.object(asr.subprocess,'check_output',return_value=json.dumps(metadata).encode()):
+                with self.assertRaisesRegex(asr.RenderError,'duration'):self.run_asr()
+        self.assertEqual(self.calls(),0)
+        self.assertFalse(list((self.root/'cache').glob('*/state.json')))
+
+    def test_nonprivate_source_refused_before_helper(self):
+        self.source.chmod(0o644)
+        with self.assertRaises(asr.RenderError):self.run_asr()
+        self.assertEqual(self.calls(),0)
+
+if __name__=='__main__':unittest.main()
