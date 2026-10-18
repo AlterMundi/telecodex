@@ -90,6 +90,10 @@ print(json.dumps({'text':item['text'],'final':True}))
         assert orders[0][0]==original and orders[1][0]==later and orders[0][1]<orders[1][1]
         assert '"capture_order":'+str(orders[0][1]) in worker_packet
         assert calls().count(digest)==1 and len(j.packets)==2
+        assert not Path(str(j.root/'state.sqlite')+'.voice').joinpath(original).exists()
+        repeated = upload(data,original)[1]
+        assert repeated.status_code==200 and calls().count(digest)==1
+        assert not Path(str(j.root/'state.sqlite')+'.voice').joinpath(original).exists()
         # Silence fails before invoking ASR and leaves ordinary text controls usable.
         silent=audio(silence=True);register(silent,'Never use hallucinated silence')
         silent_id,r=upload(silent);assert r.status_code==200

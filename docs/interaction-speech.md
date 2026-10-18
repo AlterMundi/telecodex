@@ -230,3 +230,17 @@ explicitly expired payload again. Cleanup never does that itself, never repeats
 ASR or worker work, and never converts an uncertain synthesis into a new attempt.
 This policy governs the speech cache; original capture/transcription media has its
 own lifecycle and must not be deleted through this cache command.
+
+
+### Uploaded capture disposal
+
+The dashboard retires its own `.voice/<capture UUID>` payload once the native
+controller returns a nonempty committed transcript with the exact capture ID
+and audio hash. Input status/history reads and completed duplicate submissions
+finish interrupted cleanup. Transcript text, capture identity, provenance and
+routing remain in the native store. A delivery still pending after ASR does not
+need the original audio. Cleanup errors never change the original input outcome
+or retry transcription. Pending/unconfirmed ASR, mismatched bytes, links and
+nonprivate files are retained. This applies to dashboard uploads only; companion
+recordings, Telegram downloads and transcription preparation copies have separate
+owners and are not recursively removed by this mechanism.
