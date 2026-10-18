@@ -17,7 +17,8 @@ window.Conversation = (() => {
     const sendState = $("#conversation-send-state");
     let replyFocus, focusVersion = 0, routingChoices = [];
     let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0, latestComposerId;
-    const phaseText = value => value.retired ? "Saved from an earlier conversation binding."
+    let telegramCursor=0,telegramNewest=0,telegramLoaded=false,telegramReading=false;
+    const phaseText = value => value.origin_kind==="telegram" ? `Telegram input retained (${value.phase}). Inspect its routing path for delivery evidence.${value.ordering_unknown?" Historical capture order unavailable.":""}` : value.retired ? "Saved from an earlier conversation binding."
       : value.routing ? routeText(value.routing) : ({awaiting_target:"Choose the session for this saved message.",preparing:"Recording saved; preparing its automatic transcript.", preparation_unconfirmed:"Recording saved; transcription unconfirmed. No work was submitted automatically.", retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
           sending:"Sending to your conversation…", steering:"Sending to your conversation…",
           accepted:"Sent to your conversation. Work may continue.", matrix_requested:"Saved for the selected daimon; awaiting its authorized execution and reply.",
@@ -57,17 +58,19 @@ window.Conversation = (() => {
         card.select.value=routingChoices.some(c=>c.selector===selected)?selected:"";card.choiceVersion=JSON.stringify(routingChoices);
       }
       if(card.value.routing){card.routePending=undefined;card.routeNote.textContent="";}
-      card.routeBox.hidden=card.value.phase!=="awaiting_target";
+      card.routeBox.hidden=card.value.read_only || card.value.phase!=="awaiting_target";
       card.select.disabled=!!card.routePending || card.routeBusy || card.value.retired;
       card.routeButton.textContent=card.routePending?"Retry this selection":"Send to session";
       card.routeButton.disabled=card.routeBusy || card.value.retired || (!card.routePending && !card.select.value);
-      card.continueButton.hidden=!card.value.continuation;
+      card.continueButton.hidden=card.value.read_only || !card.value.continuation;
     }
     function resetInputs() {
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
+      telegramCursor=0;telegramNewest=0;telegramLoaded=false;
       $("#conversation-inputs").replaceChildren();
       $("#conversation-inputs-older").hidden = true;
+      $("#conversation-telegram-older").hidden=true;$("#conversation-telegram-state").textContent="";
       draft.disabled = true; send.disabled = true;
     }
     async function readTrace(card) {
@@ -228,12 +231,13 @@ window.Conversation = (() => {
       card.imageButton.hidden=!card.value.visual;
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
+      card.check.hidden=card.value.read_only===true;
       microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
       if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
       card.retry.hidden = !!card.value.phase || !card.value.binding;
       renderRoute(card);
-      card.box.dataset.sequence = String(card.value.sequence ?? Number.MAX_SAFE_INTEGER);
+      card.box.dataset.sequence = String(card.value.capture_order ?? (card.value.ordering_unknown?Number.MIN_SAFE_INTEGER:card.value.sequence ?? Number.MAX_SAFE_INTEGER));
       const container = $("#conversation-inputs");
       const following = [...container.children].find(item => item !== card.box
         && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
@@ -257,6 +261,37 @@ window.Conversation = (() => {
       draft.disabled = false; send.disabled = posting;
       return result;
     }
+    async function telegramPage(before=0,direction="before",remember=true) {
+      const owned=inputGeneration,observation=++inputObservation;
+      const result=await api(`interaction/telegram-inputs?before=${before}&direction=${direction}`);
+      if(owned!==inputGeneration)return;
+      if(result.binding!==binding || result.schema!=="telecodex.telegram-input-list/v1")throw new Error("Telegram observation binding changed");
+      for(const value of result.items)inputCard(value,observation);
+      if(direction==="before" && remember){telegramCursor=result.cursor||0;$("#conversation-telegram-older").hidden=!result.more;}
+      if(direction==="after" || !telegramLoaded)telegramNewest=Math.max(telegramNewest,result.newest||0);
+      telegramLoaded=true;
+      return result;
+    }
+    async function refreshTelegram() {
+      if(telegramReading || !enabled || !ready || !$("#conversation-sent").open)return;
+      const owned=inputGeneration;telegramReading=true;
+      try {
+        if(!telegramLoaded)await telegramPage();
+        else {
+          let more=true;
+          for(let n=0;n<4 && more;n++){const page=await telegramPage(telegramNewest,"after",false);more=!!page?.more;}
+          if(owned===inputGeneration)await telegramPage(0,"before",false);
+        }
+        if(owned===inputGeneration)$("#conversation-telegram-state").textContent="Telegram and app/device inputs share the retained capture order. Historical inputs without that order are labelled separately.";
+      }catch(e){if(owned===inputGeneration)$("#conversation-telegram-state").textContent="Telegram observation unavailable. Saved app/device inputs remain visible; nothing was resent.";if([401,403].includes(e.status))failed(e);}
+      finally{telegramReading=false;}
+    }
+    $("#conversation-sent").addEventListener("toggle",()=>refreshTelegram());
+    $("#conversation-telegram-older").addEventListener("click",async()=>{
+      const button=$("#conversation-telegram-older");button.disabled=true;
+      try{await telegramPage(telegramCursor);}catch(e){$("#conversation-telegram-state").textContent="Earlier Telegram inputs unavailable; nothing was resent.";if([401,403].includes(e.status))failed(e);}
+      finally{button.disabled=false;}
+    });
     compose.addEventListener("submit", async event => {
       event.preventDefault();
       if (posting || !ready || !binding || inputBinding !== binding) return;
@@ -483,6 +518,7 @@ window.Conversation = (() => {
           await inputPage(0,"before",false);
         }
         await requestControls.refresh();
+        await refreshTelegram();
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);
       } catch (e) { failed(e); }
       finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false; }

@@ -173,6 +173,69 @@ pub(super) fn read_on(conn: &Connection, id: &str, human: i64) -> Result<Convers
     Ok(input)
 }
 
+/// Historical inspection never grants admission or refreshes a voice transcript.
+fn trace_original_on(
+    conn: &Connection,
+    human: i64,
+    entry: SessionKey,
+    id: &str,
+) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let (session, _) = super::presentation::entry_on(conn, human, entry)?;
+    if let Some(value) = id.strip_prefix("telegram:") {
+        let update_id: i64 = value.parse()?;
+        if update_id < 0 || update_id.to_string() != value {
+            bail!("Invalid Telegram input identity");
+        }
+        let (raw, phase): (String, String) = conn.query_row(
+            "SELECT payload_json,status FROM incoming_updates WHERE update_id=?1",
+            [update_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let update: crate::telegram::Update = serde_json::from_str(&raw)?;
+        let message = update.message.context("No original message")?;
+        if message
+            .from
+            .as_ref()
+            .is_none_or(|u| u.id != human || u.is_bot)
+            || message.chat.id != entry.chat_id
+            || message.message_thread_id.unwrap_or(0) != entry.thread_id
+        {
+            bail!("Telegram original is outside this owned entry");
+        }
+        let (text, voice, retired) = if let Some(text) = message.text {
+            (text, None, false)
+        } else {
+            let voice = message.voice.context("No original text or voice")?;
+            let retained:Option<(String,Option<String>,Option<String>)>=conn.query_row("SELECT phase,text,source FROM interaction_voice_inputs WHERE update_id=?1 AND human_id=?2 AND session_id=?3",params![update_id,human,session],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+            let (state, text, source) = retained.unwrap_or(("not_prepared".into(), None, None));
+            if let Some(raw) = source {
+                let source: crate::voice::TranscriptSource = serde_json::from_str(&raw)?;
+                if source.telegram_file_id.as_deref() != Some(voice.file_id.as_str()) {
+                    bail!("Original voice changed");
+                }
+            } else if text.is_some() {
+                bail!("Transcript support unavailable");
+            }
+            (
+                text.unwrap_or_default(),
+                Some(json!({"phase":state})),
+                state == "retired",
+            )
+        };
+        return Ok(
+            json!({"id":id,"text":text,"voice":voice,"phase":phase,"retired":retired,"routing":null,"channel_kind":"telegram","source_event":value,"update_id":update_id}),
+        );
+    }
+    let input = read_on(conn, id, human)?;
+    if input.entry != entry || input.session != session {
+        bail!("Input belongs to another conversation");
+    }
+    Ok(
+        json!({"id":input.id,"text":input.text,"voice":input.voice.as_ref().map(|v|json!({"audio_sha256":v.audio_sha256,"mime":v.mime})),"phase":input.phase,"retired":input.retired,"routing":input.routing,"channel_kind":"conversation","source_event":input.id,"update_id":null}),
+    )
+}
+
 pub(super) fn eligible_on(conn: &Connection, input: &ConversationInput) -> Result<()> {
     let (session, native) = super::presentation::entry_on(conn, input.human, input.entry)?;
     if input.retired
@@ -510,26 +573,35 @@ impl Store {
         let answer = self.conversation_answer_receipt(human, entry, id)?;
         let conn = self.conn.lock().expect("store mutex poisoned");
         let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
-        let input = read_on(&conn, id, human)?;
-        if input.entry != entry || input.session != session {
-            bail!("Input belongs to another conversation");
-        }
+        let original = trace_original_on(&conn, human, entry, id)?;
         let mut query = conn.prepare(
             "SELECT i.doc,i.phase,coalesce(s.creator_user_id=?1 AND u.allowed=1,0)
              FROM interaction_sources o JOIN interaction_instructions i ON i.input_id=o.id
              LEFT JOIN sessions s ON s.id=i.session_id
              LEFT JOIN users u ON u.tg_user_id=s.creator_user_id
-             WHERE o.human_id=?1 AND o.channel='conversation' AND o.event_id=?2
+             WHERE o.human_id=?1 AND o.event_id=?2
+               AND ((?3='conversation' AND o.channel='conversation') OR
+                    (?3='telegram' AND o.channel LIKE 'telegram:%' AND o.update_id=?4 AND o.origin_chat=?5 AND o.origin_thread=?6))
              ORDER BY i.sequence LIMIT 6",
         )?;
         let rows = query
-            .query_map(params![human, id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, bool>(2)?,
-                ))
-            })?
+            .query_map(
+                params![
+                    human,
+                    original["source_event"].as_str(),
+                    original["channel_kind"].as_str(),
+                    original["update_id"].as_i64(),
+                    entry.chat_id,
+                    entry.thread_id
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
+                },
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if rows.len() > 5 {
             bail!("Trace exceeds selected destination bound");
@@ -587,16 +659,13 @@ impl Store {
                 "results":results,"more_results":more_results}),
             );
         }
-        Ok(
-            json!({"schema":"telecodex.conversation-trace/v1","id":input.id,
-            "entry_binding":[human,entry,session,native],"text":input.text.chars().take(2048).collect::<String>(),
-            "text_next_offset":(input.text.chars().count()>2048).then_some(2048),
-            "voice":input.voice.as_ref().map(|v|json!({"audio_sha256":v.audio_sha256,"mime":v.mime})),
-            "phase":input.phase,"retired":input.retired,"routing":input.routing,
+        Ok(json!({"schema":"telecodex.conversation-trace/v1","id":id,
+            "entry_binding":[human,entry,session,native],"text":original["text"].as_str().unwrap_or_default().chars().take(2048).collect::<String>(),
+            "text_next_offset":(original["text"].as_str().unwrap_or_default().chars().count()>2048).then_some(2048),
+            "voice":original["voice"],"phase":original["phase"],"retired":original["retired"],"routing":original["routing"],
             "answer":answer.map(|a|json!({"id":a["id"],"revision":a["revision"],"recorded":true})),
             "routes":routes,"read_only":true,
-            "evidence":"Forwarded originals are exact retained controller text, not reconstructed native relay envelopes. Native acceptance and worker coverage declarations are separate evidence."}),
-        )
+            "evidence":"Forwarded originals are exact retained controller text, not reconstructed native relay envelopes. Native acceptance and worker coverage declarations are separate evidence."}))
     }
 
     pub fn conversation_trace_text(
@@ -611,14 +680,11 @@ impl Store {
         use serde_json::json;
         let conn = self.conn.lock().expect("store mutex poisoned");
         let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
-        let input = read_on(&conn, id, human)?;
-        if input.entry != entry || input.session != session {
-            bail!("Input belongs to another conversation");
-        }
+        let original = trace_original_on(&conn, human, entry, id)?;
         let text = if source == "original" {
-            input.text
+            original["text"].as_str().unwrap_or_default().to_owned()
         } else {
-            let raw:String=conn.query_row("SELECT i.doc FROM interaction_instructions i JOIN interaction_sources o ON o.id=i.input_id WHERE i.id=?1 AND o.channel='conversation' AND o.event_id=?2 AND o.human_id=?3",params![source,id,human],|r|r.get(0))?;
+            let raw:String=conn.query_row("SELECT i.doc FROM interaction_instructions i JOIN interaction_sources o ON o.id=i.input_id WHERE i.id=?1 AND o.event_id=?2 AND o.human_id=?3 AND ((?4='conversation' AND o.channel='conversation') OR (?4='telegram' AND o.channel LIKE 'telegram:%' AND o.update_id=?5 AND o.origin_chat=?6 AND o.origin_thread=?7))",params![source,original["source_event"].as_str(),human,original["channel_kind"].as_str(),original["update_id"].as_i64(),entry.chat_id,entry.thread_id],|r|r.get(0))?;
             let instruction: Instruction = serde_json::from_str(&raw)?;
             if instruction.human_id != human {
                 bail!("Trace instruction owner changed");
@@ -634,6 +700,49 @@ impl Store {
             json!({"schema":"telecodex.conversation-trace-text/v1","id":id,"source":source,
             "entry_binding":[human,entry,session,native],"offset":offset,"text":part,
             "next_offset":(offset+2048<length).then_some(offset+2048),"read_only":true}),
+        )
+    }
+
+    /// Telegram observations use retained ingress, including unrouted messages.
+    pub fn conversation_telegram_page(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        cursor: i64,
+        before: bool,
+    ) -> Result<serde_json::Value> {
+        use serde_json::json;
+        if cursor < 0 {
+            bail!("Invalid Telegram input cursor");
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
+        let comparison = if before { "<" } else { ">" };
+        let order = if before { "DESC" } else { "ASC" };
+        let mut query=conn.prepare(&format!("SELECT i.update_id,g.id FROM incoming_updates i LEFT JOIN original_ingress_order g ON g.channel='telegram' AND g.event_id=CAST(i.update_id AS TEXT) WHERE json_extract(i.payload_json,'$.message.from.id')=?1 AND json_extract(i.payload_json,'$.message.from.is_bot')=0 AND json_extract(i.payload_json,'$.message.chat.id')=?2 AND COALESCE(json_extract(i.payload_json,'$.message.message_thread_id'),0)=?3 AND (json_type(i.payload_json,'$.message.text')='text' OR json_type(i.payload_json,'$.message.voice')='object') AND i.update_id{comparison}?4 ORDER BY i.update_id {order} LIMIT 9"))?;
+        let rows = query
+            .query_map(
+                params![
+                    human,
+                    entry.chat_id,
+                    entry.thread_id,
+                    if before && cursor == 0 {
+                        i64::MAX
+                    } else {
+                        cursor
+                    }
+                ],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut items = Vec::new();
+        for (update, capture) in rows.iter().take(8) {
+            let id = format!("telegram:{update}");
+            let original = trace_original_on(&conn, human, entry, &id)?;
+            items.push(json!({"id":id,"sequence":update,"capture_order":capture,"ordering_unknown":capture.is_none(),"origin_kind":"telegram","read_only":true,"preview":original["text"].as_str().unwrap_or_default().chars().take(1000).collect::<String>(),"voice":original["voice"],"phase":original["phase"],"retired":original["retired"]}));
+        }
+        Ok(
+            json!({"schema":"telecodex.telegram-input-list/v1","entry_binding":[human,entry,session,native],"binding":super::presentation::entry_binding(&conn,human,entry,session)?,"items":items,"cursor":rows.iter().take(8).next_back().map(|r|r.0),"newest":rows.iter().take(8).map(|r|r.0).max().unwrap_or(0),"more":rows.len()>8,"read_only":true}),
         )
     }
 
@@ -674,8 +783,9 @@ impl Store {
         let mut items = Vec::new();
         for (sequence, id) in rows.iter().take(8) {
             let input = read_on(&conn, id, human)?;
+            let capture:Option<i64>=conn.query_row("SELECT id FROM original_ingress_order WHERE channel='conversation' AND event_id=?1",[id],|r|r.get(0)).optional()?;
             items.push(serde_json::json!({
-                "id":id,"sequence":sequence,"preview":input.text.chars().take(1000).collect::<String>(),
+                "id":id,"sequence":sequence,"capture_order":capture,"ordering_unknown":capture.is_none(),"preview":input.text.chars().take(1000).collect::<String>(),
                 "phase":input.phase,"retired":input.retired,"visual":input.visual,"voice":input.voice,"routing":input.routing,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
                 "clarifiable":input.phase=="awaiting_target" && eligible_on(&conn,&input).is_ok(),
                 "native_binding_current":input.native==native,

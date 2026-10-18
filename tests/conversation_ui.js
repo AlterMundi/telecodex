@@ -34,16 +34,22 @@ function boot() {
   let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false;
   const source = n => ({id:`native:${n}`, kind:"integrator_answer", sequence:n,
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`});
-  const originals = new Map(), nativeRequests = new Map(), nativePosts = [];
+  const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), nativePosts = [];
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
+    if(url.pathname==='/interaction/telegram-inputs'){
+      const before=Number(url.searchParams.get('before')),after=url.searchParams.get('direction')==='after';
+      const rows=[...telegramOriginals.values()].filter(v=>after?v.sequence>before:!before||v.sequence<before).sort((a,b)=>after?a.sequence-b.sequence:b.sequence-a.sequence);
+      const items=rows.slice(0,8);requests.push({telegram:true,body});
+      return {schema:'telecodex.telegram-input-list/v1',binding:'fixture',items,cursor:items.at(-1)?.sequence||0,newest:Math.max(0,...items.map(v=>v.sequence)),more:rows.length>8};
+    }
     if(url.pathname.endsWith('/trace/original')) {
-      const id=url.pathname.split('/').at(-3),offset=Number(url.searchParams.get('offset'));
-      return {id,source:'original',offset,text:originals.get(id).text.slice(offset),next_offset:null};
+      const id=decodeURIComponent(url.pathname.split('/').at(-3)),offset=Number(url.searchParams.get('offset'));
+      return {id,source:'original',offset,text:(originals.get(id)||telegramOriginals.get(id)).text.slice(offset),next_offset:null};
     }
     if(url.pathname.endsWith('/trace')) {
-      const id=url.pathname.split('/').at(-2),original=originals.get(id);
+      const id=decodeURIComponent(url.pathname.split('/').at(-2)),original=originals.get(id)||telegramOriginals.get(id);
       requests.push({trace:id,body});
       return {schema:'telecodex.conversation-trace/v1',id,text:original.longTrace?original.text.slice(0,2):original.text,text_next_offset:original.longTrace?2:null,phase:original.phase,read_only:true,
         routes:[{label:'Alpha',instruction:'retained-instruction',requests:['parent-request'],relation:{kind:'amends'},transport_phase:'accepted',forwarded_original:'Exact correction <script>literal</script>',target_available:true,results:[]}],
@@ -114,7 +120,7 @@ function boot() {
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   const ui = context.window.Conversation.mount({api,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals, nativePosts,audio(parts=false){renderAudio=true;multipart=parts;},
+  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audio(parts=false){renderAudio=true;multipart=parts;},
     nativeRequest() {
       nativeRequests.set("native-request",{id:"native-request",binding:"fixture",revision:"native-revision",state:"pending",actionable:true,kind:"question",title:"Scope",label:"Conversation",body:"Choose scope",choices:[{label:"Selected scope",action:{kind:"option",index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:1,recorded_revisions:[]});
     },
@@ -368,5 +374,23 @@ function boot() {
   const longOriginal=longPath.children[2].children[0];assert.equal(longOriginal.children[1].textContent,'Co');
   await longOriginal.children[2].handlers.click();assert.equal(longOriginal.children[1].textContent,'Complete immutable original');
   await paginated.ui.refresh();assert.equal(longPath.children[2].children[0].children[1].textContent,'Complete immutable original','Read-only refresh preserves expanded immutable text');
+  const mixed=boot();
+  mixed.originals.set('app-order',{id:'app-order',text:'App between Telegram captures',phase:'accepted',sequence:1,capture_order:2});
+  for(let n=1;n<=10;n++)mixed.telegramOriginals.set(`telegram:${n}`,{id:`telegram:${n}`,text:`Telegram original ${n}`,preview:`Telegram original ${n}`,phase:'completed',sequence:n,capture_order:n===1?1:n+1,voice:n===2?{phase:'committed'}:null,origin_kind:'telegram',read_only:true});
+  mixed.nodes.get('#conversation-sent').open=true;await mixed.ui.refresh();
+  assert.equal(mixed.nodes.get('#conversation-inputs').children.length,9);
+  await mixed.nodes.get('#conversation-telegram-older').handlers.click();
+  const mixedCards=mixed.nodes.get('#conversation-inputs').children;
+  assert.equal(mixedCards.length,11);
+  assert.deepEqual(mixedCards.map(card=>Number(card.dataset.sequence)),[11,10,9,8,7,6,5,4,3,2,1]);
+  const telegramCard=mixedCards.find(card=>card.children[0].textContent.includes('Telegram original 2'));
+  assert.match(telegramCard.children[0].textContent,/Automatic voice transcript/);
+  assert.equal(telegramCard.children[2].children[0].hidden,true,'Telegram originals expose no UUID status action');
+  assert.equal(telegramCard.children[3].hidden,true,'Inspection cannot choose another destination for a Telegram original');
+  const telegramPath=telegramCard.children[6];telegramPath.open=true;await telegramPath.children[3].handlers.click();
+  assert.equal(telegramPath.children[2].children[0].children[1].textContent,'Telegram original 2');
+  mixed.telegramOriginals.set('telegram:11',{id:'telegram:11',text:'New Telegram ingress',phase:'completed',sequence:11,capture_order:12,origin_kind:'telegram',read_only:true});
+  await mixed.ui.refresh();assert.equal(mixed.nodes.get('#conversation-inputs').children[0].children[0].textContent,'New Telegram ingress');
+  assert(mixed.requests.filter(r=>r.telegram||r.trace).every(r=>r.body===undefined),'All observation requests remain GET only');
   console.log("Conversation history, routing trace, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });

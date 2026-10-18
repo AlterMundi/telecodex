@@ -159,6 +159,21 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
             offset.parse()?,
         );
     }
+    if let Some(args) = args.strip_prefix("telegram-list ") {
+        let fields: Vec<_> = args.split_whitespace().collect();
+        let [cursor, direction] = fields.as_slice() else {
+            bail!("Expected Telegram cursor and direction");
+        };
+        if !matches!(*direction, "before" | "after") {
+            bail!("Invalid Telegram direction");
+        }
+        return app.shared.store.conversation_telegram_page(
+            human,
+            cfg.entry(),
+            cursor.parse()?,
+            *direction == "before",
+        );
+    }
     if let Some(id) = args.strip_prefix("trace ") {
         let mut trace = app
             .shared
