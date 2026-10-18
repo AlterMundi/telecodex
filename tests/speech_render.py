@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 import wave
@@ -91,6 +92,61 @@ class Render(unittest.TestCase):
 
     def render(self, request=None):
         return speech.render(self.binding, self.request if request is None else request)
+
+    def age_audio(self, result, seconds):
+        path=Path(result['audio_path']).parent/'state.json'
+        state=json.loads(path.read_text());state['last_used_at']=time.time()-seconds
+        speech.atomic(path,speech.canonical(state))
+        return path
+
+    def test_expired_completed_audio_keeps_receipt_and_renders_only_on_request(self):
+        first=self.render();path=self.age_audio(first,7200)
+        removed=speech.prune_audio(self.config)
+        self.assertEqual(removed['removed_audio_bytes'],len(self.data))
+        self.assertFalse(Path(first['audio_path']).exists())
+        state=json.loads(path.read_text())
+        self.assertEqual(state['phase'],'audio_expired')
+        self.assertEqual(state['text_sha256'],first['text_sha256'])
+        self.assertEqual(len(self.calls),1,'Maintenance cannot call the provider')
+        second=self.render()
+        self.assertFalse(second['cache_hit'])
+        self.assertEqual(json.loads(path.read_text())['generation'],2)
+        self.assertTrue(self.render()['cache_hit'])
+        self.assertEqual(len(self.calls),2,'Only the selected render request recreates audio')
+
+    def test_audio_retention_never_deletes_busy_or_uncertain_work(self):
+        first=self.render();path=self.age_audio(first,7200)
+        with speech.lock(path.parent/'.lock'):
+            self.assertEqual(speech.prune_audio(self.config)['removed_audio_bytes'],0)
+        state=json.loads(path.read_text());state['phase']='unconfirmed'
+        speech.atomic(path,speech.canonical(state))
+        self.assertEqual(speech.prune_audio(self.config)['removed_audio_bytes'],0)
+        self.assertTrue(Path(first['audio_path']).exists())
+        with self.assertRaisesRegex(speech.RenderError,'retained-render-outcome'):
+            self.render()
+        self.assertEqual(len(self.calls),1)
+
+    def test_audio_budget_expires_oldest_completed_payload_before_age_limit(self):
+        stream=io.BytesIO()
+        with wave.open(stream,'wb') as output:
+            output.setparams((1,2,22050,0,'NONE','not compressed'))
+            output.writeframes(b'\x01\x00'*(22050*100))
+        self.data=stream.getvalue()
+        first=self.render();self.age_audio(first,700)
+        second=self.render({**self.request,'scope':'second-result'});self.age_audio(second,600)
+        result=speech.prune_audio({**self.config,'audio_cache_max_bytes':speech.MAX_AUDIO})
+        self.assertFalse(Path(first['audio_path']).exists())
+        self.assertTrue(Path(second['audio_path']).exists())
+        self.assertLessEqual(result['retained_audio_bytes'],speech.MAX_AUDIO)
+        self.assertEqual(len(self.calls),2)
+
+    def test_audio_budget_refuses_new_synthesis_before_storage_can_grow(self):
+        self.config['audio_cache_max_bytes']=speech.MAX_AUDIO
+        self.binding.write_text(json.dumps(self.config))
+        self.render()
+        with self.assertRaisesRegex(speech.RenderError,'audio-cache-capacity'):
+            self.render({**self.request,'scope':'new-part'})
+        self.assertEqual(len(self.calls),1,'A full protected budget must not spend another provider call')
 
     def test_success_restart_cache_scope_and_no_playback_claim(self):
         first = self.render()

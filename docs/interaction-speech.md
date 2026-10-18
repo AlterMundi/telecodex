@@ -204,3 +204,29 @@ refresh and a stale validation that fails after a newer selection. Browser
 qualification uses an owned Chromium context with fictional identity, synthetic
 loopback audio and muted speakers. It establishes rendering and media lifecycle
 behavior, not physical audibility or real Telegram Android/iOS acceptance.
+
+## Ephemeral audio retention
+
+The text result is durable; synthesized WAV files are disposable. The owner route
+accepts `audio_retention_seconds` (default3600, minimum300) and
+`audio_cache_max_bytes` (default256MiB, maximum1GiB). Rendering performs maintenance
+without calling the provider. The same cleanup can be explicitly run with:
+
+```sh
+python3 scripts/speech_render.py --binding /private/route.json --prune
+```
+
+Only verified completed audio is eligible. A five-minute grace and the existing
+per-render lock protect immediate consumers. Oldest completed payloads are
+removed when idle expiry or the byte budget requires it; small source hashes and
+outcome state remain. An interrupted, uncertain, corrupt or orphaned render is
+not treated as disposable successful audio. New provider requests reserve their
+maximum possible payload before transmission; when protected audio/intents fill
+the budget, speech fails without another provider call and canonical text remains
+available.
+
+A later authenticated playback request may synthesize a previously completed,
+explicitly expired payload again. Cleanup never does that itself, never repeats
+ASR or worker work, and never converts an uncertain synthesis into a new attempt.
+This policy governs the speech cache; original capture/transcription media has its
+own lifecycle and must not be deleted through this cache command.

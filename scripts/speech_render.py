@@ -112,7 +112,7 @@ def lock(path):
 def route(path):
     value = json.loads(private_bytes(path, 16384))
     allowed = {'schema', 'provider', 'cache_root', 'env_file', 'voice', 'language',
-               'endpoint', 'timeout_seconds'}
+               'endpoint', 'timeout_seconds', 'audio_retention_seconds', 'audio_cache_max_bytes'}
     if (not isinstance(value, dict) or set(value) - allowed or value.get('schema') != SCHEMA
             or value.get('provider') != 'nvidia-magpie'
             or not isinstance(value.get('cache_root'), str)
@@ -135,7 +135,102 @@ def route(path):
     timeout = value.get('timeout_seconds', 45)
     if type(timeout) is not int or not 1 <= timeout <= 120:
         raise RenderError('invalid-synthesis-deadline')
+    if (type(value.get('audio_retention_seconds', 3600)) is not int
+            or not 300 <= value.get('audio_retention_seconds', 3600) <= 7 * 86400
+            or type(value.get('audio_cache_max_bytes', 256 * 1024 * 1024)) is not int
+            or not MAX_AUDIO <= value.get('audio_cache_max_bytes', 256 * 1024 * 1024) <= 1024 * 1024 * 1024):
+        raise RenderError('invalid-audio-retention')
     return {**value, 'endpoint': endpoint, 'timeout_seconds': timeout}
+
+
+def prune_audio(config, *, exclude=None, now=None):
+    """Expire only verified completed WAVs; preserve small outcome receipts."""
+    try:
+        return _prune_audio(config, exclude=exclude, now=now)
+    except RenderError as error:
+        if str(error) != 'render-in-progress':
+            raise
+        return {'removed_audio_bytes': 0, 'maintenance_busy': True, 'provider_calls': 0}
+
+
+def _prune_audio(config, *, exclude=None, now=None):
+    now = time.time() if now is None else now
+    root = directory(config['cache_root'])
+    age = config.get('audio_retention_seconds', 3600)
+    limit = config.get('audio_cache_max_bytes', 256 * 1024 * 1024)
+    removed = 0
+    with lock(root / '.retention.lock'):
+        candidates = []
+        for job in root.iterdir():
+            if not re.fullmatch(r'[a-f0-9]{64}', job.name) or job.name == exclude:
+                continue
+            try:
+                info = job.lstat()
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    continue
+                state = json.loads(private_bytes(job / 'state.json', 32768))
+                audio = (job / 'audio.wav').lstat()
+                used = state.get('last_used_at', state.get('created_at'))
+                if (state.get('schema') != 'telecodex.speech-render/v1'
+                        or state.get('identity_sha256') != job.name
+                        or state.get('phase') not in ('rendered', 'audio_expired')
+                        or not isinstance(used, (int, float)) or isinstance(used, bool)
+                        or not stat.S_ISREG(audio.st_mode) or audio.st_uid != os.getuid()
+                        or audio.st_mode & 0o077 or audio.st_size != state.get('audio_bytes')):
+                    continue
+                candidates.append((used, job, audio.st_size))
+            except (OSError, ValueError, KeyError, TypeError, RenderError):
+                continue
+        remaining = sum(size for _, _, size in candidates)
+        for used, job, size in sorted(candidates):
+            if now - used < 300 or (now - used < age and remaining <= limit):
+                continue  # A bounded grace protects a renderer's immediate reader.
+            try:
+                with lock(job / '.lock'):
+                    state = json.loads(private_bytes(job / 'state.json', 32768))
+                    latest = state.get('last_used_at', state.get('created_at'))
+                    if latest != used or state.get('phase') not in ('rendered', 'audio_expired'):
+                        continue
+                    audio = job / 'audio.wav'
+                    data = private_bytes(audio, MAX_AUDIO)
+                    if sha(data) != state['audio_sha256']:
+                        continue  # Changed/uncertain media is never disposable cache.
+                    state.update(phase='audio_expired', audio_expired_at=now)
+                    atomic(job / 'state.json', canonical(state))
+                    audio.unlink()
+                    sync_directory(job)
+                    remaining -= size
+                    removed += size
+            except (OSError, ValueError, KeyError, TypeError, RenderError):
+                continue
+    return {'removed_audio_bytes': removed, 'retained_audio_bytes': remaining,
+            'receipts_preserved': True, 'provider_calls': 0}
+
+
+def reserve_audio(config, state_file, state):
+    """Bound payloads plus in-flight maximum sizes before a provider request."""
+    root = Path(config['cache_root'])
+    with lock(root / '.audio-budget.lock'):
+        used = 0
+        for job in root.iterdir():
+            if not re.fullmatch(r'[a-f0-9]{64}', job.name) or job.is_symlink() or not job.is_dir():
+                continue
+            audio = job / 'audio.wav'
+            if audio.exists() or audio.is_symlink():
+                info = audio.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    raise RenderError('unsafe-audio-budget-artifact')
+                used += info.st_size
+            else:
+                try:
+                    prior = json.loads(private_bytes(job / 'state.json', 32768))
+                    if prior.get('phase') == 'intent':
+                        used += MAX_AUDIO
+                except FileNotFoundError:
+                    pass
+        if used + MAX_AUDIO > config.get('audio_cache_max_bytes', 256 * 1024 * 1024):
+            raise RenderError('audio-cache-capacity-text-remains-available')
+        atomic(state_file, canonical(state))
 
 
 def credential(path):
@@ -190,28 +285,44 @@ def render(binding, request):
                 'provider': config['provider'], 'endpoint': config['endpoint'], 'fields': fields}
     ident = sha(canonical(identity))
     job = directory(directory(config['cache_root']) / ident)
+    prune_audio(config, exclude=ident)
     state_file, audio_file = job / 'state.json', job / 'audio.wav'
     with lock(job / '.lock'):
+        generation = 1
         if state_file.exists() or state_file.is_symlink():
             state = json.loads(private_bytes(state_file, 32768))
             if (not isinstance(state, dict) or state.get('schema') != 'telecodex.speech-render/v1'
-                    or state.get('identity_sha256') != ident or state.get('phase') != 'rendered'
+                    or state.get('identity_sha256') != ident or state.get('phase') not in ('rendered', 'audio_expired')
                     or state.get('text_sha256') != sha(request['text'].encode())
                     or state.get('voice') != config['voice'] or state.get('language') != config['language']):
                 raise RenderError('retained-render-outcome-no-automatic-retry')
-            data = private_bytes(audio_file, MAX_AUDIO)
-            info = audio_info(data)
-            if sha(data) != state['audio_sha256'] or info != state['format']:
-                raise RenderError('retained-render-integrity-failed')
-            return result(state, audio_file, True)
+            if state['phase'] == 'rendered':
+                data = private_bytes(audio_file, MAX_AUDIO)
+                info = audio_info(data)
+                if sha(data) != state['audio_sha256'] or info != state['format']:
+                    raise RenderError('retained-render-integrity-failed')
+                state['last_used_at'] = time.time()
+                atomic(state_file, canonical(state))
+                return result(state, audio_file, True)
+            # This is a known completed render whose disposable payload expired,
+            # not an uncertain provider request. Only this new render call may
+            # produce audio again; pruning itself never invokes a provider.
+            if audio_file.exists():
+                if sha(private_bytes(audio_file, MAX_AUDIO)) != state['audio_sha256']:
+                    raise RenderError('expired-render-integrity-failed')
+                audio_file.unlink()
+                sync_directory(job)
+            generation = state.get('generation', 1) + 1
         if audio_file.exists() or audio_file.is_symlink():
             raise RenderError('orphan-render-no-automatic-retry')
+        prune_audio({**config, 'audio_cache_max_bytes':
+                     config.get('audio_cache_max_bytes', 256 * 1024 * 1024) - MAX_AUDIO}, exclude=ident)
         token = credential(config['env_file'])
         state = {'schema': 'telecodex.speech-render/v1', 'identity_sha256': ident,
                  'phase': 'intent', 'provider': config['provider'], 'voice': config['voice'],
                  'language': config['language'], 'text_sha256': sha(request['text'].encode()),
-                 'created_at': time.time()}
-        atomic(state_file, canonical(state))
+                 'created_at': time.time(), 'last_used_at': time.time(), 'generation': generation}
+        reserve_audio(config, state_file, state)
         boundary, body = multipart(fields)
         # No retry or redirect may resend a credential/request to another endpoint.
         http = Request(config['endpoint'], data=body, headers={
@@ -268,9 +379,13 @@ def result(state, audio_file, cached):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binding', type=Path, required=True)
+    parser.add_argument('--prune', action='store_true', help='Expire completed cached audio without provider calls')
     args = parser.parse_args()
     os.umask(0o077)
     try:
+        if args.prune:
+            print(json.dumps(prune_audio(route(args.binding))))
+            return 0
         raw = sys.stdin.buffer.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise RenderError('speech-request-bound')
