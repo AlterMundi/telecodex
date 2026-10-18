@@ -17,6 +17,7 @@ class Semantic(Routing):
         self.input_ref=None
         self.source_text=None
         self.entry_send=None
+        self.inspections={}
         super().__init__(binary)
 
     def call(self,ident,operation,arguments):
@@ -27,6 +28,9 @@ class Semantic(Routing):
 
     def handle_extra_rpc(self,m,send):
         method=m.get('method');p=m.get('params',{});ident=m.get('id')
+        if method is None and isinstance(ident,str) and ident.startswith('inspect-'):
+            self.inspections[ident]=m['result']
+            return True
         if method=='turn/start' and p['threadId'] not in ('native-topic-7','native-topic-8'):
             self.entry=p['threadId'];self.entry_turn='semantic-entry-turn';self.entry_send=send
             send({'id':ident,'result':{'turn':{'id':self.entry_turn}}})
@@ -39,6 +43,7 @@ class Semantic(Routing):
             if ident=='caps':
                 assert value['success']
                 assert 'dispatch' in json.loads(value['contentItems'][0]['text'])['operations']
+                assert 'target_inputs' in json.loads(value['contentItems'][0]['text'])['operations']
                 self.call('inputs','inputs',{})
             elif ident=='inputs':
                 assert value['success']
@@ -77,6 +82,23 @@ def semantic_originals(binary):
         j.wait(lambda:all(len(j.instructions(t))==1 and j.instructions(t)[0][1]=='accepted' for t in (7,8)))
         assert j.input_ref==original
         assert all(len(j.packets['native-topic-'+str(t)])==1 for t in (7,8))
+        before_read=j.row('SELECT count(*) FROM turns')
+        j.call('inspect-alpha','target_inputs',{'selector':'Alpha'})
+        j.wait(lambda:'inspect-alpha' in j.inspections)
+        inspection=j.inspections['inspect-alpha'];assert inspection['success']
+        inspected=json.loads(inspection['contentItems'][0]['text'])
+        alpha_doc=json.loads(j.instructions(7)[0][2])
+        assert inspected['target']['thread_id']==7 and inspected['bounded']
+        assert len(inspected['inputs'])==1
+        actual=inspected['inputs'][0]
+        assert actual['instruction']==alpha_doc['id'] and actual['requests']==alpha_doc['requests']
+        assert actual['input_ref']==original and actual['attributed_text_excerpt']==text
+        assert 'human_text_excerpt' not in actual
+        assert j.row('SELECT count(*) FROM turns')==before_read
+        for name,args in [('unknown',{'selector':'Unknown'}),('forged',{'selector':'Alpha','human':101})]:
+            ident='inspect-'+name;j.call(ident,'target_inputs',args)
+            j.wait(lambda ident=ident:ident in j.inspections)
+            assert j.inspections[ident]['success'] is False
         for topic in (7,8):
             doc=json.loads(j.instructions(topic)[0][2])
             assert doc['text']==text and doc['origin']['message_id']==original
