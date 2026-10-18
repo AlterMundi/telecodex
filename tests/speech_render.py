@@ -291,7 +291,9 @@ class Render(unittest.TestCase):
         target.write_bytes(self.data)
         target.chmod(0o600)
         audio.symlink_to(target)
-        with self.assertRaises(OSError):
+        # Budget accounting may reject the unsafe artifact before the cache's
+        # O_NOFOLLOW read. Both paths must refuse it without regeneration.
+        with self.assertRaises((OSError,speech.RenderError)):
             self.render()
         self.assertEqual(len(self.calls), 1)
 
