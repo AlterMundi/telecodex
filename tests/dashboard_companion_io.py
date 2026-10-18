@@ -1,4 +1,9 @@
 """Explicit device grants through actual private files, HTTP and speech cache."""
+import copy
+import hashlib
+import os
+import tempfile
+import uuid
 import concurrent.futures
 import json
 from pathlib import Path
@@ -11,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 from dashboard.app import create_app
 from dashboard.companion import Grants
+from dashboard.provider import Provider
 from dashboard.private_state import read_json, write_json
 from presentation_io import Receiver
 import speech_render as speech_fixture
@@ -241,6 +247,54 @@ class Companion(unittest.TestCase):
         self.grants.revoke(self.receipt['grant_id'])
         with self.assertRaises(FileNotFoundError):self.grants.renew(self.receipt['grant_id'],7*86400)
         self.assertEqual(self.client.get('/api/interaction',headers=self.headers).status_code,401)
+
+
+class CaptureRetention(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.provider = object.__new__(Provider)
+        self.provider.receiver = {'db_path':str(self.root/'state.sqlite')}
+        self.directory = self.root/'state.sqlite.voice'
+        self.directory.mkdir(mode=0o700)
+        self.ident = str(uuid.uuid4())
+        self.path = self.directory/self.ident
+        self.path.write_bytes(b'original owned clip');self.path.chmod(0o600)
+        digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        self.value = {'id':self.ident,'text':'Committed words','phase':'preparing',
+            'voice':{'audio_sha256':digest,'transcription':{'audio_sha256':digest,
+                'capture_id':self.ident,'committed_at':'2026-10-18T00:00:00Z'}}}
+    def tearDown(self):self.temp.cleanup()
+    def test_confirmed_clip_removed_but_text_and_identity_survive(self):
+        original = copy.deepcopy(self.value)
+        self.assertTrue(self.provider.retire_voice_capture(self.value))
+        self.assertFalse(self.path.exists())
+        self.assertEqual(self.value,original)
+        self.assertFalse(self.provider.retire_voice_capture(self.value))
+    def test_pending_mismatched_empty_and_changed_audio_are_retained(self):
+        for change in ('pending','identity','hash','text','commit'):
+            value = copy.deepcopy(self.value)
+            if change == 'pending':value['voice'].pop('transcription')
+            if change == 'identity':value['voice']['transcription']['capture_id']=str(uuid.uuid4())
+            if change == 'hash':value['voice']['transcription']['audio_sha256']='0'*64
+            if change == 'text':value['text']=''
+            if change == 'commit':value['voice']['transcription'].pop('committed_at')
+            self.assertFalse(self.provider.retire_voice_capture(value),change)
+            self.assertTrue(self.path.exists())
+        self.path.write_bytes(b'changed bytes')
+        self.assertFalse(self.provider.retire_voice_capture(self.value))
+    def test_links_and_nonprivate_files_are_not_removed(self):
+        self.path.chmod(0o644)
+        self.assertFalse(self.provider.retire_voice_capture(self.value))
+        outside = self.root/'other-recording';self.path.rename(outside)
+        self.path.symlink_to(outside)
+        self.assertFalse(self.provider.retire_voice_capture(self.value))
+        self.assertTrue(outside.exists());self.assertTrue(self.path.is_symlink())
+    def test_cleanup_error_does_not_change_committed_input(self):
+        original = copy.deepcopy(self.value)
+        with patch('dashboard.provider.os.open',side_effect=OSError('simulated')):
+            self.assertFalse(self.provider.retire_voice_capture(self.value))
+        self.assertEqual(self.value,original);self.assertTrue(self.path.exists())
 
 
 if __name__=='__main__':

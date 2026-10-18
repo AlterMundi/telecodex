@@ -235,10 +235,58 @@ class Provider:
         page = self.presentation(f'input list {before} {direction}')
         for item in page['items']:
             self.decorate_input(item,page.get('routing_choices'),page['entry_binding'],page['binding'])
+            self.retire_voice_capture(item)
         return page
 
     def conversation_input_status(self, ident):
-        return self.decorate_input(self.presentation(f'input status {self.input_id(ident)}'))
+        value = self.decorate_input(self.presentation(f'input status {self.input_id(ident)}'))
+        self.retire_voice_capture(value)
+        return value
+
+    def retire_voice_capture(self, value):
+        """Dispose only this receiver's clip after its matching durable transcript.
+
+        Admission/delivery may still be pending: the retained transcript is the
+        input from this point. A failed cleanup never changes admission or ASR.
+        Status/list reads also finish cleanup interrupted by a process exit.
+        """
+        try:
+            voice = value.get('voice') or {}
+            proof = voice.get('transcription') or {}
+            ident = self.input_id(value['id'])
+            digest = voice.get('audio_sha256')
+            if (not isinstance(value.get('text'), str) or not value['text'].strip()
+                    or proof.get('capture_id') != ident
+                    or not isinstance(digest, str) or len(digest) != 64
+                    or proof.get('audio_sha256') != digest
+                    or not proof.get('committed_at')):
+                return False
+            directory = Path(str(self.receiver['db_path'])+'.voice')
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                return False
+            path = directory / ident
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or info.st_mode & 0o077 or not 0 < info.st_size <= 20*1024*1024
+                        or hashlib.sha256(source.read(20*1024*1024+1)).hexdigest() != digest):
+                    return False
+                current = path.lstat()
+                if (current.st_dev,current.st_ino) != (info.st_dev,info.st_ino):
+                    return False
+                path.unlink()
+                sync_directory(directory)
+            return True
+        except FileNotFoundError:
+            return False
+        except (OSError, ValueError, KeyError, TypeError):
+            # Cleanup cannot turn an already committed input into a failed or
+            # replayable submission. No clip paths or content enter the log.
+            import logging
+            logging.getLogger(__name__).warning('Committed voice cleanup deferred')
+            return False
 
     def conversation_input_trace(self, ident):
         return self.presentation(f'input trace {self.trace_id(ident)}')
@@ -434,7 +482,9 @@ class Provider:
             temporary.unlink(missing_ok=True)
         # The controller reserves original order/authority before asynchronous ASR.
         # A retry names the same clip and only inspects existing capture state.
-        return self.decorate_input(self.presentation('input voice submit '+json.dumps(metadata)))
+        value = self.decorate_input(self.presentation('input voice submit '+json.dumps(metadata)))
+        self.retire_voice_capture(value)
+        return value
 
     @staticmethod
     def request_id(ident):
