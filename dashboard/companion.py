@@ -10,7 +10,7 @@ import time
 import tomllib
 
 from .private_state import private_directory, read_json, write_json
-from scripts.speech_render import directory, sync_directory, RenderError
+from scripts.speech_render import directory, sync_directory, lock, RenderError
 
 
 def authority(config, provider):
@@ -119,14 +119,49 @@ class Grants:
     def revoke(self, ident):
         if self.root is None or not re.fullmatch(r'[a-f0-9]{64}', ident):
             raise ValueError('Select an enrolled companion grant')
-        path = self.root / (ident + '.json')
-        if not path.exists():
+        with lock(self.root / 'owner-mutation.lock'):
+            path = self.root / (ident + '.json')
+            if not path.exists():
+                sync_directory(self.root)
+                return {'revoked':True, 'already_absent':True}
+            read_json(path)
+            path.unlink()
             sync_directory(self.root)
-            return {'revoked':True, 'already_absent':True}
-        read_json(path)
-        path.unlink()
-        sync_directory(self.root)
-        return {'revoked':True}
+            return {'revoked':True}
+
+    def renew(self, ident, seconds):
+        """Extend the same button enrollment without changing captured identity."""
+        if (self.root is None or not re.fullmatch(r'[a-f0-9]{64}', ident)
+                or type(seconds) is not int or not 60 <= seconds <= 30 * 86400):
+            raise ValueError('Select an existing button grant and bounded lifetime')
+        with lock(self.root / 'owner-mutation.lock'):
+            self.provider.assert_binding()
+            path = self.root / (ident + '.json')
+            grant = read_json(path)  # Absent/revoked grants are never recreated.
+            now = int(time.time())
+            if (not isinstance(grant, dict)
+                    or grant.get('schema') != 'telecodex.companion-grant/v1'
+                    or grant.get('scope') != 'interaction_only'
+                    or grant.get('authority') != authority(self.config, self.provider)
+                    or type(grant.get('human')) is not int
+                    or grant['human'] != self.provider.human
+                    or type(grant.get('expires')) is not int
+                    or not 0 < grant['expires'] <= now + 30 * 86400
+                    or not isinstance(grant.get('csrf'), str)
+                    or not re.fullmatch(r'[A-Za-z0-9_-]{43}', grant['csrf'])
+                    or not self.provider.authorized(grant['human'])
+                    or now + seconds <= grant['expires']):
+                raise ValueError('Existing button authority and a later expiry required')
+            self.provider.presentation_list(0, 0)
+            self.provider.assert_binding()
+            if (grant['authority'] != authority(self.config, self.provider)
+                    or grant['human'] != self.provider.human
+                    or not self.provider.authorized(grant['human'])):
+                raise ValueError('Receiving human grant changed during renewal')
+            renewed = {**grant, 'expires': now + seconds}
+            write_json(path, renewed)
+            return {'grant_id':ident, 'scope':grant['scope'], 'expires':renewed['expires'],
+                    'previous_expires':grant['expires'], 'renewed':True}
 
 
 def main():
@@ -140,6 +175,9 @@ def main():
     enroll.add_argument('--scope', choices=['interaction_only','monitor_readonly'], default='interaction_only')
     revoke = commands.add_parser('revoke')
     revoke.add_argument('grant_id')
+    renew = commands.add_parser('renew')
+    renew.add_argument('grant_id')
+    renew.add_argument('--seconds', required=True, type=int)
     args = parser.parse_args()
     from .provider import Provider
     provider = None
@@ -147,7 +185,12 @@ def main():
         config = tomllib.loads(args.config.read_text())
         provider = Provider(config)
         grants = Grants(config, provider)
-        result = grants.enroll(args.label, args.output, args.seconds, scope=args.scope) if args.command == 'enroll' else grants.revoke(args.grant_id)
+        if args.command == 'enroll':
+            result = grants.enroll(args.label, args.output, args.seconds, scope=args.scope)
+        elif args.command == 'renew':
+            result = grants.renew(args.grant_id, args.seconds)
+        else:
+            result = grants.revoke(args.grant_id)
         print(json.dumps(result))  # Never emit the credential or its private path.
     except (OSError, ValueError, KeyError, RenderError):
         parser.exit(2, 'Companion operation unavailable; inspect owner-local configuration and grant.\n')

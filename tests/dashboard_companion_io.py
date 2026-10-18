@@ -190,6 +190,58 @@ class Companion(unittest.TestCase):
         self.assertIn(self.root/'new-device',parents)
         self.assertEqual(read_json(output)['grant_id'],receipt['grant_id'])
 
+    def test_owner_renewal_preserves_button_identity_and_permissions(self):
+        original=read_json(self.record)
+        expired={**original,'expires':int(time.time())-1}
+        write_json(self.record,expired)
+        before=self.output.read_bytes()
+        self.assertEqual(self.client.get('/api/interaction',headers=self.headers).status_code,401)
+        receipt=self.grants.renew(self.receipt['grant_id'],7*86400)
+        self.assertEqual(self.output.read_bytes(),before,'Saved capture identity must not change')
+        self.assertEqual(receipt['previous_expires'],expired['expires'])
+        self.assertEqual(read_json(self.record),{**expired,'expires':receipt['expires']})
+        self.assertEqual(self.client.get('/api/interaction',headers=self.headers).status_code,200)
+        self.assertEqual(self.client.get('/api/state',headers=self.headers).status_code,403)
+        self.assertEqual(len(self.speech.calls),0)
+
+    def test_renewal_refuses_changed_authority_scope_owner_and_revoked_grants(self):
+        original=read_json(self.record)
+        for change in ({'authority':'changed'},{'scope':'monitor_readonly'},
+                       {'human':101},{'csrf':'invalid'},{'expires':False}):
+            write_json(self.record,{**original,**change})
+            with self.assertRaises(ValueError):self.grants.renew(self.receipt['grant_id'],7*86400)
+            self.assertEqual(read_json(self.record),{**original,**change})
+        write_json(self.record,original)
+        for seconds in (True,59,30*86400+1,60):
+            with self.assertRaises(ValueError):self.grants.renew(self.receipt['grant_id'],seconds)
+        self.provider.allowed=False
+        with self.assertRaises(ValueError):self.grants.renew(self.receipt['grant_id'],7*86400)
+        self.provider.allowed=True
+        self.grants.revoke(self.receipt['grant_id'])
+        with self.assertRaises(FileNotFoundError):self.grants.renew(self.receipt['grant_id'],7*86400)
+        self.assertFalse(self.record.exists())
+
+    def test_concurrent_renewal_and_revocation_cannot_resurrect_access(self):
+        import threading
+        entered=threading.Event();release=threading.Event()
+        original=self.provider.presentation_list
+        def held(*args):
+            entered.set()
+            if not release.wait(timeout=4):raise TimeoutError('release renewal fixture')
+            return original(*args)
+        self.provider.presentation_list=held
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pending=pool.submit(self.grants.renew,self.receipt['grant_id'],7*86400)
+            try:
+                self.assertTrue(entered.wait(timeout=4))
+                with self.assertRaises(renderer.RenderError):
+                    Grants(self.config,self.provider).revoke(self.receipt['grant_id'])
+            finally:release.set()
+            self.assertTrue(pending.result(timeout=5)['renewed'])
+        self.grants.revoke(self.receipt['grant_id'])
+        with self.assertRaises(FileNotFoundError):self.grants.renew(self.receipt['grant_id'],7*86400)
+        self.assertEqual(self.client.get('/api/interaction',headers=self.headers).status_code,401)
+
 
 if __name__=='__main__':
     unittest.main()

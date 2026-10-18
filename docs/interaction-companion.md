@@ -49,7 +49,26 @@ The live human grant and device record are checked again after private I/O,
 including synthesis. Changed authority, expiry, disabled device access, unsafe
 records or revocation deny the next request. Restart retains grants without a
 new token or model call. The default lifetime is one day, bounded to 30 days;
-renewal is an explicit enrollment. Disabling the route does not erase records.
+renewal is an explicit owner operation. Disabling the route does not erase records.
+
+Extend an existing interaction-only button enrollment without replacing the
+credential or its saved capture identity:
+
+```sh
+python -m dashboard.companion --config /private/dashboard.toml renew GRANT_ID \
+  --seconds 2592000
+```
+
+The receiving expiry is authoritative for this button client; the unchanged
+credential file retains its original issuance metadata. Renewal requires the
+same live human, bot/entry authority, scope and CSRF, and an expiry later than
+the existing one, at most 30 days from now. Expired retained grants may be
+explicitly renewed; revoked or absent grants cannot be recreated. Renewal and
+revocation share an owner mutation lock: a busy operation reports failure rather
+than racing a deletion. No automatic renewal, media, model call, device restart
+or permission expansion occurs. Read the returned receiving expiry in the local
+operation receipt. A read-only browser monitor instead requires a newly enrolled
+file when its client-side expiry is reached.
 
 Revoke the selected grant using its opaque ID:
 
