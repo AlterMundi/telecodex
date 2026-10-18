@@ -38,6 +38,13 @@ function boot() {
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
+    if(url.pathname.endsWith('/trace')) {
+      const id=url.pathname.split('/').at(-2),original=originals.get(id);
+      requests.push({trace:id,body});
+      return {schema:'telecodex.conversation-trace/v1',id,text:original.text,phase:original.phase,read_only:true,
+        routes:[{label:'Alpha',instruction:'retained-instruction',requests:['parent-request'],relation:{kind:'amends'},transport_phase:'accepted',forwarded_original:'Exact correction <script>literal</script>',target_available:true,results:[]}],
+        evidence:'Receiver-retained original; native acceptance is not incorporation.'};
+    }
     if (url.pathname === "/interaction/requests") return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
     if (url.pathname.startsWith("/interaction/requests/")) {
       if (body) {nativePosts.push(JSON.parse(JSON.stringify(body)));throw new TypeError("Lost decision acknowledgement");}
@@ -340,5 +347,16 @@ function boot() {
   assert.match(earlyCard.children[1].textContent,/#Alpha: saved; waiting for this session/);
   assert.equal(earlyBox.hidden,true,"An older-started queued route response still proves immutable destination selection");
   assert.equal(earlyCard.children[2].children[2].hidden,false,"The retained route also carries its reply source");
-  console.log("Conversation history, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
+  const monitor=boot();monitor.originals.set('monitor-original',{id:'monitor-original',text:'Correct Alpha',sequence:1,phase:'accepted'});
+  await monitor.ui.refresh();
+  const monitorCard=monitor.nodes.get('#conversation-inputs').children[0],trace=monitorCard.children[6];
+  trace.open=true;await trace.children[3].handlers.click();
+  assert.equal(trace.children[2].children[0].children[1].textContent,'Correct Alpha');
+  const traceStep=trace.children[2].children[1];
+  assert.match(traceStep.children[0].textContent,/#Alpha · Correction/);
+  assert.equal(traceStep.children[3].textContent,'Exact correction <script>literal</script>');
+  assert.equal(monitor.requests.filter(r=>r.trace).length,1);
+  assert.equal(monitor.requests.find(r=>r.trace).body,undefined,'Trace reads cannot submit or retry an input');
+  assert.equal(monitor.originals.size,1);
+  console.log("Conversation history, routing trace, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });

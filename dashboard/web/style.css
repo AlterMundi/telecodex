@@ -484,3 +484,8 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 
 .input-visual { display: block; max-width: 100%; height: auto; margin-block: 8px; }
 .input-visual[hidden] { display: none; }
+.routing-trace { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.routing-trace summary { cursor: pointer; color: var(--accent); font-size: 16px; }
+.routing-trace h3 { font-size: 16px; margin: 12px 0 6px; overflow-wrap: anywhere; }
+.routing-trace .route-step { margin: 14px 0; border-left: 3px solid var(--accent); padding-left: 12px; }
+.route-identity { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }

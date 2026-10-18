@@ -240,6 +240,9 @@ class Provider:
     def conversation_input_status(self, ident):
         return self.decorate_input(self.presentation(f'input status {self.input_id(ident)}'))
 
+    def conversation_input_trace(self, ident):
+        return self.presentation(f'input trace {self.input_id(ident)}')
+
     @classmethod
     def clarification_source(cls, value, choices=None, entry_binding=None, binding=None):
         if (value.get('clarifiable') is not True or value.get('phase')!='awaiting_target'

@@ -70,6 +70,43 @@ window.Conversation = (() => {
       $("#conversation-inputs-older").hidden = true;
       draft.disabled = true; send.disabled = true;
     }
+    async function readTrace(card) {
+      if (card.traceBusy) return;
+      const owned=inputGeneration;
+      card.traceBusy=true;card.traceRefresh.disabled=true;
+      card.traceState.textContent="Reading saved routing evidence…";
+      try {
+        const value=await api(`interaction/inputs/${encodeURIComponent(card.value.id)}/trace`);
+        if(owned!==inputGeneration || inputs.get(card.value.id)!==card)return;
+        if(value.id!==card.value.id || value.schema!=="telecodex.conversation-trace/v1")throw new Error("Wrong routing observation");
+        const original=node("section");
+        original.append(node("h3",value.voice?"Voice transcript":"Original text"),node("p",value.text||"No transcript is confirmed yet.","reply-text"));
+        const stages=[original];
+        for(const route of value.routes) {
+          const step=node("section",undefined,"route-step");
+          const relation=({new:"New task",amends:"Correction",context:"Additional context"})[route.relation?.kind]||"Related input";
+          step.append(node("h3",`→ #${route.label} · ${relation}`),node("p",routeText({...route,phase:route.transport_phase}),"reply-status"));
+          step.append(node("p","Exact original forwarded to this session:","note"),node("p",route.forwarded_original,"reply-text"));
+          if(!route.target_available)step.append(node("p","This session is no longer available in your current scope. Its response is not exposed.","note"));
+          for(const result of route.results) {
+            const state=!result.current?"Earlier result; a later correction may apply.":result.correction_pending?"A correction is still pending.":result.instruction_covered&&result.completed?"Session declared this input incorporated and the request completed.":"The session has not declared this input fully incorporated and completed.";
+            step.append(node("p",state,"reply-status"),node("p",result.text_excerpt,"reply-text"));
+            if(result.text_bounded)step.append(node("p","Response excerpt; read the complete reply under From your sessions.","note"));
+          }
+          if(route.more_results)step.append(node("p","Earlier related results remain in reply history.","note"));
+          const identity=node("details"),summary=node("summary","Request references");
+          identity.append(summary,node("p",`Instruction: ${route.instruction}\nRequests: ${route.requests.join(", ")}`,"route-identity"));step.append(identity);stages.push(step);
+        }
+        if(!value.routes.length)stages.push(node("p",value.answer?"Recorded as an answer to a session question; recording an answer does not prove incorporation.":value.routing?routeText(value.routing):"No work-session dispatch is recorded. The input may remain with the integrator or await clarification.","note"));
+        stages.push(node("p",value.evidence,"note"));
+        card.traceContent.replaceChildren(...stages);
+        card.traceState.textContent=`Saved input: ${value.phase}. Observation only; no message was resent.`;
+      } catch(e) {
+        if(owned!==inputGeneration || inputs.get(card.value.id)!==card)return;
+        card.traceState.textContent="Routing observation unavailable. Previous evidence is retained; nothing was resent.";
+        if([401,403].includes(e.status))failed(e);
+      } finally {card.traceBusy=false;card.traceRefresh.disabled=false;}
+    }
     function inputCard(value, observed = ++inputObservation) {
       let card = inputs.get(value.id);
       if (!card) {
@@ -96,8 +133,12 @@ window.Conversation = (() => {
           }catch(e){status.textContent="Selected image unavailable. The message was not resent.";if([401,403].includes(e.status))failed(e);}
           finally{clearTimeout(deadline);imageButton.disabled=false;if(imageView.hidden)imageButton.textContent="Show selected image";}
         });
-        box.append(text,status,actions,routeBox,imageButton,imageView);
-        card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote};
+        const trace=node("details",undefined,"routing-trace"),traceSummary=node("summary","Show routing path"),traceState=node("p","","note"),traceContent=node("div"),traceRefresh=node("button","Refresh route");
+        traceRefresh.type="button";traceState.setAttribute("role","status");trace.append(traceSummary,traceState,traceContent,traceRefresh);
+        box.append(text,status,actions,routeBox,imageButton,imageView,trace);
+        card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote,trace,traceState,traceContent,traceRefresh};
+        trace.addEventListener("toggle",()=>trace.open&&readTrace(card));
+        traceRefresh.addEventListener("click",()=>readTrace(card));
         continueButton.addEventListener("click",()=>card.value.continuation&&selectFocus(card.value.continuation,`#${card.value.routing?.label||"session"}`));
         select.addEventListener("change",()=>renderRoute(card));
         routeButton.addEventListener("click",()=>routeInput(card,card.routePending||{binding,selector:select.value})); inputs.set(value.id, card);
@@ -420,6 +461,7 @@ window.Conversation = (() => {
           await inputPage(0,"before",false);
         }
         await requestControls.refresh();
+        for(const card of inputs.values())if(card.trace.open)await readTrace(card);
       } catch (e) { failed(e); }
       finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false; }
     }

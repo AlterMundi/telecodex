@@ -146,6 +146,19 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         page["routing_choices"] = choices(app)?;
         return Ok(page);
     }
+    if let Some(id) = args.strip_prefix("trace ") {
+        let mut trace = app
+            .shared
+            .store
+            .conversation_input_trace(human, cfg.entry(), id)?;
+        if let Some(routes) = trace["routes"].as_array_mut() {
+            for route in routes {
+                let target: SessionKey = serde_json::from_value(route["target"].clone())?;
+                route["label"] = json!(super::routing::label(&app.shared, target));
+            }
+        }
+        return Ok(trace);
+    }
     if let Some(id) = args.strip_prefix("status ") {
         return response(
             app,

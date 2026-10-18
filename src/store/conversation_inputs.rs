@@ -497,6 +497,93 @@ impl Store {
         Ok(input)
     }
 
+    /// Trace an owned original through immutable controller instructions/results.
+    /// This read does not prepare, transmit, retry or synthesize anything.
+    pub fn conversation_input_trace(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<serde_json::Value> {
+        use crate::interaction::{Delivery, Instruction};
+        use serde_json::json;
+        let answer = self.conversation_answer_receipt(human, entry, id)?;
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
+        let input = read_on(&conn, id, human)?;
+        if input.entry != entry || input.session != session {
+            bail!("Input belongs to another conversation");
+        }
+        let mut query = conn.prepare(
+            "SELECT i.doc,i.phase,coalesce(s.creator_user_id=?1 AND u.allowed=1,0)
+             FROM interaction_sources o JOIN interaction_instructions i ON i.input_id=o.id
+             LEFT JOIN sessions s ON s.id=i.session_id
+             LEFT JOIN users u ON u.tg_user_id=s.creator_user_id
+             WHERE o.human_id=?1 AND o.channel='conversation' AND o.event_id=?2
+               AND i.human_id=?1 ORDER BY i.sequence LIMIT 6",
+        )?;
+        let rows = query
+            .query_map(params![human, id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if rows.len() > 5 {
+            bail!("Trace exceeds selected destination bound");
+        }
+        let mut routes = Vec::new();
+        for (raw, phase, available) in rows {
+            let instruction: Instruction = serde_json::from_str(&raw)?;
+            let mut results = Vec::new();
+            let mut more_results = false;
+            if available {
+                let mut deliveries = conn.prepare(
+                    "SELECT d.doc,d.phase FROM interaction_request_links l
+                     JOIN interaction_deliveries d ON d.request_id=l.request_id
+                     WHERE l.instruction_id=?1 ORDER BY d.rowid DESC LIMIT 9",
+                )?;
+                let selected = deliveries
+                    .query_map([&instruction.id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                more_results = selected.len() > 8;
+                for (raw, delivery_phase) in selected.into_iter().take(8) {
+                    let delivery: Delivery = serde_json::from_str(&raw)?;
+                    let (current, pending) = super::routing::freshness(
+                        &conn,
+                        &delivery.request_id,
+                        &delivery.covered,
+                        delivery.declared,
+                    )?;
+                    results.push(json!({"source":format!("delivery:{}",delivery.id),
+                        "phase":delivery_phase,"text_excerpt":delivery.body.chars().take(4000).collect::<String>(),
+                        "text_bounded":delivery.body.chars().count()>4000,
+                        "instruction_covered":delivery.covered.contains(&instruction.id),
+                        "declared":delivery.declared,"completed":delivery.completed,
+                        "current":current,"correction_pending":pending}));
+                }
+            }
+            routes.push(
+                json!({"instruction":instruction.id,"target":instruction.target,
+                "relation":instruction.relation,"requests":instruction.requests,
+                "forwarded_original":instruction.text,"transport_phase":phase,
+                "native_acceptance":phase=="accepted","target_available":available,
+                "results":results,"more_results":more_results}),
+            );
+        }
+        Ok(
+            json!({"schema":"telecodex.conversation-trace/v1","id":input.id,
+            "entry_binding":[human,entry,session,native],"text":input.text,"voice":input.voice,
+            "phase":input.phase,"retired":input.retired,"routing":input.routing,"answer":answer,
+            "routes":routes,"read_only":true,
+            "evidence":"Forwarded originals are exact retained controller text, not reconstructed native relay envelopes. Native acceptance and worker coverage declarations are separate evidence."}),
+        )
+    }
+
     /// Recent retained originals for this owned logical entry, newest first.
     /// Pagination never dispatches an input or invents an acceptance receipt.
     pub fn conversation_input_page(

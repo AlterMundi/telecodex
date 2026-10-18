@@ -320,6 +320,19 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         authorize(request)
         return result
 
+    @app.get('/api/interaction/inputs/{ident}/trace')
+    async def conversation_input_trace(request: Request, ident: str):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_input_trace, ident)
+        except ValueError:
+            raise HTTPException(400, 'Invalid message identity') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Routing observation unavailable; the input was not resent') from None
+        authorize(request)
+        return result
+
     @app.post('/api/interaction/inputs')
     async def conversation_input_submit(request: Request):
         session = authorize(request)
