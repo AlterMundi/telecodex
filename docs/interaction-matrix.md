@@ -4,7 +4,8 @@ The optional host module `scripts/matrix_execution.py` connects an already
 approved Matrix `ExecutionStore` cycle to its authenticated owner-local SDK
 client. It is a building block for [Matrix #367](https://github.com/AlterMundi/daimon-matrix/issues/367),
 part of [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
-It is not enabled in the local conversation router yet.
+The conversation can retain explicitly configured Matrix requests and canonical
+returns. No remote participant or receiving execution is selected by default.
 
 The trusted host constructs one closed task with `make_task`, including the
 original input UUID, exact execution scope and explicit being/body destination.
@@ -43,6 +44,50 @@ refund or new execution. `accept_verified_reply` correlates an already verified
 selected event to the original message ID, digest, author, thread and recipient.
 It does not perform signature verification itself or read an inbox.
 
+## Retained conversation requests and returns
+
+Add `matrix_targets` under the existing `[interaction]` profile only for explicitly
+selected recipients. Each entry has a distinct `name` and a `destination` tagged
+`kind = "being"` with `being_ref`, or `kind = "body"` with both `being_ref` and
+`embodiment_id`. These are signed identity references, not labels resolved through
+an archived pair lane. An empty list preserves ordinary local-only operation.
+
+The integrator's `matrix_request` operation accepts one retained `input_ref`, a
+configured `selector`, and a `new`, `amends` or `context` relation. It cannot supply
+replacement text. Selection atomically freezes the original, recipient, entry
+generation, admission epoch and up to four explicitly selected same-entry,
+same-recipient parent originals. Parent text and authorship remain separate from
+the current human text or committed machine transcript. Serialized selected
+content is bounded to 15360 UTF-8 bytes, reserving 1024 bytes for the SDK relay's
+fixed metadata and bounded execution reference. Oversized JSON-escaped context
+is refused before consuming the original. A Matrix selection excludes local
+routing, creation and implicit native-question answers for that same original.
+
+`matrix_status` reads one selected request or canonical event. The authenticated
+owner can use `telecodex --control CONFIG matrix status UUID`. The trusted host
+passes that exact status to `make_conversation_task`; it verifies the immutable
+binding and excludes private human return coordinates from the outbound relay.
+A model cannot paraphrase a relayed original into apparent human speech.
+`make_received_task` prepares a selected SDK-verified original for independent
+receiving approval; it does not read an inbox or approve execution.
+
+After SDK signature and reply-parent verification, the host derives a callback
+with `broker.conversation_return` and records it through
+`telecodex --control CONFIG matrix return JSON`. This owner-local callback is a
+trusted host boundary, not a model tool or independent signature validator.
+Exact event retries are idempotent; changed bytes under the same event fail.
+Late replies remain historical after native renewal or admission changes, with
+`current: false`. Corrections retain their parent request and make the prior
+result noncurrent; a received reply alone never proves task completion.
+
+The browser requests the optional third `matrix` cursor from `/api/interaction`.
+Canonical sources use `matrix:<event UUID>` and `kind: matrix_result`, preserving
+the selected label and authenticated source author. Text and speech share the
+existing source/revision checks. A contextual reply sends a new human original
+to the integrator; the integrator explicitly selects its relation and recipient.
+Two-cursor clients retain their local-only behavior. Device-client adoption and
+production receiving execution remain separate qualification requirements.
+
 ## Qualification and remaining integration
 
 Run the zero-inference suite using the pinned SDK checkout and its test helpers:
@@ -59,9 +104,13 @@ mismatched being before send. These tests do not qualify a complete installed
 receiving runtime, paid accounting or live cross-body execution. CI pins the SDK
 source.
 
-The production integrating conversation must still bind this host adapter to
-its retained request/return path, qualified receiver execution and immutable
-origin. The selected cross-body trial and complete correction/renewal journey
-remain open in #367. One inference/token admission does not establish a global
+`tests/matrix_conversation_http_io.py` also exercises the actual native controller,
+authenticated owner CLI and HTTP server around signed SDK fixtures, including
+canonical returns, correction context and local-plan exclusion. Run it with the
+same SDK source, existing dashboard dependencies and a freshly built text binary.
+Its native workers and execution instructions are synthetic, with zero inference.
+
+Production deployment, qualified receiver execution and the selected live
+cross-body correction/renewal trial remain open in #367. One inference/token admission does not establish a global
 monetary ceiling. No existing local routing, selected runtime or paused goal is
 changed by importing this module.

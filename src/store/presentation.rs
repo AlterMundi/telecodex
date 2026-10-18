@@ -52,7 +52,26 @@ impl Store {
         after_native: i64,
         before: bool,
     ) -> Result<Value> {
-        if after_delivery < 0 || after_native < 0 {
+        self.interaction_presentation_page_matrix(
+            human,
+            entry,
+            after_delivery,
+            after_native,
+            None,
+            before,
+        )
+    }
+
+    pub fn interaction_presentation_page_matrix(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        after_delivery: i64,
+        after_native: i64,
+        after_matrix: Option<i64>,
+        before: bool,
+    ) -> Result<Value> {
+        if after_delivery < 0 || after_native < 0 || after_matrix.is_some_and(|v| v < 0) {
             bail!("Invalid presentation cursor");
         }
         let conn = self.conn.lock().expect("store mutex poisoned");
@@ -99,7 +118,29 @@ impl Store {
                 r.get::<_, i64>(0)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        let matrices = if let Some(cursor) = after_matrix {
+            let bound = if before && cursor == 0 {
+                i64::MAX
+            } else {
+                cursor
+            };
+            let mut query=conn.prepare(&format!("SELECT r.rowid,r.message_id FROM interaction_matrix_results r JOIN interaction_matrix_requests m ON m.id=r.request_id WHERE r.rowid{comparison}?1 AND r.human_id=?2 AND m.human_id=?2 AND m.entry_session=?3 ORDER BY r.rowid {order} LIMIT 9"))?;
+            query
+                .query_map(params![bound, human, session], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            vec![]
+        };
         let mut items = Vec::new();
+        for (sequence, id) in matrices.iter().take(8) {
+            if let Some(mut source) = source_on(&conn, human, entry, &format!("matrix:{id}"))? {
+                source["sequence"] = json!(sequence);
+                preview(&mut source);
+                items.push(source);
+            }
+        }
         for (sequence, id) in deliveries.iter().take(8) {
             if let Some(mut source) = source_on(&conn, human, entry, id)? {
                 source["sequence"] = json!(sequence);
@@ -114,13 +155,20 @@ impl Store {
                 items.push(source);
             }
         }
-        Ok(json!({"schema":"telecodex.presentation-list/v1",
+        let mut result = json!({"schema":"telecodex.presentation-list/v1",
             "binding":entry_binding(&conn,human,entry,session)?,"items":items,
             "cursor":{"delivery":deliveries.iter().take(8).next_back().map_or(after_delivery,|r|r.0),
                       "native":natives.iter().take(8).next_back().copied().unwrap_or(after_native)},
             "newest":{"delivery":deliveries.iter().take(8).map(|r|r.0).max().unwrap_or(0),
                       "native":natives.iter().take(8).copied().max().unwrap_or(0)},
-            "more":deliveries.len()>8 || natives.len()>8,"playback":"not_observed"}))
+            "more":deliveries.len()>8 || natives.len()>8 || matrices.len()>8,"playback":"not_observed"});
+        if let Some(cursor) = after_matrix {
+            result["cursor"]["matrix"] =
+                json!(matrices.iter().take(8).next_back().map_or(cursor, |r| r.0));
+            result["newest"]["matrix"] =
+                json!(matrices.iter().take(8).map(|r| r.0).max().unwrap_or(0));
+        }
+        Ok(result)
     }
 
     /// The revision fences source content, owner/native bindings and relevance.
@@ -178,7 +226,12 @@ pub(super) fn source_on(
     id: &str,
 ) -> Result<Option<Value>> {
     let (entry_session, entry_native) = entry_on(conn, human, entry)?;
-    let mut source = if let Some(id) = id.strip_prefix("delivery:") {
+    let mut source = if let Some(matrix) = id.strip_prefix("matrix:") {
+        let Some(source) = super::matrix::result_on(conn, human, entry, matrix)? else {
+            return Ok(None);
+        };
+        source
+    } else if let Some(id) = id.strip_prefix("delivery:") {
         let row:Option<(String,String,Option<String>,String,bool)>=conn.query_row(
             "SELECT d.doc,d.phase,s.codex_thread_id,o.native_thread,s.force_fresh_thread FROM interaction_deliveries d
              JOIN interaction_requests r ON r.id=d.request_id JOIN interaction_sources x ON x.id=r.input_id

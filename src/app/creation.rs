@@ -69,6 +69,10 @@ async fn create_selected(
         || args.context_selectors.len() > 5
         || cfg.targets.len() >= 64
         || !cfg.resolve(&args.name).is_empty()
+        || cfg
+            .matrix_targets
+            .iter()
+            .any(|target| target.name.eq_ignore_ascii_case(&args.name))
     {
         bail!("Invalid, duplicate or unsupported new destination");
     }

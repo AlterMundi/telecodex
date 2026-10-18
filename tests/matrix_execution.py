@@ -5,27 +5,30 @@ Only synthetic keys, loopback transport and synthetic approval are used.
 """
 
 import copy
-from dataclasses import dataclass, replace
 import hashlib
 import json
-from pathlib import Path
 import sys
 import time
-from types import SimpleNamespace
 import unittest
 import uuid
+from dataclasses import dataclass, replace
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from daimon_matrix.execution_instruction import Instruction, Scope
 from matrix_execution import (
     MatrixExecutionBroker,
     MatrixExecutionError,
     canonical,
+    make_conversation_task,
+    make_received_task,
     make_task,
     parent_from_verified_sdk,
 )
-from daimon_matrix.execution_instruction import Instruction, Scope
 from tests.test_execution_instruction import request
+
 from tests import test_dm025_client as client_fixtures
 from tests import test_execution_store as store_fixtures
 from tests import test_group_messaging_runtime as group_fixtures
@@ -97,9 +100,17 @@ class AdapterTests(unittest.TestCase):
         self.broker = self.make_broker(self.sender, self.scope, target=self.target)
 
     def make_broker(
-        self, group, scope, *, target=None, parent=None, revision=1, input_ref=None
+        self,
+        group,
+        scope,
+        *,
+        target=None,
+        parent=None,
+        revision=1,
+        input_ref=None,
+        task=None,
     ):
-        task = make_task(
+        task = task or make_task(
             "One explicitly selected technical question.",
             input_ref or self.input_ref,
             scope,
@@ -167,6 +178,105 @@ class AdapterTests(unittest.TestCase):
         wrong["payload"]["body"]["response_context"]["message_hash"] = "0" * 64
         with self.assertRaises(MatrixExecutionError):
             self.broker.accept_verified_reply(first, wrong)
+
+    def test_conversation_original_and_selected_context_use_signed_roundtrip(self):
+        original = "  Pregunta exacta: ¿qué cambió?\nConservá este contexto.  "
+        retained = {
+            "schema": "telecodex.matrix-request/v1",
+            "id": self.input_ref,
+            "human": 100,
+            "entry": {"chat_id": 100, "thread_id": 1},
+            "original": {
+                "human_id": 100,
+                "origin": {"chat_id": 100, "thread_id": 1},
+                "text": original,
+                "transcription": {"capture_id": "fixture"},
+            },
+            "destination": self.target,
+            "parents": [
+                {
+                    "request": str(uuid.uuid4()),
+                    "binding": "c" * 64,
+                    "text": "Only the explicitly selected previous original.",
+                    "input_kind": "human_text",
+                }
+            ],
+        }
+        retained["binding"] = hashlib.sha256(canonical(retained).encode()).hexdigest()
+        status = {"request": retained, "current": True, "phase": "awaiting_execution"}
+        task = make_conversation_task(status, self.scope)
+        broker = self.make_broker(self.sender, self.scope, task=task)
+        with self.assertRaises(MatrixExecutionError):
+            broker.submit(self.scope, {"text": "A model's paraphrase"}, 1)
+        first = broker.submit(self.scope, {"text": original}, 1)
+        received = self.receiver.message(first["message_id"])
+        wire = received["payload"]["body"]["text"]
+        relay = json.loads(wire)
+        self.assertEqual(relay["text"], original)
+        self.assertEqual(relay["context"], retained["parents"])
+        self.assertEqual(relay["input_kind"], "committed_machine_transcript")
+        self.assertNotIn('"human"', wire)
+        self.assertNotIn('"entry"', wire)
+        scope = replace(self.scope, tool="messaging_reply", action="reply")
+        received_task = make_received_task(received, scope)
+        self.assertEqual(json.loads(received_task)["question"], original)
+        responder = self.make_broker(self.receiver, scope, task=received_task)
+        response = responder.submit(scope, {"text": "Exact signed answer."}, 1)
+        answer = self.sender.message(response["message_id"])
+        callback = broker.conversation_return(first, answer)
+        self.assertEqual(callback["request"], retained["id"])
+        self.assertEqual(callback["binding"], retained["binding"])
+        self.assertEqual(callback["text"], "Exact signed answer.")
+        self.assertEqual(callback["author"]["being_ref"], self.receiver.lane.being_ref)
+        wrong = copy.deepcopy(status)
+        wrong["request"]["original"]["text"] = "Changed after selection"
+        with self.assertRaises(MatrixExecutionError):
+            make_conversation_task(wrong, self.scope)
+
+    def test_serialized_context_bound_is_checked_before_any_execution(self):
+        parent = {
+            "request": str(uuid.uuid4()),
+            "binding": "c" * 64,
+            "text": "x" * 10000,
+            "input_kind": "human_text",
+        }
+        with self.assertRaisesRegex(MatrixExecutionError, "serialized relay"):
+            make_task(
+                "x" * 10000,
+                self.input_ref,
+                self.scope,
+                selected_destination=self.target,
+                context=[parent],
+                input_kind="human_text",
+            )
+        # Small raw text can still exceed the wire bound through JSON escaping.
+        with self.assertRaisesRegex(MatrixExecutionError, "serialized relay"):
+            make_task(
+                "x" + "\t" * 8000,
+                self.input_ref,
+                self.scope,
+                selected_destination=self.target,
+                context=[],
+                input_kind="human_text",
+            )
+        # Reserve worst permitted execution metadata; accepted content still sends.
+        task = make_task(
+            "ñ" * 7000,
+            self.input_ref,
+            self.scope,
+            selected_destination=self.target,
+            context=[],
+            input_kind="human_text",
+        )
+        broker = self.make_broker(self.sender, self.scope, task=task)
+        broker._instruction = replace(
+            broker._instruction,
+            instruction_id="x" * 200,
+            revision=2**53 - 1,
+            predecessor="a" * 64,
+        )
+        result = broker.submit(self.scope, {"text": "ñ" * 7000}, 1)
+        self.assertTrue(result["semantic"]["terminal"])
 
     def test_being_directed_reply_preserves_kind_and_rejects_broadcast_parent(self):
         requester = self.make_broker(

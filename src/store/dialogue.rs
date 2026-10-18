@@ -56,6 +56,18 @@ pub(super) fn original_on(
     committed: bool,
 ) -> Result<(SourceInput, Option<crate::telegram::Message>)> {
     reference.validate()?;
+    let source_channel = if reference.update().is_some() {
+        channel
+    } else {
+        "conversation"
+    };
+    super::matrix::unclaimed_on(
+        conn,
+        human,
+        source_channel,
+        &reference.event(),
+        reference.update(),
+    )?;
     match reference {
         InputReference::Telegram(update) => {
             let original = entry_inputs_query(conn, key, human, native, Some(*update), committed)?

@@ -265,6 +265,16 @@ function boot() {
   const oldAnswerStatus=answered.holdStatus();const answerChecking=answeredCard.children[2].children[0].handlers.click();await oldAnswerStatus.entered;
   answerOriginal.phase="answered";await answered.ui.refresh();answerOriginal.phase="preparing";oldAnswerStatus.release();await answerChecking;
   assert.match(answeredCard.children[1].textContent,/Answer recorded/,"A late preparation read cannot undo an already recorded question answer");
+  const matrix=boot(), matrixOriginal={id:"matrix-original",text:"Directed external work",sequence:1,phase:"accepted"};
+  matrix.originals.set(matrixOriginal.id,matrixOriginal);await matrix.ui.refresh();
+  const matrixCard=matrix.nodes.get("#conversation-inputs").children[0];
+  matrixOriginal.phase="matrix_requested";await matrix.ui.refresh();
+  assert.match(matrixCard.children[1].textContent,/selected daimon/,"Accepted input can advance to Matrix selection");
+  matrixOriginal.phase="accepted";await matrix.ui.refresh();
+  assert.match(matrixCard.children[1].textContent,/selected daimon/,"A stale native ACK cannot undo Matrix selection");
+  const oldMatrixStatus=matrix.holdStatus();const matrixChecking=matrixCard.children[2].children[0].handlers.click();await oldMatrixStatus.entered;
+  await matrix.ui.refresh();oldMatrixStatus.release();await matrixChecking;
+  assert.match(matrixCard.children[1].textContent,/selected daimon/,"Older-started accepted responses preserve Matrix selection");
   const integrated=boot();integrated.nativeRequest();await integrated.ui.refresh();
   const requestBox=integrated.nodes.get("#conversation-request-cards").children[0];
   await requestBox.children[3].handlers.click();

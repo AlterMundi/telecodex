@@ -56,6 +56,13 @@ pub(super) fn admit_on(
     instance: &str,
 ) -> Result<(crate::interaction::Instruction, bool)> {
     use crate::interaction::{Instruction, RequestRelation};
+    super::matrix::unclaimed_on(
+        tx,
+        source.human_id,
+        &source.channel,
+        &source.event_id,
+        source.update_id,
+    )?;
     if source.text.trim().is_empty()
         || source.text.len() > 256 * 1024
         || source.channel.is_empty()

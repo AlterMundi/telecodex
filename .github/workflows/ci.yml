@@ -168,6 +168,15 @@ jobs:
       - run: python3 -B tests/conversation_visual_http_io.py target/release/telecodex
       - run: python3 -B tests/conversation_direct_routing_http_io.py target/release/telecodex
       - run: python3 -B tests/conversation_cold_entry_http_io.py target/release/telecodex
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: AlterMundi/daimon-matrix
+          ref: 9b2b8ec2c455d3bf316bc00dc9e1bac44e9d5094
+          path: .matrix-sdk
+      - run: python3 -m pip install cryptography==50.0.0 jsonschema==4.26.0 wasmtime==45.0.0 idna==3.20
+      - run: python3 -B tests/matrix_conversation_http_io.py target/release/telecodex
+        env:
+          PYTHONPATH: .matrix-sdk/src:.matrix-sdk
       - run: python3 -B tests/fixture_native_idle_io.py target/release/telecodex
       - run: python3 -B tests/request_turn_lifetime_io.py target/release/telecodex
       - run: python3 -B tests/conversation_voice_http_io.py target/release/telecodex

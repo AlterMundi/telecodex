@@ -6,6 +6,12 @@ Before integration, require current-head CI success and independent review for t
 
 Run cargo fmt --all --check, locked text-only tests and clippy; optional audio changes must also pass locked all-features tests/clippy. Relevant CI qualifies Linux/macOS text builds with the committed toolchain. Test actual SQLite transactions/restarts, loopback HTTP and native App Server attachment where relevant. Unit tests alone do not prove live Telegram or native model delivery.
 
+Parallel load and control-flow fixtures use synthetic workers with zero inference.
+When semantic qualification requires a real model, start with Luna low and move
+to Sol low or medium only when the case requires it. Preserve ordinary human
+session model defaults. Reuse retained outcomes instead of repeating paid work
+to repair a test verifier.
+
 Keep credentials, numeric human allowlists, body bindings, private endpoints and conversation databases local. No changes may silently reuse another bot's polling consumer, import unrelated native history, replace owner identity/authentication or introduce Matrix polling/autonomous peer replies. A human-authorized listener starts only through an explicit local setup action.
 
 Document exact deployment reference/hash, feature set, local prerequisites, health checks and rollback. Preserve input journals/offsets and report ambiguous effects honestly. Operational progress belongs in issues or project context, not durable personal memory.
