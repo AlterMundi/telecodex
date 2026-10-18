@@ -73,7 +73,8 @@ const hung = (options) => new Promise((resolve, reject) => {
   const credential={scope:"monitor_readonly",origin:"https://fixture.invalid",prefix:"/sessions",expires:Date.now()/1000+3600,authorization:"Companion "+"m".repeat(43)};
   upload.files=[{size:400,text:async()=>JSON.stringify(credential)}];await upload.handlers.change();
   assert.equal(monitor.context.document.title,"Routing monitor · TEST <fixture>");
-  assert.equal(monitor.nodes.get("#feedback").children[1].textContent,"Source: TEST <fixture>");
+  assert.equal(monitor.nodes.get("#feedback").children[2].children[0].textContent,"Change monitor access");
+  assert.equal(monitor.nodes.get("#feedback").children[0].textContent,"Source: TEST <fixture>");
   assert.equal(monitor.headers().Authorization,credential.authorization,"Direct image reads use the same restricted grant");
   assert.equal(monitor.requests[0].options.headers.Authorization,credential.authorization);
   assert(monitor.requests.every(r=>r.options.method==="GET"));
