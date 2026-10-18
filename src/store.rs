@@ -21,7 +21,9 @@ mod creation;
 mod dialogue;
 mod interaction;
 mod interactions;
+mod matrix;
 mod merging;
+pub use matrix::MatrixReturn;
 mod routing;
 mod session_requests;
 mod stopping;
@@ -119,6 +121,7 @@ impl Store {
         store.init_conversation_inputs()?;
         store.init_conversation_entry()?;
         store.init_conversation_requests()?;
+        store.init_matrix()?;
         store.init_observer_cards()?;
         store.init_observer_freshness()?;
         // A restarted process cannot continue a previous command's activity lease.

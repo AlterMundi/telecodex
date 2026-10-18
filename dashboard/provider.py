@@ -176,17 +176,20 @@ class Provider:
                 raise ProviderUnavailable('Loaded integrating entry does not match the receiving configuration')
         return result
 
-    def presentation_list(self, delivery, native, direction='after'):
+    def presentation_list(self, delivery, native, direction='after', matrix=None):
         if type(delivery) is not int or type(native) is not int or min(delivery, native) < 0:
             raise ValueError('Invalid presentation cursor')
         if direction not in ('after', 'before'):
             raise ValueError('Invalid presentation direction')
         operation = 'before' if direction == 'before' else 'list'
-        return self.presentation(f'presentation {operation} {delivery} {native}')
+        if matrix is not None and (type(matrix) is not int or matrix < 0):
+            raise ValueError('Invalid Matrix presentation cursor')
+        suffix='' if matrix is None else f' {matrix}'
+        return self.presentation(f'presentation {operation} {delivery} {native}'+suffix)
 
     def presentation_part(self, source, revision, offset):
         import re
-        if (not isinstance(source, str) or not re.fullmatch(r'(?:(?:delivery|input):[a-f0-9-]{36}|native:[1-9][0-9]{0,18}|request:[a-f0-9]{32})', source)
+        if (not isinstance(source, str) or not re.fullmatch(r'(?:(?:delivery|input|matrix):[a-f0-9-]{36}|native:[1-9][0-9]{0,18}|request:[a-f0-9]{32})', source)
                 or not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{64}', revision)
                 or type(offset) is not int or not 0 <= offset <= 10**9):
             raise ValueError('Invalid presentation selection')
@@ -336,11 +339,13 @@ class Provider:
         if value is None: return
         if (not isinstance(value, dict) or set(value) not in ({'source', 'revision'}, {'source', 'revision', 'context_only'})
                 or 'context_only' in value and value['context_only'] is not True
-                or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:', 'request:'))
+                or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:', 'request:', 'matrix:'))
                 or not isinstance(value['revision'], str) or not re.fullmatch('[a-f0-9]{64}', value['revision'])):
             raise ValueError('Select one retained original or worker result')
-        if value.get('context_only') and not value['source'].startswith(('request:', 'delivery:', 'input:')):
+        if value.get('context_only') and not value['source'].startswith(('request:', 'delivery:', 'input:', 'matrix:')):
             raise ValueError('Context must refer to a reported conversation source')
+        if value['source'].startswith('matrix:') and not value.get('context_only'):
+            raise ValueError('Matrix replies are selected contextual evidence')
         ident=value['source'].split(':', 1)[1]
         if value['source'].startswith('request:'):
             if not re.fullmatch('[a-f0-9]{32}',ident):

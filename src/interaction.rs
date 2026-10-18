@@ -12,6 +12,8 @@ pub struct InteractionConfig {
     pub topic_id: i64,
     #[serde(default)]
     pub targets: Vec<Target>,
+    #[serde(default)]
+    pub matrix_targets: Vec<MatrixTarget>,
     #[serde(default = "default_active_workers")]
     pub max_active_workers: usize,
 }
@@ -21,6 +23,51 @@ pub struct InteractionConfig {
 pub struct Target {
     pub name: String,
     pub topic_id: i64,
+}
+
+/// Explicit receiving configuration; labels never establish social authority.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixTarget {
+    pub name: String,
+    pub destination: MatrixDestination,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MatrixDestination {
+    Being {
+        being_ref: String,
+    },
+    Body {
+        being_ref: String,
+        embodiment_id: String,
+    },
+}
+impl MatrixDestination {
+    pub fn being(&self) -> &str {
+        match self {
+            Self::Being { being_ref } | Self::Body { being_ref, .. } => being_ref,
+        }
+    }
+    pub fn validate(&self) -> Result<()> {
+        let suffix = self.being().strip_prefix("dm:being:v1:").unwrap_or("");
+        if suffix.len() != 43
+            || !suffix
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+        {
+            bail!("Explicit signed Matrix being reference required");
+        }
+        if let Self::Body { embodiment_id, .. } = self
+            && (embodiment_id.is_empty()
+                || embodiment_id.len() > 240
+                || embodiment_id.chars().any(char::is_control))
+        {
+            bail!("Explicit bounded Matrix body reference required");
+        }
+        Ok(())
+    }
 }
 
 fn default_active_workers() -> usize {
@@ -62,6 +109,28 @@ impl InteractionConfig {
                 })
             {
                 bail!("Interaction targets require distinct topic IDs and single-token selectors");
+            }
+        }
+        if self.matrix_targets.len() > 16 {
+            bail!("Too many explicitly selected Matrix targets");
+        }
+        let mut matrix_names = std::collections::HashSet::new();
+        for target in &self.matrix_targets {
+            target.destination.validate()?;
+            if target.name.is_empty()
+                || target.name.len() > 128
+                || target.name.chars().any(|c| {
+                    c.is_whitespace()
+                        || c.is_control()
+                        || matches!(c, '#' | '`' | '"' | '\'' | '<' | '>')
+                })
+                || !matrix_names.insert(target.name.to_lowercase())
+                || self
+                    .targets
+                    .iter()
+                    .any(|local| local.name.eq_ignore_ascii_case(&target.name))
+            {
+                bail!("Matrix target labels require distinct explicitly configured names");
             }
         }
         // Duplicate human labels remain resolvable through #t<topic_id>.
@@ -337,6 +406,7 @@ mod tests {
             chat_id: 100,
             topic_id: 1,
             max_active_workers: 2,
+            matrix_targets: vec![],
             targets: vec![
                 Target {
                     name: "Nexus".into(),

@@ -29,6 +29,16 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
     }
     let fields: Vec<_> = args.split_whitespace().collect();
     let mut result = match fields.as_slice() {
+        [operation, delivery, native, matrix] if matches!(*operation, "list" | "before") => {
+            app.shared.store.interaction_presentation_page_matrix(
+                human,
+                cfg.entry(),
+                delivery.parse()?,
+                native.parse()?,
+                Some(matrix.parse()?),
+                *operation == "before",
+            )
+        }
         ["list", delivery, native] => app.shared.store.interaction_presentation_list(
             human,
             cfg.entry(),
@@ -61,6 +71,9 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
 }
 
 fn source_label(shared: &AppShared, source: &mut serde_json::Value) -> Result<()> {
+    if source["kind"] == "matrix_result" {
+        return Ok(());
+    }
     source["label"] = if source["kind"] == "worker_result" {
         let target: SessionKey = serde_json::from_value(source["target"].clone())?;
         serde_json::json!(format!("#{}", super::routing::label(shared, target)))

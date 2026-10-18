@@ -27,17 +27,17 @@ async fn main() -> Result<()> {
         if args.len() < 5
             || !matches!(
                 args[3].as_str(),
-                "stop" | "attach-active" | "presentation" | "input" | "requests"
+                "stop" | "attach-active" | "presentation" | "input" | "requests" | "matrix"
             )
         {
             anyhow::bail!(
-                "Usage: telecodex --control CONFIG stop all|status ID|resume ID; attach-active CHAT TOPIC NATIVE_THREAD NATIVE_TURN; presentation list|before DELIVERY_CURSOR NATIVE_CURSOR|part SOURCE REVISION OFFSET; input submit JSON|status UUID|list CURSOR; requests list CURSOR|detail ID OFFSET [REVISION]|decide JSON"
+                "Usage: telecodex --control CONFIG stop all|status ID|resume ID; attach-active CHAT TOPIC NATIVE_THREAD NATIVE_TURN; presentation list|before DELIVERY_CURSOR NATIVE_CURSOR [MATRIX_CURSOR]|part SOURCE REVISION OFFSET; input submit JSON|status UUID|list CURSOR; requests list CURSOR|detail ID OFFSET [REVISION]|decide JSON; matrix status UUID|return JSON"
             );
         }
         let config = config::Config::load(args[2].clone().into())?;
         let command = if matches!(
             args[3].as_str(),
-            "attach-active" | "presentation" | "input" | "requests"
+            "attach-active" | "presentation" | "input" | "requests" | "matrix"
         ) {
             args[3..].join(" ")
         } else {

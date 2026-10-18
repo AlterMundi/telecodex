@@ -20,7 +20,7 @@ window.Conversation = (() => {
     const phaseText = value => value.retired ? "Saved from an earlier conversation binding."
       : value.routing ? routeText(value.routing) : ({awaiting_target:"Choose the session for this saved message.",preparing:"Recording saved; preparing its automatic transcript.", preparation_unconfirmed:"Recording saved; transcription unconfirmed. No work was submitted automatically.", retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
           sending:"Sending to your conversation…", steering:"Sending to your conversation…",
-          accepted:"Sent to your conversation. Work may continue.",
+          accepted:"Sent to your conversation. Work may continue.", matrix_requested:"Saved for the selected daimon; awaiting its authorized execution and reply.",
           reselection:"This attempt did not submit the message. Select the image again, then send.", answered:"Answer recorded for the selected question. Work may continue.",
           retained_unsent:"Saved; not sent.", uncertain:"Saved; delivery unconfirmed. Check status."})[value.phase]
         || "Submission unconfirmed. Check status before sending this message again.";
@@ -130,7 +130,8 @@ window.Conversation = (() => {
       }
       if (observed < card.observed) {
         // A request that started earlier can nevertheless observe a later commit.
-        if (["accepted","answered","retained_unsent"].includes(value.phase)) {
+        if (["accepted","answered","matrix_requested","retained_unsent"].includes(value.phase) &&
+            (!["answered","matrix_requested"].includes(card.value.phase) || value.phase===card.value.phase)) {
           if (!card.value.phase && draft.value === card.value.text) draft.value = "";
           card.value.phase = value.phase;
         }
@@ -147,7 +148,8 @@ window.Conversation = (() => {
         renderRoute(card);return card;
       }
       // Native acceptance and retirement cannot be undone by a late snapshot.
-      if (["accepted","answered","retained_unsent"].includes(card.value.phase)) value = {...value,phase:card.value.phase};
+      if (["answered","matrix_requested","retained_unsent"].includes(card.value.phase) ||
+          (card.value.phase==="accepted" && !["answered","matrix_requested"].includes(value.phase))) value = {...value,phase:card.value.phase};
       if(card.value.routing) {
         // Destination selection is immutable, even if a later-started request
         // sampled an earlier database state before the route committed.
@@ -243,7 +245,7 @@ window.Conversation = (() => {
     toggle.id = "conversation-play";
     audio.before(toggle);
     let enabled = false, ready = false, reading = false, binding, canListen = false;
-    let newest = {delivery:0, native:0}, oldest = {delivery:0, native:0};
+    let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
     let initialized = false, active, generation = 0, requestAbort, blobUrl;
     const audioState = (text) => { $("#conversation-audio-state").textContent = text; };
     const initialMode = () => new URL(location.href).searchParams.get("view") === "conversation"
@@ -313,14 +315,14 @@ window.Conversation = (() => {
         const read = node("button", "Read reply"); read.type = "button";
         const listen = node("button", "Listen"); listen.type = "button";
         const error = node("p", "", "reply-error"); error.setAttribute("role", "status");
-        const reply=node("button","Reply to this session");reply.type="button";reply.hidden=source.kind!=="worker_result";
+        const reply=node("button","Reply to this session");reply.type="button";reply.hidden=!["worker_result","matrix_result"].includes(source.kind);
         actions.append(read, listen,reply); box.append(title, status, body, actions, error);
         box.dataset.sequence = String(source.sequence);
         const following = [...container.children].find((item) => Number(item.dataset.sequence) < source.sequence);
         container.insertBefore(box, following || null);
         card = {source, box, title, status, body, read, listen, error, offset:0, expanded:false};
         cards.set(source.id, card);
-        reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision},card.source.label||"this session"));
+        reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
         read.addEventListener("click", async () => {
           read.disabled = true; error.textContent = "";
           const selected = card.source;
@@ -350,6 +352,7 @@ window.Conversation = (() => {
         : source.correction_pending ? "A later correction is pending."
         : !source.native_binding_current ? "From an earlier session."
         : !source.current ? "Instruction coverage has not been confirmed."
+        : source.kind === "matrix_result" ? "Reply from the selected daimon. Work completion is not independently verified."
         : source.completed ? "Session reports this request complete." : "Session progress; work may continue.";
       card.box.dataset.pending = String(!!source.correction_pending || source.native_binding_current === false);
       card.listen.hidden = !canListen;
@@ -358,7 +361,7 @@ window.Conversation = (() => {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
         stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
-        newest = {delivery:0,native:0}; oldest = {delivery:0,native:0};
+        newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
       binding = value.binding;
@@ -375,6 +378,7 @@ window.Conversation = (() => {
       if (direction === "after" || (rememberHistory && !initialized)) {
         newest.delivery = Math.max(newest.delivery, value.newest.delivery);
         newest.native = Math.max(newest.native, value.newest.native);
+        newest.matrix = Math.max(newest.matrix || 0, value.newest.matrix || 0);
       }
       return value;
     }
@@ -385,17 +389,17 @@ window.Conversation = (() => {
       $("#conversation-older").disabled = true;
       try {
         if (!initialized) {
-          newest = {delivery:0,native:0};
-          await page({delivery:0,native:0}, "before");
+          newest = {delivery:0,native:0,matrix:0};
+          await page({delivery:0,native:0,matrix:0}, "before");
           initialized = true;
         } else {
           let more = true;
           for (let n = 0; n < 4 && more && enabled && !document.hidden; n++) {
             const value = await page(newest, "after");
-            if (!initialized) { newest = {delivery:0,native:0}; await page(newest,"before"); initialized = true; break; }
+            if (!initialized) { newest = {delivery:0,native:0,matrix:0}; await page(newest,"before"); initialized = true; break; }
             more = value.more;
           }
-          if (enabled && !document.hidden) await page({delivery:0,native:0}, "before", false);
+          if (enabled && !document.hidden) await page({delivery:0,native:0,matrix:0}, "before", false);
         }
         if (active && enabled && !document.hidden) {
           const selected = active, owned = generation;

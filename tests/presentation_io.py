@@ -121,6 +121,11 @@ class Presentation(unittest.TestCase):
         self.assertEqual(len(self.fixture.calls),1)
         self.assertGreaterEqual(self.provider.parts,4)
 
+    def test_matrix_reply_keeps_label_source_and_cached_audio_without_completion_claim(self):
+        self.provider.source.update(kind='matrix_result',id='matrix:11111111-1111-1111-1111-111111111111',completed=None)
+        self.body['source']=self.provider.source['id']
+        self.test_authentication_source_selection_and_reconnect_reuse_actual_audio()
+
     def test_source_label_change_during_synthesis_refuses_old_labeled_audio(self):
         self.login()
         self.fixture.hold=True

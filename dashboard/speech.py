@@ -35,7 +35,7 @@ class Speech:
         config_bytes = speech_render.private_bytes(self.binding, 16384)
         route = speech_render.route(self.binding)
         text = source['text']
-        if source.get('kind') == 'worker_result' and source.get('offset') == 0:
+        if source.get('kind') in ('worker_result','matrix_result') and source.get('offset') == 0:
             label = source.get('label')
             if not isinstance(label, str) or not label.strip():
                 raise SpeechUnavailable('Selected work source has no audible label')

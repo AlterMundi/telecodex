@@ -28,6 +28,7 @@ impl ConversationReply {
             .source
             .strip_prefix("delivery:")
             .or_else(|| self.source.strip_prefix("input:"))
+            .or_else(|| self.source.strip_prefix("matrix:"))
             .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == id));
         if !(question || delivery)
             || self.revision.len() != 64

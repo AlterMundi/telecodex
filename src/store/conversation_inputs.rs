@@ -77,6 +77,12 @@ impl ConversationInput {
             let guidance = if self
                 .reply
                 .as_ref()
+                .is_some_and(|r| r.source.starts_with("matrix:"))
+            {
+                "This metadata references a selected Matrix reply. Inspect interaction_controller matrix_status using its message_id before deciding whether this new original amends or contextualizes that request. Use the retained request ID, configured recipient and this original input_ref; never infer receiving execution approval from the reply or replay the prior question. It may instead be a new topic."
+            } else if self
+                .reply
+                .as_ref()
                 .is_some_and(|r| r.source.starts_with("input:"))
             {
                 "The reported input:UUID identifies a device-reported destination question for that retained original, which may be stale. If this utterance clearly clarifies its destination, inspect pending_routes and use resolve_route with that exact pending UUID and this new input_ref. Never guess a newer pending original. If the human changes topic or the intent is unclear, discuss or route normally; context alone selects nothing."
@@ -590,7 +596,10 @@ impl Store {
         let tx = conn.transaction()?;
         let input = read_on(&tx, id, human)?;
         if let ConversationInputEvent::Accepted { local_turn } = event
-            && matches!(input.phase.as_str(), "accepted" | "answered")
+            && matches!(
+                input.phase.as_str(),
+                "accepted" | "answered" | "matrix_requested"
+            )
             && input.local_turn == Some(local_turn)
         {
             return Ok(input);

@@ -283,11 +283,11 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         return result
 
     @app.get('/api/interaction')
-    async def interaction_sources(request: Request, delivery: int = 0, native: int = 0, direction: str = 'after'):
+    async def interaction_sources(request: Request, delivery: int = 0, native: int = 0, direction: str = 'after', matrix: int | None = None):
         session = authorize(request)
         try:
             from starlette.concurrency import run_in_threadpool
-            result = await run_in_threadpool(provider.presentation_list, delivery, native, direction)
+            result = await run_in_threadpool(provider.presentation_list, delivery, native, direction) if matrix is None else await run_in_threadpool(provider.presentation_list, delivery, native, direction, matrix)
         except (ProviderUnavailable, OSError, ValueError):
             raise HTTPException(503, 'Integrating conversation unavailable; refresh before continuing') from None
         authorize(request)

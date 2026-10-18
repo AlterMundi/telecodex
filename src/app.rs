@@ -29,6 +29,7 @@ mod goals;
 mod icons;
 mod interactions;
 mod io;
+mod matrix;
 mod merging;
 mod nexus;
 mod observer;
