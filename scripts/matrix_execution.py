@@ -123,6 +123,26 @@ def parent_from_verified_sdk(message):
     }
 
 
+def request_relation(value, context):
+    """Retain selected lineage; this data never supplies execution authority."""
+    if not isinstance(value, dict):
+        raise MatrixExecutionError("Explicit request relation object required")
+    kind = value.get("kind")
+    if kind == "new":
+        closed(value, ("kind",))
+        if context:
+            raise MatrixExecutionError("A new relation cannot claim selected parents")
+    elif kind in ("amends", "context"):
+        closed(value, ("kind", "requests"))
+        if not context or value["requests"] != [row["request"] for row in context]:
+            raise MatrixExecutionError(
+                "Relation must retain the exact selected parents"
+            )
+    else:
+        raise MatrixExecutionError("Unsupported selected request relation")
+    return value
+
+
 def validate_task(task):
     parsed = strict_json(task)
     names = ("schema", "question", "input_ref", "scope", "destination", "parent")
@@ -131,7 +151,7 @@ def validate_task(task):
         names
         + tuple(
             key
-            for key in ("origin", "context", "input_kind")
+            for key in ("origin", "context", "input_kind", "relation")
             if isinstance(parsed, dict) and key in parsed
         ),
     )
@@ -155,11 +175,13 @@ def validate_task(task):
         ):
             raise MatrixExecutionError("Frozen parent binding required")
         size += len(text(row["text"]).encode())
+    if "relation" in value:
+        request_relation(value["relation"], context)
     if size > 24000:
         raise MatrixExecutionError(
             "Selected source context exceeds the bounded package"
         )
-    if any(key in value for key in ("context", "origin", "input_kind")):
+    if any(key in value for key in ("context", "origin", "input_kind", "relation")):
         # Same serialized-content bound as transactional Telecodex selection.
         # The remaining 1024 bytes cover the closed relay schema/execution ref.
         content = {
@@ -248,6 +270,7 @@ def make_task(
     origin=None,
     context=None,
     input_kind=None,
+    relation=None,
 ):
     task = canonical(
         {
@@ -267,6 +290,7 @@ def make_task(
             ("origin", origin),
             ("context", context),
             ("input_kind", input_kind),
+            ("relation", relation),
         )
         if value is not None
     }
@@ -313,6 +337,7 @@ def make_conversation_task(status, scope):
         scope,
         selected_destination=destination(request["destination"]),
         context=request.get("parents", []),
+        relation=request["relation"],
         input_kind="committed_machine_transcript"
         if original.get("transcription")
         else "human_text",
@@ -335,7 +360,9 @@ def make_received_task(message, scope):
     relay = strict_json(message["payload"]["body"]["text"])
     names = ("schema", "via", "kind", "input_ref", "execution_ref", "text")
     closed(
-        relay, names + tuple(key for key in ("context", "input_kind") if key in relay)
+        relay,
+        names
+        + tuple(key for key in ("context", "input_kind", "relation") if key in relay),
     )
     if (
         relay["schema"] != RELAY_SCHEMA
@@ -343,6 +370,8 @@ def make_received_task(message, scope):
         or relay["kind"] != "session_request"
     ):
         raise MatrixExecutionError("Selected attributed session request required")
+    if "relation" in relay and not isinstance(relay["relation"], dict):
+        raise MatrixExecutionError("Explicit request relation object required")
     if scope.tool != "messaging_reply" or scope.action != "reply":
         raise MatrixExecutionError(
             "Receiving execution must preserve the verified reply route"
@@ -354,6 +383,7 @@ def make_received_task(message, scope):
         verified_parent=parent,
         context=relay.get("context", []),
         input_kind=relay.get("input_kind", "session_authored"),
+        relation=relay.get("relation"),
     )
 
 
@@ -569,6 +599,8 @@ class MatrixExecutionBroker:
                 relay["context"] = self._task["context"]
             if self._task.get("input_kind"):
                 relay["input_kind"] = self._task["input_kind"]
+            if "relation" in self._task:
+                relay["relation"] = self._task["relation"]
             body = canonical(relay)
         text(body)
         params = {"channel_id": scope.channel, "send_id": self.send_id, "text": body}

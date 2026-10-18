@@ -26,6 +26,7 @@ from matrix_execution import (
     make_received_task,
     make_task,
     parent_from_verified_sdk,
+    validate_task,
 )
 from tests.test_execution_instruction import request
 
@@ -202,9 +203,14 @@ class AdapterTests(unittest.TestCase):
                 }
             ],
         }
+        retained["relation"] = {
+            "kind": "amends",
+            "requests": [retained["parents"][0]["request"]],
+        }
         retained["binding"] = hashlib.sha256(canonical(retained).encode()).hexdigest()
         status = {"request": retained, "current": True, "phase": "awaiting_execution"}
         task = make_conversation_task(status, self.scope)
+        self.assertEqual(json.loads(task)["relation"], retained["relation"])
         broker = self.make_broker(self.sender, self.scope, task=task)
         with self.assertRaises(MatrixExecutionError):
             broker.submit(self.scope, {"text": "A model's paraphrase"}, 1)
@@ -214,12 +220,14 @@ class AdapterTests(unittest.TestCase):
         relay = json.loads(wire)
         self.assertEqual(relay["text"], original)
         self.assertEqual(relay["context"], retained["parents"])
+        self.assertEqual(relay["relation"], retained["relation"])
         self.assertEqual(relay["input_kind"], "committed_machine_transcript")
         self.assertNotIn('"human"', wire)
         self.assertNotIn('"entry"', wire)
         scope = replace(self.scope, tool="messaging_reply", action="reply")
         received_task = make_received_task(received, scope)
         self.assertEqual(json.loads(received_task)["question"], original)
+        self.assertEqual(json.loads(received_task)["relation"], retained["relation"])
         responder = self.make_broker(self.receiver, scope, task=received_task)
         response = responder.submit(scope, {"text": "Exact signed answer."}, 1)
         answer = self.sender.message(response["message_id"])
@@ -259,14 +267,22 @@ class AdapterTests(unittest.TestCase):
                 context=[],
                 input_kind="human_text",
             )
-        # Reserve worst permitted execution metadata; accepted content still sends.
+        # Reserve worst permitted execution metadata plus all four relation IDs.
+        parents = [
+            {**parent, "request": str(uuid.uuid4()), "text": "Bounded selected parent."}
+            for _ in range(4)
+        ]
         task = make_task(
             "ñ" * 7000,
             self.input_ref,
             self.scope,
             selected_destination=self.target,
-            context=[],
+            context=parents,
             input_kind="human_text",
+            relation={
+                "kind": "context",
+                "requests": [row["request"] for row in parents],
+            },
         )
         broker = self.make_broker(self.sender, self.scope, task=task)
         broker._instruction = replace(
@@ -277,6 +293,29 @@ class AdapterTests(unittest.TestCase):
         )
         result = broker.submit(self.scope, {"text": "ñ" * 7000}, 1)
         self.assertTrue(result["semantic"]["terminal"])
+
+    def test_signed_malformed_relation_is_refused_before_receiving_execution(self):
+        relay = {
+            "schema": "telecodex.matrix-relay/v1",
+            "via": "interaction-controller",
+            "kind": "session_request",
+            "input_ref": self.input_ref,
+            "execution_ref": {"id": "synthetic-selected-source", "revision": 1},
+            "text": "Selected original.",
+            "relation": None,
+        }
+        sent = self.fixture.send_and_settle(
+            self.sender,
+            client_id="test",
+            send_id=str(uuid.uuid4()),
+            thread_id=self.scope.thread,
+            text=canonical(relay),
+            destination=self.target,
+        )
+        message = self.receiver.message(sent["message_id"])
+        scope = replace(self.scope, tool="messaging_reply", action="reply")
+        with self.assertRaisesRegex(MatrixExecutionError, "relation object"):
+            make_received_task(message, scope)
 
     def test_being_directed_reply_preserves_kind_and_rejects_broadcast_parent(self):
         requester = self.make_broker(
@@ -518,6 +557,92 @@ class AuthenticatedSourceTests(unittest.TestCase):
             with self.assertRaises(MatrixExecutionError):
                 broker.submit(scope, {"text": "Must never be authored"}, 1)
         self.assertEqual(calls, ["runtime.status"])
+
+
+class TaskRelationTests(unittest.TestCase):
+    def setUp(self):
+        self.scope = Scope("tribe", str(uuid.uuid4()), "messaging_send", "send")
+        self.target = {
+            "kind": "body",
+            "being_ref": "dm:being:v1:" + "A" * 43,
+            "embodiment_id": "embodiment:selected",
+        }
+        self.parent = {
+            "request": str(uuid.uuid4()),
+            "binding": "c" * 64,
+            "text": "Only the selected original.",
+            "input_kind": "human_text",
+        }
+
+    def task(self, relation, context):
+        return make_task(
+            "The exact new original.",
+            str(uuid.uuid4()),
+            self.scope,
+            selected_destination=self.target,
+            relation=relation,
+            context=context,
+        )
+
+    def test_relation_keeps_exact_selected_lineage_and_rejects_overrides(self):
+        for kind in ("amends", "context"):
+            selected = {"kind": kind, "requests": [self.parent["request"]]}
+            task = self.task(selected, [self.parent])
+            self.assertEqual(validate_task(task)["relation"], selected)
+            for wrong in (
+                None,
+                {},
+                {"kind": "unknown"},
+                {"kind": "new"},
+                {"kind": kind, "requests": []},
+                {"kind": kind, "requests": [str(uuid.uuid4())]},
+                {**selected, "selector": "unselected"},
+            ):
+                raw = json.loads(task)
+                raw["relation"] = wrong
+                with (
+                    self.subTest(kind=kind, wrong=wrong),
+                    self.assertRaises(MatrixExecutionError),
+                ):
+                    validate_task(canonical(raw))
+        self.assertEqual(
+            validate_task(self.task({"kind": "new"}, []))["relation"], {"kind": "new"}
+        )
+        with self.assertRaises(MatrixExecutionError):
+            self.task({"kind": "new", "requests": []}, [])
+
+    def test_relation_alone_also_reserves_serialized_relay_space(self):
+        with self.assertRaisesRegex(MatrixExecutionError, "serialized relay"):
+            make_task(
+                "x" * 16000,
+                str(uuid.uuid4()),
+                self.scope,
+                selected_destination=self.target,
+                relation={"kind": "new"},
+            )
+        second = {**self.parent, "request": str(uuid.uuid4())}
+        with self.assertRaisesRegex(MatrixExecutionError, "exact selected parents"):
+            self.task(
+                {
+                    "kind": "amends",
+                    "requests": [second["request"], self.parent["request"]],
+                },
+                [self.parent, second],
+            )
+
+    def test_legacy_task_without_relation_retains_its_exact_closed_shape(self):
+        task = make_task(
+            "Legacy selected work.",
+            str(uuid.uuid4()),
+            self.scope,
+            selected_destination=self.target,
+        )
+        value = validate_task(task)
+        self.assertEqual(
+            set(value),
+            {"schema", "question", "input_ref", "scope", "destination", "parent"},
+        )
+        self.assertEqual(task, canonical(value))
 
 
 if __name__ == "__main__":
