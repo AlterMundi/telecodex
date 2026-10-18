@@ -109,27 +109,32 @@ class Traffic:
                 return [dict(r) for r in db.execute(sql, parameters)]
             total = query('''SELECT COUNT(*) AS requests,COALESCE(SUM(request_bytes),0) AS request_bytes,
                 COALESCE(SUM(response_bytes),0) AS response_bytes,
-                COALESCE(SUM(CASE WHEN http_status=429 OR api_error=429 THEN 1 ELSE 0 END),0) AS rate_limited,
+                COALESCE(SUM(CASE WHEN outcome='response' AND (http_status=429 OR api_error=429) THEN 1 ELSE 0 END),0) AS rate_limited,
+                COALESCE(SUM(outcome='deferred_local'),0) AS deferred_local,
                 COALESCE(SUM(outcome='in_flight'),0) AS in_flight,
-                COALESCE(SUM(CASE WHEN http_status>=500 OR outcome='upstream_unknown' THEN 1 ELSE 0 END),0) AS failures,
+                COALESCE(SUM(CASE WHEN (outcome='response' AND http_status>=500) OR outcome='upstream_unknown' THEN 1 ELSE 0 END),0) AS failures,
                 COALESCE(SUM(source='unknown'),0) AS unknown_source,
                 COALESCE(SUM(topic_id IS NULL),0) AS unknown_topic,
                 COALESCE(SUM(metadata_complete=0),0) AS incomplete,
                 MAX(finished) AS last_completed FROM requests WHERE started>=?''', (now-86400,))[0]
             sources = query('''SELECT source,method,COUNT(*) AS requests,
-                SUM(CASE WHEN http_status=429 OR api_error=429 THEN 1 ELSE 0 END) AS rate_limited
+                SUM(CASE WHEN outcome='response' AND (http_status=429 OR api_error=429) THEN 1 ELSE 0 END) AS rate_limited
                 FROM requests WHERE started>=? GROUP BY source,method ORDER BY COUNT(*) DESC LIMIT 20''', (now-86400,))
             minute = query('''SELECT CAST(started/60 AS INTEGER)*60 AS at,COUNT(*) AS requests,
-                SUM(CASE WHEN http_status=429 OR api_error=429 THEN 1 ELSE 0 END) AS rate_limited
+                SUM(CASE WHEN outcome='response' AND (http_status=429 OR api_error=429) THEN 1 ELSE 0 END) AS rate_limited
                 FROM requests WHERE started>=? GROUP BY CAST(started/60 AS INTEGER) ORDER BY 1''', (now-3600,))
             recent = db.execute('SELECT COUNT(*) FROM requests WHERE started>=?', (now-300,)).fetchone()[0]
             topic_counts = query('''SELECT chat_id,topic_id,COUNT(*) AS requests,
-                SUM(CASE WHEN http_status=429 OR api_error=429 THEN 1 ELSE 0 END) AS rate_limited
+                SUM(CASE WHEN outcome='response' AND (http_status=429 OR api_error=429) THEN 1 ELSE 0 END) AS rate_limited
                 FROM requests WHERE started>=? GROUP BY chat_id,topic_id ORDER BY COUNT(*) DESC''', (now-86400,))
             limited = query('''SELECT method,MAX(finished) AS failed_at,MAX(finished+retry_after) AS until
-                FROM requests WHERE (http_status=429 OR api_error=429) AND finished IS NOT NULL GROUP BY method''')
+                FROM requests WHERE outcome='response' AND (http_status=429 OR api_error=429) AND finished IS NOT NULL GROUP BY method''')
+            shared_until = None
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='outbound_control' AND type='table'").fetchone():
+                row = db.execute("SELECT until FROM outbound_control WHERE key='cooldown:writes'").fetchone()
+                shared_until = row[0] if row else None
             failed = query("""SELECT method,MAX(finished) AS failed_at FROM requests
-                WHERE finished>=? AND (http_status>=500 OR outcome='upstream_unknown')
+                WHERE finished>=? AND ((outcome='response' AND http_status>=500) OR outcome='upstream_unknown')
                 GROUP BY method HAVING COUNT(*)>=3""", (now-300,))
             successes = {r['method']: r['succeeded_at'] for r in query('''SELECT method,MAX(finished) AS succeeded_at
                 FROM requests WHERE http_status BETWEEN 200 AND 299 AND api_error IS NULL
@@ -145,6 +150,7 @@ class Traffic:
                 'capture_started': float(settings['capture_started']), 'totals': total,
                 'requests_last_5m': recent, 'sources': sources, 'topics': topics, 'minutes': minute,
                 'dropped_records': dropped, 'meter_healthy': bool(health),
+                'shared_write_cooldown_until': shared_until,
                 '_limited': limited, '_successes': successes, '_failed': failed}
 
     def cooldown(self, value):
@@ -264,6 +270,8 @@ class Traffic:
             if self.view.get('state') != 'available' or not self.view.get('meter_healthy'):
                 return False
             if time.time()-self.view['observed_at'] > max(30, self.interval*2):
+                return False
+            if (self.view.get('shared_write_cooldown_until') or 0) > time.time():
                 return False
             blocked = dict(self.state['blocked'])
         return not any((row['until'] or 0) > time.time() for method, row in blocked.items()

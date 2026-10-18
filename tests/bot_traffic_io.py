@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real HTTP streams and private SQLite, synthetic Bot API only."""
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
@@ -33,6 +34,7 @@ def free_port():
 class Upstream(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     calls = []
+    received_headers = []
     def log_message(self, *args):
         pass
     def do_POST(self):
@@ -48,6 +50,7 @@ class Upstream(BaseHTTPRequestHandler):
         else:
             data.extend(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         self.calls.append((self.path, bytes(data)))
+        self.received_headers.append({key.lower() for key in self.headers})
         method = self.path.split('/')[-1]
         code = 200;headers = {}
         if method == 'editMessageText':
@@ -75,22 +78,24 @@ class Traffic(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='telecodex-traffic-')
         self.root = Path(self.tmp.name);self.root.chmod(0o700)
         self.token = self.root/'token';self.token.write_text(TOKEN);self.token.chmod(0o600)
-        self.upstream = ThreadingHTTPServer(('127.0.0.1',0),Upstream);Upstream.calls=[]
+        self.upstream = ThreadingHTTPServer(('127.0.0.1',0),Upstream);Upstream.calls=[];Upstream.received_headers=[]
         threading.Thread(target=self.upstream.serve_forever,daemon=True).start()
         self.port = free_port();self.config = self.root/'meter.toml'
         self.config.write_text(f'host="127.0.0.1"\nport={self.port}\nupstream="http://127.0.0.1:{self.upstream.server_port}"\ntoken_file="{self.token}"\nstate_dir="{self.root}/state"\n')
         self.config.chmod(0o600)
+        self.config.write_text(self.config.read_text() + 'rate_control=false\n')
         self.log = (self.root/'process.log').open('wb')
         self.start()
     def start(self):
         self.process = subprocess.Popen([sys.executable,'-B',str(ROOT/'scripts/bot_traffic.py'),'serve','--config',str(self.config)],stdout=self.log,stderr=self.log)
-        for _ in range(150):
+        for _ in range(500):
             if self.process.poll() is not None:raise AssertionError((self.root/'process.log').read_text())
             try:
                 with urllib.request.urlopen(f'http://127.0.0.1:{self.port}/healthz',timeout=.2) as response:
                     assert json.load(response)['ok'];return
             except OSError:time.sleep(.02)
-        raise AssertionError('meter did not become ready')
+        self.process.terminate();self.process.wait(timeout=10)
+        raise AssertionError('meter did not become ready: '+(self.root/'process.log').read_text())
     def tearDown(self):
         self.process.terminate();self.process.wait(timeout=10);self.log.close();self.upstream.shutdown();self.upstream.server_close();self.tmp.cleanup()
     def request(self, method, body=None, token=TOKEN, path=None):
@@ -148,6 +153,64 @@ class Traffic(unittest.TestCase):
         self.assertEqual(self.request('unknownFailure').status_code,502)
         rows=self.wait_rows(1);self.assertEqual(rows[0]['outcome'],'upstream_unknown');self.assertEqual(len(Upstream.calls),1)
         self.assertNotIn(TOKEN,(self.root/'process.log').read_text())
+
+    def enable_control(self):
+        self.process.terminate();self.process.wait(timeout=10)
+        self.config.write_text(self.config.read_text().replace('rate_control=false', 'rate_control=true'))
+        self.start()
+
+    def test_cross_topic_cooldown_survives_restart_without_blocking_ingress(self):
+        self.enable_control()
+        self.assertEqual(self.request('editMessageText', {'chat_id':100, 'message_id':42}).status_code,429)
+        self.process.terminate();self.process.wait(timeout=10);self.start()
+        before = len(Upstream.calls)
+        for method in ('sendMessage', 'deleteMessage', 'sendDocument'):
+            result = self.request(method, {'chat_id':100, 'message_thread_id':99})
+            self.assertEqual(result.status_code,429)
+            self.assertTrue(result.json()['telecodex_local'])
+            self.assertGreaterEqual(result.json()['parameters']['retry_after'],80)
+        self.assertEqual(len(Upstream.calls),before)
+        self.assertEqual(self.request('getUpdates').status_code,200)
+        self.assertEqual(self.request('sendChatAction', {'chat_id':100,'message_thread_id':99}).status_code,200)
+        # Other bots remain transparent; this receiving token's limit is not theirs.
+        self.assertEqual(self.request('sendMessage', {'chat_id':100}, token=OTHER).status_code,200)
+        rows=self.wait_rows(6)
+        self.assertEqual(sum(r['outcome']=='deferred_local' for r in rows),3)
+
+    def test_streaming_admission_optional_budget_and_typing_coalescing(self):
+        import httpx
+        self.enable_control()
+        with httpx.Client(trust_env=False) as client:
+            base=f'http://127.0.0.1:{self.port}/bot{TOKEN}/'
+            first=client.post(base+'sendMessage',json={'chat_id':100,'message_thread_id':7})
+            self.assertEqual(first.status_code,200)
+            before=len(Upstream.calls)
+            optional=client.post(base+'sendMessage',json={'chat_id':100,'message_thread_id':8},headers={'X-Telecodex-Priority':'background'})
+            self.assertEqual(optional.status_code,429);self.assertEqual(len(Upstream.calls),before)
+            # Foreground delivery is not rejected by optional budget contention.
+            self.assertEqual(client.post(base+'sendMessage',json={'chat_id':100}).status_code,200)
+            for expected in (200,429):
+                self.assertEqual(client.post(base+'sendChatAction',json={'chat_id':100,'message_thread_id':7}).status_code,expected)
+            data=(SECRET*10000).encode()
+            result=client.post(base+'sendDocument',data={'chat_id':'101','message_thread_id':'7'},files={'document':('fixture.bin',data)})
+            self.assertEqual(result.status_code,200);self.assertIn(data,Upstream.calls[-1][1])
+            self.assertTrue(all('x-telecodex-priority' not in h for h in Upstream.received_headers))
+
+    def test_foreground_burst_and_explicit_status_never_become_optional_rejections(self):
+        self.enable_control()
+        with ThreadPoolExecutor(max_workers=9) as executor:
+            futures=[executor.submit(self.request,'sendMessage',{'chat_id':100,'message_thread_id':n}) for n in range(9)]
+            self.assertEqual([f.result().status_code for f in futures],[200]*9)
+        # Exercise the actual activity client used by explicit StatusRequests,
+        # immediately after the standard /status reply consumed the quiet slot.
+        spec=importlib.util.spec_from_file_location('activity',ROOT/'scripts/activity_indicator.py')
+        activity=importlib.util.module_from_spec(spec);spec.loader.exec_module(activity)
+        telegram=activity.Telegram({'bot_token_file':str(self.token),'api_base':f'http://127.0.0.1:{self.port}'})
+        self.assertTrue(telegram.call('sendMessage',{'chat_id':100,'message_thread_id':7,'text':'weekly details'})['ok'])
+        second=activity.Telegram({'bot_token_file':str(self.token),'api_base':f'http://127.0.0.1:{self.port}'})
+        optional=second.call('editMessageText',{'chat_id':100,'message_id':42,'text':'optional card'},background=True)
+        self.assertTrue(optional.get('telecodex_local'))
+        self.assertEqual(len(Upstream.calls),10)
 
 
 class Storage(unittest.TestCase):

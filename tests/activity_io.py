@@ -312,6 +312,38 @@ class ActivityIO(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(self.publisher.entries['100:7']['message_id'], 102)
 
+    def test_unchanged_cards_survive_restart_but_changed_buttons_are_published(self):
+        self.publisher.update('100:7', 100, 7, 'a', 'Waiting for your answer', 100)
+        self.publisher = activity.Publisher(self.telegram, self.path)
+        self.publisher.update('100:7', 100, 7, 'a', 'Waiting for your answer', 140)
+        self.publisher.update('100:7', 100, 7, 'a', 'Waiting for your answer', 180, requested=True)
+        self.assertEqual(len(self.calls), 1)
+        markup = {'inline_keyboard': [[{'text': 'Review', 'callback_data': 'test'}]]}
+        self.publisher.update('100:7', 100, 7, 'a', 'Waiting for your answer', 220, markup=markup)
+        self.assertEqual([m for m, _ in self.calls], ['sendMessage', 'editMessageText'])
+        self.assertEqual(self.calls[-1][1]['reply_markup'], markup)
+        self.publisher.update('100:7', 100, 7, 'a', 'Waiting for your answer', 260)
+        self.assertEqual(self.calls[-1][1]['reply_markup'], {'inline_keyboard': []})
+        self.assertNotIn('Waiting for your answer', self.path.read_text())
+
+    def test_rejected_edit_is_not_hammered_and_cleanup_respects_retry_after(self):
+        self.publisher.update('100:7', 100, 7, 'a', 'Working', 100)
+        self.answers = [{'ok': False, 'error_code': 400, 'description': 'message is not modified'}]
+        self.publisher.entries['100:7'].pop('accepted_payload')  # Pre-upgrade receipt.
+        self.publisher.update('100:7', 100, 7, 'a', 'Working', 140)
+        self.publisher.update('100:7', 100, 7, 'a', 'Working', 180)
+        self.assertEqual(len(self.calls), 2)
+        self.answers = [{'ok': False, 'error_code': 400, 'description': 'invalid presentation'}]
+        self.publisher.update('100:7', 100, 7, 'a', 'New state', 220)
+        self.publisher = activity.Publisher(self.telegram, self.path)
+        self.publisher.update('100:7', 100, 7, 'a', 'New state', 260)
+        self.assertEqual(len(self.calls), 3)
+        self.answers = [{'ok': False, 'error_code': 429, 'parameters': {'retry_after': 3600}}]
+        self.publisher.update('100:7', 100, 7, 'a', None, time.time())
+        self.publisher.update('100:7', 100, 7, 'b', 'New turn', time.time()+60)
+        self.assertEqual(self.calls[-1][0], 'deleteMessage')
+        self.assertEqual(len(self.calls), 4)  # No edit fallback or replacement send.
+
     def test_incremental_native_tools_agents_partial_records_and_binding(self):
         path = self.root / 'rollout.jsonl'
         records = [
@@ -631,7 +663,7 @@ class ActivityIO(unittest.TestCase):
                     'from': {'id': 1}, 'message_id': 1000 + update, 'text': '/status'}})))
             cache.respond(requests, self.publisher)
         self.assertEqual([method for method, _ in self.calls],
-                         ['sendMessage', 'editMessageText', 'editMessageText'])
+                         ['sendMessage', 'editMessageText'])
         self.assertEqual([receipt['message_id'] for receipt in requests.state['attempted'].values()],
                          [original, original])
         restarted = activity.Publisher(self.telegram, self.path)

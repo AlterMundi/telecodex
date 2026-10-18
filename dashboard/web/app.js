@@ -434,7 +434,8 @@ function traffic(data) {
   if (data.alerts_state === "unavailable" || data.alerts_state === "backlog")
     $("#traffic-status").textContent += " Alert publication is unconfirmed; retained incidents will be reconciled.";
   const trafficMetric = (label, value) => metric(label, String(value), undefined, null);
-  $("#traffic-metrics").replaceChildren(trafficMetric("Requests · 24h", data.totals.requests), trafficMetric("Rate limits · 24h", data.totals.rate_limited),
+  $("#traffic-metrics").replaceChildren(trafficMetric("Attempts · 24h", data.totals.requests), trafficMetric("Telegram limits · 24h", data.totals.rate_limited),
+    trafficMetric("Deferred locally · 24h", data.totals.deferred_local || 0),
     trafficMetric("Body volume · 24h", `${((data.totals.request_bytes + data.totals.response_bytes) / 1024).toFixed(1)} KiB`), trafficMetric("API failures · 24h", data.totals.failures || 0), trafficMetric("Dropped records", data.dropped_records));
   const byMinute = new Map(data.minutes.map((m) => [m.at, m]));
   const current = Math.floor(data.observed_at / 60) * 60;
