@@ -133,6 +133,20 @@ impl WorkerBudget {
             _permit: permit,
         })
     }
+    pub(super) fn waiting_reason(&self, key: SessionKey) -> String {
+        let state = self.state.lock().expect("budget mutex poisoned");
+        if state.waiting.contains_key(&key) {
+            format!(
+                "Waiting for worker capacity ({} active, limit {}, {} waiting). Active turns keep their slots while waiting for tools or processes. It will start automatically when a slot becomes available.",
+                state.active.len(),
+                self.limit,
+                state.waiting.len()
+            )
+        } else {
+            "Waiting for this conversation's worker to finish preparation or earlier work. Native submission has not started yet.".into()
+        }
+    }
+
     pub(super) fn snapshot(&self) -> Value {
         let state = self.state.lock().expect("budget mutex poisoned");
         json!({"scope":"Enrolled top-level native turn reservations in this listener instance; not provider-wide model calls, child agents or task completion","limit":self.limit,"active":state.active.len(),"waiting":state.waiting.len(),"started":state.started,"attached_collectors":state.attached.len(),"peak":state.peak,"total_wait_ms":state.wait_ms,"max_wait_ms":state.max_wait_ms,"waiting_topics":state.waiting.keys().map(|k|k.thread_id).collect::<Vec<_>>(),"active_topics":state.active.keys().map(|k|k.thread_id).collect::<Vec<_>>(),"oldest_wait_ms":state.waiting.values().map(|t|t.elapsed().as_millis()).max().unwrap_or(0),"currency_cost":"unknown"})

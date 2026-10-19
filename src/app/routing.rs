@@ -944,8 +944,9 @@ pub(super) async fn dispatch(app: &App, id: &str, human: i64) -> Result<()> {
                 shared.clone(),
                 waiting.origin,
                 format!(
-                    "#{}: your input is retained, but native submission has not started. The worker may still be preparing or finishing earlier work. Use /interaction input {} to inspect it. This wait does not cancel or replay the input.",
+                    "#{}: your input is safely queued. {} Use /interaction input {} to inspect it. You do not need to resend it. This notice does not cancel or replay the input.",
                     label(&shared, waiting.target),
+                    shared.worker_budget.waiting_reason(waiting.target),
                     waiting.id,
                 ),
                 Some((waiting.id, waiting.human_id, P::Queued)),
