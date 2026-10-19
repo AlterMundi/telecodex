@@ -26,6 +26,11 @@ def menu_selection(config):
         except ValueError:
             raise SystemExit('Invalid HTTPS launcher URL; no menu mutation requested') from None
         return {'type':'web_app','text':'Apps','web_app':{'url':launcher}}
+    return sessions_selection(config)
+
+
+def sessions_selection(config):
+    """Keep alert destinations independent of the chosen bot menu."""
     short_name = config.get('miniapp_short_name')
     if short_name is None:
         url = config['origin'].rstrip('/') + config.get('prefix', '/sessions') + '/'

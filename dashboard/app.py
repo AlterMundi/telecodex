@@ -23,7 +23,7 @@ from .visual import VisualSelectionInvalid
 from .alerts import Receiver as AlertsReceiver, AlertsUnavailable
 from .traffic import Traffic
 from .menu_attention import attention_projection
-from .operator import menu_selection
+from .operator import sessions_selection
 from .speech import Speech, SpeechUnavailable
 from .companion import Grants as CompanionGrants, permitted as companion_permitted
 from scripts.speech_render import RenderError
@@ -587,7 +587,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         check_binding()
         if not provider.authorized(human):
             raise HTTPException(403, 'Receiving grant unavailable')
-        return {**result, 'app_url':menu_selection(config)['web_app']['url']}
+        return {**result, 'app_url':sessions_selection(config)['web_app']['url'],
+                'bot_username':config.get('bot_username')}
 
     @app.get('/api/alerts')
     def incidents(request: Request):

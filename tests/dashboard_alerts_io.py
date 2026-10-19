@@ -120,6 +120,7 @@ class Receiving(unittest.TestCase):
 
     def test_launcher_attention_is_signed_read_only_and_origin_scoped(self):
         config = {**self.config, 'bot_username':'TestBot', 'miniapp_short_name':'sessions',
+                  'launcher_url':'https://pair.example.test/apps/',
                   'alerts':{**self.config['alerts'], 'launcher_origins':['https://apps.example.test']}}
         app = create_app(config, self.provider, lambda raw, bot: int(raw), alerts=self.receiver)
         client = TestClient(app, base_url='https://example.test')
@@ -137,6 +138,7 @@ class Receiving(unittest.TestCase):
         self.assertEqual(value['symbol'], '🔴')
         self.assertEqual(value['count'], 1)
         self.assertEqual(value['app_url'], 'https://t.me/TestBot/sessions?mode=compact')
+        self.assertEqual(value['bot_username'], 'TestBot')
         self.assertNotIn('session_token', value)
         self.assertNotIn('csrf', value)
         self.assertNotIn('set-cookie', response.headers)
