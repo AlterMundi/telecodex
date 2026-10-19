@@ -29,6 +29,7 @@ class Voice(Semantic):
 source=pathlib.Path(sys.argv[-1]); digest=hashlib.sha256(source.read_bytes()).hexdigest()
 root=pathlib.Path(sys.argv[1]); item=json.loads((root/'transcripts.json').read_text())[digest]
 with (root/'asr-calls').open('a') as calls: calls.write(digest+'\\n')
+with (root/'asr-paths').open('a') as paths: paths.write(json.dumps([digest,str(source)])+'\\n')
 if item.get('gate'):
     child=subprocess.Popen(['/usr/bin/python3','-c','import time;time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     (root/('asr-processes-'+digest)).write_text(json.dumps([os.getpid(),child.pid]))
@@ -77,6 +78,10 @@ def semantic_voice_and_responsive_corrections(binary):
         gate=j.root/'release-asr'
         original,payload,digest=j.voice('NATURAL-ROUTE Use requirement 10 for Alpha and Beta.',gate=gate)
         j.wait(lambda:digest in j.calls())
+        source_paths=j.root/'asr-paths'
+        j.wait(lambda:source_paths.exists() and any(json.loads(line)[0]==digest for line in source_paths.read_text().splitlines()))
+        downloaded=pathlib.Path(next(json.loads(line)[1] for line in source_paths.read_text().splitlines() if json.loads(line)[0]==digest))
+        assert downloaded.exists() and hashlib.sha256(downloaded.read_bytes()).hexdigest()==digest
         assert not j.instructions(7) and not j.instructions(8), 'Partial/preparing ASR admitted work'
         correction=j.admit('#Alpha Change the requirement to 17.',topic=1)
         j.wait(lambda:len(j.instructions(7))==1 and j.instructions(7)[0][1]=='accepted')
@@ -92,6 +97,7 @@ def semantic_voice_and_responsive_corrections(binary):
         source=json.loads(j.row('SELECT doc FROM interaction_sources WHERE event_id=?',(str(original),))[0][0])
         assert source['transcription']['audio_sha256']==digest and source['text'].startswith('NATURAL-ROUTE')
         assert source['transcription']['audio_millis']==100
+        j.wait(lambda:not downloaded.exists())
         packet=j.packets['native-topic-7'][-1]['input'][0]['text']
         provenance=json.loads(packet.split('Transport provenance: ',1)[1].split('\nCurrent instruction:',1)[0])
         assert provenance['transcription']['audio_sha256']==digest

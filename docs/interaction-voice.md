@@ -105,3 +105,12 @@ protected storage refuses new ASR while ordinary text remains available. The
 native caller retains its process-group deadline and owns original-capture
 retirement after native transcript commit. Selecting this adapter is an explicit
 owner configuration change; merely installing it does not alter the live route.
+
+
+After Telegram voice text/provenance commits, the listener removes its exact
+private downloaded copy in a separate bounded cleanup task. It preserves the
+original ingress/file identity and transcript; no routing or work completion
+is claimed by deletion. Unconfirmed transcription never enters this cleanup.
+Changed, nonprivate or linked payloads are preserved, and cleanup failure cannot
+repeat ASR or prevent delivery of a committed input. Telegram's own original
+message/audio remains governed by Telegram rather than this local storage policy.

@@ -10,6 +10,7 @@
     <script src="assets/requests.js" defer></script>
     <script src="assets/microphone.js" defer></script>
     <script src="assets/visual.js" defer></script>
+    <script src="assets/routing_graph.js" defer></script>
     <script src="assets/conversation.js" defer></script>
     <script src="assets/app.js" defer></script>
   </head>
@@ -63,6 +64,12 @@
         <section id="conversation-voice" hidden aria-label="Speak to your conversation">
           <div class="conversation-tools"><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
           <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
+        </section>
+        <section id="routing-graph" hidden aria-label="Live conversation routing graph">
+          <div class="conversation-tools"><h2>Conversation flow</h2><button id="routing-graph-live" type="button" hidden>Return to live →</button></div>
+          <p id="routing-graph-state" class="note" role="status"></p>
+          <p class="note">Select a step for saved text and routing evidence. Reply links require declared input coverage; other replies stay unlinked.</p>
+          <div id="routing-graph-viewport" tabindex="0" role="region" aria-label="Routing history. Scroll horizontally through interactions; select a step to inspect its retained evidence."><div id="routing-graph-surface"></div></div>
         </section>
         <details id="conversation-sent"><summary>Routing monitor · your inputs and destinations</summary><p class="note">Open a message to inspect its original text, destination and forwarded input. Refreshing this monitor never resends work.</p><p id="conversation-telegram-state" class="note" role="status"></p><div id="conversation-inputs"></div><button id="conversation-inputs-older" type="button" hidden>Earlier app/device inputs</button><button id="conversation-telegram-older" type="button" hidden>Earlier Telegram inputs</button></details>
         <div id="conversation-replies" tabindex="-1">

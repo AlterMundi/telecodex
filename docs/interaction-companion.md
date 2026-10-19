@@ -135,3 +135,34 @@ and cannot inspect routing traces. Enrollment does not start media, models or a
 browser; opening a selected monitor is an explicit operator action.
 
 The monitor displays the operator-assigned source label returned by the receiver, so a separately enrolled experiment can be visibly distinguished from the ordinary conversation. Credential-file labels do not determine the displayed source.
+
+
+Receiving-profile adoption also affects configured Alerts and Traffic companions:
+both retain fingerprints separately from device grants. Reauthorizing a device
+does not requalify their journals. Before selecting a changed profile, exercise
+all configured receiving constructors and reconcile their exact dependencies.
+For an ASR-command-only change, verify the same bot/human, Alerts endpoint and
+credential, receiving scope, adapter, traffic meter and producer before adopting
+new fingerprints. Preserve delivery attempts/receipts, menu selection/pending
+state, traffic incidents and outbox; never clear or recreate them to bypass a
+binding mismatch. A listener successor must retain native writers/goals and
+collectors independently of this web-side requalification.
+
+
+The read-only monitor presents a virtualized horizontal conversation graph.
+Inputs and routing share the integrating conversation lane; work sessions have
+separate lanes keyed by retained target identity, even when labels match. New
+observations append to the right; stable source IDs update their own nodes.
+Each node retains at most the first300 Unicode characters and opens the existing
+saved-input/reply inspector. Declared instruction coverage is required before
+linking a session reply to an input; an earlier result must never acquire an edge
+from a later correction. Integrator replies without a retained exact input link
+remain visibly unlinked.
+
+The first saved-history layout reconstructs input/workflow relationships rather
+than inventing historical timestamps. Later placement reflects browser observation
+order. Scrolling, keyboard navigation or selecting a step pauses automatic follow;
+Return to live resumes it. The existing foreground refresh reads at most six closed
+input traces per cycle, rotating through retained inputs independently of open
+inspectors. No extra poller, model session, routing action or media is introduced.
+The graph resets with the existing credential/binding invalidation path.

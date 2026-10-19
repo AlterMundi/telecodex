@@ -11,6 +11,13 @@ window.Conversation = (() => {
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
     const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:pause,unauthorized:failed,telegram});
+    const graph = readOnly ? window.RoutingGraph?.mount({inspect:selection=>{
+      const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
+      if(!card)return;
+      if(selection.input){$("#conversation-sent").open=true;card.trace.open=true;readTrace(card);}
+      card.box.scrollIntoView({block:"nearest"});
+    }}) : undefined;
+    let graphCursor=0;
     const cards = new Map();
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
@@ -65,6 +72,7 @@ window.Conversation = (() => {
       card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
     }
     function resetInputs() {
+      graph?.reset();graphCursor=0;
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
       telegramCursor=0;telegramNewest=0;telegramLoaded=false;
@@ -82,6 +90,8 @@ window.Conversation = (() => {
         const value=await api(`interaction/inputs/${encodeURIComponent(card.value.id)}/trace`);
         if(owned!==inputGeneration || inputs.get(card.value.id)!==card)return;
         if(value.id!==card.value.id || value.schema!=="telecodex.conversation-trace/v1")throw new Error("Wrong routing observation");
+        graph?.trace(value);
+        if(graph && !card.trace.open)return;
         const original=node("section");
         original.append(node("h3",value.voice?"Voice transcript":"Original text"),node("p",value.text||"No transcript is confirmed yet.","reply-text"));
         traceTextMore(card,original,original.children[1],"original",value.text_next_offset);
@@ -211,7 +221,7 @@ window.Conversation = (() => {
         microphone?.observe(card.value,phaseText(card.value));
         card.retry.hidden = readOnly || !!card.value.phase || !card.value.binding;
         if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
-        renderRoute(card);return card;
+        renderRoute(card);graph?.input(card.value);return card;
       }
       // Native acceptance and retirement cannot be undone by a late snapshot.
       if (["answered","matrix_requested","retained_unsent"].includes(card.value.phase) ||
@@ -242,6 +252,7 @@ window.Conversation = (() => {
       const following = [...container.children].find(item => item !== card.box
         && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
       container.insertBefore(card.box, following || null);
+      graph?.input(card.value);
       return card;
     }
     async function inputPage(before = 0, direction = "before", remember = true) {
@@ -454,6 +465,7 @@ window.Conversation = (() => {
         : source.completed ? "Session reports this request complete." : "Session progress; work may continue.";
       card.box.dataset.pending = String(!!source.correction_pending || source.native_binding_current === false);
       card.listen.hidden = !canListen;
+      graph?.result(source);
     }
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
@@ -520,6 +532,12 @@ window.Conversation = (() => {
         if(!readOnly)await requestControls.refresh();
         await refreshTelegram();
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);
+        if(graph){
+          const closed=[...inputs.values()].filter(card=>!card.trace.open);
+          for(let n=0;n<Math.min(6,closed.length);n++)await readTrace(closed[(graphCursor+n)%closed.length]);
+          graphCursor=closed.length?(graphCursor+6)%closed.length:0;
+          graph.flush();
+        }
       } catch (e) { failed(e); }
       finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false; }
     }
