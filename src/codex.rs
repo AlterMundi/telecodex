@@ -622,6 +622,7 @@ impl CodexRunner {
         instructions: &str,
         effort: Option<&str>,
     ) -> Result<(String, Vec<usize>)> {
+        let last_index = context.len().checked_sub(1).context("empty source")?;
         tokio::time::timeout(Duration::from_secs(180), async {
             let empty = tempfile::tempdir()?;
             let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
@@ -636,8 +637,8 @@ impl CodexRunner {
             let id=process.send_request("thread/start",json!({"model":session.model,"cwd":empty.path(),"approvalPolicy":"untrusted","sandbox":"read-only","ephemeral":true,"config":config,"baseInstructions":instructions,"developerInstructions":instructions,"dynamicTools":[],"serviceName":"telecodex-handoff"})).await?;
             let response=process.await_response(id).await?;
             let thread=response.pointer("/thread/id").and_then(Value::as_str).ok_or_else(||anyhow!("handoff summarizer returned no thread"))?.to_string();
-            let prompt=serde_json::to_string(&json!({"selected_topic":title,"source_entries":context}))?;
-            let mut params=json!({"threadId":thread,"input":[{"type":"text","text":prompt,"text_elements":[]}],"outputSchema":{"type":"object","properties":{"summary":{"type":"string"},"recent_indices":{"type":"array","items":{"type":"integer"}}},"required":["summary","recent_indices"],"additionalProperties":false}});
+            let prompt=serde_json::to_string(&json!({"selected_topic":title,"source_entries":context,"source_entry_indexing":format!("source_entries is a zero-based array. Select at most six array positions from 0 through {last_index}. Native turn identifiers inside entries are provenance labels, not array indices.")}))?;
+            let mut params=json!({"threadId":thread,"input":[{"type":"text","text":prompt,"text_elements":[]}],"outputSchema":{"type":"object","properties":{"summary":{"type":"string"},"recent_indices":{"type":"array","maxItems":6,"items":{"type":"integer","minimum":0,"maximum":last_index}}},"required":["summary","recent_indices"],"additionalProperties":false}});
             if let Some(effort)=effort {params["effort"]=json!(effort);}
             let id=process.send_request("turn/start",params).await?;
             let response=process.await_response(id).await?;
