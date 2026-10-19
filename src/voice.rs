@@ -274,6 +274,7 @@ pub struct DownloadReservation {
 #[cfg(unix)]
 pub fn reserve_telegram_download(database: &Path) -> Result<DownloadReservation> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+    let database = std::path::absolute(database)?;
     let directory = std::path::PathBuf::from(format!("{}.telegram-voice", database.display()));
     match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
         Ok(()) => {}
@@ -358,6 +359,26 @@ mod capacity_tests {
         assert!(protected.exists());
         std::fs::remove_file(&protected).unwrap();
         assert!(reserve_telegram_download(&db).is_ok());
+    }
+    #[test]
+    fn relative_database_paths_keep_the_existing_working_directory_resolution() {
+        let root = tempfile::tempdir_in(".").unwrap();
+        let relative = root
+            .path()
+            .strip_prefix(std::env::current_dir().unwrap())
+            .unwrap_or(root.path());
+        assert!(!relative.is_absolute());
+        let reservation = reserve_telegram_download(&relative.join("state.sqlite")).unwrap();
+        assert!(reservation.directory.is_absolute());
+        assert_eq!(
+            reservation
+                .directory
+                .parent()
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
+            root.path().canonicalize().unwrap()
+        );
     }
     #[test]
     fn tiny_pending_files_and_links_are_preserved_and_refuse_admission() {
