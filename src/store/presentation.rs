@@ -93,7 +93,7 @@ impl Store {
             JOIN interaction_sources x ON x.id=r.input_id
             JOIN sessions s ON s.id=r.session_id
             WHERE d.rowid{comparison}?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2
-            AND s.creator_user_id=?2 AND x.origin_chat=?3 AND x.origin_thread=?4
+            AND s.creator_user_id=?2 AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4
             ORDER BY d.rowid {order} LIMIT 9"
         ))?;
         let deliveries = stmt
@@ -232,25 +232,21 @@ pub(super) fn source_on(
         };
         source
     } else if let Some(id) = id.strip_prefix("delivery:") {
-        let row:Option<(String,String,Option<String>,String,bool)>=conn.query_row(
-            "SELECT d.doc,d.phase,s.codex_thread_id,o.native_thread,s.force_fresh_thread FROM interaction_deliveries d
+        let row:Option<(String,String,Option<String>,String,bool,String)>=conn.query_row(
+            "SELECT d.doc,d.phase,s.codex_thread_id,o.native_thread,s.force_fresh_thread,d.result_id FROM interaction_deliveries d
              JOIN interaction_requests r ON r.id=d.request_id JOIN interaction_sources x ON x.id=r.input_id
              JOIN sessions s ON s.id=r.session_id JOIN interaction_results o ON o.id=d.result_id
              WHERE d.id=?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2 AND s.creator_user_id=?2
-             AND x.origin_chat=?3 AND x.origin_thread=?4",
-             params![id,human,entry.chat_id,entry.thread_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
-        let Some((doc, phase, current_native, result_native, force_fresh)) = row else {
+             AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4",
+             params![id,human,entry.chat_id,entry.thread_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+        let Some((doc, phase, current_native, result_native, force_fresh, result_id)) = row else {
             return Ok(None);
         };
         let delivery: crate::interaction::Delivery = serde_json::from_str(&doc)?;
-        let (current, pending) = super::routing::freshness(
-            conn,
-            &delivery.request_id,
-            &delivery.covered,
-            delivery.declared,
-        )?;
+        let (current, pending) = super::routing::delivery_freshness(conn, &delivery)?;
+        let request_ids = delivery.requests().to_vec();
         json!({"id":format!("delivery:{id}"),"kind":"worker_result","text":delivery.body,
-            "request_id":delivery.request_id,"target":delivery.target,"current":current,
+            "request_id":delivery.request_id,"request_ids":request_ids,"result_id":result_id,"target":delivery.target,"current":current,
             "correction_pending":pending,"completed":delivery.completed,"delivery_phase":phase,
             "native_binding_current":!force_fresh && current_native.as_deref()==Some(result_native.as_str()),
             "target_native":current_native,"result_native":result_native})

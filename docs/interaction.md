@@ -132,6 +132,29 @@ invalid coverage remains unreported and cannot silently settle a correction.
 The output reservation/transmission boundary must also recheck admitted
 corrections before an unsent item is published.
 
+## Canonical responses and requesting conversations
+
+A native final item is one response. Several work requests addressed by that
+item do not create several copies in the same requesting conversation. Its
+shared delivery retains all associated request IDs, while the canonical native
+claim preserves the complete reported coverage. A response is complete only
+when the worker declares every associated request complete. Freshness checks at
+inspection and before transmission include corrections to every association,
+including a request other than the primary compatibility ID.
+
+Only requests with an accepted input in the actual responding execution receive
+a new return. Mentioning older unfinished work in cumulative coverage does not
+make its earlier messages unanswered again. A contextual follow-up uses the
+participating input's retained return origin when it differs from the original
+work request; the model cannot choose a recipient. Distinct authorized audiences
+and session-authored dependencies retain their own correlations.
+
+The response transaction reserves every return once under the native item
+identity. Re-observing the item cannot create new returns after later input
+arrives. Different native items can legitimately contain identical text. Existing
+publication history, uncertain attempts and source originals are preserved;
+no content-string deduplication or work replay repairs earlier copies.
+
 ## Listener routing and return
 
 The native worker is explicitly told that an interaction controller is relaying

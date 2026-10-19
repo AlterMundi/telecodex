@@ -537,6 +537,10 @@ mod tests {
 pub struct Delivery {
     pub id: String,
     pub request_id: String,
+    /// One response can address multiple work requests in the same conversation.
+    /// Older retained deliveries have only their original primary request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub request_ids: Vec<String>,
     pub target: SessionKey,
     pub origin: ReturnRoute,
     pub body: String,
@@ -546,4 +550,14 @@ pub struct Delivery {
     pub current: bool,
     pub correction_pending: bool,
     pub phase: String,
+}
+
+impl Delivery {
+    pub fn requests(&self) -> &[String] {
+        if self.request_ids.is_empty() {
+            std::slice::from_ref(&self.request_id)
+        } else {
+            &self.request_ids
+        }
+    }
 }

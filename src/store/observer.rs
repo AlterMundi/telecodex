@@ -61,8 +61,7 @@ impl Store {
                 |(doc, phase, native_thread, native_turn, item_id)| -> Result<ObservedDelivery> {
                     let mut d: Delivery = serde_json::from_str(&doc)?;
                     d.phase = phase;
-                    (d.current, d.correction_pending) =
-                        routing::freshness(&tx, &d.request_id, &d.covered, d.declared)?;
+                    (d.current, d.correction_pending) = routing::delivery_freshness(&tx, &d)?;
                     Ok(ObservedDelivery {
                         value: d,
                         native_thread,

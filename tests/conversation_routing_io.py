@@ -229,6 +229,47 @@ def original_references_beyond_recent_window(binary):
         journey.close()
 
 
+def cumulative_results_are_not_old_request_fanout(binary):
+    j=CanonicalRouting(binary)
+    try:
+        j.start()
+        for topic in (7,8,1):
+            j.admit('Seed the owned source context',topic=topic)
+            j.wait(lambda:j.has('Initial goal turn delivered.',topic));j.idle()
+        j.stop();j.config.write_text(j.config.read_text()+j.target_config)
+        j.start();j.wait_control_socket(j.socket);j.routing=True
+        binding=j.read('presentation','list','0','0')['result']['binding']
+        j.messages.clear();j.telegram_methods.clear()
+        counts=[]
+        for number in range(2):
+            original,_=j.submit(binding,'Continue independent work iteration '+str(number))
+            j.wait(lambda:j.row('SELECT phase FROM conversation_inputs WHERE id=?',(original['id'],))==[('accepted',)])
+            j.call('route-cumulative-'+str(number),'dispatch',{'input_ref':original['id'],'destinations':[{'selector':'Alpha','relation':'new','requests':[]}]})
+            j.wait(lambda:len(j.instructions(7))==number+1 and j.instructions(7)[-1][1]=='accepted')
+            rows=j.instructions(7)
+            native=j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=7')[0][0]
+            claim={'requests':sorted({r for _,_,doc in rows for r in json.loads(doc)['requests']}),'covered':[row[0]for row in rows],'completed':[],'deferred':[]}
+            j.broadcast(native,'item/completed',{'turnId':j.workers[native],'item':{'id':'progress-'+str(number),'type':'agentMessage','phase':'final_answer','text':'Progress '+str(number)+'\n<daimon-result>'+json.dumps(claim)+'</daimon-result>'}})
+            j.broadcast(native,'turn/completed',{'turn':{'id':j.workers[native],'status':'completed'}})
+            j.wait(lambda:j.row('SELECT busy FROM sessions WHERE thread_id=7')==[(0,)])
+            page=j.read('presentation','list','0','0')['result']
+            results=[item for item in page['items']if item['kind']=='worker_result']
+            counts.append(len(results))
+            assert len(results)==number+1, 'Historical unfinished requests duplicated the current native item'
+            assert all(not item['completed'] for item in results)
+            current=max(results,key=lambda item:item['sequence'])
+            assert current['request_ids']==json.loads(rows[-1][2])['requests']
+        assert counts==[1,2]
+        assert j.row('SELECT count(*) FROM interaction_results')==[(2,)]
+        assert len(json.loads(j.row('SELECT claim FROM interaction_results ORDER BY rowid DESC LIMIT 1')[0][0])['requests'])==2
+        forbidden={'sendMessage','editMessageText','sendMessageDraft','sendPhoto','sendDocument','sendAudio','sendVoice','sendVideo','sendChatAction'}
+        assert not forbidden.intersection(j.telegram_methods) and not j.messages,(j.telegram_methods,j.messages)
+        j.finish(j.web_thread,j.web_turn);j.idle()
+        print('PASS canonical cumulative coverage preserves historical unfinished work without repeating its old returns; two native items yield two visible replies, zero models.')
+    finally:j.close()
+
+
 if __name__ == '__main__':
+    cumulative_results_are_not_old_request_fanout(str(Path(sys.argv[1]).resolve()))
     canonical_routes(str(Path(sys.argv[1]).resolve()))
     original_references_beyond_recent_window(str(Path(sys.argv[1]).resolve()))
