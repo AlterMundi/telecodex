@@ -284,6 +284,12 @@ fixed `failure_code` (for example `support_outside_source`, `invalid_json` or
 not establish a provider or source diagnosis. Raw native errors and private
 source/summary text are not included in this warning.
 
+Synthesis requests constrain support selection to at most six zero-based indices
+within the supplied original-entry array, including the array's current upper
+bound in the structured output schema. The prompt distinguishes these positions
+from native turn identifiers. Receiver validation remains in place; a
+nonconforming result is retained as unconfirmed rather than published as a card.
+
 Interrupted/uncertain synthesis attempts remain retained across restart. Merely
 asking to observe again does not replay them; `/interaction observe #Topic
 --retry` explicitly selects a new attempt while preserving the old record. Source

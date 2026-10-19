@@ -51,6 +51,10 @@ class Merge(Goals):
         if method == 'turn/start' and p['threadId'].startswith('summary-'):
             context = json.loads(p['input'][0]['text'])
             assert len(context['source_entries']) >= 2
+            supports = p['outputSchema']['properties']['recent_indices']
+            assert supports['maxItems'] == 6
+            assert supports['items'] == {'type':'integer','minimum':0,'maximum':len(context['source_entries'])-1}
+            assert 'zero-based' in context['source_entry_indexing']
             text = 'Prior understanding retained. Received research is attributed. Discarded suggestion remains discarded; alternatives and open questions remain.'
             output = json.dumps({'summary': context['selected_topic'] + '\n' + text,
                                  'recent_indices': [0, len(context['source_entries'])-1]})
