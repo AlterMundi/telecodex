@@ -802,3 +802,26 @@ a destination selection, an answer or an approval. The next utterance can answer
 or change topic. Voice uploads preserve `context_only` through the existing
 `context:SOURCE` header form, and automatic question playback uses that same
 interpretive boundary. Explicit reply actions retain their existing semantics.
+
+## Live controller fallback for existing native threads
+
+The native dynamic-tool set is persisted at thread creation. An older integrating
+conversation or worker can invoke the same scoped controller through
+`telecodex --controller TURN_ACCESS_FILE OPERATION_JSON` when terminal execution
+and receiving session control are available. This is a live invocation, not a
+completion manifest, new human message or generic owner-command tunnel.
+
+The owner-only access file is bound to the actual local execution and human;
+current native/physical binding and role are checked by the existing handlers.
+It is invalid on cancellation, completion, binding change or listener restart.
+Its token is read from the private file, never placed in argv or normal output.
+A dormant local lease can exist for an enrolled direct execution so that a later
+explicit routed steer can use it. Ordinary direct text, runtime instructions,
+router admission and quota remain unchanged; the hint is disclosed only with
+actual integrating/routed input. No new topic consumer or model wakeup follows.
+
+The fallback shares canonical original reservations, dependency limits and
+uncertain-outcome behavior with dynamic tools. Inspect retained outcomes rather
+than automatically repeating an unavailable/uncertain operation. An old active
+execution without a receiving collector/access lease still requires supported
+collector attachment; its missing tool is not repaired by replacing history.

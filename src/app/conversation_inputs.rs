@@ -380,7 +380,14 @@ async fn submit(app: App, input: ConversationInput) -> Result<()> {
             shared.store.conversation_input_validate(human, &id)
         })),
         client_message_id: Some(format!("conversation:{}", input.id)),
-        text: input.rendered(),
+        text: match &active.controller_hint {
+            Some(hint) => format!(
+                "{}\n\n[Controller access for this execution]{}",
+                input.rendered(),
+                hint
+            ),
+            None => input.rendered(),
+        },
         goal: None,
         response: send,
     };

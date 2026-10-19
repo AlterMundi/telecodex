@@ -157,6 +157,7 @@ fn sample_app() -> (App, NamedTempFile) {
         worker_budget: attention::WorkerBudget::new(2),
         pending_task_text: Mutex::new(HashMap::new()),
         conversation_ingress: Mutex::new(()),
+        controller_leases: StdMutex::new(HashMap::new()),
         pending_icon_pickers: Mutex::new(HashMap::new()),
         pending_goal_controls: Mutex::new(HashMap::new()),
         pending_codex_login: Mutex::new(None),
@@ -460,6 +461,7 @@ async fn sends_plain_text_to_the_active_turn() {
                 turn_id: 17,
                 sender: steer_tx,
                 attachments: Arc::new(SteeredFiles::default()),
+                controller_hint: None,
             }))),
         },
     );
@@ -496,6 +498,7 @@ async fn falls_back_when_the_active_turn_rejects_steering() {
                 turn_id: 17,
                 sender: steer_tx,
                 attachments: Arc::new(SteeredFiles::default()),
+                controller_hint: None,
             }))),
         },
     );
@@ -533,6 +536,7 @@ async fn keeps_steering_pending_past_the_previous_timeout() {
                 turn_id: 17,
                 sender: steer_tx,
                 attachments: Arc::new(SteeredFiles::default()),
+                controller_hint: None,
             }))),
         },
     );
@@ -1976,6 +1980,7 @@ fn rebinds_stale_session_to_latest_active_thread_for_same_cwd() {
         worker_budget: attention::WorkerBudget::new(2),
         pending_task_text: Mutex::new(HashMap::new()),
         conversation_ingress: Mutex::new(()),
+        controller_leases: StdMutex::new(HashMap::new()),
         pending_icon_pickers: Mutex::new(HashMap::new()),
         pending_goal_controls: Mutex::new(HashMap::new()),
         pending_codex_login: Mutex::new(None),
@@ -2103,6 +2108,7 @@ fn keeps_truly_archived_session_unbound_when_no_active_replacement_exists() {
         worker_budget: attention::WorkerBudget::new(2),
         pending_task_text: Mutex::new(HashMap::new()),
         conversation_ingress: Mutex::new(()),
+        controller_leases: StdMutex::new(HashMap::new()),
         pending_icon_pickers: Mutex::new(HashMap::new()),
         pending_goal_controls: Mutex::new(HashMap::new()),
         pending_codex_login: Mutex::new(None),

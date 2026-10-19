@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 mod attention;
 mod auth;
+pub(crate) mod controller;
 mod conversation_inputs;
 mod conversation_requests;
 mod creation;
@@ -108,6 +109,7 @@ struct AppShared {
     pending_questions: Mutex<HashMap<String, questions::PendingDialogue>>,
     pending_task_text: Mutex<HashMap<(SessionKey, i64), String>>,
     conversation_ingress: Mutex<()>,
+    controller_leases: StdMutex<HashMap<String, controller::Lease>>,
     pending_goal_controls: Mutex<HashMap<String, goals::PendingGoalControl>>,
     pending_icon_pickers: Mutex<HashMap<String, icons::PendingIconPicker>>,
     pending_codex_login: Mutex<Option<PendingCodexLogin>>,
@@ -171,6 +173,7 @@ struct ActiveTurnSteerHandle {
     turn_id: i64,
     sender: mpsc::UnboundedSender<CodexSteerRequest>,
     attachments: Arc<SteeredFiles>,
+    controller_hint: Option<String>,
 }
 
 /// Keep downloaded steer inputs alive through their exact native execution.
@@ -369,6 +372,7 @@ impl App {
                 pending_questions: Mutex::new(HashMap::new()),
                 pending_task_text: Mutex::new(HashMap::new()),
                 conversation_ingress: Mutex::new(()),
+                controller_leases: StdMutex::new(HashMap::new()),
                 pending_goal_controls: Mutex::new(HashMap::new()),
                 pending_icon_pickers: Mutex::new(HashMap::new()),
                 pending_codex_login: Mutex::new(None),

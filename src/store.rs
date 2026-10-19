@@ -970,6 +970,27 @@ impl Store {
         Ok(session.add_dirs)
     }
 
+    /// Controller leases can act only in the current owned live execution.
+    pub fn controller_native_turn(
+        &self,
+        local: i64,
+        key: SessionKey,
+        human: i64,
+    ) -> Result<String> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.query_row(
+            "SELECT t.native_thread_id FROM turns t JOIN sessions s ON s.id=t.session_id
+            JOIN users u ON u.tg_user_id=s.creator_user_id
+            WHERE t.id=?1 AND t.from_user_id=?2 AND t.status='running' AND t.completed_at IS NULL
+            AND s.chat_id=?3 AND s.thread_id=?4 AND s.creator_user_id=?2 AND u.allowed=1
+            AND s.force_fresh_thread=0 AND s.codex_thread_id=t.native_thread_id",
+            params![local, human, key.chat_id, key.thread_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .context("Controller execution or native binding changed")
+    }
+
     pub fn record_turn_native_thread(&self, turn_id: i64, thread: &str) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let changed=conn.execute("UPDATE turns SET native_thread_id=?2 WHERE id=?1 AND (native_thread_id IS NULL OR native_thread_id=?2)",params![turn_id,thread])?;

@@ -136,6 +136,26 @@ rather than claiming the wrapper eliminates that race. A timed-out mutation
 requires inspection: compatible current state alone may not prove which attempt
 caused it. Preserve uncertainty instead of promising exactly-once external effects.
 
+## Installed-native race evidence — 2026-10-19
+
+A bounded two-client experiment on three newly created test threads used the
+installed 0.163.0 shared native server, with zero inference calls and zero
+work-session mutations. It reproduced all three stale-selection cases:
+
+- Select goal A, independently clear/create B, then apply the old status mutation:
+  B became complete.
+- Select A, independently clear/create B, then apply the old clear: B was deleted.
+- Select A, independently edit its definition/status, then apply the old status
+  mutation: the changed definition was affected.
+
+These are actual native metadata outcomes, not synthetic fixture behavior or
+inferred source findings. Scratch goals were cleared; their history and the
+private case receipt remain retained. No active work or global Stop was touched.
+Consequently #210 requires native definition/generation preconditions on both set
+and clear before exposing stale-selection-sensitive integrator mutations. A
+client lock or immediate reread cannot meet that requirement. Replacement also
+needs an honest partial outcome if clear succeeds but new-goal creation fails.
+
 ## v0.2 review requirements
 
 The [reviewed implementation plan](interaction-v02.md) governs delivery. Resolve
