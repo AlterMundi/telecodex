@@ -54,7 +54,9 @@ For a selected desktop/device display, an operator can enroll a separate expirin
 read-only credential and open ?view=monitor without Telegram. This reuses the
 same renderer and gives no message, question-answer, audio or session-control
 authority. See [standalone monitor setup](interaction-companion.md#standalone-read-only-routing-monitor).
-The ordinary Talk credential does not grant inspection access.
+The ordinary Talk credential can inspect its canonical web input traces. The
+separate monitor can also read retained legacy Telegram routing originals and
+has no input, playback or session-control authority.
 
 The integrating conversation retains conversational continuity while independently
 running native sessions retain their own work. Native input identity, request
@@ -112,6 +114,17 @@ An instruction's transport state is not a task-completion flag. Canonical native
 outputs are recorded separately. Worker coverage and correction-aware publication
 use these retained records independently. Operational state stays in Telecodex;
 DMK provides consolidation techniques rather than becoming the transient journal.
+
+Router capacity waits do not hold a session's ordinary native input queue. If a
+direct input arrives while an older routed original is waiting for capacity, the
+direct input starts its normal native execution. The older original remains
+correlated and can join that execution through the existing steering mechanism.
+Its delayed relay carries bounded chronology references to later direct inputs
+already in native history. Those references come from the existing ingress
+journal; they never create router requests or grant discovery subscribers access
+to direct conversations. Preserve applicable later corrections without repeating
+their actions. Historical progress cards describe an update, not a claim that
+the session is still working after its final answer.
 
 ## Worker coverage
 

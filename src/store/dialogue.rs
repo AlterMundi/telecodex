@@ -9,9 +9,11 @@ pub(super) fn entry_inputs_on(
     native: &str,
     selected: Option<i64>,
 ) -> Result<Vec<crate::telegram::Update>> {
-    entry_inputs_query(conn, key, human, native, selected, false)
+    entry_inputs_query(conn, key, human, native, selected, false, None)
 }
 
+// Only relay chronology can name the exact local writer still preparing its
+// first native input. Original-selection callers always require a native binding.
 fn entry_inputs_query(
     conn: &Connection,
     key: SessionKey,
@@ -19,8 +21,9 @@ fn entry_inputs_query(
     native: &str,
     selected: Option<i64>,
     committed: bool,
+    preparing_local: Option<i64>,
 ) -> Result<Vec<crate::telegram::Update>> {
-    let mut query=conn.prepare("SELECT i.payload_json FROM incoming_updates i JOIN turns t ON t.id=i.turn_id JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN bot_state captured ON captured.key='stop_input_epoch:'||i.update_id LEFT JOIN bot_state current ON current.key='stop_admission_epoch:'||s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND t.from_user_id=?3 AND s.codex_thread_id=?4 AND t.native_thread_id=?4 AND (i.status IN ('started','settled','steering') OR (?6=1 AND i.status='undetermined' AND EXISTS(SELECT 1 FROM interaction_creations c WHERE c.human_id=?3 AND c.entry_chat=?1 AND c.entry_topic=?2 AND c.input_update=i.update_id))) AND json_extract(i.payload_json,'$.message.from.id')=?3 AND json_extract(i.payload_json,'$.message.chat.id')=?1 AND json_extract(i.payload_json,'$.message.message_thread_id')=?2 AND (json_type(i.payload_json,'$.message.text')='text' OR EXISTS(SELECT 1 FROM interaction_voice_inputs v WHERE v.update_id=i.update_id AND v.human_id=?3 AND v.phase='committed')) AND captured.value=COALESCE(current.value,'initial') AND (?5 IS NULL OR i.update_id=?5) ORDER BY i.update_id DESC LIMIT 12")?;
+    let mut query=conn.prepare("SELECT i.payload_json FROM incoming_updates i JOIN turns t ON t.id=i.turn_id JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN bot_state captured ON captured.key='stop_input_epoch:'||i.update_id LEFT JOIN bot_state current ON current.key='stop_admission_epoch:'||s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND t.from_user_id=?3 AND s.codex_thread_id=?4 AND (t.native_thread_id=?4 OR (t.id=?7 AND t.native_thread_id IS NULL AND t.status='running')) AND (i.status IN ('started','settled','steering') OR (?6=1 AND i.status='undetermined' AND EXISTS(SELECT 1 FROM interaction_creations c WHERE c.human_id=?3 AND c.entry_chat=?1 AND c.entry_topic=?2 AND c.input_update=i.update_id))) AND json_extract(i.payload_json,'$.message.from.id')=?3 AND json_extract(i.payload_json,'$.message.chat.id')=?1 AND json_extract(i.payload_json,'$.message.message_thread_id')=?2 AND (json_type(i.payload_json,'$.message.text')='text' OR EXISTS(SELECT 1 FROM interaction_voice_inputs v WHERE v.update_id=i.update_id AND v.human_id=?3 AND v.phase='committed')) AND captured.value=COALESCE(current.value,'initial') AND (?5 IS NULL OR i.update_id=?5) ORDER BY i.update_id DESC LIMIT 12")?;
     let rows = query.query_map(
         params![
             key.chat_id,
@@ -28,7 +31,8 @@ fn entry_inputs_query(
             human,
             native,
             selected,
-            committed
+            committed,
+            preparing_local
         ],
         |r| r.get::<_, String>(0),
     )?;
@@ -70,9 +74,10 @@ pub(super) fn original_on(
     )?;
     match reference {
         InputReference::Telegram(update) => {
-            let original = entry_inputs_query(conn, key, human, native, Some(*update), committed)?
-                .pop()
-                .context("Original Telegram input unavailable")?;
+            let original =
+                entry_inputs_query(conn, key, human, native, Some(*update), committed, None)?
+                    .pop()
+                    .context("Original Telegram input unavailable")?;
             let (text, transcription) = super::voice::content_on(conn, &original, human)?;
             let message = original.message.context("Original message missing")?;
             let origin = ReturnRoute {
@@ -320,6 +325,54 @@ impl Store {
         requests: &[String],
     ) -> Result<Vec<serde_json::Value>> {
         self.interaction_target_input_context(key, human, Some(requests))
+    }
+
+    /// Chronology references for raw native inputs captured after a delayed
+    /// relay. Read the ordinary ingress journal; never admit them to routing.
+    pub fn interaction_later_direct_inputs(
+        &self,
+        key: SessionKey,
+        human: i64,
+        captured: Option<i64>,
+        preparing_local: Option<i64>,
+    ) -> Result<Vec<serde_json::Value>> {
+        let Some(captured) = captured else {
+            return Ok(vec![]);
+        };
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let native: Option<String> = conn.query_row(
+            "SELECT codex_thread_id FROM sessions WHERE chat_id=?1 AND thread_id=?2 AND creator_user_id=?3",
+            params![key.chat_id,key.thread_id,human], |r| r.get(0),
+        ).optional()?.flatten();
+        let Some(native) = native else {
+            return Ok(vec![]);
+        };
+        let mut later = vec![];
+        for update in entry_inputs_query(&conn, key, human, &native, None, false, preparing_local)?
+        {
+            let order: Option<i64> = conn.query_row(
+                "SELECT id FROM original_ingress_order WHERE channel='telegram' AND event_id=?1",
+                [update.update_id.to_string()], |r|r.get(0),
+            ).optional()?;
+            if order.is_none_or(|order| order <= captured)
+                || conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM interaction_sources WHERE update_id=?1)",
+                    [update.update_id],
+                    |r| r.get::<_, bool>(0),
+                )?
+            {
+                continue;
+            }
+            let (text, _) = super::voice::content_on(&conn, &update, human)?;
+            let message = update.message.context("Direct input message missing")?;
+            later.push(
+                serde_json::json!({"input_ref":update.update_id,"capture_order":order,
+                "original_human_author":human,"source_message":{"chat_id":message.chat.id,
+                "thread_id":message.message_thread_id,"message_id":message.message_id},
+                "text_excerpt":text.chars().take(4000).collect::<String>(),"excerpt_bounded":true}),
+            );
+        }
+        Ok(later)
     }
 
     fn interaction_target_input_context(

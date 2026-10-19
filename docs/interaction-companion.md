@@ -151,8 +151,8 @@ transcripts, exact routing traces and correlated replies. It has no message,
 route-selection, question-answer, playback or session-control authority. The
 server rejects every write and administrative route even if the browser also
 has an owner cookie. Existing interaction-only device grants remain unchanged
-and cannot inspect routing traces. Enrollment does not start media, models or a
-browser; opening a selected monitor is an explicit operator action.
+and can inspect only their own canonical input traces. Enrollment does not start
+media, models or a browser; opening a selected monitor is an explicit operator action.
 
 The monitor displays the operator-assigned source label returned by the receiver, so a separately enrolled experiment can be visibly distinguished from the ordinary conversation. Credential-file labels do not determine the displayed source.
 

@@ -592,6 +592,11 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
                     &text,
                     proof,
                 )?;
+                if crate::voice::retire_transcribed_clip(&path, expected).is_err() {
+                    // Durable text is already committed. A later client read
+                    // can finish exact cleanup without repeating ASR or work.
+                    tracing::warn!("Committed conversation voice cleanup deferred");
+                }
                 if let Err(error) = deliver(&worker, ready, None).await {
                     worker
                         .shared

@@ -11,6 +11,7 @@ pub(super) async fn process_turn(
     steer_slot: Arc<StdMutex<Option<ActiveTurnSteerHandle>>>,
     mut queued: QueuedTurn,
     registration: Option<String>,
+    prepared_worker_lease: Option<super::attention::WorkerLease>,
 ) -> Result<()> {
     let shared = app.shared.clone();
     let initial_binding = if queued.request.review_mode.is_none()
@@ -144,7 +145,9 @@ pub(super) async fn process_turn(
         } else {
             false
         };
-    let _worker_lease = if routed_attachment && attaching {
+    let _worker_lease = if prepared_worker_lease.is_some() {
+        prepared_worker_lease
+    } else if routed_attachment && attaching {
         Some(
             shared
                 .worker_budget

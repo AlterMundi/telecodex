@@ -77,7 +77,9 @@ print(json.dumps({'text':item['text'],'final':True}))
         j.wait(lambda:status(later)['phase']=='accepted');assert len(j.packets)==1
         j.call('route-newer-text','dispatch',{'input_ref':later,'destinations':[{'selector':'Alpha','relation':'new','requests':[]}]})
         j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='accepted')
-        (j.root/('release-'+digest)).touch();j.wait(lambda:status(original)['phase']=='accepted')
+        (j.root/('release-'+digest)).touch()
+        j.wait(lambda:j.row('SELECT phase FROM conversation_inputs WHERE id=?',(original,))==[('accepted',)])
+        assert not Path(str(j.root/'state.sqlite')+'.voice').joinpath(original).exists(), 'Committed browser capture remained without another client read'
         retained=status(original);assert retained['text']=='Earlier spoken requirement13.'
         proof=retained['voice']['transcription'];assert proof['capture_id']==original and 'telegram_file_id' not in proof and proof['audio_sha256']==digest
         assert 'not verified written speech' in j.packets[-1][1]['input'][0]['text']

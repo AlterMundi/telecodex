@@ -835,7 +835,7 @@ async fn admit_message(
     Ok(())
 }
 
-fn packet(shared: &AppShared, i: &Instruction) -> Result<String> {
+fn packet(shared: &AppShared, i: &Instruction, preparing_local: Option<i64>) -> Result<String> {
     let source = shared.store.interaction_source(&i.id, i.human_id)?;
     let author = shared.store.interaction_author(&i.id, i.human_id)?;
     let original = shared
@@ -897,6 +897,18 @@ fn packet(shared: &AppShared, i: &Instruction) -> Result<String> {
         context.push_str(&format!(
             "\nLater inputs at this destination (source data; preserve applicable corrections):\n{}\n",
             serde_json::to_string(&later)?
+        ));
+    }
+    let direct = shared.store.interaction_later_direct_inputs(
+        i.target,
+        i.human_id,
+        original["capture_order"].as_i64(),
+        preparing_local,
+    )?;
+    if !direct.is_empty() {
+        context.push_str(&format!(
+            "\nLater direct context already in native history (bounded source excerpts, not new routed requests):\n{}\nThis relay was captured earlier. Preserve applicable later directions in native history; do not repeat their actions. These direct input references are not instruction IDs for the result declaration. If a needed constraint is missing from the excerpts and native history, ask rather than invent it.\n",
+            serde_json::to_string(&direct)?
         ));
     }
     if matches!(i.relation, RequestRelation::New)
@@ -1000,14 +1012,22 @@ pub(super) async fn dispatch(app: &App, id: &str, human: i64) -> Result<()> {
         let waiting = i.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(10)).await;
-            notice_when(
-                shared.clone(),
-                waiting.origin,
+            let message = if waiting.origin.message_id.is_none() {
+                format!(
+                    "#{}: your message is saved and waiting for this session to start. You can keep talking; check the saved message's status for updates.",
+                    label(&shared, waiting.target)
+                )
+            } else {
                 format!(
                     "#{}: your input is retained, but native submission has not started. The worker may still be preparing or finishing earlier work. Use /interaction input {} to inspect it. This wait does not cancel or replay the input.",
                     label(&shared, waiting.target),
-                    waiting.id,
-                ),
+                    waiting.id
+                )
+            };
+            notice_when(
+                shared.clone(),
+                waiting.origin,
+                message,
                 Some((waiting.id, waiting.human_id, P::Queued)),
             );
         });
@@ -1046,7 +1066,7 @@ fn queue_root(
         source.update_id,
         i.target,
         i.human_id,
-        &packet(shared, i)?,
+        &packet(shared, i, None)?,
     )?;
     let epoch = i
         .admission_epoch
@@ -1096,7 +1116,7 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
         source.update_id,
         i.target,
         i.human_id,
-        &packet(&app.shared, &i)?,
+        &packet(&app.shared, &i, Some(active.turn_id))?,
     ) {
         Ok(text) => text,
         Err(_) => {
