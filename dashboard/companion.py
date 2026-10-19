@@ -163,6 +163,47 @@ class Grants:
             return {'grant_id':ident, 'scope':grant['scope'], 'expires':renewed['expires'],
                     'previous_expires':grant['expires'], 'renewed':True}
 
+    def reauthorize(self, ident, previous_authority):
+        """Explicit owner adoption of a changed receiving profile, same device.
+
+        Ordinary HTTP access and renewal never migrate authority. The owner names
+        the retained old authority and validates the live new profile separately.
+        No credential, scope, human or lifetime is changed by this operation.
+        """
+        if (self.root is None or not isinstance(ident,str)
+                or not re.fullmatch(r'[a-f0-9]{64}',ident)
+                or not isinstance(previous_authority,str)
+                or not re.fullmatch(r'[a-f0-9]{64}',previous_authority)):
+            raise ValueError('Select an existing grant and its exact previous authority')
+        with lock(self.root / 'owner-mutation.lock'):
+            self.provider.assert_binding()
+            path = self.root / (ident + '.json')
+            grant = read_json(path)
+            current = authority(self.config,self.provider)
+            now = int(time.time())
+            if (not isinstance(grant,dict)
+                    or grant.get('schema') != 'telecodex.companion-grant/v1'
+                    or grant.get('scope') not in ('interaction_only','monitor_readonly')
+                    or grant.get('authority') not in (previous_authority,current)
+                    or type(grant.get('human')) is not int or grant['human'] != self.provider.human
+                    or type(grant.get('expires')) is not int
+                    or not now < grant['expires'] <= now + 30*86400
+                    or not isinstance(grant.get('csrf'),str)
+                    or not re.fullmatch(r'[A-Za-z0-9_-]{43}',grant['csrf'])
+                    or not self.provider.authorized(grant['human'])):
+                raise ValueError('Existing unexpired same-human grant and exact old authority required')
+            self.provider.presentation_list(0,0)
+            self.provider.assert_binding()
+            if (authority(self.config,self.provider) != current
+                    or grant['human'] != self.provider.human
+                    or not self.provider.authorized(grant['human'])):
+                raise ValueError('Receiving profile changed during explicit adoption')
+            changed = grant['authority'] != current
+            if changed:
+                write_json(path,{**grant,'authority':current})
+            return {'grant_id':ident,'scope':grant['scope'],'expires':grant['expires'],
+                    'reauthorized':changed,'already_current':not changed}
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -178,6 +219,9 @@ def main():
     renew = commands.add_parser('renew')
     renew.add_argument('grant_id')
     renew.add_argument('--seconds', required=True, type=int)
+    adopt = commands.add_parser('reauthorize')
+    adopt.add_argument('grant_id')
+    adopt.add_argument('--previous-authority',required=True)
     args = parser.parse_args()
     from .provider import Provider
     provider = None
@@ -189,6 +233,8 @@ def main():
             result = grants.enroll(args.label, args.output, args.seconds, scope=args.scope)
         elif args.command == 'renew':
             result = grants.renew(args.grant_id, args.seconds)
+        elif args.command == 'reauthorize':
+            result = grants.reauthorize(args.grant_id,args.previous_authority)
         else:
             result = grants.revoke(args.grant_id)
         print(json.dumps(result))  # Never emit the credential or its private path.
