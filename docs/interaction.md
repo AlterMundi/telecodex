@@ -11,6 +11,9 @@ The current MVP is a single **web conversation** for text and two-way voice, coo
 Acceptance must demonstrate the entire actual client/controller/native/return journey: visible input retention, attributable intermediate communication, appropriate destination or clarification, mid-work corrections, and one canonical response in the requesting conversation. Historical unresolved work must not repeatedly fan out the same answer. Worker relays include the current attributed input once. Native history retains earlier messages; only later-captured related deltas accompany a delayed dispatch so an older message cannot override a newer correction. Unrelated topic inputs and repeated policy walls are not sent. Native mobile/badge and cross-body activation remain deferred.
 
 Owning plan: [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
+Next acceptance campaign and product sequence:
+[qualification and roadmap](interaction-qualification.md). The first functional
+baseline is distinct from daily-use acceptance.
 Implementation: #109–#119. The controller runs inside the existing listener.
 The single-body native controller and browser monitor have a qualified receiving
 deployment, recorded in [#170](https://github.com/AlterMundi/telecodex/issues/170).
