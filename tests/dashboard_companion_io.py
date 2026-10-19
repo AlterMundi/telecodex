@@ -15,7 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 from dashboard.app import create_app
-from dashboard.companion import Grants
+from dashboard.companion import Grants, authority
 from dashboard.provider import Provider
 from dashboard.private_state import read_json, write_json
 from presentation_io import Receiver
@@ -247,6 +247,39 @@ class Companion(unittest.TestCase):
         self.grants.revoke(self.receipt['grant_id'])
         with self.assertRaises(FileNotFoundError):self.grants.renew(self.receipt['grant_id'],7*86400)
         self.assertEqual(self.client.get('/api/interaction',headers=self.headers).status_code,401)
+
+    def test_profile_adoption_is_explicit_preserves_device_and_exact_retry(self):
+        previous=authority(self.config,self.provider)
+        before=read_json(self.record);credential=self.output.read_bytes()
+        self.provider.binding_bytes=b'owner-selected-updated-transcription-route'
+        self.assertEqual(self.client.get('/api/interaction',headers=self.headers).status_code,401)
+        with self.assertRaises(ValueError):self.grants.renew(self.receipt['grant_id'],7*86400)
+        with self.assertRaises(ValueError):self.grants.reauthorize(self.receipt['grant_id'],'0'*64)
+        result=self.grants.reauthorize(self.receipt['grant_id'],previous)
+        self.assertTrue(result['reauthorized']);self.assertEqual(result['expires'],before['expires'])
+        after=read_json(self.record)
+        self.assertEqual({k:v for k,v in before.items() if k!='authority'},
+            {k:v for k,v in after.items() if k!='authority'})
+        self.assertEqual(self.output.read_bytes(),credential)
+        self.assertEqual(self.client.get('/api/interaction',headers=self.headers).status_code,200)
+        self.assertTrue(self.grants.reauthorize(self.receipt['grant_id'],previous)['already_current'])
+        self.assertEqual(self.client.post('/api/state',headers=self.headers).status_code,403)
+
+    def test_adoption_refuses_expired_foreign_revoked_and_concurrent_revoke(self):
+        previous=authority(self.config,self.provider);original=read_json(self.record)
+        self.provider.binding_bytes=b'owner-selected-updated-profile'
+        for change in ({'expires':int(time.time())-1},{'human':101},{'scope':'owner'},{'csrf':'invalid'}):
+            write_json(self.record,{**original,**change})
+            with self.assertRaises(ValueError):self.grants.reauthorize(self.receipt['grant_id'],previous)
+        write_json(self.record,original)
+        self.provider.allowed=False
+        with self.assertRaises(ValueError):self.grants.reauthorize(self.receipt['grant_id'],previous)
+        self.provider.allowed=True
+        with renderer.lock(self.grants.root/'owner-mutation.lock'):
+            with self.assertRaises(renderer.RenderError):self.grants.reauthorize(self.receipt['grant_id'],previous)
+        self.grants.revoke(self.receipt['grant_id'])
+        with self.assertRaises(FileNotFoundError):self.grants.reauthorize(self.receipt['grant_id'],previous)
+        self.assertFalse(self.record.exists())
 
 
 class CaptureRetention(unittest.TestCase):

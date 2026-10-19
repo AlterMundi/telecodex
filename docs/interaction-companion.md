@@ -70,6 +70,23 @@ or permission expansion occurs. Read the returned receiving expiry in the local
 operation receipt. A read-only browser monitor instead requires a newly enrolled
 file when its client-side expiry is reached.
 
+A receiving-profile change deliberately invalidates the old grant. After the
+owner has qualified the selected new profile, adopt it for one existing device:
+
+```sh
+python -m dashboard.companion --config /private/dashboard.toml reauthorize GRANT_ID \
+  --previous-authority EXACT_RETAINED_PREVIOUS_AUTHORITY_HASH
+```
+
+This owner-local command requires an unexpired retained grant, the exact previous
+authority and the same currently allowed human, then verifies the live owned
+entry. It preserves device bytes, scope, CSRF, lifetime and captured client
+identity. HTTP requests and ordinary renewal cannot perform this migration.
+Revoked, absent, foreign-human and expired grants are refused. Repeated adoption
+of the already selected profile reports its current state without another write.
+The owner migration shares the existing mutation lock with renewal/revocation.
+It creates no media, model execution or automatic access migration.
+
 Revoke the selected grant using its opaque ID:
 
 ```sh
