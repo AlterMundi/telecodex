@@ -169,11 +169,11 @@ function boot(readOnly=false,standalone=false) {
   single.originals.set('between',{id:'between',text:'A direction while work continues',sequence:1,phase:'accepted',received_at:'2024-01-01T00:00:04.500Z'});
   await single.ui.refresh();
   const stream=single.nodes.get('#conversation-timeline');
-  assert.deepEqual(stream.children.map(c=>c.dataset.timelineKey),['native:1','native:2','native:3','native:4','input:between','native:5','native:6','native:7','native:8']);
-  assert.equal(stream.children[0].children[1].textContent,'Working…');
-  assert.equal(stream.children[4].children[0].textContent,'You');
+  assert.deepEqual(stream.children.filter(c=>c.dataset.timelineKey).map(c=>c.dataset.timelineKey),['native:1','native:2','native:3','native:4','input:between','native:5','native:6','native:7','native:8']);
+  assert.equal(stream.children.find(c=>c.dataset.timelineKey==='native:1').children[1].textContent,'Working…');
+  assert.equal(stream.children.find(c=>c.dataset.timelineKey==='input:between').children[0].textContent,'You');
   await single.ui.refresh();
-  assert.equal(stream.children.length,9,'Refreshing keeps one card per saved input or native item');
+  assert.equal(stream.children.filter(c=>c.dataset.timelineKey).length,9,'Refreshing keeps one card per saved input or native item');
   assert.equal(single.nodes.get('#conversation-replies').hidden,true);
   const until=async check=>{for(let n=0;n<100;n++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error("Voice transition did not finish");};
   const voice=boot();voice.audio();await voice.ui.refresh();

@@ -610,7 +610,12 @@ const conversationView = window.Conversation?.mount({
       sessionStorage.setItem(storageKey,JSON.stringify(value));
       const access=el('details');access.append(el('summary',monitorOnly?'Change monitor access':'Change conversation access'),label);
       authenticated=true;conversationView?.authenticated();
+      if(standaloneConversation){
+        access.children[0].textContent='Connected · '+sourceLabel;
+        feedback.replaceChildren(access);
+      }else{
       feedback.replaceChildren(el('p','Source: '+sourceLabel),el('p',monitorOnly?'Read-only access until '+new Date((source.viewer?.expires || value.expires)*1000).toLocaleString()+'. Inputs, playback and session controls are disabled.':'Text and voice access to your conversation. Sessions administration is separate.'),access);
+      }
       await refresh(true);schedule();
     }
     function clearCredential(){accessVersion++;deviceAuthorization=undefined;csrf=undefined;authenticated=false;conversationView?.unauthenticated?.();document.title=title;sessionStorage.removeItem(storageKey);}

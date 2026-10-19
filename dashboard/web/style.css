@@ -544,3 +544,38 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-timeline .human-message { margin-inline-start: min(10%, 3rem); }
 
 #conversation-timeline:empty { display: none; }
+
+
+/* Keep the standalone chat and its two input modes in one viewport. */
+.standalone-conversation #feedback { margin-block: 4px; }
+.standalone-conversation #feedback summary { min-height: 44px; cursor: pointer; }
+.standalone-conversation main > #conversation { overflow: hidden; }
+.standalone-conversation #conversation-timeline { flex: 1 1 140px; min-height: 80px; max-height: none; }
+.standalone-conversation #conversation-state { margin-block: 4px; }
+.standalone-conversation #conversation-compose { flex-shrink: 0; margin-block: 4px; }
+.standalone-conversation #conversation-message { min-height: 60px; max-height: 25dvh; }
+.standalone-conversation #conversation-compose .note { display: none; }
+.standalone-conversation #conversation-visual { margin-block: 2px; padding: 4px 8px; }
+.standalone-conversation #conversation-visual summary { min-height: 36px; padding-block: 4px; }
+.standalone-conversation #conversation-send-state:empty,
+.standalone-conversation #conversation-voice-state:empty { display: none; }
+.standalone-conversation #conversation-send-state,
+.standalone-conversation #conversation-voice-state { font-size: 14px; margin-block: 4px; }
+.standalone-conversation #conversation-flow { flex-shrink: 0; max-height: 35dvh; overflow: auto; }
+.standalone-conversation #conversation-flow > summary { min-height: 44px; cursor: pointer; }
+.standalone-conversation #conversation > .note { display: none; }
+.standalone-conversation #conversation:has(#conversation-visual[open]) { overflow: auto; }
+
+.standalone-conversation #conversation-visual[open] { width: 100%; }
+.standalone-conversation #conversation-requests { max-height: min(18dvh, 120px); }
+
+.standalone-conversation #conversation:has(#conversation-flow[open]) { overflow: auto; }
+.standalone-conversation #conversation-player { max-height: 22dvh; overflow: auto; }
+@media (max-height: 650px) {
+  .standalone-conversation main > #conversation { overflow: auto; }
+  .standalone-conversation #conversation-timeline { flex-basis: 160px; }
+}
+
+.timeline-history { display: none; position: sticky; top: 0; z-index: 1; background: var(--bg); padding-block: 4px; }
+.timeline-history:has(button:not([hidden])) { display: flex; }
+.timeline-history button { font-size: 14px; min-height: 44px; }

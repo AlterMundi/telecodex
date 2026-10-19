@@ -19,10 +19,16 @@ window.Conversation = (() => {
       if(selection.input){$("#conversation-sent").open=true;card.trace.open=true;readTrace(card);}
       card.box.scrollIntoView({block:"nearest"});
     }}) : undefined;
+    document.body.classList.toggle("standalone-conversation",standalone);
+    if(graph){$("#conversation-flow").hidden=false;$("#conversation-flow").open=readOnly;}
     const timeline = standalone ? $("#conversation-timeline") : undefined;
+    const historyTools=timeline?node("div",undefined,"conversation-tools timeline-history"):undefined;
     if(timeline){
+      $("#conversation-message").rows=2;
+      $("#conversation-visual summary").textContent="Add an image";
       timeline.hidden=false;$("#conversation-replies").hidden=true;$("#conversation-sent").hidden=true;
-      timeline.before($("#conversation-inputs-older"),$("#conversation-older"));
+      $("#conversation-inputs-older").textContent="Earlier messages";
+      historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));timeline.append(historyTools);
     }
     function placeInTimeline(box, key, timestamp) {
       if(!timeline)return;
@@ -90,7 +96,7 @@ window.Conversation = (() => {
       card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
     }
     function resetInputs() {
-      disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren();
+      disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren(historyTools);
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
       telegramCursor=0;telegramNewest=0;telegramLoaded=false;
@@ -260,7 +266,7 @@ window.Conversation = (() => {
       card.imageButton.hidden=!card.value.visual;
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
-      card.check.hidden=readOnly || card.value.read_only===true;
+      card.check.hidden=readOnly || card.value.read_only===true || (["accepted","routed","answered"].includes(card.value.phase) && (!!card.value.text || (card.value.preview?.length||0)<1000));
       microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
       if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
@@ -339,7 +345,8 @@ window.Conversation = (() => {
       try {if(visual)selectedVisual=await visual.capture();}
       catch(e){posting=false;send.disabled=!inputBinding;sendState.textContent=e.message||"Select your image again.";return;}
       const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation, focusAtSubmit=focusVersion;
-      const reply=replyFocus?.reference&&JSON.parse(JSON.stringify(replyFocus.reference));
+      const context=replyFocus?.reference||voiceContext;
+      const reply=context&&JSON.parse(JSON.stringify(context));
       posting = true; send.disabled = true; latestComposerId = id;
       inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); $("#conversation-sent").open = true;
       sendState.textContent = "Sending…";
@@ -397,7 +404,7 @@ window.Conversation = (() => {
       voiceStatus();
     }
     function beginVoiceCapture() {
-      enableVoice();voiceBusy=false;stop("Listening to your input. Replies remain in the conversation.");
+      draft.blur?.();enableVoice();voiceBusy=false;stop("Listening to your input. Replies remain in the conversation.");
     }
     const speaker=source=>source.kind.startsWith("integrator_")?"integrator":JSON.stringify(source.target);
     function rememberFinal(source) {
@@ -597,7 +604,7 @@ window.Conversation = (() => {
               stop("This reply is no longer current. Refresh before listening.");
           }
         }
-        $("#conversation-state").textContent = cards.size ? `${cards.size} replies available.`
+        $("#conversation-state").textContent = cards.size ? `${cards.size} ${cards.size===1?"reply":"replies"} available.`
           : "No replies yet. Work can continue while this view is closed.";
         if (!inputBinding) await inputPage();
         else {
@@ -715,7 +722,7 @@ window.Conversation = (() => {
       try {
         await part(selected.source, selected.offset);
         if(active!==selected || generation!==owned || !selected.auto || document.hidden || !enabled || focusVersion!==selected.focusVersion)return;
-        selectFocus({source:selected.source.id,revision:selected.source.revision,context_only:true},selected.source.label);
+        if(!voiceEnabled)selectFocus({source:selected.source.id,revision:selected.source.revision,context_only:true},selected.source.label);
         audioState("Question finished. Press Talk to answer or change topic.");
       } catch (_) {
         if(active===selected && generation===owned)stop("This question changed. Refresh before answering.");
