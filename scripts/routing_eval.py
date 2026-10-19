@@ -3,7 +3,7 @@
 
 Export unlabeled inputs for a selected external evaluator, then score its retained
 JSON decisions. The sparse text baseline is deliberately not a calibrated semantic
-classifier. Synthetic cases and real human corrections retain distinct provenance.
+classifier. Synthetic cases, human intent and actual corrections retain distinct provenance.
 """
 import argparse
 import collections
@@ -41,10 +41,12 @@ def load(path):
         raise ValueError('Duplicate card identity')
     seen = set()
     for case in data['cases']:
-        if case['id'] in seen or not case.get('source', {}).get('kind') in {'synthetic', 'human_correction'}:
+        if case['id'] in seen or not case.get('source', {}).get('kind') in {'synthetic', 'human_correction', 'human_intent'}:
             raise ValueError('Unique cases and explicit source provenance required')
-        if case['source']['kind'] == 'human_correction' and not all(case['source'].get(k) for k in ('reference', 'audience')):
-            raise ValueError('Human corrections need source reference and selected audience')
+        if case['source']['kind'] != 'synthetic' and not all(
+                isinstance(case['source'].get(k), str) and case['source'][k].strip()
+                for k in ('reference', 'audience')):
+            raise ValueError('Human examples need source reference and selected audience')
         seen.add(case['id'])
         if not case.get('acceptable'):
             raise ValueError('Each case requires labeled acceptable outcomes')
