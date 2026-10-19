@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'), fs=require('node:fs'), vm=require('node:vm');
 const clone=value=>JSON.parse(JSON.stringify(value));
 const deferred=()=>{let release,enter;return {promise:new Promise(yes=>{release=yes;}),entered:new Promise(yes=>{enter=yes;}),release:()=>release(),enter:()=>enter()};};
-function boot(count=1) {
+function boot(count=1, mayDecide=true) {
   const nodes=new Map();
   const element=tag=>({tag,children:[],handlers:{},textContent:'',value:'',hidden:false,disabled:false,
     setAttribute(key,value){this[key]=value;},addEventListener(name,fn){this.handlers[name]=fn;},
@@ -55,7 +55,7 @@ function boot(count=1) {
   }
   const context=vm.createContext({window:{},document,TextEncoder,URLSearchParams});
   vm.runInContext(fs.readFileSync('dashboard/web/requests.js','utf8'),context);
-  let ui;ui=context.window.RequestControls.mount({api,getBinding:()=>binding,setCsrf(){},unauthorized(){ui.reset();},onReply:(reference,label)=>replies.push({reference:clone(reference),label}),onListen:source=>listens.push(clone(source)),getCanListen:()=>canListen});
+  let ui;ui=context.window.RequestControls.mount({api,getBinding:()=>binding,setCsrf(){},unauthorized(){ui.reset();},onReply:(reference,label)=>replies.push({reference:clone(reference),label}),onListen:source=>listens.push(clone(source)),getCanListen:()=>canListen,getCanDecide:()=>mayDecide});
   const all=(el,predicate)=>[...(predicate(el)?[el]:[]),...el.children.flatMap(child=>all(child,predicate))];
   const button=(card,text)=>all(card,el=>el.tag==='button'&&el.textContent===text)[0];
   return {ui,nodes,sources,receipts,calls,replies,listens,button,all,speech(value){canListen=value;},
@@ -131,6 +131,14 @@ function boot(count=1) {
   assert(draft.all(dc,v=>v.textContent==='This request is closed.').length);
   assert(draft.button(dc,'Selected scope')?.disabled ?? true,'Closed source cannot retain actionable choices');
 
+  const companion=boot(1,false);await companion.ui.refresh();const cc=companion.cards()[0];await companion.read(cc);
+  assert(companion.all(cc,v=>v.tag==='form')[0].hidden);
+  assert(companion.button(cc,'Selected scope').disabled);
+  await companion.button(cc,'Selected scope').handlers.click();
+  assert.equal(companion.calls.filter(v=>v.body).length,0,'Conversation-only access never attempts a native decision');
+  assert.notEqual(companion.button(cc,'Answer in conversation').parent.tag,'form');
+  await companion.button(cc,'Answer in conversation').handlers.click();
+  assert.equal(companion.replies.length,1,'The human can answer a native question through the same chat');
   const page=boot(25);await page.ui.refresh();assert.equal(page.cards().length,8);
   await page.nodes.get('#conversation-requests-more').handlers.click();assert.equal(page.cards().length,16);
   await page.ui.refresh();assert.equal(page.cards().length,24);

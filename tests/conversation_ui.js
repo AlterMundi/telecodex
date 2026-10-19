@@ -297,7 +297,7 @@ function boot(readOnly=false) {
   await requestBox.children[3].handlers.click();
   const answer=requestBox.children[6].children[1];answer.value="Keep this draft during conversation refresh";answer.handlers.input();
   await requestBox.children[5].children[0].handlers.click();
-  const retry=requestBox.children[8].children[1];assert(!retry.hidden);
+  const retry=requestBox.children[8].children.find(item=>item.textContent==="Retry this same decision");assert(!retry.hidden);
   await integrated.ui.refresh();
   assert.equal(integrated.nodes.get("#conversation-request-cards").children[0],requestBox,
     "Refreshing input metadata must not reset native request cards under an unchanged binding");

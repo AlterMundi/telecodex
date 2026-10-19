@@ -541,29 +541,6 @@ impl Store {
         let raw:String=conn.query_row("SELECT s.doc FROM interaction_sources s JOIN interaction_instructions i ON i.input_id=s.id WHERE i.id=?1 AND s.human_id=?2",params![id,human],|r|r.get(0))?;
         Ok(serde_json::from_str(&raw)?)
     }
-
-    pub fn interaction_request_inputs(
-        &self,
-        requests: &[String],
-        human: i64,
-    ) -> Result<Vec<serde_json::Value>> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        let mut out = Vec::new();
-        for request in requests {
-            let raw:Option<String>=conn.query_row("SELECT s.doc FROM interaction_requests r JOIN interaction_sources s ON s.id=r.input_id WHERE r.id=?1 AND r.human_id=?2",params![request,human],|r|r.get(0)).optional()?;
-            if let Some(raw) = raw {
-                let source: crate::interaction::SourceInput = serde_json::from_str(&raw)?;
-                let input_id: String = conn.query_row(
-                    "SELECT input_id FROM interaction_requests WHERE id=?",
-                    [request],
-                    |r| r.get(0),
-                )?;
-                let author = super::session_requests::author_on(&conn, &input_id)?;
-                out.push(serde_json::json!({"request":request,"original_text":source.text,"author":author}));
-            }
-        }
-        Ok(out)
-    }
 }
 
 #[cfg(test)]

@@ -7,11 +7,11 @@ window.Conversation = (() => {
     if (cls) value.className = cls;
     return value;
   };
-  function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false}) {
-    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen});
+  function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false, standalone=false}) {
+    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
     const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:pause,unauthorized:failed,telegram});
-    const graph = readOnly ? window.RoutingGraph?.mount({inspect:selection=>{
+    const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
       if(selection.input){$("#conversation-sent").open=true;card.trace.open=true;readTrace(card);}
@@ -284,7 +284,7 @@ window.Conversation = (() => {
       return result;
     }
     async function refreshTelegram() {
-      if(telegramReading || !enabled || !ready || !$("#conversation-sent").open)return;
+      if(standalone || telegramReading || !enabled || !ready || !$("#conversation-sent").open)return;
       const owned=inputGeneration;telegramReading=true;
       try {
         if(!telegramLoaded)await telegramPage();
@@ -384,6 +384,7 @@ window.Conversation = (() => {
       audioState("Paused. Your replies remain available.");
     }
     function setMode(value, initial = false, navigate = true) {
+      if(standalone && !value)return;
       enabled = value;
       document.body.classList.toggle("conversation-mode", enabled);
       $("#conversation").hidden = !enabled;
@@ -662,9 +663,11 @@ window.Conversation = (() => {
     window.addEventListener("online", () => { if (enabled && ready && !document.hidden) refresh(true); });
     telegram?.onEvent?.("deactivated", pause);
     telegram?.BackButton?.onClick?.(() => setMode(false));
+    if(standalone){$("#conversation-back").hidden=true;$("#conversation-telegram-older").hidden=true;}
     if(readOnly){document.body.classList.toggle("monitor-mode",true);$("#conversation-sent").open=true;}
     setMode(initialMode(), true, false);
     return {refresh, pause, stop,
+      unauthenticated() { ready=false; failed({status:401,message:"Open your conversation access file to reconnect."}); },
       authenticated() { ready = true; $("#conversation-open").disabled = false; }};
   }
   return {mount};

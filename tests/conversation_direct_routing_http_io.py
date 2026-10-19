@@ -73,7 +73,9 @@ def qualify(binary):
         grant_file=j.root/'trace-device.json'
         Grants(config,Provider(config)).enroll('Trace scope regression',grant_file,60)
         credential=json.loads(grant_file.read_text())
-        assert client.get(trace_url,headers={'origin':config['origin'],'authorization':credential['authorization']}).status_code==403
+        device_trace=client.get(trace_url,headers={'origin':config['origin'],'authorization':credential['authorization']})
+        assert device_trace.status_code==200,device_trace.text
+        assert device_trace.json()['read_only'] and device_trace.json()['id']==amendment['id']
         packet=j.worker_packets['native-topic-7'][-1]['input'][0]['text']
         assert 'Replace requirement13 with requirement17.' in packet
         provenance=json.loads(next(line.removeprefix('Transport provenance: ') for line in packet.splitlines() if line.startswith('Transport provenance: ')))

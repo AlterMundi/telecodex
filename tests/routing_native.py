@@ -153,6 +153,7 @@ def qualify(args):
 human_id=100
 chat_id=100
 topic_id=1
+telegram_ingress=true
 [[interaction.targets]]
 name="Alpha"
 topic_id=7

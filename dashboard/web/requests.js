@@ -15,7 +15,7 @@ window.RequestControls = (() => {
         unknown:"Earlier response remains unconfirmed.", cancelled:"Cancellation requested.",
         expired:"This request is closed.", source_changed:"This request is no longer current."})[value.state]
       || "This request has no live response channel.";
-  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false}) {
+  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false, getCanDecide=()=>true}) {
     const cards = new Map(), section = $("#conversation-requests"), container = $("#conversation-request-cards");
     const state = $("#conversation-request-state"), more = $("#conversation-requests-more");
     let generation = 0, observation = 0, cursor = 0, reading = false, probeCursor = 0;
@@ -27,13 +27,14 @@ window.RequestControls = (() => {
     function updateControls(card) {
       const allowed = card.view?.actionable && !terminal(card.view) && card.complete
         && !card.reviewRequired && !card.closed && !card.busy && !card.loading && !card.pending && !card.unavailable && card.view.binding === getBinding();
-      for (const button of card.choices.children) button.disabled = !allowed;
+      const mayDecide=allowed && getCanDecide();
+      for (const button of card.choices.children) button.disabled = !mayDecide;
       card.reply.disabled = !allowed;
       card.listen.hidden = card.view?.kind!=="question" || typeof onListen!=="function" || !getCanListen();
       card.listen.disabled = !card.view?.actionable || card.closed || card.busy || card.loading || !!card.pending || card.unavailable || card.view?.binding!==getBinding();
-      card.text.disabled = !allowed;
-      card.submit.disabled = !allowed;
-      card.cancel.disabled = !allowed;
+      card.text.disabled = !mayDecide;
+      card.submit.disabled = !mayDecide;
+      card.cancel.disabled = !mayDecide;
       card.read.disabled = card.busy || card.loading;
       card.retry.hidden = !card.pending;
       card.retry.disabled = card.busy;
@@ -85,7 +86,7 @@ window.RequestControls = (() => {
       }
       card.meta = value;
       card.title.textContent = `${value.label || "Conversation"} · ${value.title || (value.kind === "approval" ? "Approval" : "Question")}`;
-      card.status.textContent = statusText(value);
+      card.status.textContent = statusText(value) + (!getCanDecide() && value.state==='pending' ? value.kind==='approval' ? ' Open Sessions to review this approval.' : ' Reply through the conversation to answer.' : '');
       updateControls(card);
       return true;
     }
@@ -100,13 +101,13 @@ window.RequestControls = (() => {
       text.rows = 3; text.id = `answer-${value.id}`; label.setAttribute("for", text.id);
       const submit = node("button", "Send answer"); submit.type = "submit";
       form.append(label, text, submit); form.hidden = true;
-      const reply = node("button", "Answer in conversation"); reply.type = "button"; reply.hidden = true; form.append(reply);
-      const listen = node("button", "Listen to question"); listen.type = "button"; listen.hidden = true; form.append(listen);
+      const reply = node("button", "Answer in conversation"); reply.type = "button"; reply.hidden = true;
+      const listen = node("button", "Listen to question"); listen.type = "button"; listen.hidden = true;
       const cancel = node("button", "Cancel this turn"); cancel.type = "button"; cancel.hidden = true;
       const check = node("button", "Check decision"), retry = node("button", "Retry this same decision");
       const dismiss = node("button", "Dismiss");
       for (const button of [check,retry,dismiss]) button.type = "button";
-      const actions = node("div", undefined, "reply-actions"); actions.append(check,retry,dismiss);
+      const actions = node("div", undefined, "reply-actions"); actions.append(reply,listen,check,retry,dismiss);
       const note = node("p", "", "reply-error"); note.setAttribute("role", "status");
       const saved = node("details"); saved.hidden = true; saved.append(node("summary", "Previous drafts"));
       box.append(title,status,preview,read,body,choices,form,cancel,actions,note,saved);
@@ -155,9 +156,10 @@ window.RequestControls = (() => {
         const button = node("button",choice.label); button.type = "button";
         button.addEventListener("click", () => choose(card,choice.action,value.revision)); card.choices.append(button);
       }
-      card.form.hidden = !value.allows_text;
+      card.form.hidden = !value.allows_text || !getCanDecide();
       card.reply.hidden = value.kind!=="question" || !value.allows_text || typeof onReply!=="function";
-      card.cancel.hidden = !value.can_cancel;
+      card.cancel.hidden = !value.can_cancel || !getCanDecide();
+      card.choices.hidden = !getCanDecide();
     }
     async function readRequest(card, force = false, userGesture = false) {
       if (card.loading || card.busy) return;
@@ -186,7 +188,7 @@ window.RequestControls = (() => {
       }
     }
     function choose(card, action, expectedRevision) {
-      if (!expectedRevision || card.view?.revision !== expectedRevision || card.reviewRequired || !card.complete || !card.view?.actionable || card.view.binding !== getBinding() || card.pending || card.busy || card.loading || card.unavailable || card.closed) return;
+      if (!getCanDecide() || !expectedRevision || card.view?.revision !== expectedRevision || card.reviewRequired || !card.complete || !card.view?.actionable || card.view.binding !== getBinding() || card.pending || card.busy || card.loading || card.unavailable || card.closed) return;
       if (action.kind === "answer" && (!action.text.trim() || action.text.includes("\0") || new TextEncoder().encode(action.text).length > 32768)) {
         card.note.textContent = "Write an answer of at most 32 KiB."; return;
       }
@@ -195,7 +197,7 @@ window.RequestControls = (() => {
       return sendDecision(card,frozen);
     }
     async function sendDecision(card, frozen) {
-      if (card.busy || frozen !== card.pending) return;
+      if (!getCanDecide() || card.busy || frozen !== card.pending) return;
       const owned = generation;
       card.busy = true; card.note.textContent = "Sending your decision…"; updateControls(card);
       try {

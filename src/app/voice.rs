@@ -45,7 +45,11 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64) -> Result<b
         return Ok(false);
     };
     let key = SessionKey::new(message.chat.id, message.message_thread_id);
-    if key != profile.entry() || human != profile.human_id || message.voice.is_none() {
+    if !profile.telegram_ingress
+        || key != profile.entry()
+        || human != profile.human_id
+        || message.voice.is_none()
+    {
         return Ok(false);
     }
     let update = HUMAN_UPDATE_ID

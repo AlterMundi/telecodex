@@ -10,6 +10,9 @@ pub struct InteractionConfig {
     pub human_id: i64,
     pub chat_id: i64,
     pub topic_id: i64,
+    /// Optional legacy entry adapter. Work topics are never routing ingress.
+    #[serde(default)]
+    pub telegram_ingress: bool,
     #[serde(default)]
     pub targets: Vec<Target>,
     /// Include existing bound conversations owned by this human in this chat.
@@ -387,6 +390,22 @@ pub struct Coverage {
     pub deferred: Vec<String>,
 }
 
+/// Presentation only: an empty declaration is not valid coverage, but remains
+/// protocol metadata. Keep malformed text and quoted/code-fenced examples visible.
+pub fn visible_answer(text: &str) -> &str {
+    let Some((body, tail)) = text.trim_end().rsplit_once("\n<daimon-result>") else {
+        return text;
+    };
+    let Some(raw) = tail.strip_suffix("</daimon-result>") else {
+        return text;
+    };
+    if serde_json::from_str::<Coverage>(raw).is_ok() {
+        body.trim_end()
+    } else {
+        text
+    }
+}
+
 pub fn worker_result(text: &str) -> (&str, Option<Coverage>) {
     const START: &str = "\n<daimon-result>";
     const END: &str = "</daimon-result>";
@@ -449,6 +468,7 @@ mod tests {
             human_id: 100,
             chat_id: 100,
             topic_id: 1,
+            telegram_ingress: false,
             max_active_workers: 2,
             discover_owned_sessions: false,
             observer_model: None,
@@ -496,6 +516,20 @@ mod tests {
         assert_eq!(body, "Answer");
         assert!(claim.is_none());
         assert!(worker_result("Ordinary answer").1.is_none());
+    }
+
+    #[test]
+    fn presentation_hides_empty_metadata_without_accepting_coverage() {
+        let text = "Answer\n<daimon-result>{\"requests\":[],\"covered\":[],\"completed\":[],\"deferred\":[]}</daimon-result>";
+        assert_eq!(visible_answer(text), "Answer");
+        assert!(worker_result(text).1.is_none());
+        for text in [
+            "Answer\n<daimon-result>not JSON</daimon-result>",
+            "Example:\n```\n<daimon-result>{\"requests\":[],\"covered\":[]}</daimon-result>\n```",
+            "Answer\n<daimon-result>{\"requests\":[],\"covered\":[],\"recipient\":\"other\"}</daimon-result>",
+        ] {
+            assert_eq!(visible_answer(text), text);
+        }
     }
 }
 

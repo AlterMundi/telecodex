@@ -6,7 +6,8 @@ const vm = require("node:vm");
 const source = fs.readFileSync("dashboard/web/app.js", "utf8");
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf"})}), monitor=false) {
+function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf"})}), mode=false) {
+  const monitor=mode===true, standalone=mode==='conversation', device=monitor||standalone;
   const nodes = new Map(), requests = [], timers = new Map();
   let nextTimer = 0, monitorHeaders;
   const saved = new Map();
@@ -30,10 +31,10 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
   };
   const context = vm.createContext({
     document,
-    window: { Telegram: { WebApp: { initData: "synthetic", ready() {} } },
-      ...(monitor?{Conversation:{mount(options){monitorHeaders=options.headers;options.modeChanged(true,true);return {authenticated(){},refresh:async()=>{}};}}}:{}) },
+    window: { Telegram: { WebApp: { initData: standalone ? undefined : "synthetic", ready() {} } },
+      ...(device?{Conversation:{mount(options){monitorHeaders=options.headers;options.modeChanged(true,true);return {authenticated(){},refresh:async()=>{}};}}}:{}) },
     sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},
-    URL, location:{href:"https://fixture.invalid/sessions/"+(monitor?"?view=monitor":""),origin:"https://fixture.invalid",pathname:"/sessions/"},
+    URL, location:{href:"https://fixture.invalid/sessions/"+(device?"?view="+(monitor?"monitor":"conversation"):""),origin:"https://fixture.invalid",pathname:"/sessions/"},
     AbortController,
     crypto: { randomUUID: () => "synthetic-action-nonce" },
     fetch(route, options) {
@@ -84,6 +85,24 @@ const hung = (options) => new Promise((resolve, reject) => {
   const before=monitor.requests.length;
   await assert.rejects(vm.runInContext('api("interaction/inputs")',monitor.context),/monitor credential/);
   assert.equal(monitor.requests.length,before);
+  const client=boot(()=>Promise.resolve({ok:true,json:async()=>({binding:"fixture",csrf:"server-csrf",viewer:{label:"Phone",expires:1900000000}})}),undefined,'conversation');
+  await settle();
+  assert.equal(client.requests.length,0,"Standalone chat must not open a Telegram session or use ambient owner cookies");
+  const accessFile=client.nodes.get("#feedback").children[0].children[0];
+  const access={...credential,schema:"telecodex.companion-device/v1",scope:undefined,csrf:"c".repeat(43),expires:1};
+  accessFile.files=[{size:400,text:async()=>JSON.stringify(access)}];await accessFile.handlers.change();
+  assert.equal(client.context.document.title,"Daimon Interaction · Phone");
+  assert.equal(client.headers().Authorization,access.authorization);
+  await vm.runInContext('api("interaction/inputs",{id:"synthetic",text:"Continue while a worker is active"})',client.context);
+  const submitted=client.requests.at(-1);
+  assert.equal(submitted.options.method,"POST");
+  assert.equal(submitted.options.headers["X-Dashboard-CSRF"],"server-csrf");
+  assert.equal(submitted.options.headers.Authorization,access.authorization);
+  const requestCount=client.requests.length;
+  await assert.rejects(vm.runInContext('api("stop",{nonce:"forbidden"})',client.context),/limited to your conversation/);
+  assert.equal(client.requests.length,requestCount);
+  accessFile.files=[{size:400,text:async()=>JSON.stringify({...access,scope:"monitor_readonly"})}];await accessFile.handlers.change();
+  assert.throws(()=>client.headers(),/conversation access file/);
   // Regression: previously this bootstrap skipped state and stayed on Reading….
   const launch = boot((route) => route === "api/session" ? ok() : unavailable());
   await settle();

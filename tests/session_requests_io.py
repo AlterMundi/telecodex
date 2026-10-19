@@ -80,9 +80,7 @@ def live_return(binary):
 def one_slot_deferred_return(binary):
     j=Sessions(binary)
     try:
-        j.prepare();j.stop()
-        j.config.write_text(j.config.read_text().replace('topic_id=1\n','topic_id=1\nmax_active_workers=1\n'))
-        j.start()
+        j.prepare(max_active_workers=1)
         source_starts=len([r for r in j.rpc if r.get('method')=='turn/start' and r['params']['threadId']=='native-topic-7'])
         j.admit('#Alpha Work and consult the selected existing Beta session.',topic=1)
         j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='accepted')

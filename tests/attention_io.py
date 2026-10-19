@@ -43,6 +43,8 @@ class Load(Routing):
 
     def handle_extra_rpc(self,m,send):
         p=m.get('params',{})
+        if self.allow_native_launch and m.get('method')=='turn/start' and p.get('clientUserMessageId','').startswith('telegram:'):
+            return super().handle_extra_rpc(m,send)
         if self.routed and m.get('method')=='turn/start':
             thread=p['threadId']
             if thread not in {f'native-topic-{n}' for n in range(7,27)}:
@@ -221,35 +223,40 @@ def retained_load(binary):
     finally:j.close()
 
 
-def withdrawn_goal(binary):
+def direct_goal_bypasses_routing_capacity(binary):
     j=Load(binary)
     try:
         j.prepare_load(10)
+        j.allow_native_launch=True
         for name in ('Alpha','Beta'):j.admit(f'#{name} Occupy a worker slot.',topic=1)
         j.wait(lambda:all(j.instructions(n) and j.instructions(n)[0][1]=='accepted' for n in (7,8)))
-        assert 'native-topic-9' not in j.goals
-        j.admit('/goal This queued objective must never activate.',topic=9)
-        j.wait(lambda:j.has('Starting native goal work.',9))
-        j.admit('/interaction attention',topic=1)
-        j.wait(lambda:any('Interaction attention' in m['text'] and 9 in json.loads(re.sub(r'<[^>]+>', '', m['text'].split('\n',1)[1]))['waitingtopics'] for m,_ in j.messages))
-        j.admit('#Work9 Pending human input behind the queued goal.',topic=1)
-        j.wait(lambda:j.instructions(9) and j.instructions(9)[0][1]=='queued')
+        objective='Independent native work starts while router capacity is full.'
+        j.admit('/goal '+objective,topic=9)
+        j.wait(lambda:j.goals.get('native-topic-9',{}).get('status')=='active' and 'native-topic-9' in j.runs)
+        assert not j.instructions(9), 'A direct goal became router input'
+        quota=attention_snapshot(j,'direct-goal')
+        assert quota['active']==2 and quota['waiting']==0, quota
+        packet=j.packets['native-topic-9'][-1]
+        assert j.goals['native-topic-9']['objective']==objective
+        assert '[Interaction controller]' not in str(packet['input']), packet['input']
         j.admit('/goal clear',topic=9)
-        j.wait(lambda:j.has('No goal to clear.',9))
-        j.answer(8,'Release capacity after queued goal withdrawal.')
-        j.wait(lambda:j.instructions(9)[0][1]=='retained_unsent')
-        j.wait(lambda:j.row("SELECT value FROM bot_state WHERE key='goal_intent:100:9'")!=[])
-        assert 'native-topic-9' not in j.goals and 'native-topic-9' not in j.runs
-        assert not any(m.get('method')=='thread/goal/set' and m.get('params',{}).get('threadId')=='native-topic-9' for m in j.rpc)
-        j.answer(7,'Finish remaining capacity holder.')
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered'")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')[0][0]>=2)
+        j.wait(lambda:j.has('Goal cleared.',9))
+        assert 'native-topic-9' not in j.goals
+        native=j.runs['native-topic-9']
+        j.broadcast('native-topic-9','item/completed',{'turnId':native,'item':{'id':'direct-goal-answer','type':'agentMessage','phase':'final_answer','text':'Independent native work answer.'}})
+        j.broadcast('native-topic-9','turn/completed',{'turn':{'id':native,'status':'completed'}})
+        j.wait(lambda:j.has('Independent native work answer.',9))
+        j.answer(8,'Routed Beta continues independently.')
+        j.answer(7,'Routed Alpha continues independently.')
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered'")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')[0][0]==2)
         j.idle()
-        print('PASS queued goal revoked during capacity wait cannot activate; pending human input remains known unsent without replay')
+        assert not any(m.get('method')=='turn/interrupt' for m in j.rpc)
+        print('PASS ordinary native goal starts and clears outside a saturated router quota, retains its own answer, and leaves routed work intact')
     finally:j.close()
 
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     retained_load(binary)
-    withdrawn_goal(binary)
+    direct_goal_bypasses_routing_capacity(binary)
 

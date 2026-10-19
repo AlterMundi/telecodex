@@ -92,6 +92,8 @@ def scenario(mode):
     markup_prefix = '_markup' in mode
     commentary = ['First completed progress.', 'Second progress: ' + 'x' * 3800]
     final_answer = 'Final answer.'
+    result_footer = mode.endswith('_result_footer')
+    wire_final = final_answer + ('\n<daimon-result>'+json.dumps({'requests':[], 'covered':[], 'completed':[], 'deferred':[]})+'</daimon-result>' if result_footer else '')
     acknowledge_steer = mode == 'accepted_steer'
     missing_binding = mode == 'missing_saved_binding'
     with tempfile.TemporaryDirectory(prefix='telecodex-review-steer-') as name:
@@ -191,7 +193,7 @@ def scenario(mode):
                                 send({'method':'item/completed','params':{'item':{'type':'agentMessage','id':'empty-first','phase':'commentary','text':''}}})
                                 send({'method':'item/completed','params':{'item':{'type':'agentMessage','id':'space-first','phase':'final_answer','text':' \n\t'}}})
                                 send({'method':'thread/status/changed','params':{'status':{'type':'idle'}}})
-                            for index, text in enumerate(commentary if commentary_only else [*commentary, final_answer]):
+                            for index, text in enumerate(commentary if commentary_only else [*commentary, wire_final]):
                                 item_id = f'agent-{index}'
                                 send({'method': 'item/started', 'params': {'item': {
                                     'type': 'agentMessage', 'id': item_id}}})
@@ -546,7 +548,7 @@ import_desktop_history=false
                 assert all(target != first_id for _, target, _ in edits[first_commit + 1:])
                 with sqlite3.connect(root / 'state.sqlite') as db:
                     assert db.execute('select status,assistant_text from turns').fetchall() == [
-                        ('completed', commentary[-1] if commentary_only else 'Continued final answer.' if final_before_completion else final_answer)]
+                        ('completed', commentary[-1] if commentary_only else 'Continued final answer.' if final_before_completion else wire_final)]
                 if foreign_events:
                     assert sessions == [('synthetic-native-thread',)], sessions
                     assert all(method is not None for method, _ in rpc), 'answered a foreign server request'
@@ -592,7 +594,7 @@ if __name__ == '__main__':
     else:
         token_probe()
         for mode in ['retained_commentary_attachment_local', 'retained_commentary_attachment_oversize', 'retained_commentary_attachment_interrupted', 'stalled_steer', 'accepted_steer', 'unacknowledged_steer', 'missing_saved_binding',
-                     'retained_commentary_drafts', 'retained_commentary_preview',
+                     'retained_commentary_drafts', 'retained_commentary_preview', 'retained_commentary_result_footer', 'retained_commentary_hidden_result_footer',
                      'retained_commentary_only', 'retained_commentary_hidden',
                      'retained_commentary_hidden_drafts', 'retained_commentary_hidden_only',
                      'retained_commentary_empty_drafts', 'retained_commentary_empty_hidden', 'retained_commentary_markup_preview',

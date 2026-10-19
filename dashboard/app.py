@@ -212,8 +212,10 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     public = Path(__file__).parent / 'web'
 
     @app.get('/')
-    def shell():
+    def shell(request: Request):
         body = (public / 'index.html').read_text()
+        if request.query_params.get('view') == 'conversation' and request.query_params.get('client') == 'standalone':
+            body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
         for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
@@ -306,7 +308,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(503, 'Message history unavailable; refresh to reconnect') from None
         authorize(request)
         viewer = {}
-        if isinstance(session, dict) and session.get('scope') == 'monitor_readonly':
+        if isinstance(session, dict) and session.get('scope') in ('monitor_readonly','interaction_only'):
             label = session.get('label')
             if not isinstance(label, str) or not 1 <= len(label) <= 64 or any(ord(c) < 32 for c in label):
                 label = 'Selected receiver'
