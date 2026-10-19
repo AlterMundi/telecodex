@@ -354,7 +354,7 @@ impl Store {
                 "SELECT id FROM original_ingress_order WHERE channel='telegram' AND event_id=?1",
                 [update.update_id.to_string()], |r|r.get(0),
             ).optional()?;
-            if !order.is_some_and(|order| order > captured)
+            if order.is_none_or(|order| order <= captured)
                 || conn.query_row(
                     "SELECT EXISTS(SELECT 1 FROM interaction_sources WHERE update_id=?1)",
                     [update.update_id],
