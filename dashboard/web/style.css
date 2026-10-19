@@ -499,3 +499,41 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .monitor-mode #conversation-play,
 .monitor-mode #conversation-audio-state,
 .monitor-mode #conversation-requests { display:none !important; }
+
+
+/* Temporal routing view: the server owns evidence, this pane only observes it. */
+.monitor-mode main { max-width: none; }
+#routing-graph { margin-block: 12px 20px; }
+#routing-graph h2 { font-size: 20px; margin: 0; }
+#routing-graph-viewport {
+  overflow: auto; height: min(65vh, 640px); min-height: 320px;
+  border: 1px solid var(--line); border-radius: var(--dm-radius, 10px);
+  background: var(--bg); overscroll-behavior: contain;
+}
+#routing-graph-viewport:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+#routing-graph-surface { position: relative; isolation: isolate; }
+.routing-edges { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.routing-edge { fill: none; stroke: var(--accent); stroke-width: 2; opacity: .75; }
+.routing-edge.incorporated { stroke-width: 3; }
+.routing-arrow { fill: var(--accent); }
+.routing-node {
+  position: absolute; width: 292px; height: 248px; padding: 14px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+  border-radius: var(--dm-radius, 10px); text-align: start; font: inherit;
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--bg) 65%, transparent);
+}
+.routing-node:hover { border-color: var(--accent); }
+.routing-node:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.routing-route { border-inline-start: 4px solid var(--accent); }
+.routing-response { border-inline-start: 4px solid var(--good); }
+.routing-decision { border-style: dashed; }
+.routing-node-title { font-size: 16px; font-weight: 600; line-height: 1.3; }
+.routing-node-text { font-size: 14px; line-height: 1.4; overflow: hidden; overflow-wrap: anywhere; flex: 1; min-height: 0; white-space: pre-wrap; }
+.routing-node-status { font-size: 14px; color: var(--muted); line-height: 1.3; }
+.routing-lane-label {
+  position: absolute; left: 0; z-index: 2; padding: 1px 10px; font-size: 14px;
+  color: var(--muted); background: var(--bg); pointer-events: none;
+}
+@media (max-width: 480px) { #routing-graph-viewport { height: 60vh; } }
+@media (prefers-reduced-motion: reduce) { #routing-graph-viewport { scroll-behavior: auto; } }

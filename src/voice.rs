@@ -187,3 +187,80 @@ async fn read_media(path: &Path) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+
+/// Remove only the exact owned download whose interpretation was durably committed.
+/// The caller must commit text/provenance first. Cleanup failure never retries ASR.
+#[cfg(unix)]
+pub fn retire_transcribed_clip(path: &Path, expected_sha256: &str) -> Result<()> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let info = file.metadata()?;
+    if !info.is_file()
+        || info.uid() != unsafe { libc::geteuid() }
+        || info.mode() & 0o077 != 0
+        || info.len() > MAX_BYTES as u64
+    {
+        bail!("Committed voice cleanup requires a bounded private owner file");
+    }
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_BYTES || format!("{:x}", Sha256::digest(&bytes)) != expected_sha256 {
+        bail!("Committed voice bytes changed before cleanup");
+    }
+    let current = std::fs::symlink_metadata(path)?;
+    if current.dev() != info.dev() || current.ino() != info.ino() {
+        bail!("Committed voice path changed before cleanup");
+    }
+    std::fs::remove_file(path)?;
+    std::fs::File::open(path.parent().context("Voice cleanup parent unavailable")?)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn retire_transcribed_clip(_path: &Path, _expected_sha256: &str) -> Result<()> {
+    bail!("Committed voice cleanup requires Unix file ownership");
+}
+
+#[cfg(all(test, unix))]
+mod retirement_tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    #[test]
+    fn committed_payload_disposal_is_exact_and_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("voice.ogg");
+        std::fs::write(&path, b"owned confirmed clip").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let hash = format!("{:x}", Sha256::digest(b"owned confirmed clip"));
+        assert!(retire_transcribed_clip(&path, &"0".repeat(64)).is_err());
+        assert!(path.exists());
+        retire_transcribed_clip(&path, &hash).unwrap();
+        assert!(!path.exists());
+        retire_transcribed_clip(&path, &hash).unwrap();
+    }
+    #[test]
+    fn public_or_linked_sources_are_preserved() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let link = root.path().join("link");
+        std::fs::write(&source, b"private original").unwrap();
+        let hash = format!("{:x}", Sha256::digest(b"private original"));
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(retire_transcribed_clip(&source, &hash).is_err());
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&source, &link).unwrap();
+        assert!(retire_transcribed_clip(&link, &hash).is_err());
+        assert!(source.exists());
+    }
+}

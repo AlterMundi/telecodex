@@ -86,6 +86,13 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64) -> Result<b
             let(text,proof)=crate::voice::transcribe(&config,&attachment.path,&source.file_id).await?;
             if app.maintenance_writer_held(&message,human,Some(&text)).await? {bail!("Voice source held during preparation");}
             app.shared.store.voice_commit(update,human,&text,&proof)?;
+            let cleanup_path=attachment.path.clone();
+            let cleanup_hash=proof.audio_sha256.clone();
+            tokio::task::spawn_blocking(move || {
+                if crate::voice::retire_transcribed_clip(&cleanup_path,&cleanup_hash).is_err() {
+                    tracing::warn!("Committed voice download cleanup deferred");
+                }
+            });
             routing::notice(app.shared.clone(),origin(&message),format!("Automatic voice transcript:\n{}",text.chars().take(1800).collect::<String>()));
             if routing::handle(&app,&message,human,&text).await? {return Ok(());}
             // Voice bypasses the general slash-command dispatcher. Routing/status
@@ -103,7 +110,7 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64) -> Result<b
         };
         if result.is_err() {
             let _ = app.shared.store.voice_fail(update);
-            routing::notice(app.shared.clone(),origin(&message),"Voice preparation or admission is unconfirmed. The original clip is retained; no automatic retry was made. Text controls remain available.".into());
+            routing::notice(app.shared.clone(),origin(&message),"Voice preparation or admission is unconfirmed. The original input and any committed transcript remain recorded; no automatic retry was made. Text controls remain available.".into());
         } else {
             let _ = app.shared.store.voice_finish_dispatch(update);
         }
