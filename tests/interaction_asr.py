@@ -48,7 +48,7 @@ class Retention(unittest.TestCase):
         self.cfg={'schema':'telecodex.interaction-asr/v1','helper':str(self.helper),
             'route_binding':str(self.route),'cache_root':str(self.root/'cache')}
         self.write_config()
-        self.probe=patch.object(asr,'probe_duration',return_value=1);self.probe.start()
+        self.probe=patch.object(asr,'probe_duration',return_value=(1,None));self.probe.start()
     def tearDown(self):self.probe.stop();self.temp.cleanup();os.umask(self.previous_umask)
     def write_config(self):self.binding.write_text(json.dumps(self.cfg))
     def calls(self):
@@ -116,6 +116,32 @@ class Retention(unittest.TestCase):
             metadata={'streams':[{'duration':str(stream)}],'format':{'duration':str(container)}}
             with patch.object(asr.subprocess,'check_output',return_value=json.dumps(metadata).encode()):
                 with self.assertRaisesRegex(asr.RenderError,'duration'):self.run_asr()
+        self.assertEqual(self.calls(),0)
+        self.assertFalse(list((self.root/'cache').glob('*/state.json')))
+
+    def streaming_webm(self, seconds):
+        self.source=self.root/'browser.webm'
+        audio=subprocess.check_output(['ffmpeg','-v','error','-f','lavfi','-i',
+            'sine=frequency=440:sample_rate=16000','-t',str(seconds),'-c:a','libopus',
+            '-live','1','-f','webm','pipe:1'])
+        self.source.write_bytes(audio)
+
+    def test_browser_stream_without_duration_is_finalized_and_media_retired(self):
+        self.probe.stop();self.streaming_webm(1)
+        before=self.source.read_bytes()
+        duration,pcm=asr.probe_duration(self.source)
+        self.assertGreater(duration,.9);self.assertIsNotNone(pcm)
+        self.assertEqual(self.run_asr(),{'text':'Final words','final':True})
+        state=json.loads(next((self.root/'cache').glob('*/state.json')).read_text())
+        self.assertIn('prepared_source_sha256',state)
+        self.assertEqual(self.source.read_bytes(),before)
+        self.assertFalse(list((self.root/'cache').rglob('*.wav')))
+        self.assertFalse(list((self.root/'cache').rglob('source.media')))
+        self.assertEqual(self.run_asr()['text'],'Final words');self.assertEqual(self.calls(),1)
+
+    def test_overlong_stream_without_duration_refused_before_helper(self):
+        self.probe.stop();self.streaming_webm(121)
+        with self.assertRaisesRegex(asr.RenderError,'duration'):self.run_asr()
         self.assertEqual(self.calls(),0)
         self.assertFalse(list((self.root/'cache').glob('*/state.json')))
 
