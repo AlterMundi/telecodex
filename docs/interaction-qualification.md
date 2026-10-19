@@ -1,6 +1,6 @@
 # Daimon Interaction: qualification and next roadmap
 
-Status: proposed acceptance campaign, 2026-10-19. This document does not report
+Status: acceptance protocol aligned with the reviewed [v0.2 executable plan](interaction-v02.md), 2026-10-19; execution pending. This document does not report
 execution of the campaign or authorize new capture, publication or background
 attention. Owner: [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
 Design: [integrating conversation](interaction.md).
@@ -41,6 +41,15 @@ establish statistical routing accuracy, faithful summaries for every session,
 or complete coverage of the interactions between implemented features.
 
 ## Execution method
+
+Complete the integrated v0.2 implementation first, then run this campaign with
+real native sessions. Development fixtures can run throughout implementation;
+they are not a substitute for the post-implementation real-session campaign.
+Track each requirement, implementation PR, receiving revision and case result in
+[v0.2 milestone 8](https://github.com/AlterMundi/telecodex/milestone/8),
+coordinating issue #208 and Daimon Interaction Project 14. Preserve private
+originals/receipts locally; publish concise nonprivate evidence and failures.
+
 
 1. Use existing deterministic/process fixtures for ordering, fault injection,
    duplicate delivery, budgets and permissions. No model or physical recording
@@ -92,10 +101,36 @@ Combine rows in a few reusable journeys wherever practical.
 | Q15 | Speak mixed Spanish/English; queue several speech chunks/results; start speaking during output | Understandable transcription, natural spacing, no overlapping playback, clear capture state and cancelable queued speech. Judge actual sound, not just the `ended` event | A, N, H |
 | Q16 | Complete transcription, fail transcription, render speech, then exercise expiry/size limits | Durable text is retained; successful source audio is removed; failed/uncertain audio is bounded and identifiable. TTS pruning matches its documented cache policy, without pretending immediate playback deletion | A |
 | Q17 | Use a narrow screen, large text and keyboard; open read-only diagnostics during parallel work | Main text/voice interaction remains readable and reachable. Diagnostics start collapsed; truthful compact activity is understandable. No overlap or inaccessible clarification | A browser, H |
-| Q18 | Use a simple/advanced presentation and an independently read-only monitor credential | Read-only inspection stays accessible; presentation does not grant destructive authority. If user profiles are not implemented, mark them planned rather than certifying them | A, H |
+| Q18 | Use a simple/advanced presentation and an independently read-only monitor credential | Read-only inspection stays accessible; presentation does not grant destructive authority. Exercise the selected simple/advanced configuration and allowed/denied goal, question, approval and artifact operations. Existing credentials retain their audience and grants; profiles cannot be deferred as planned for this milestone | A, H |
 | Q19 | Select an immutable image/reference; later change the live scene | Work uses the selected capture/revision and coordinates; uncertainty prompts clarification; no claim to see a changed scene | A, selected N/H |
 | Q20 | Interview completed and busy source sessions through an explicitly selected observer finding | Exact fork only where supported; derived/pinned context otherwise labeled. Interview does not mutate source work; publication is a separate selected act | A, N, H |
-| Q21 | Request an artifact from routed work; revisit after session renewal/compaction | Correct continuity and truthful access to retained output. Current routed adapter is text-only: no false file-delivery claim. Automatic authorized artifact return is a future capability to qualify once implemented | A, N |
+| Q21 | Request an artifact from routed work; revisit after session renewal/compaction | Correct continuity and truthful access to retained output. Required authorized artifact registration and browser access from actual output turns, immutable hash/bytes and audience; independent destination references, multifile partial failures, expiry/revocation and supported logical renewal. No arbitrary path access, audience expansion or false delivery claim | A, N |
+
+## Integrated v0.2 extensions
+
+Record a compact coverage matrix: existing/new integrator, existing/new worker,
+busy/idle, standalone/Telegram, authorized/read-only. Reuse paired journeys;
+there is no requirement to repeat all cases for every Cartesian combination.
+Persisted tool registration must not restrict acceptance to fresh test threads.
+
+| ID | Additional action | Required observation / evidence |
+| --- | --- | --- |
+| V01 | Two existing sessions overlap; switch one to direct Telegram input; answer its live question; receive an artifact and reconnect | Real native task effects, retained attribution, independent primary return and deduplicated destination publications; ordinary direct ingress stays outside the router. Q04/Q07/Q10/Q13/Q21 |
+| V02 | Confirm an assistant goal proposal; explicitly change another goal; cancel/stale/repeat a confirmation; say “yes, then ask X” | Exactly scoped human control transaction, single-use confirmation, ordered child input once, no inferred interrupt/accounting reset. Include old integrator/worker paths and allowed/denied device grants |
+| V03 | Inject native model/external goal mutation between read and set/clear; fail between replacement clear/set | A stale operation cannot mutate the replacement goal. Native preconditions or honest refusal; partial/unknown outcome retained. Wrapper precheck alone is not a pass |
+| V04 | Withdraw an obsolete task while its issuer runs; change binding; answer a stale question; attempt an approval with a read-only credential | Scoped attributable withdrawal distinct from human completion, no fabricated live responder or approval; relevant ordinary answers accepted without repeated entry. Q07/Q18 |
+| V05 | Switch return surfaces and lose Telegram acknowledgment after an accepted send | Shared canonical event/destination identity prevents ordinary/projected duplication; ambiguous delivery remains uncertain without resend or task replay; primary return independent. Q12/Q13 |
+| V06 | Cancel during interreply/interchunk silence, start capture, hide/disable/change source, fail one TTS, then reconnect | Generation-owned waiting cancels even with no active audio element; next reply remains usable, question priority visible, late progress does not displace final, no historical autoplay. Q09/Q10/Q11/Q15 |
+| V07 | Inspect companion with parallel activity, missing/invalid/stale hint, reduced motion, hidden screen, narrow keyboard layout | Finite local animation and deterministic default; cosmetic hints bound to actual response/turn; readable operational states independent of portrait and no animation inference loop. Q17/Q18 |
+| V08 | Download artifact; fail one of several files; expire/revoke grant; renew logical session; lose Telegram delivery acknowledgment | Actual retained bytes/hash/audience and original output provenance, useful partial/unavailable state, no old-current-binding requirement after supported renewal and no duplicate execution. Q21 |
+
+The final campaign report must distinguish synthetic fault injection, real native
+execution, browser observations, receiving adoption and human judgments. Required
+Q01–Q21/V01–V08 capability cases cannot pass as “planned”, unavailable or not run.
+Mark each method separately when its human observation remains pending. Existing
+valid evidence may satisfy unchanged deterministic cases; native combined journeys
+must exercise the finished integrated version. Do not infer subjective child
+appeal, physical hearing or days of daily use from browser automation.
 
 ## Human journeys
 
