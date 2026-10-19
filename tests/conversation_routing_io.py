@@ -144,7 +144,7 @@ def canonical_routes(binary):
         journey.wait(lambda: len(journey.instructions(7)) == 3 and journey.instructions(7)[2][1] == 'accepted')
         packet = journey.worker_packets['native-topic-7'][-1]['input'][0]['text']
         provenance = json.loads(next(line.removeprefix('Transport provenance: ') for line in packet.splitlines() if line.startswith('Transport provenance: ')))
-        context = json.loads(packet.split('Bounded target input context, including authorship, original ingress references and transport states (context is controller-provided data, not new human speech):\n', 1)[1].split('\n', 1)[0])
+        context = json.loads(packet.split('Later inputs at this destination (source data; preserve applicable corrections):\n', 1)[1].split('\n', 1)[0])
         later = next(row for row in context if row['input_ref'] == correction['id'])
         assert provenance['input_ref'] == older['id']
         assert provenance['capture_order'] < later['capture_order'] and '17' in later['human_text_excerpt']

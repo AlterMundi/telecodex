@@ -308,16 +308,44 @@ impl Store {
         key: SessionKey,
         human: i64,
     ) -> Result<Vec<serde_json::Value>> {
+        self.interaction_target_input_context(key, human, None)
+    }
+
+    /// Related source deltas for a worker packet; unrelated topic activity must
+    /// neither be replayed nor push the needed correction out of the window.
+    pub fn interaction_related_target_inputs(
+        &self,
+        key: SessionKey,
+        human: i64,
+        requests: &[String],
+    ) -> Result<Vec<serde_json::Value>> {
+        self.interaction_target_input_context(key, human, Some(requests))
+    }
+
+    fn interaction_target_input_context(
+        &self,
+        key: SessionKey,
+        human: i64,
+        requests: Option<&[String]>,
+    ) -> Result<Vec<serde_json::Value>> {
         use serde_json::{Value, json};
         let conn = self.conn.lock().expect("store mutex poisoned");
-        let mut query=conn.prepare("SELECT i.doc,i.phase,o.doc FROM interaction_instructions i JOIN interaction_sources o ON o.id=i.input_id JOIN sessions s ON s.id=i.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND o.human_id=?3 AND (json_extract(i.doc,'$.native_thread')=s.codex_thread_id OR json_extract(i.doc,'$.native_thread') IS NULL) ORDER BY i.sequence DESC LIMIT 16")?;
-        let rows = query.query_map(params![key.chat_id, key.thread_id, human], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?;
+        let mut query=conn.prepare("SELECT i.doc,i.phase,o.doc FROM interaction_instructions i JOIN interaction_sources o ON o.id=i.input_id JOIN sessions s ON s.id=i.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND o.human_id=?3 AND (json_extract(i.doc,'$.native_thread')=s.codex_thread_id OR json_extract(i.doc,'$.native_thread') IS NULL) AND (?4 IS NULL OR EXISTS(SELECT 1 FROM interaction_request_links l JOIN json_each(?4) r ON r.value=l.request_id WHERE l.instruction_id=i.id)) ORDER BY i.sequence DESC LIMIT 16")?;
+        let rows = query.query_map(
+            params![
+                key.chat_id,
+                key.thread_id,
+                human,
+                requests.map(serde_json::to_string).transpose()?
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )?;
         rows.map(|row|{let(doc,phase,source)=row?;let i:crate::interaction::Instruction=serde_json::from_str(&doc)?;let source:crate::interaction::SourceInput=serde_json::from_str(&source)?;let capture=original_order_on(&conn,&source)?;let reference=source_reference(&source);let author=super::session_requests::author_on(&conn,&i.input_id)?;Ok(json!({"author":author,"instruction":i.id,"requests":i.requests,"relation":i.relation,"transport_phase":phase,"input_ref":reference,"capture_order":capture,"source_channel":source.channel,"transcription":source.transcription,"original_ingress_update":source.update_id,"source_message":source.origin,"human_text_excerpt":if author.is_none() && source.transcription.is_none(){Some(i.text.chars().take(4000).collect::<String>())}else{None},"attributed_text_excerpt":i.text.chars().take(4000).collect::<String>(),"excerpt_bounded":true}))}).collect::<Result<Vec<Value>>>()
     }
 }

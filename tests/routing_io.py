@@ -42,18 +42,20 @@ class Routing(Goals):
         self.activity_unavailable = False
         super().__init__(binary)
 
-    def prepare(self):
+    def prepare(self, max_active_workers=2, telegram_ingress=True, seed_entry=False):
         self.start()
-        for topic in (7, 8):
+        for topic in ((7, 8, 1) if seed_entry else (7, 8)):
             self.admit('Seed existing native conversation', topic=topic)
             self.wait(lambda: self.has('Initial goal turn delivered.', topic))
             self.idle()
         self.stop()
         with self.config.open('a') as f:
-            f.write('''\n[interaction]
+            f.write(f'''\n[interaction]
 human_id=100
 chat_id=100
 topic_id=1
+telegram_ingress={str(telegram_ingress).lower()}
+max_active_workers={max_active_workers}
 [[interaction.targets]]
 name="Alpha"
 topic_id=7
@@ -78,6 +80,11 @@ topic_id=8
         if self.routed and self.block_binding and m.get('method') == 'thread/resume':
             self.binding_held.set()
             self.release_binding.wait(timeout=30)
+        if self.routed and self.allow_native_launch and m.get('method') == 'turn/steer' and m['params'].get('clientUserMessageId','').startswith('telegram:'):
+            p = m['params']
+            self.packets.setdefault(p['threadId'], []).append(p)
+            send({'id':m['id'],'result':{'turnId':self.runs[p['threadId']]}})
+            return True
         if self.routed and self.allow_native_launch and m.get('method') == 'turn/start' and m['params'].get('clientUserMessageId','').startswith('telegram:'):
             p = m['params']
             thread = p['threadId']
@@ -184,6 +191,75 @@ topic_id=8
             self.broadcast(thread, 'turn/completed', {'turn': {'id': turn, 'status': 'completed'}})
 
 
+def direct_topics_bypass_router(binary):
+    j = Routing(binary)
+    try:
+        j.prepare(max_active_workers=1)
+        j.allow_native_launch = True
+        j.admit('#Alpha Hold the only router slot', topic=1)
+        j.wait(lambda: j.instructions(7) and j.instructions(7)[0][1] == 'accepted')
+        before = j.row('SELECT count(*) FROM interaction_sources')
+        original = 'Direct text already has its selected destination'
+        j.admit(original, topic=8)
+        j.wait(lambda: 'native-topic-8' in j.runs)
+        assert j.instructions(8) == [], 'Direct input entered the routing journal'
+        assert j.row('SELECT count(*) FROM interaction_sources') == before
+        packet = j.packets['native-topic-8'][-1]
+        assert packet['input'][0]['text'] == original
+        runtime = packet['additionalContext']['telecodex.runtime']['value']
+        assert 'This routed adapter' not in runtime
+        assert 'Your selected local work conversation' not in runtime
+        thread = 'native-topic-8'
+        j.broadcast(thread, 'item/completed', {'turnId':j.runs[thread], 'item': {
+            'id':'direct-progress', 'type':'agentMessage', 'phase':'commentary',
+            'text':'Direct progress reaches its own topic before completion.'}})
+        j.wait(lambda: j.has('Direct progress reaches its own topic before completion.',8))
+        assert not j.has('Direct progress reaches its own topic before completion.',1)
+        j.broadcast(thread, 'item/completed', {'turnId':j.runs[thread], 'item': {
+            'id':'direct-final', 'type':'agentMessage', 'phase':'final_answer',
+            'text':'One ordinary direct answer.'}})
+        j.broadcast(thread, 'turn/completed', {'turn':{'id':j.runs[thread],'status':'completed'}})
+        j.wait(lambda: j.has('One ordinary direct answer.',8))
+        assert sum('One ordinary direct answer.' in m['text'] for m,_ in j.messages) == 1
+        # Even a selector in a work topic remains literal native human text.
+        j.admit('#Alpha is mentioned in this direct conversation',topic=8)
+        j.wait(lambda: len(j.packets[thread]) == 2)
+        assert j.packets[thread][-1]['input'][0]['text'] == '#Alpha is mentioned in this direct conversation'
+        assert len(j.instructions(7)) == 1 and not j.instructions(8)
+        j.broadcast(thread,'turn/completed',{'turn':{'id':j.runs[thread],'status':'completed'}})
+        j.answer(7,'Routed work completes independently.')
+        j.wait(lambda:j.has('Routed work completes independently.',1))
+        j.idle()
+        print('PASS direct topics bypass routing/capacity, retain raw text/native commentary/final, and never interpret selectors')
+    finally:
+        j.close()
+
+
+def disabled_entry_is_native(binary):
+    j = Routing(binary)
+    try:
+        j.prepare(telegram_ingress=False, seed_entry=True)
+        # Prove omission has the same default as an explicit false setting.
+        j.stop()
+        j.config.write_text(j.config.read_text().replace('telegram_ingress=false\n', ''))
+        j.allow_native_launch = True
+        j.start()
+        text = '#Alpha is ordinary text when the legacy Telegram entry is disabled'
+        j.admit(text, topic=1)
+        thread = j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=1')[0][0]
+        j.wait(lambda: thread in j.runs)
+        packet = j.packets[thread][-1]
+        assert packet['input'][0]['text'] == text
+        assert j.row('SELECT count(*) FROM interaction_sources') == [(0,)]
+        runtime = packet['additionalContext']['telecodex.runtime']['value']
+        assert 'integrating conversation' not in runtime
+        j.broadcast(thread,'turn/completed',{'turn':{'id':j.runs[thread],'status':'completed'}})
+        j.idle()
+        print('PASS omitted legacy Telegram adapter remains native, including selectors at the former entry')
+    finally:
+        j.close()
+
+
 def parallel_and_corrections(binary):
     j = Routing(binary)
     try:
@@ -194,6 +270,12 @@ def parallel_and_corrections(binary):
         j.wait(lambda: all(r[1] == 'accepted' for topic in (7, 8) for r in j.instructions(topic)))
         j.admit('Change the Alpha requirement now', topic=1, reply=original)
         j.wait(lambda: len(j.instructions(7)) == 2 and j.instructions(7)[1][1] == 'accepted')
+        initial = j.packets['native-topic-7'][0]['input'][0]['text']
+        amended = j.packets['native-topic-7'][1]['input'][0]['text']
+        assert initial.count('Analyze a complex task') == 1
+        assert len(initial) < 2200, len(initial)
+        assert 'Analyze a complex task' not in amended, 'Prior source was replayed into an already-retained native context'
+        assert amended.count('Change the Alpha requirement now') == 1
         assert len(j.packets['native-topic-7']) == 2, j.packets
         assert len(j.packets['native-topic-8']) == 1, j.packets
         # Beta finishes first; Alpha's old result must not pass as current.
@@ -236,12 +318,10 @@ def parallel_and_corrections(binary):
         j.answer(7, 'Refined result', item='refined')
         j.wait(lambda: j.has('Refined result', 1))
         j.idle()
-        direct = j.admit('Direct text in an enrolled session', topic=8)
+        j.admit('#Beta Start the next independent task', topic=1)
         j.wait(lambda: len(j.instructions(8)) == 2 and j.instructions(8)[1][1] == 'accepted')
-        direct_doc = json.loads(j.instructions(8)[1][2])
-        assert direct_doc['origin']['thread_id'] == 8 and direct_doc['origin']['message_id'] == direct
         j.admit('#Beta /interrupt', topic=1)
-        j.wait(lambda: j.has('turn interrupted', 8))
+        j.wait(lambda: j.has('turn interrupted', 1))
         j.idle()
         interrupted = [m for m in j.rpc if m.get('method') == 'turn/interrupt']
         assert len(interrupted) == 1 and interrupted[0]['params']['threadId'] == 'native-topic-8'
@@ -634,6 +714,8 @@ def observer_status_is_read_only(binary):
 
 if __name__ == '__main__':
     binary = str(pathlib.Path(sys.argv[1]).resolve())
+    direct_topics_bypass_router(binary)
+    disabled_entry_is_native(binary)
     parallel_and_corrections(binary)
     clarification(binary)
     rejected_generation(binary)

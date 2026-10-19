@@ -1,5 +1,15 @@
 # Integrating conversation controller
 
+## Current repair direction — human correction, 2026-10-19
+
+The delivered pilot did not establish a coherent daily experience. The owner observed hidden progress in ordinary Telegram topics, repeated copies of shared answers and verbose relay packets. Prior completion records retain their bounded evidence but do not establish completion of the repaired product.
+
+The current MVP is a single **web conversation** for text and two-way voice, coordinating existing native work sessions. Ordinary Telegram work topics retain their native input, commentary, answers, controls and file handling. Destination discovery and observer summaries never authorize routing interception. Only actual integrator work uses its capacity quota; the existing per-session writer still coordinates concurrent ingress.
+
+`interaction.telegram_ingress` defaults to false. The optional legacy Telegram adapter applies only to the explicitly configured integrating entry. Even when enabled, ordinary work topics, replies and literal selectors bypass routing. The current receiving MVP uses the web client; do not silently enable the legacy adapter to make a test or deployment appear successful.
+
+Acceptance must demonstrate the entire actual client/controller/native/return journey: visible input retention, attributable intermediate communication, appropriate destination or clarification, mid-work corrections, and one canonical response in the requesting conversation. Historical unresolved work must not repeatedly fan out the same answer. Worker relays include the current attributed input once. Native history retains earlier messages; only later-captured related deltas accompany a delayed dispatch so an older message cannot override a newer correction. Unrelated topic inputs and repeated policy walls are not sent. Native mobile/badge and cross-body activation remain deferred.
+
 Owning plan: [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
 Implementation: #109–#119. The controller runs inside the existing listener.
 The single-body native controller and browser monitor have a qualified receiving
@@ -127,15 +137,14 @@ corrections before an unsent item is published.
 The native worker is explicitly told that an interaction controller is relaying
 an authenticated human input. The packet keeps controller guidance separate from
 the human-authored content and carries original author and source-message
-provenance. Direct enrolled-topic input retains that direct source even though
-it uses the same admission controller. Relay does not impersonate a direct human
+provenance. Direct work-topic input bypasses the routing adapter entirely. Relay does not impersonate a direct human
 intervention, and future integrator interpretations must remain separately
 attributed. Canonical worker answers also retain their own authorship.
 
 `#Name message` or `#t7 message` in the integrating entry selects an existing
 owned native conversation. Replying to an original admitted message or returned
 result inherits its request and target; an explicit selector overrides that
-focus. Direct text in an enrolled worker topic uses the same controller. Plain
+focus. Direct text in a work topic stays with its native writer and ordinary presentation. Plain
 unselected entry text enters the native integrating conversation. Its controller
 tool can inspect authorized observer cards and retained originals, propose an
 existing destination or a justified new session, or ask for clarification.
@@ -165,8 +174,7 @@ known-unsent input; `/interaction retry ID` selects retained known-unsent input
 for recovery. Other native controls remain available in their own conversation.
 These operations do not initiate coordinated global Stop.
 
-All enrolled owner executions reserve the same worker registry before native
-preparation, including starts through goal, merge and Nexus controls. A routed
+The existing owner executions share writer coordination so actual integrator work can reach a busy native session. Ordinary starts through goal, merge and Nexus controls do not consume the integrator capacity quota. A routed
 instruction joins that actual local execution; it does not wait behind an
 unregistered native start. Native acceptance is matched to the individual
 instruction, while a start acknowledgement accepts only its initiating input.
@@ -186,8 +194,8 @@ A native control keeps its original conversation return. If routing joins that
 execution later, its canonical answers need explicit valid worker coverage before
 being associated with the newly routed request. Earlier answers remain in native
 history; missing coverage leaves the routed input unresolved. Normal conversation
-presentation identifies the separate follow-up status and strips controller
-metadata only when routing actually participates. Questions and retained-file or
+presentation retains ordinary native output and strips a structurally valid
+controller metadata tail even when an older native context emits it. Questions and retained-file or
 human-action notices use the actual participating source, without inventing an
 original human message for the native execution.
 
@@ -581,9 +589,7 @@ incorporation or task completion.
 ## Worker capacity and retained contexts
 
 `interaction.max_active_workers` defaults to two, matching the actual qualified
-two-worker native pilot; it may be selected from one to 64. It bounds enrolled
-top-level native turn reservations in this listener, including native control
-launches into enrolled topics. It does not claim a provider-wide model-call,
+two-worker native pilot; it may be selected from one to 64. It bounds actual integrator worker launches in this listener. Direct human/native-control launches do not consume that quota; registry eligibility alone is insufficient. It does not claim a provider-wide model-call,
 child-agent or monetary limit. The integrating entry and bounded observer
 synthesis remain separate. No twenty-worker latency or cost guarantee follows
 from retaining twenty contexts.
