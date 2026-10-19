@@ -136,6 +136,33 @@ rather than claiming the wrapper eliminates that race. A timed-out mutation
 requires inspection: compatible current state alone may not prove which attempt
 caused it. Preserve uncertainty instead of promising exactly-once external effects.
 
+## v0.2 review requirements
+
+The [reviewed implementation plan](interaction-v02.md) governs delivery. Resolve
+warm integrator/worker invocation and the standalone credential/grant path before
+exposing controls. Persisted tool registration and a completion-only manifest do
+not provide live control to every existing thread. Add only supported scoped
+operations, not a generic owner RPC accessible to all devices.
+
+Use one attributable control transaction for explicit commands and assistant
+proposals. Retain original human instruction separately from interpreted arguments,
+proposal/confirmation identities, logical/native target, goal definition/generation,
+action and outcome. Confirmation is single use and invalidated by cancellation,
+replacement or relevant definition change, not ordinary accounting increments.
+Preserve ordered child actions for “yes, then ask X” without duplicate admission.
+
+Run the native mutation race experiment early. Interleave a native model/external
+pause/change/clear between client read and set/clear, and fail replacement between
+clear and set. If a stale mutation can affect a new goal, require a supported native
+precondition on both mutations or refuse the unsafe operation. No wrapper-only
+serialization claim is sufficient. Preserve partial/unknown operations and usage.
+
+Scoped integrator task withdrawal must retain issuer, actual withdrawing actor,
+reason and evidence and work during an active issuing turn. A changed binding,
+expired question channel, approval or uncertain effect cannot be silently settled.
+Qualification: Q07/Q18 and V02–V04, followed by the complete real-session campaign
+on the finished version. The human does not need to manually enter target topics.
+
 ## Recovery choices
 
 | Situation | Useful response from the integrator | Automation boundary |
