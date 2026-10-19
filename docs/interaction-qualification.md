@@ -87,7 +87,7 @@ Combine rows in a few reusable journeys wherever practical.
 | Q10 | Reload, lose connectivity, suspend/background the phone, then reconnect | Retained inputs/results recover once; no automatic replay of uncertain dispatch or surprise replay of old audio; fresh useful progress is distinguishable from history | A, N, H |
 | Q11 | Fail ASR, routing, a worker and TTS at their respective boundaries | Retained state explains the problem, text remains usable, known-unsent and uncertain work differ; no invented transcript/result or retry side effect | A, selected N |
 | Q12 | Deliver a final answer covering several old requests; deliver the same native event twice | One canonical presentation per requesting conversation, correction-aware revision/history; no copy per historical request and no visible metadata tail | A |
-| Q13 | Use an ordinary direct topic while routed work/quota is active, then switch return surfaces in the same native session | Direct input and intermediate/final replies retain ordinary behavior; no router admission or quota charge. Later surface selection wins despite delayed older input | A, N |
+| Q13 | Use routed work and ordinary direct input in the same session while quota is active; inspect CLI, session Telegram topic and integrator | The topic also projects attributed integrator inputs, progress and answers once, without creating another input or task. The integrator still receives its correlated return. Direct input remains ordinary, with no router admission/quota charge; no internal JSON or metadata tail leaks | A, N, H |
 | Q14 | Reach the configured execution budget with many retained contexts | Inputs remain visible and recoverable; direct work is responsive; bounded actual execution and waiting are truthful. Record context count separately from running workers | A, selected N |
 | Q15 | Speak mixed Spanish/English; queue several speech chunks/results; start speaking during output | Understandable transcription, natural spacing, no overlapping playback, clear capture state and cancelable queued speech. Judge actual sound, not just the `ended` event | A, N, H |
 | Q16 | Complete transcription, fail transcription, render speech, then exercise expiry/size limits | Durable text is retained; successful source audio is removed; failed/uncertain audio is bounded and identifiable. TTS pruning matches its documented cache policy, without pretending immediate playback deletion | A |
@@ -150,7 +150,9 @@ and retention; routine audio follows the existing deletion/cache policy.
 
 1. **Usable surface and broad qualification.** Implement the human's simple
    text/voice view, collapsed read-only diagnostics, clear compact activity and
-   cancelable spacing between speech segments. Run affected browser/audio checks,
+   cancelable spacing between speech segments. Project integrator activity into
+   the corresponding session's Telegram topic as well as CLI, preserving the
+   correlated integrator return and direct-topic independence. Run affected browser/audio checks,
    then the integrated campaign. User-profile configuration is a separate
    presentation/access requirement; CSS hiding cannot implement permissions.
 2. **Attention and semantic reliability.** Improve observer fidelity and intent

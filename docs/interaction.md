@@ -727,6 +727,31 @@ can discover this operation through the stable controller's `capabilities` call.
 
 ## Switching between web and direct conversations
 
+### Requested next behavior: visible session parity — 2026-10-19
+
+The human requested that a session's Telegram topic also show the integrator
+activity visible in its CLI. This supersedes exclusive return-surface selection
+as the desired presentation design. It is a pending implementation requirement,
+not a claim that the deployed baseline already mirrors those events.
+
+Project the attributed input/transcript arriving through the integrator, useful
+native progress and canonical answers into that same owned session's topic.
+Keep the correlated response in the requesting integrator conversation. Label
+the origin concisely, without displaying relay JSON or internal coverage tails.
+Use the existing audience bindings; this grants no other audience access.
+
+These are projections of the same events, not new human inputs, controller
+admissions or native executions. A topic projection must never feed back into
+routing, trigger another response or multiply copies per associated request.
+Retain per-destination publication identity and uncertainty using existing
+delivery mechanisms. Failure to mirror must not cause replay of native work or
+prevent the canonical integrator return. Ordinary direct topic input remains
+ordinary native ingress, outside the router quota and without controller wrapping.
+Textual visibility does not require retaining raw audio or sending a second
+spoken copy. Qualify coexistence with direct interaction in the same session.
+
+### Baseline behavior before session parity
+
 Web routing selects a return surface for the work it admits; it does not take
 permanent ownership of a native session's presentation. A subsequent ordinary
 message in that session's Telegram topic retains raw native ingress and restores
