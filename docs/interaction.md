@@ -290,6 +290,16 @@ asking to observe again does not replay them; `/interaction observe #Topic
 workers are never resumed, steered or interrupted by observation. Only the
 read-only synthesis uses a separate ephemeral context with tools disabled.
 
+The authenticated owner-local client offers the same selected operations:
+`telecodex --control CONFIG observer observe '#Topic' [--retry]`,
+`observer summary '#Topic'` and `observer sources '#Topic'`. Quote selectors in
+shell commands. Observe acknowledges scheduling, not successful synthesis; it
+does not fabricate a human message or a Telegram delivery. Operational notices
+are retained as local `canonical_routing_notice` audit records. Summary and
+sources return their bounded retained text directly without a model call. After
+an uncertain command acknowledgment, inspect retained evidence before repeating
+the operation; no automatic retry is added by this adapter.
+
 Local canonical message, turn, input and human-question changes invalidate the
 card through a counter updated in the owning transaction. The counter is captured
 before the native read; the read completion time is retained separately from

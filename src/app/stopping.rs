@@ -21,6 +21,9 @@ pub(super) async fn command(
     args: &str,
     nonce: Option<String>,
 ) -> Result<Value> {
+    if let Some(selected) = args.strip_prefix("observer ") {
+        return observer::owner_command(app, human, selected);
+    }
     if let Some(selected) = args.strip_prefix("matrix ") {
         return matrix::owner(app, human, selected);
     }
