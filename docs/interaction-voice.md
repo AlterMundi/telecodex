@@ -114,3 +114,10 @@ is claimed by deletion. Unconfirmed transcription never enters this cleanup.
 Changed, nonprivate or linked payloads are preserved, and cleanup failure cannot
 repeat ASR or prevent delivery of a committed input. Telegram's own original
 message/audio remains governed by Telegram rather than this local storage policy.
+
+Unresolved browser/companion uploads share a 256 MiB / 128-file receiving limit. A private
+filesystem lock serializes admission across web processes, counting protected and
+interrupted files before retaining a new original. Exact retained retries need no
+additional copy even when full. Capacity never expires or removes uncertain input;
+new audio is refused while text remains available. Committed transcript cleanup
+releases bytes through the existing path.
