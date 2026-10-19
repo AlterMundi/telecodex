@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
 from dashboard.app import create_app
 from dashboard.companion import Grants, authority
-from dashboard.provider import Provider
+from dashboard.provider import Provider, ProviderUnavailable
 from dashboard.private_state import read_json, write_json
 from presentation_io import Receiver
 import speech_render as speech_fixture
@@ -328,6 +328,66 @@ class CaptureRetention(unittest.TestCase):
         with patch('dashboard.provider.os.open',side_effect=OSError('simulated')):
             self.assertFalse(self.provider.retire_voice_capture(self.value))
         self.assertEqual(self.value,original);self.assertTrue(self.path.exists())
+
+
+class CaptureCapacity(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.directory = self.root/'voice'
+        self.directory.mkdir(mode=0o700)
+    def tearDown(self):self.temp.cleanup()
+    def retain(self, data=b'new recording', ident=None):
+        ident = ident or str(uuid.uuid4())
+        Provider.retain_voice_capture(self.directory,ident,data,hashlib.sha256(data).hexdigest())
+        return self.directory/ident
+    def protected(self, size):
+        path=self.directory/str(uuid.uuid4())
+        with path.open('wb') as stream:stream.truncate(size)
+        path.chmod(0o600)
+        return path
+    def test_full_uncertain_storage_refuses_new_but_allows_exact_retry(self):
+        data=b'exact retained original';path=self.retain(data)
+        protected=self.protected(256*1024*1024-len(data))
+        before={p.name:p.stat().st_size for p in self.directory.iterdir()}
+        with self.assertRaises(ProviderUnavailable):self.retain()
+        self.assertEqual(self.retain(data,path.name),path)
+        self.assertEqual(path.read_bytes(),data)
+        self.assertEqual({p.name:p.stat().st_size for p in self.directory.iterdir()},before)
+        self.assertTrue(protected.exists())
+    def test_parallel_admission_cannot_overrun_shared_budget(self):
+        import concurrent.futures,threading
+        self.protected(255*1024*1024)
+        barrier=threading.Barrier(2)
+        def submit():
+            barrier.wait()
+            try:self.retain(b'x'*(1024*1024));return True
+            except ProviderUnavailable:return False
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            results=list(pool.map(lambda _:submit(),range(2)))
+        self.assertEqual(results.count(True),1)
+        self.assertLessEqual(sum(p.stat().st_size for p in self.directory.iterdir()),256*1024*1024)
+    def test_exact_retry_completes_failed_publication_barrier(self):
+        ident=str(uuid.uuid4());data=b'retained before failed sync'
+        with patch('dashboard.provider.sync_directory',side_effect=OSError('injected')):
+            with self.assertRaises(OSError):self.retain(data,ident)
+        self.assertEqual((self.directory/ident).read_bytes(),data)
+        with patch('dashboard.provider.sync_directory',wraps=renderer.sync_directory) as barrier:
+            self.retain(data,ident)
+            barrier.assert_called_once_with(self.directory)
+    def test_many_small_uncertain_files_cannot_exhaust_metadata(self):
+        for _ in range(128):self.protected(1)
+        before={p.name for p in self.directory.iterdir()}
+        with self.assertRaises(ProviderUnavailable):self.retain()
+        self.assertEqual({p.name for p in self.directory.iterdir()}-{'admission.lock'},before)
+    def test_unknown_unsafe_storage_and_changed_identity_are_preserved(self):
+        data=b'first';path=self.retain(data)
+        with self.assertRaises(ValueError):self.retain(b'changed',path.name)
+        self.assertEqual(path.read_bytes(),data)
+        external=self.root/'unrelated';external.write_bytes(b'preserve')
+        link=self.directory/'unknown-link';link.symlink_to(external)
+        with self.assertRaises(ProviderUnavailable):self.retain()
+        self.assertTrue(link.is_symlink());self.assertEqual(external.read_bytes(),b'preserve')
 
 
 if __name__=='__main__':

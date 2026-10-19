@@ -458,33 +458,66 @@ class Provider:
             raise ProviderUnavailable('Voice recording storage unavailable')
         # Persist the newly created directory name before retaining any clip/capture.
         sync_directory(directory.parent)
-        import secrets
-        temporary = directory / ('.'+secrets.token_hex(16))
-        destination = directory / metadata['id']
-        try:
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, 'wb') as stream:
-                stream.write(data); stream.flush(); os.fsync(stream.fileno())
-            try:
-                os.link(temporary, destination, follow_symlinks=False)
-            except FileExistsError:
-                fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW)
-                with os.fdopen(fd, 'rb') as stream:
-                    info = os.fstat(stream.fileno())
-                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-                        raise ProviderUnavailable('Voice recording storage changed')
-                    if hashlib.sha256(stream.read(20*1024*1024+1)).hexdigest() != metadata['audio_sha256']:
-                        raise ValueError('Original voice identity cannot be replaced')
-            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try: os.fsync(fd)
-            finally: os.close(fd)
-        finally:
-            temporary.unlink(missing_ok=True)
+        self.retain_voice_capture(directory, metadata['id'], data, metadata['audio_sha256'])
         # The controller reserves original order/authority before asynchronous ASR.
         # A retry names the same clip and only inspects existing capture state.
         value = self.decorate_input(self.presentation('input voice submit '+json.dumps(metadata)))
         self.retire_voice_capture(value)
         return value
+
+    @staticmethod
+    def retain_voice_capture(directory, ident, data, digest):
+        """Bound unresolved originals without expiring or discarding any input."""
+        from scripts.speech_render import lock, RenderError
+        import secrets
+        # Same budget for every receiving worker/process. Completed transcripts
+        # release their original bytes through retire_voice_capture above.
+        budget = 256 * 1024 * 1024
+        try:
+            with lock(directory / 'admission.lock'):
+                destination = directory / ident
+                try:
+                    fd = os.open(destination, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except FileNotFoundError:
+                    fd = None
+                if fd is not None:
+                    with os.fdopen(fd, 'rb') as stream:
+                        info = os.fstat(stream.fileno())
+                        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                                or info.st_mode & 0o077):
+                            raise ProviderUnavailable('Voice recording storage changed')
+                        if hashlib.sha256(stream.read(20*1024*1024+1)).hexdigest() != digest:
+                            raise ValueError('Original voice identity cannot be replaced')
+                    sync_directory(directory)  # Finish an interrupted publication barrier.
+                    return  # An exact retained retry needs no new space.
+                used = 0
+                entries = 0
+                inodes = set()
+                for path in directory.iterdir():
+                    try: info = path.lstat()
+                    except FileNotFoundError: continue  # Confirmed cleanup may run concurrently.
+                    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                            or info.st_mode & 0o077):
+                        raise ProviderUnavailable('Voice recording storage changed')
+                    if path.name != 'admission.lock':
+                        entries += 1
+                    key = (info.st_dev, info.st_ino)
+                    if key not in inodes:
+                        used += info.st_size
+                        inodes.add(key)
+                    if entries >= 128 or used + len(data) > budget:
+                        raise ProviderUnavailable('Voice recording storage full; use text')
+                temporary = directory / ('.'+secrets.token_hex(16))
+                try:
+                    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    with os.fdopen(fd, 'wb') as stream:
+                        stream.write(data); stream.flush(); os.fsync(stream.fileno())
+                    os.link(temporary, destination, follow_symlinks=False)
+                    sync_directory(directory)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        except RenderError:
+            raise ProviderUnavailable('Voice recording storage busy; check original status') from None
 
     @staticmethod
     def request_id(ident):
