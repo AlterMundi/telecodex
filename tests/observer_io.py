@@ -271,9 +271,43 @@ def synthesis_profile_and_global_budget(binary):
         j.release_summary.set();j.close()
 
 
+def failed_synthesis_diagnostic(binary):
+    j = Observer(binary)
+    try:
+        j.prepare()
+        original = j.handle_extra_rpc
+        def invalid_support(request, send):
+            def substitute(value):
+                if value.get('method') == 'item/completed':
+                    item = value.get('params', {}).get('item', {})
+                    if item.get('id') == 'summary-answer':
+                        item['text'] = json.dumps({'summary': 'Private derived text', 'recent_indices': [999]})
+                send(value)
+            return original(request, substitute)
+        j.handle_extra_rpc = invalid_support
+        j.admit('/interaction observe #Alpha', topic=1)
+        j.wait(lambda:j.row('SELECT phase FROM interaction_observer_attempts') == [('uncertain',)])
+        j.wait(lambda:j.has('Observer refresh could not be confirmed',1))
+        j.admit('/interaction observe #Alpha',topic=1)
+        j.wait(lambda:j.has('Observer attempt is uncertain',1))
+        assert j.summaries == 1 and j.card() is None
+        import signal
+        j.process.send_signal(signal.SIGINT)
+        output, error = j.process.communicate(timeout=8)
+        j.process = None
+        logs = output + error
+        assert 'support_outside_source' in logs
+        assert 'Private derived text' not in logs
+        assert 'Preserve original narrative' not in logs
+        print('PASS failed synthesis emits bounded diagnostic without private text or automatic retry')
+    finally:
+        j.close()
+
+
 if __name__ == '__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     revisions_and_originals(binary)
     legacy_observer_session_links(binary)
     candidate_reconciliation(binary)
     synthesis_profile_and_global_budget(binary)
+    failed_synthesis_diagnostic(binary)

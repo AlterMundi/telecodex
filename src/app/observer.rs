@@ -156,6 +156,36 @@ enum Refresh {
     Retained(String),
 }
 
+// Only emit fixed diagnostic labels. Native errors may contain private source
+// text or provider details, so never interpolate their display chain into logs.
+fn failure_code(error: &anyhow::Error) -> &'static str {
+    for cause in error.chain() {
+        match cause.to_string().as_str() {
+            "handoff selection outside source" => return "support_outside_source",
+            "handoff selection exceeds bound" => return "too_many_supports",
+            "handoff summary empty or exceeds output bound" => return "output_bound",
+            "handoff summary must be structured JSON" => return "invalid_json",
+            "handoff summary missing" => return "missing_summary",
+            "handoff selection missing" => return "missing_supports",
+            "Observer summary or support references exceed retained originals" => {
+                return "card_bounds";
+            }
+            "Observer attempt or expected revision changed; source remains retained" => {
+                return "card_revision_changed";
+            }
+            "handoff summarizer attempted non-summary activity" => return "non_summary_activity",
+            "handoff summary did not complete" => return "native_turn_incomplete",
+            "handoff summarizer requested interaction; no topic created" => {
+                return "interaction_requested";
+            }
+            "handoff summarization timed out; no topic created"
+            | "handoff summarization timed out; no automatic retry" => return "timeout",
+            _ => {}
+        }
+    }
+    "other_refresh_failure"
+}
+
 /// Reusable source reconciliation for explicit inspection and router candidates.
 /// A racing source event is represented by freshness, never an unbounded retry.
 async fn refresh(
@@ -243,11 +273,32 @@ async fn refresh(
                     .observer_commit(key, human, &attempt, &summary, &supports)
             }
             .await;
-            if result.is_err() {
+            if let Err(error) = &result {
                 shared.store.observer_uncertain(&attempt.id)?;
+                tracing::warn!(attempt = %attempt.id, failure_code = failure_code(error), "Observer synthesis unconfirmed; retained without automatic retry");
             }
             result.map(Refresh::Updated)
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::failure_code;
+
+    #[test]
+    fn observer_diagnostics_are_fixed_labels_without_private_error_text() {
+        let error = anyhow::anyhow!("private provider response or source excerpt")
+            .context("handoff summary must be structured JSON");
+        assert_eq!(failure_code(&error), "invalid_json");
+        assert_eq!(
+            failure_code(&anyhow::anyhow!("handoff selection outside source")),
+            "support_outside_source"
+        );
+        assert_eq!(
+            failure_code(&anyhow::anyhow!("private unmatched error")),
+            "other_refresh_failure"
+        );
     }
 }
 
