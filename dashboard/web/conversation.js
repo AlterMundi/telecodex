@@ -8,19 +8,27 @@ window.Conversation = (() => {
     return value;
   };
   function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false, standalone=false}) {
-    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone});
+    let voiceEnabled=false,captureBusy=false,voiceBusy=false,voiceContext;
+    const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
+    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>replyFocus&&({reference:replyFocus.reference,version:focusVersion}),getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:pause,unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:value=>{captureBusy=value;if(!value)drainVoice();},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
       if(selection.input){$("#conversation-sent").open=true;card.trace.open=true;readTrace(card);}
       card.box.scrollIntoView({block:"nearest"});
     }}) : undefined;
+    document.body.classList.toggle("standalone-conversation",standalone);
+    if(graph){$("#conversation-flow").hidden=false;$("#conversation-flow").open=readOnly;}
     const timeline = standalone ? $("#conversation-timeline") : undefined;
+    const historyTools=timeline?node("div",undefined,"conversation-tools timeline-history"):undefined;
     if(timeline){
+      $("#conversation-message").rows=2;
+      $("#conversation-visual summary").textContent="Add an image";
       timeline.hidden=false;$("#conversation-replies").hidden=true;$("#conversation-sent").hidden=true;
-      timeline.before($("#conversation-inputs-older"),$("#conversation-older"));
+      $("#conversation-inputs-older").textContent="Earlier messages";
+      historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));timeline.append(historyTools);
     }
     function placeInTimeline(box, key, timestamp) {
       if(!timeline)return;
@@ -88,7 +96,7 @@ window.Conversation = (() => {
       card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
     }
     function resetInputs() {
-      graph?.reset();graphCursor=0;timeline?.replaceChildren();
+      disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren(historyTools);
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
       telegramCursor=0;telegramNewest=0;telegramLoaded=false;
@@ -258,7 +266,7 @@ window.Conversation = (() => {
       card.imageButton.hidden=!card.value.visual;
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
-      card.check.hidden=readOnly || card.value.read_only===true;
+      card.check.hidden=readOnly || card.value.read_only===true || (["accepted","routed","answered"].includes(card.value.phase) && (!!card.value.text || (card.value.preview?.length||0)<1000));
       microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
       if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
@@ -337,7 +345,8 @@ window.Conversation = (() => {
       try {if(visual)selectedVisual=await visual.capture();}
       catch(e){posting=false;send.disabled=!inputBinding;sendState.textContent=e.message||"Select your image again.";return;}
       const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation, focusAtSubmit=focusVersion;
-      const reply=replyFocus?.reference&&JSON.parse(JSON.stringify(replyFocus.reference));
+      const context=replyFocus?.reference||voiceContext;
+      const reply=context&&JSON.parse(JSON.stringify(context));
       posting = true; send.disabled = true; latestComposerId = id;
       inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); $("#conversation-sent").open = true;
       sendState.textContent = "Sending…";
@@ -378,8 +387,60 @@ window.Conversation = (() => {
     const initialMode = () => readOnly || new URL(location.href).searchParams.get("view") === "conversation"
       || new URLSearchParams(telegram?.initData || "").get("start_param") === "conversation";
 
+    function voiceKey(source) {return source.kind==="native_question"?`${source.id}:${source.revision}`:source.id;}
+    function voiceStatus() {
+      const button=$("#conversation-voice-replies");
+      button.setAttribute("aria-pressed",String(voiceEnabled));
+      button.textContent=voiceEnabled?`Voice replies on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read new replies aloud";
+    }
+    function enableVoice() {
+      if(readOnly || !canListen)return;
+      if(!voiceEnabled){
+        voiceEnabled=true;voiceSeen.clear();
+        for(const card of cards.values()){voiceSeen.add(voiceKey(card.source));rememberFinal(card.source);}
+        for(const source of requestControls.audioSources?.()||[])voiceSeen.add(voiceKey(source));
+      }
+      if(active && !audio.ended)voiceBusy=true;
+      voiceStatus();
+    }
+    function beginVoiceCapture() {
+      draft.blur?.();enableVoice();voiceBusy=false;stop("Listening to your input. Replies remain in the conversation.");
+    }
+    const speaker=source=>source.kind.startsWith("integrator_")?"integrator":JSON.stringify(source.target);
+    function rememberFinal(source) {
+      if(!["worker_result","integrator_answer"].includes(source.kind) || source.current===false || source.correction_pending)return;
+      const key=speaker(source),time=Date.parse(source.observed_at)||0;
+      voiceFinalTimes.set(key,Math.max(voiceFinalTimes.get(key)||0,time));
+    }
+    function offerVoice(source) {
+      if(!voiceEnabled || voiceSeen.has(voiceKey(source)))return;
+      voiceSeen.add(voiceKey(source));
+      if(source.current===false || source.correction_pending || source.native_binding_current===false)return;
+      const observed=Date.parse(source.observed_at)||0;
+      if(source.kind.endsWith("_progress") && observed && observed<=(voiceFinalTimes.get(speaker(source))||0))return;
+      rememberFinal(source);
+      const sameSpeaker=other=>source.kind.startsWith("integrator_")?other.kind==="integrator_progress":
+        other.kind==="worker_progress" && JSON.stringify(other.target)===JSON.stringify(source.target);
+      if(source.kind.endsWith("_progress") || ["worker_result","integrator_answer"].includes(source.kind)){
+        for(let n=voiceQueue.length-1;n>=0;n--)if(sameSpeaker(voiceQueue[n]))voiceQueue.splice(n,1);
+      }
+      voiceQueue.push(source);voiceStatus();Promise.resolve().then(drainVoice);
+    }
+    async function drainVoice() {
+      if(!voiceEnabled || voiceBusy || captureBusy || !enabled || !canListen || document.hidden)return;
+      const next=voiceQueue.shift();voiceStatus();if(!next)return;
+      voiceBusy=true;
+      await listenTo(next,0,{queued:true});
+      if(!active || active.source.id!==next.id){voiceBusy=false;drainVoice();}
+    }
+    function disableVoice() {
+      voiceEnabled=false;voiceBusy=false;voiceQueue.length=0;voiceFinalTimes.clear();voiceContext=undefined;voiceStatus();stop();
+    }
+    $("#conversation-voice-replies").addEventListener("click",()=>{
+      if(voiceEnabled)disableVoice();else {enableVoice();drainVoice();}
+    });
     function stop(text = "Audio stopped.") {
-      generation++;
+      voiceBusy=false;generation++;
       requestAbort?.abort(); requestAbort = undefined;
       active = undefined;
       audio.pause(); audio.muted = true;
@@ -500,7 +561,9 @@ window.Conversation = (() => {
       microphone?.configure(value.can_speak);
       setCsrf(value.csrf);
       canListen = !readOnly && value.can_listen;
-      for (const source of value.items) upsert(source);
+      $("#conversation-voice-replies").disabled=!canListen;
+      for (const source of value.items)upsert(source);
+      if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0)))offerVoice(source);
       for (const card of cards.values()) card.listen.hidden = !canListen;
       if (direction === "before" && rememberHistory) {
         oldest = value.cursor;
@@ -541,7 +604,7 @@ window.Conversation = (() => {
               stop("This reply is no longer current. Refresh before listening.");
           }
         }
-        $("#conversation-state").textContent = cards.size ? `${cards.size} replies available.`
+        $("#conversation-state").textContent = cards.size ? `${cards.size} ${cards.size===1?"reply":"replies"} available.`
           : "No replies yet. Work can continue while this view is closed.";
         if (!inputBinding) await inputPage();
         else {
@@ -560,6 +623,7 @@ window.Conversation = (() => {
           graphCursor=closed.length?(graphCursor+6)%closed.length:0;
           graph.flush();
         }
+        drainVoice();
       } catch (e) { failed(e); }
       finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false; }
     }
@@ -583,6 +647,9 @@ window.Conversation = (() => {
         audio.muted = false;
         await audio.play();
         if (active !== selected || generation !== owned) return;
+        if(replyFocus?.reference.context_only){clearFocus();selected.focusVersion=focusVersion;}
+        voiceContext=["worker_result","matrix_result","native_question"].includes(selected.source.kind)
+          ?{source:selected.source.id,revision:selected.source.revision,context_only:true}:undefined;
         toggle.textContent = "Pause audio";
         audioState("Playing this reply.");
       } catch (e) {
@@ -597,8 +664,9 @@ window.Conversation = (() => {
     }
     async function listenTo(source, offset = 0, chain) {
       stop();
+      if(voiceEnabled)voiceBusy=true;
       const owned = generation;
-      active = {source, offset, generation:owned, auto:false, focusVersion:chain?.focusVersion ?? focusVersion};
+      active = {source, offset, generation:owned, auto:false, focusVersion:chain?.focusVersion ?? focusVersion,queued:!!chain?.queued};
       const selected = active;
       $("#conversation-player").hidden = false;
       $("#conversation-playing").textContent = source.kind === "integrator_answer" ? "Conversation reply" : source.label;
@@ -638,7 +706,7 @@ window.Conversation = (() => {
         await startPlayback();
       } catch (e) {
         if (active !== selected || generation !== owned) return;
-        stop();
+        stop();voiceBusy=false;
         if (e.status === 401 || e.status === 403) failed(e);
         $("#conversation-state").textContent = e.name === "AbortError" ? "Audio preparation ended. Your text replies remain available."
           : e.message || "Audio unavailable. Text replies remain available.";
@@ -649,22 +717,23 @@ window.Conversation = (() => {
       const selected=active, owned=generation;
       if (selected.next !== null) return listenTo(selected.source, selected.next, selected);
       audioState("End of reply."); toggle.textContent = "Play audio again";
-      if(selected.source.kind!=="native_question" || selected.finished)return;
+      if(selected.source.kind!=="native_question" || selected.finished){if(voiceEnabled){voiceBusy=false;drainVoice();}return;}
       selected.finished=true;
       try {
         await part(selected.source, selected.offset);
         if(active!==selected || generation!==owned || !selected.auto || document.hidden || !enabled || focusVersion!==selected.focusVersion)return;
-        selectFocus({source:selected.source.id,revision:selected.source.revision},selected.source.label);
-        audioState("Question finished. Press Talk to answer.");
+        if(!voiceEnabled)selectFocus({source:selected.source.id,revision:selected.source.revision,context_only:true},selected.source.label);
+        audioState("Question finished. Press Talk to answer or change topic.");
       } catch (_) {
         if(active===selected && generation===owned)stop("This question changed. Refresh before answering.");
       }
+      if(voiceEnabled && generation===owned){voiceBusy=false;drainVoice();}
     });
     toggle.addEventListener("click", () => {
       if (audio.paused) { if (audio.ended) audio.currentTime = 0; startPlayback(); }
       else pause();
     });
-    $("#conversation-stop").addEventListener("click", () => stop());
+    $("#conversation-stop").addEventListener("click", disableVoice);
     $("#conversation-open").addEventListener("click", () => setMode(true));
     $("#conversation-back").addEventListener("click", () => setMode(false));
     $("#conversation-refresh").addEventListener("click", () => refresh(true));

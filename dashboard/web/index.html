@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
     <meta name="robots" content="noindex,nofollow" />
     <title>Sessions · Telecodex</title>
     <link rel="stylesheet" href="assets/style.css" />
@@ -38,8 +38,8 @@
         </button></div>
       </div>
       <section id="conversation" hidden aria-label="Integrating conversation">
-        <div class="conversation-tools"><button id="conversation-back" type="button">← Sessions</button><button id="conversation-refresh" type="button">Refresh replies</button></div>
-        <p id="conversation-state" role="status" aria-live="polite">Connecting to your conversation…</p>
+        <div class="conversation-tools"><button id="conversation-back" type="button">← Sessions</button><button id="conversation-refresh" type="button">Refresh replies</button>
+        <p id="conversation-state" role="status" aria-live="polite">Connecting to your conversation…</p></div>
         <section id="conversation-requests" hidden aria-labelledby="conversation-requests-title">
           <h2 id="conversation-requests-title">Requests from your sessions</h2>
           <p id="conversation-request-state" class="note" role="status" aria-live="polite"></p>
@@ -49,6 +49,9 @@
         <div id="conversation-timeline" role="log" aria-label="Conversation messages and session updates" hidden></div>
         <form id="conversation-compose" aria-label="Message your conversation">
           <div id="conversation-focus" class="conversation-tools" hidden><span id="conversation-focus-label"></span><button id="conversation-focus-clear" type="button">Back to conversation</button></div>
+          <label for="conversation-message">Your message</label>
+          <textarea id="conversation-message" rows="3" placeholder="Continue a topic, add a correction, or start something new…" disabled></textarea>
+          <div class="conversation-tools">
           <details id="conversation-visual">
             <summary>Point to something in an image</summary>
             <p class="note">Choose an image, then point to what you mean. Only this captured image is sent; this does not share a live view.</p>
@@ -57,21 +60,21 @@
             <div class="conversation-tools"><label>X <input id="conversation-image-x" type="number" min="0" step="1" disabled></label><label>Y <input id="conversation-image-y" type="number" min="0" step="1" disabled></label><button id="conversation-image-clear" type="button" hidden>Remove image</button></div>
             <p id="conversation-image-state" class="note" role="status" aria-live="polite"></p>
           </details>
-          <label for="conversation-message">Your message</label>
-          <textarea id="conversation-message" rows="3" placeholder="Continue a topic, add a correction, or start something new…" disabled></textarea>
-          <div class="conversation-tools"><span class="note">You can write again while sessions work.</span><button id="conversation-send" type="submit" disabled>Send</button></div>
+<span class="note">You can write again while sessions work.</span><button id="conversation-send" type="submit" disabled>Send</button></div>
           <p id="conversation-send-state" role="status" aria-live="polite"></p>
         </form>
         <section id="conversation-voice" hidden aria-label="Speak to your conversation">
-          <div class="conversation-tools"><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
+          <div class="conversation-tools"><button id="conversation-voice-replies" type="button" aria-pressed="false">Read new replies aloud</button><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
           <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
         </section>
+        <details id="conversation-flow" hidden><summary>Routing monitor</summary>
         <section id="routing-graph" hidden aria-label="Live conversation routing graph">
           <div class="conversation-tools"><h2>Conversation flow</h2><button id="routing-graph-live" type="button" hidden>Return to live →</button></div>
           <p id="routing-graph-state" class="note" role="status"></p>
           <p class="note">Select a step for saved text and routing evidence. Reply links require declared input coverage; other replies stay unlinked.</p>
           <div id="routing-graph-viewport" tabindex="0" role="region" aria-label="Routing history. Scroll horizontally through interactions; select a step to inspect its retained evidence."><div id="routing-graph-surface"></div></div>
         </section>
+        </details>
         <details id="conversation-sent"><summary>Routing monitor · your inputs and destinations</summary><p class="note">Open a message to inspect its original text, destination and forwarded input. Refreshing this monitor never resends work.</p><p id="conversation-telegram-state" class="note" role="status"></p><div id="conversation-inputs"></div><button id="conversation-inputs-older" type="button" hidden>Earlier app/device inputs</button><button id="conversation-telegram-older" type="button" hidden>Earlier Telegram inputs</button></details>
         <div id="conversation-replies" tabindex="-1">
           <section aria-labelledby="conversation-answers-title"><h2 id="conversation-answers-title">Conversation replies</h2><div id="conversation-answers"></div></section>

@@ -741,3 +741,23 @@ refers to an answer from a worker; it keeps that evidence's session authorship
 rather than injecting it as new human speech. Native worker progress snapshots
 its web source at first observation. Duplicate native observations retain that
 original scope, and old progress without a recorded web source is not imported.
+
+## Spoken conversation scheduling
+
+Talk enables new spoken replies when synthesis is available. The browser captures
+one utterance between Talk and Send voice, then uses the existing committed clip,
+transcription and native delivery path. This is utterance-based ASR and scheduled
+speech output; it does not claim continuous full-duplex transport.
+
+New replies and native questions play sequentially through the existing
+source/revision-fenced player. Enabling voice does not recite history. Pending
+progress from one speaker is coalesced, and a final answer supersedes that
+speaker's unspoken progress; every original update remains in the text history.
+Capture and transcription preparation pause automatic output. Voice can be
+turned off without affecting retained inputs or ongoing native work.
+
+Playback supplies contextual source metadata. It is not proof of human hearing,
+a destination selection, an answer or an approval. The next utterance can answer
+or change topic. Voice uploads preserve `context_only` through the existing
+`context:SOURCE` header form, and automatic question playback uses that same
+interpretive boundary. Explicit reply actions retain their existing semantics.
