@@ -152,6 +152,11 @@ def retained_load(binary):
             assert any(item['kind']=='approval' and item['state']=='pending' for item in pending)
             metrics['pending_question_read_ms']=round((time.monotonic()-clock)*1000,3)
             assert not j.answers,'Reading a pending question answered a native request'
+            # Both slots are still occupied; assert queued correction before
+            # releasing Beta, which may admit any waiting worker immediately.
+            j.admit('#Work10 Correct the waiting task to 23.',topic=1)
+            j.wait(lambda:len(j.instructions(10))==2)
+            assert all(row[1]=='queued' for row in j.instructions(10)), {'instructions':j.instructions(10),'live':sorted(j.live),'runs':j.runs}
             j.broadcast('native-topic-8','serverRequest/resolved',{'requestId':900})
             clock=time.monotonic();before=len(progress)
             j.answer(8,'Completed worker 8.')
@@ -173,9 +178,6 @@ def retained_load(binary):
         assert not burst.is_alive() and not errors,errors
         metrics['progress_events']=len(progress);metrics['approval_still_pending']=True
         j.broadcast('native-topic-7','serverRequest/resolved',{'requestId':901})
-        j.admit('#Work10 Correct the waiting task to 23.',topic=1)
-        j.wait(lambda:len(j.instructions(10))==2)
-        assert all(row[1]=='queued' for row in j.instructions(10))
         j.admit('#Work26 /interrupt',topic=1)
         j.wait(lambda:j.instructions(26)[0][1]=='retained_unsent')
         j.admit('Can we still discuss the work here?',topic=1)
@@ -199,8 +201,11 @@ def retained_load(binary):
         j.answer(7,'Completed worker 7 with correction 17.')
         # Wait for committed Telegram receipts. Canonical originals have no
         # Telegram publication/hearing receipt; inspect their retained sources.
-        # Nineteen completed workers plus two separately retained follow-ups.
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered' AND json_extract(doc,'$.origin.message_id') IS NOT NULL")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')==[(21,)],seconds=75)
+        # Nineteen completed workers; Alpha returns to web and Telegram, while
+        # Work10 shares one Telegram answer across its two retained requests.
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered' AND json_extract(doc,'$.origin.message_id') IS NOT NULL")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')==[(20,)],seconds=75)
+        grouped=j.row("SELECT d.doc FROM interaction_deliveries d JOIN interaction_requests r ON r.id=d.request_id JOIN sessions s ON s.id=r.session_id WHERE s.thread_id=10")
+        assert len(grouped)==1 and len(json.loads(grouped[0][0])['request_ids'])==2,grouped
         j.idle()
         assert j.peak==2 and 'native-topic-26' not in j.runs
         assert j.instructions(26)[0][1]=='retained_unsent'

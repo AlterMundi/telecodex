@@ -367,8 +367,7 @@ impl Store {
         }
         let mut call: SessionRequest = serde_json::from_str(&raw)?;
         let d: crate::interaction::Delivery = serde_json::from_str(&raw_delivery)?;
-        let (current, correction) =
-            super::routing::freshness(&tx, &d.request_id, &d.covered, d.declared)?;
+        let (current, correction) = super::routing::delivery_freshness(&tx, &d)?;
         if !d.completed || !current || correction || current_epoch(&tx, human)? != call.epoch {
             return Ok(None);
         }

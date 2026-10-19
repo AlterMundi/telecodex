@@ -2,6 +2,17 @@
 use super::*;
 use crate::interaction::{Delivery, Instruction, ReturnRoute, worker_result};
 
+pub(super) fn delivery_freshness(conn: &Connection, delivery: &Delivery) -> Result<(bool, bool)> {
+    let mut current = delivery.declared;
+    let mut correction = false;
+    for request in delivery.requests() {
+        let (fresh, pending) = freshness(conn, request, &delivery.covered, delivery.declared)?;
+        current &= fresh;
+        correction |= pending;
+    }
+    Ok((current, correction))
+}
+
 pub(super) fn freshness(
     conn: &Connection,
     request: &str,
@@ -67,6 +78,8 @@ impl Store {
           CREATE TABLE IF NOT EXISTS interaction_message_bindings(chat_id INTEGER NOT NULL,thread_id INTEGER NOT NULL,message_id INTEGER NOT NULL,human_id INTEGER NOT NULL,session_id INTEGER NOT NULL,requests TEXT NOT NULL,PRIMARY KEY(chat_id,thread_id,message_id));
           CREATE TABLE IF NOT EXISTS interaction_clarifications(id TEXT PRIMARY KEY,human_id INTEGER NOT NULL,doc TEXT NOT NULL,phase TEXT NOT NULL,question_chat INTEGER,question_thread INTEGER,question_message INTEGER);")?;
         let tx = conn.transaction()?;
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS interaction_delivery_requests(delivery_id TEXT NOT NULL REFERENCES interaction_deliveries(id),request_id TEXT NOT NULL REFERENCES interaction_requests(id),PRIMARY KEY(delivery_id,request_id));
+          INSERT OR IGNORE INTO interaction_delivery_requests SELECT id,request_id FROM interaction_deliveries;")?;
         tx.execute("UPDATE interaction_deliveries SET phase=CASE WHEN phase='sending' THEN 'uncertain' ELSE 'reserved' END WHERE phase IN ('preparing','sending') AND instance_id!=?",[&self.instance_id])?;
         tx.commit()?;
         Ok(())
@@ -184,39 +197,116 @@ impl Store {
             serde_json::to_string(&(thread, turn, item))?.as_bytes(),
         )
         .to_string();
-        tx.execute("INSERT OR IGNORE INTO interaction_results(id,local_turn,native_thread,native_turn,item_id,body,claim) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![result_id,local_turn,thread,turn,item,body,claim.as_ref().map(serde_json::to_string).transpose()?])?;
-        let mut deliveries = Vec::new();
+        if tx.execute("INSERT OR IGNORE INTO interaction_results(id,local_turn,native_thread,native_turn,item_id,body,claim) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![result_id,local_turn,thread,turn,item,body,claim.as_ref().map(serde_json::to_string).transpose()?])? == 0 {
+            // A repeated observation must not retarget an already reserved item
+            // after later instructions arrive. All reservations commit together.
+            tx.commit()?;
+            return Ok(vec![]);
+        }
+        let mut query=tx.prepare("SELECT i.doc,s.doc FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id WHERE i.session_id=?1 AND s.human_id=?2 AND i.phase='accepted' AND json_extract(i.doc,'$.local_turn')=?3 ORDER BY i.sequence DESC")?;
+        let inputs = query
+            .query_map(params![root.target_session, human, local_turn], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(query);
+        let inputs = inputs
+            .into_iter()
+            .map(|(input, source)| {
+                Ok((
+                    serde_json::from_str::<Instruction>(&input)?,
+                    serde_json::from_str::<crate::interaction::SourceInput>(&source)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut selected = Vec::new();
         for request in requests {
-            let source:String=tx.query_row("SELECT s.doc FROM interaction_requests r JOIN interaction_sources s ON s.id=r.input_id WHERE r.id=?1 AND r.human_id=?2 AND r.session_id=?3",params![request,human,root.target_session],|r|r.get(0))?;
-            let source: crate::interaction::SourceInput = serde_json::from_str(&source)?;
+            let mut candidates = Vec::new();
+            for (input, source) in &inputs {
+                if input.requests.contains(&request) {
+                    candidates.push((
+                        super::dialogue::original_order_on(&tx, source)?,
+                        input.sequence,
+                        input,
+                        source,
+                    ));
+                }
+            }
+            candidates.sort_by_key(|(order, sequence, _, _)| (*order, *sequence));
+            let Some((order, sequence, input, source)) = candidates.pop() else {
+                // Historical unfinished work is not an unanswered current input.
+                // Its declarations remain in the canonical native result.
+                continue;
+            };
+            let original:String=tx.query_row("SELECT s.doc FROM interaction_requests r JOIN interaction_sources s ON s.id=r.input_id WHERE r.id=?1 AND r.human_id=?2",params![request,human],|r|r.get(0))?;
+            let original: crate::interaction::SourceInput = serde_json::from_str(&original)?;
+            let origin = if source.channel == original.channel
+                && source.origin.chat_id == original.origin.chat_id
+                && source.origin.thread_id == original.origin.thread_id
+            {
+                original.origin
+            } else {
+                source.origin.clone()
+            };
+            // Session dependencies retain their own correlation/return behavior;
+            // human requests share one response per actual requesting carrier.
+            let authored =
+                super::session_requests::author_on(&tx, &input.input_id)?.map(|_| request.clone());
+            selected.push((order, sequence, origin, authored, request));
+        }
+        selected.sort_by_key(|(order, sequence, _, _, _)| std::cmp::Reverse((*order, *sequence)));
+        let mut groups: Vec<(ReturnRoute, Option<String>, Vec<String>)> = Vec::new();
+        for (_, _, origin, authored, request) in selected {
+            if let Some((_, _, requests)) = groups.iter_mut().find(|(prior, kind, _)| {
+                prior.chat_id == origin.chat_id
+                    && prior.thread_id == origin.thread_id
+                    && prior.message_id.is_some() == origin.message_id.is_some()
+                    && *kind == authored
+            }) {
+                if !requests.contains(&request) {
+                    requests.push(request);
+                }
+            } else {
+                groups.push((origin, authored, vec![request]));
+            }
+        }
+        let mut deliveries = Vec::new();
+        for (origin, _, requests) in groups {
+            let request = requests[0].clone();
             let id = Uuid::new_v5(
                 &Uuid::NAMESPACE_URL,
                 format!("{result_id}:{request}").as_bytes(),
             )
             .to_string();
-            let (current, correction_pending) =
-                freshness(&tx, &request, &covered, claim.is_some())?;
-            let delivery = Delivery {
+            let mut delivery = Delivery {
                 id: id.clone(),
                 request_id: request,
+                request_ids: requests,
                 target: root.target,
-                origin: source.origin,
+                origin,
                 body: body.to_owned(),
                 covered: covered.clone(),
                 declared: claim.is_some(),
                 completed: false,
-                current,
-                correction_pending,
+                current: false,
+                correction_pending: false,
                 phase: "reserved".into(),
             };
-            // Completion is explicitly per request, not a property of the turn.
-            let mut delivery = delivery;
-            delivery.completed = claim
-                .as_ref()
-                .is_some_and(|c| c.completed.contains(&delivery.request_id));
-            if tx.execute("INSERT OR IGNORE INTO interaction_deliveries(id,result_id,request_id,human_id,phase,doc,instance_id) VALUES(?1,?2,?3,?4,'reserved',?5,?6)",params![id,result_id,delivery.request_id,human,serde_json::to_string(&delivery)?,self.instance_id])?==1 {
-                deliveries.push(delivery);
+            delivery.completed = claim.as_ref().is_some_and(|c| {
+                delivery
+                    .requests()
+                    .iter()
+                    .all(|request| c.completed.contains(request))
+            });
+            (delivery.current, delivery.correction_pending) = delivery_freshness(&tx, &delivery)?;
+            tx.execute("INSERT INTO interaction_deliveries(id,result_id,request_id,human_id,phase,doc,instance_id) VALUES(?1,?2,?3,?4,'reserved',?5,?6)",params![id,result_id,delivery.request_id,human,serde_json::to_string(&delivery)?,self.instance_id])?;
+            for request in delivery.requests() {
+                tx.execute(
+                    "INSERT INTO interaction_delivery_requests VALUES(?1,?2)",
+                    params![id, request],
+                )?;
             }
+            deliveries.push(delivery);
         }
         tx.commit()?;
         Ok(deliveries)
@@ -231,7 +321,7 @@ impl Store {
             return Ok(None);
         };
         let mut d: Delivery = serde_json::from_str(&raw)?;
-        (d.current, d.correction_pending) = freshness(&tx, &d.request_id, &d.covered, d.declared)?;
+        (d.current, d.correction_pending) = delivery_freshness(&tx, &d)?;
         d.phase = "preparing".into();
         tx.execute(
             "UPDATE interaction_deliveries SET phase='preparing',doc=?2,instance_id=?3 WHERE id=?1",
@@ -249,8 +339,7 @@ impl Store {
         raw.map(|(doc, phase)| {
             let mut d: Delivery = serde_json::from_str(&doc)?;
             d.phase = phase;
-            (d.current, d.correction_pending) =
-                freshness(&conn, &d.request_id, &d.covered, d.declared)?;
+            (d.current, d.correction_pending) = delivery_freshness(&conn, &d)?;
             Ok(d)
         })
         .transpose()
@@ -343,7 +432,7 @@ impl Store {
             return Ok(None);
         };
         let mut d: Delivery = serde_json::from_str(&raw)?;
-        (d.current, d.correction_pending) = freshness(&tx, &d.request_id, &d.covered, d.declared)?;
+        (d.current, d.correction_pending) = delivery_freshness(&tx, &d)?;
         let selected = if d.correction_pending {
             pending_text
         } else {
@@ -392,7 +481,7 @@ impl Store {
             },
             human,
             session,
-            &[d.request_id],
+            d.requests(),
         )?;
         tx.commit()?;
         Ok(())
@@ -632,6 +721,196 @@ mod tests {
                 .is_empty()
         );
         deliveries.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn continued_physical_turn_keeps_the_same_admitted_logical_work() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let t = target(&s, 7);
+        let input = admit(&s, &t, 1, R::New);
+        let local = accept(&s, &t, &input);
+        let text = format!(
+            "Continued work\n<daimon-result>{}</daimon-result>",
+            serde_json::json!({"requests":input.requests,"covered":[input.id],"completed":[],"deferred":[]})
+        );
+        let rows = s
+            .interaction_record_result(
+                &input.id,
+                100,
+                local,
+                t.codex_thread_id.as_deref().unwrap(),
+                "later-goal-turn",
+                "continued",
+                &text,
+                true,
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].current && !rows[0].completed);
+        assert_eq!(
+            s.interaction_instruction(&input.id, 100)
+                .unwrap()
+                .unwrap()
+                .native_turn
+                .as_deref(),
+            Some("physical-turn"),
+            "The original native acceptance must stay immutable"
+        );
+    }
+
+    #[test]
+    fn shared_response_keeps_all_requests_and_rechecks_non_primary_corrections() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let t = target(&s, 7);
+        let a = admit(&s, &t, 1, R::New);
+        let b = admit(&s, &t, 2, R::New);
+        let local = accept(&s, &t, &a);
+        s.interaction_transport(&b.id, 100, local, P::Submitting, None)
+            .unwrap();
+        s.interaction_transport(&b.id, 100, local, P::Accepted, Some("physical-turn"))
+            .unwrap();
+        let text = format!(
+            "Shared progress\n<daimon-result>{}</daimon-result>",
+            serde_json::json!({"requests":[a.id,b.id],"covered":[a.id,b.id],"completed":[],"deferred":[]})
+        );
+        let thread = t.codex_thread_id.as_deref().unwrap();
+        let rows = s
+            .interaction_record_result(
+                &a.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "shared",
+                &text,
+                true,
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        let d = &rows[0];
+        assert_eq!(d.request_id, b.id);
+        assert_eq!(d.requests().len(), 2);
+        assert!(d.requests().contains(&a.id) && d.requests().contains(&b.id));
+        assert!(d.current && !d.completed);
+        s.interaction_begin_delivery(&d.id, 100).unwrap().unwrap();
+        admit(&s, &t, 3, R::Amends(a.requests.clone()));
+        let (pending, body) = s
+            .interaction_reserve_part(&d.id, 100, 0, "old shared response", "correction pending")
+            .unwrap()
+            .unwrap();
+        assert!(pending.correction_pending && !pending.current);
+        assert_eq!(body, "correction pending");
+        assert!(
+            s.interaction_record_result(
+                &a.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "shared",
+                &text,
+                true
+            )
+            .unwrap()
+            .is_empty()
+        );
+        s.interaction_part_receipt(&d.id, 100, 0, 501).unwrap();
+        let binding = s
+            .interaction_message_target(
+                &ReturnRoute {
+                    message_id: Some(501),
+                    ..d.origin.clone()
+                },
+                100,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(binding.1, d.requests());
+    }
+
+    #[test]
+    fn historical_coverage_is_not_republished_and_context_uses_current_return_origin() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let t = target(&s, 7);
+        let entry = SessionKey::new(100, Some(1));
+        s.ensure_session(entry, 100, &super::super::tests::defaults())
+            .unwrap();
+        s.set_session_codex_thread(entry, "entry-native").unwrap();
+        let source = SourceInput {
+            transcription: None,
+            channel: "fixture".into(),
+            event_id: "old-direct".into(),
+            update_id: Some(1),
+            human_id: 100,
+            target_sessions: vec![t.id],
+            origin: ReturnRoute {
+                chat_id: 100,
+                thread_id: 7,
+                message_id: Some(1),
+            },
+            text: "Historical direct work".into(),
+        };
+        let old = s.interaction_admit(&source, t.key, R::New).unwrap().0;
+        let old_local = accept(&s, &t, &old);
+        reserve(&s, &t, &old, old_local, "earlier");
+        let current = admit(&s, &t, 2, R::New);
+        let local = accept(&s, &t, &current);
+        let thread = t.codex_thread_id.as_deref().unwrap();
+        let text = format!(
+            "Current answer\n<daimon-result>{}</daimon-result>",
+            serde_json::json!({"requests":[old.id,current.id],"covered":[old.id,current.id],"completed":[],"deferred":[]})
+        );
+        let rows = s
+            .interaction_record_result(
+                &current.id,
+                100,
+                local,
+                thread,
+                "physical-turn",
+                "current",
+                &text,
+                true,
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].requests(), current.requests);
+        assert_eq!(rows[0].origin, current.origin);
+        let follow = admit(&s, &t, 3, R::Context(old.requests.clone()));
+        let next = accept(&s, &t, &follow);
+        let text = format!(
+            "Follow-up answer\n<daimon-result>{}</daimon-result>",
+            serde_json::json!({"requests":old.requests,"covered":[old.id,follow.id],"completed":[],"deferred":[]})
+        );
+        let rows = s
+            .interaction_record_result(
+                &follow.id,
+                100,
+                next,
+                thread,
+                "physical-turn",
+                "follow",
+                &text,
+                true,
+            )
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].origin, follow.origin);
+        assert_ne!(rows[0].origin.thread_id, old.origin.thread_id);
+        let page = s.interaction_presentation_list(100, entry, 0, 0).unwrap();
+        let replies = page["items"].as_array().unwrap();
+        assert_eq!(
+            replies.len(),
+            2,
+            "The current return must be readable from its requesting entry even though the old request originated in a work topic"
+        );
+        assert!(
+            replies
+                .iter()
+                .any(|item| item["preview"] == "Follow-up answer")
+        );
     }
 
     #[test]

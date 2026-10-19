@@ -93,7 +93,7 @@ def qualify(binary):
         # Results return independently of worker start order and can be selected.
         j.answer_worker(8,'Beta result arrives before Alpha.')
         j.answer_worker(7,'Alpha result incorporates requirement17.')
-        j.wait(lambda:j.row('SELECT count(*) FROM interaction_deliveries')==[(3,)])
+        j.wait(lambda:j.row('SELECT count(*) FROM interaction_deliveries')==[(2,)])
         observed=client.get(trace_url,headers=headers)
         assert observed.status_code==200,observed.text
         result_trace=observed.json()['routes'][0]['results']
@@ -101,6 +101,10 @@ def qualify(binary):
         assert result_trace[0]['completed'] and 'requirement17' in result_trace[0]['text_excerpt']
         sources=client.get('/api/interaction',headers=headers)
         assert sources.status_code==200,sources.text
+        answers=[item for item in sources.json()['items'] if item['kind']=='worker_result']
+        assert len(answers)==2,answers
+        beta_answer=next(item for item in answers if item['target']['thread_id']==8)
+        assert len(beta_answer['request_ids'])==2,beta_answer
         source=next(item for item in sources.json()['items'] if item['kind']=='worker_result' and item['target']['thread_id']==7)
         _,followup=submit('Continue this completed result.',{'source':source['id'],'revision':source['revision']})
         j.wait(lambda:len(j.instructions(7))==3 and j.instructions(7)[2][1]=='accepted')

@@ -35,7 +35,10 @@ def qualify(binary):
         assert browser.status(original)['routing']['phase'] == 'accepted'
         assert browser.status(correction)['routing']['phase'] == 'accepted'
         journey.answer_worker(7, 'Retained both inputs after idle.')
-        journey.wait(lambda: journey.row('SELECT count(*) FROM interaction_deliveries') == [(2,)])
+        journey.wait(lambda: journey.row('SELECT count(*) FROM interaction_deliveries') == [(1,)])
+        sources=browser.client.get('/api/interaction',headers=browser.headers).json()['items']
+        answer=next(i for i in sources if i['kind']=='worker_result')
+        assert len(answer['request_ids'])==2,answer
         journey.idle()
         print('PASS short connect deadline, idle worker survival, same-turn steer and correlated results; zero inference')
     finally:

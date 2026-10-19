@@ -617,8 +617,9 @@ impl Store {
             let mut more_results = false;
             if available {
                 let mut deliveries = conn.prepare(
-                    "SELECT d.doc,d.phase FROM interaction_request_links l
-                     JOIN interaction_deliveries d ON d.request_id=l.request_id
+                    "SELECT DISTINCT d.doc,d.phase FROM interaction_request_links l
+                     JOIN interaction_delivery_requests links ON links.request_id=l.request_id
+                     JOIN interaction_deliveries d ON d.id=links.delivery_id
                      WHERE l.instruction_id=?1 ORDER BY d.rowid DESC LIMIT 9",
                 )?;
                 let selected = deliveries
@@ -629,12 +630,7 @@ impl Store {
                 more_results = selected.len() > 8;
                 for (raw, delivery_phase) in selected.into_iter().take(8) {
                     let delivery: Delivery = serde_json::from_str(&raw)?;
-                    let (current, pending) = super::routing::freshness(
-                        &conn,
-                        &delivery.request_id,
-                        &delivery.covered,
-                        delivery.declared,
-                    )?;
+                    let (current, pending) = super::routing::delivery_freshness(&conn, &delivery)?;
                     let result = json!({"source":format!("delivery:{}",delivery.id),
                         "phase":delivery_phase,"text_excerpt":delivery.body.chars().take(500).collect::<String>(),
                         "text_bounded":delivery.body.chars().count()>500,

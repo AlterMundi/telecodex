@@ -192,7 +192,7 @@ pub(super) fn reply_on(
             [session],
             |r| r.get(0),
         )?,
-        requests: vec![request.into()],
+        requests: serde_json::from_value(source["request_ids"].clone())?,
     })
 }
 fn save_on(conn: &Connection, input: &ConversationInput) -> Result<()> {
