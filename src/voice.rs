@@ -264,3 +264,148 @@ mod retirement_tests {
         assert!(source.exists());
     }
 }
+
+/// Serialize bounded Telegram media publication; no transcription or work lock.
+pub struct DownloadReservation {
+    pub directory: std::path::PathBuf,
+    _lock: std::fs::File,
+}
+
+#[cfg(unix)]
+pub fn reserve_telegram_download(database: &Path) -> Result<DownloadReservation> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+    let database = std::path::absolute(database)?;
+    let directory = std::path::PathBuf::from(format!("{}.telegram-voice", database.display()));
+    match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    let info = std::fs::symlink_metadata(&directory)?;
+    if !info.is_dir() || info.uid() != unsafe { libc::geteuid() } || info.mode() & 0o077 != 0 {
+        bail!("Voice download storage must be a private owner directory");
+    }
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(directory.join("admission.lock"))?;
+    let info = lock.metadata()?;
+    if !info.is_file() || info.uid() != unsafe { libc::geteuid() } || info.mode() & 0o077 != 0 {
+        bail!("Voice download admission lock changed");
+    }
+    use std::os::fd::AsRawFd;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::WouldBlock || std::time::Instant::now() >= deadline {
+            bail!("Voice download storage busy; text remains available");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut bytes = 0u64;
+    let mut count = 0usize;
+    for entry in std::fs::read_dir(&directory)? {
+        let entry = entry?;
+        let info = match std::fs::symlink_metadata(entry.path()) {
+            Ok(info) => info,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if !info.is_file() || info.uid() != unsafe { libc::geteuid() } || info.mode() & 0o077 != 0 {
+            bail!("Voice download storage changed");
+        }
+        bytes = bytes
+            .checked_add(info.len())
+            .context("Voice storage size overflow")?;
+        if entry.file_name() != "admission.lock" {
+            count += 1;
+        }
+        if count >= 128 || bytes > 256 * 1024 * 1024 - MAX_BYTES as u64 {
+            bail!("Voice download storage full; text remains available");
+        }
+    }
+    std::fs::File::open(&directory)?.sync_all()?;
+    std::fs::File::open(directory.parent().context("Voice storage parent missing")?)?.sync_all()?;
+    Ok(DownloadReservation {
+        directory,
+        _lock: lock,
+    })
+}
+
+#[cfg(all(test, unix))]
+mod capacity_tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    #[test]
+    fn download_admission_reserves_maximum_and_releases_only_the_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("state.sqlite");
+        let reservation = reserve_telegram_download(&db).unwrap();
+        assert!(reserve_telegram_download(&db).is_err());
+        let protected = reservation.directory.join("unconfirmed");
+        let file = std::fs::File::create(&protected).unwrap();
+        std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o600)).unwrap();
+        file.set_len(256 * 1024 * 1024).unwrap();
+        drop(file);
+        drop(reservation);
+        assert!(reserve_telegram_download(&db).is_err());
+        assert!(protected.exists());
+        std::fs::remove_file(&protected).unwrap();
+        assert!(reserve_telegram_download(&db).is_ok());
+    }
+    #[test]
+    fn relative_database_paths_keep_the_existing_working_directory_resolution() {
+        let root = tempfile::tempdir_in(".").unwrap();
+        let relative = root
+            .path()
+            .strip_prefix(std::env::current_dir().unwrap())
+            .unwrap_or(root.path());
+        assert!(!relative.is_absolute());
+        let reservation = reserve_telegram_download(&relative.join("state.sqlite")).unwrap();
+        assert!(reservation.directory.is_absolute());
+        assert_eq!(
+            reservation
+                .directory
+                .parent()
+                .unwrap()
+                .canonicalize()
+                .unwrap(),
+            root.path().canonicalize().unwrap()
+        );
+    }
+    #[test]
+    fn tiny_pending_files_and_links_are_preserved_and_refuse_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("state.sqlite");
+        let reservation = reserve_telegram_download(&db).unwrap();
+        let directory = reservation.directory.clone();
+        drop(reservation);
+        for index in 0..128 {
+            let p = directory.join(index.to_string());
+            std::fs::write(&p, b"x").unwrap();
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert!(reserve_telegram_download(&db).is_err());
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 129);
+        for index in 0..128 {
+            std::fs::remove_file(directory.join(index.to_string())).unwrap();
+        }
+        let original = root.path().join("unrelated");
+        std::fs::write(&original, b"preserve").unwrap();
+        symlink(&original, directory.join("linked")).unwrap();
+        assert!(reserve_telegram_download(&db).is_err());
+        assert_eq!(std::fs::read(original).unwrap(), b"preserve");
+    }
+}
+
+#[cfg(not(unix))]
+pub fn reserve_telegram_download(_database: &Path) -> Result<DownloadReservation> {
+    bail!("Voice download storage currently requires Unix ownership and locking");
+}
