@@ -8,7 +8,9 @@ window.Conversation = (() => {
     return value;
   };
   function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false, standalone=false}) {
-    let voiceEnabled=false,captureBusy=false,voiceBusy=false,voiceContext;
+    let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext;
+    const speechGaps={chunk:180,reply:450,question:1200};
+    let speechWait;
     const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
@@ -391,11 +393,12 @@ window.Conversation = (() => {
     function voiceStatus() {
       const button=$("#conversation-voice-replies");
       button.setAttribute("aria-pressed",String(voiceEnabled));
-      button.textContent=voiceEnabled?`Voice replies on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read new replies aloud";
+      button.textContent=voiceEnabled?voiceSuspended?"Voice replies paused · tap to resume":`Voice replies on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read new replies aloud";
     }
     function enableVoice() {
       if(readOnly || !canListen)return;
-      if(!voiceEnabled){
+      const resume=voiceSuspended;voiceSuspended=false;
+      if(!voiceEnabled || resume){
         voiceEnabled=true;voiceSeen.clear();
         for(const card of cards.values()){voiceSeen.add(voiceKey(card.source));rememberFinal(card.source);}
         for(const source of requestControls.audioSources?.()||[])voiceSeen.add(voiceKey(source));
@@ -415,6 +418,8 @@ window.Conversation = (() => {
     function offerVoice(source) {
       if(!voiceEnabled || voiceSeen.has(voiceKey(source)))return;
       voiceSeen.add(voiceKey(source));
+      if(voiceSuspended)return;
+      if(active?.source.id===source.id && active.source.revision!==source.revision)stop("This reply changed. Refresh before listening.");
       if(source.current===false || source.correction_pending || source.native_binding_current===false)return;
       const observed=Date.parse(source.observed_at)||0;
       if(source.kind.endsWith("_progress") && observed && observed<=(voiceFinalTimes.get(speaker(source))||0))return;
@@ -424,23 +429,53 @@ window.Conversation = (() => {
       if(source.kind.endsWith("_progress") || ["worker_result","integrator_answer"].includes(source.kind)){
         for(let n=voiceQueue.length-1;n>=0;n--)if(sameSpeaker(voiceQueue[n]))voiceQueue.splice(n,1);
       }
-      voiceQueue.push(source);voiceStatus();Promise.resolve().then(drainVoice);
+      if(source.kind==="native_question"){
+        const nextReply=voiceQueue.findIndex(item=>item.kind!=="native_question");
+        voiceQueue.splice(nextReply<0?voiceQueue.length:nextReply,0,source);
+      }else voiceQueue.push(source);
+      voiceStatus();Promise.resolve().then(drainVoice);
+    }
+    // A single generation-owned waiting state belongs to this player, including
+    // gaps when no audio element is active. Cancellation always settles its waiter.
+    function cancelSpeechWait() {
+      if(!speechWait)return;
+      const previous=speechWait;speechWait=undefined;
+      clearTimeout(previous.timer);previous.resolve(false);
+    }
+    function waitForSpeech(kind, source) {
+      cancelSpeechWait();
+      const owned=generation;
+      return new Promise(resolve=>{
+        const waiting={generation:owned,source,resolve,kind};
+        speechWait=waiting;
+        waiting.timer=setTimeout(()=>{
+          if(speechWait!==waiting)return;
+          speechWait=undefined;
+          resolve(generation===owned && enabled && !document.hidden && !captureBusy && !voiceSuspended);
+        },speechGaps[kind]);
+      });
+    }
+    async function nextSpokenReply(kind="reply", source) {
+      if(!voiceEnabled || voiceSuspended)return;
+      voiceBusy=true;
+      if(await waitForSpeech(kind,source)){voiceBusy=false;drainVoice();}
     }
     async function drainVoice() {
-      if(!voiceEnabled || voiceBusy || captureBusy || !enabled || !canListen || document.hidden)return;
+      if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || !enabled || !canListen || document.hidden)return;
       const next=voiceQueue.shift();voiceStatus();if(!next)return;
       voiceBusy=true;
-      await listenTo(next,0,{queued:true});
-      if(!active || active.source.id!==next.id){voiceBusy=false;drainVoice();}
+      const result=await listenTo(next,0,{queued:true});
+      if(result?.failed && result.generation===generation && !active)
+        nextSpokenReply("reply",next);
     }
     function disableVoice() {
       voiceEnabled=false;voiceBusy=false;voiceQueue.length=0;voiceFinalTimes.clear();voiceContext=undefined;voiceStatus();stop();
     }
     $("#conversation-voice-replies").addEventListener("click",()=>{
-      if(voiceEnabled)disableVoice();else {enableVoice();drainVoice();}
+      if(voiceEnabled && !voiceSuspended)disableVoice();else {enableVoice();drainVoice();}
     });
     function stop(text = "Audio stopped.") {
-      voiceBusy=false;generation++;
+      cancelSpeechWait();voiceBusy=false;generation++;
       requestAbort?.abort(); requestAbort = undefined;
       active = undefined;
       audio.pause(); audio.muted = true;
@@ -452,8 +487,10 @@ window.Conversation = (() => {
       $("#conversation-player").hidden = true;
     }
     function pause() {
-      if (!active) return;
+      cancelSpeechWait();voiceBusy=false;voiceQueue.length=0;
+      voiceSuspended=true;voiceStatus();
       generation++;
+      if (!active) return;
       requestAbort?.abort(); requestAbort = undefined;
       active.generation = generation;
       active.auto = false;
@@ -481,7 +518,7 @@ window.Conversation = (() => {
     }
     function failed(error) {
       if (error.status === 401 || error.status === 403) {
-        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
+        pause();stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else pause();
@@ -533,6 +570,8 @@ window.Conversation = (() => {
         card.offset = 0; card.expanded = false; card.read.hidden = false;
         card.read.textContent = "Read reply";
       }
+      for(let n=voiceQueue.length-1;n>=0;n--)
+        if(voiceQueue[n].id===source.id && voiceQueue[n].revision!==source.revision)voiceQueue.splice(n,1);
       if (active?.source.id === source.id && active.source.revision !== source.revision)
         stop("This reply changed. Refresh before listening.");
       card.source = source;
@@ -561,6 +600,7 @@ window.Conversation = (() => {
       microphone?.configure(value.can_speak);
       setCsrf(value.csrf);
       canListen = !readOnly && value.can_listen;
+      if(!canListen && (voiceEnabled || active || speechWait))pause();
       $("#conversation-voice-replies").disabled=!canListen;
       for (const source of value.items)upsert(source);
       if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0)))offerVoice(source);
@@ -614,7 +654,15 @@ window.Conversation = (() => {
           }
           await inputPage(0,"before",false);
         }
-        if(!readOnly)await requestControls.refresh();
+        if(!readOnly){
+          await requestControls.refresh();
+          const questions=requestControls.audioSources?.()||[];
+          const current=source=>questions.some(q=>q.id===source.id && q.revision===source.revision);
+          for(let n=voiceQueue.length-1;n>=0;n--)
+            if(voiceQueue[n].kind==="native_question" && !current(voiceQueue[n]))voiceQueue.splice(n,1);
+          if(active?.source.kind==="native_question" && !current(active.source))
+            stop("This question is no longer current. Refresh before answering.");
+        }
         await refreshTelegram();
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);
         if(graph){
@@ -643,6 +691,7 @@ window.Conversation = (() => {
         if (active !== selected || generation !== owned) return;
         audio.pause(); audio.currentTime = position;
         selected.verifying = false;
+        selected.segmentEnded = false;
         selected.auto = true;
         audio.muted = false;
         await audio.play();
@@ -659,10 +708,14 @@ window.Conversation = (() => {
         if (e.name === "NotAllowedError") {
           toggle.disabled = false; toggle.textContent = "Play audio";
           audioState("Audio ready. Press Play audio to listen.");
-        } else stop("This reply changed or is unavailable. Refresh before listening.");
+        } else {
+          stop("This reply changed or is unavailable. Refresh before listening.");
+          return {failed:true,generation};
+        }
       }
     }
     async function listenTo(source, offset = 0, chain) {
+      if(!chain?.queued)voiceSuspended=false;
       stop();
       if(voiceEnabled)voiceBusy=true;
       const owned = generation;
@@ -703,21 +756,29 @@ window.Conversation = (() => {
         blobUrl = URL.createObjectURL(blob);
         audio.src = blobUrl;
         toggle.disabled = false;
-        await startPlayback();
+        return await startPlayback();
       } catch (e) {
         if (active !== selected || generation !== owned) return;
         stop();voiceBusy=false;
         if (e.status === 401 || e.status === 403) failed(e);
         $("#conversation-state").textContent = e.name === "AbortError" ? "Audio preparation ended. Your text replies remain available."
           : e.message || "Audio unavailable. Text replies remain available.";
+        return {failed:true,generation};
       } finally { clearTimeout(deadline); if (requestAbort === controller) requestAbort = undefined; }
     }
     audio.addEventListener("ended", async () => {
-      if (!audio.ended || !active || active.verifying || !active.auto || document.hidden || !enabled) return;
-      const selected=active, owned=generation;
-      if (selected.next !== null) return listenTo(selected.source, selected.next, selected);
+      if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || document.hidden || !enabled) return;
+      const selected=active, owned=generation;selected.segmentEnded=true;
+      if (selected.next !== null) {
+        audioState("A short pause before continuing…");
+        if(await waitForSpeech("chunk",selected.source)){
+          const result=await listenTo(selected.source,selected.next,selected);
+          if(result?.failed && result.generation===generation && !active)nextSpokenReply("reply",selected.source);
+        }
+        return;
+      }
       audioState("End of reply."); toggle.textContent = "Play audio again";
-      if(selected.source.kind!=="native_question" || selected.finished){if(voiceEnabled){voiceBusy=false;drainVoice();}return;}
+      if(selected.source.kind!=="native_question" || selected.finished){nextSpokenReply("reply",selected.source);return;}
       selected.finished=true;
       try {
         await part(selected.source, selected.offset);
@@ -727,10 +788,10 @@ window.Conversation = (() => {
       } catch (_) {
         if(active===selected && generation===owned)stop("This question changed. Refresh before answering.");
       }
-      if(voiceEnabled && generation===owned){voiceBusy=false;drainVoice();}
+      if(voiceEnabled && generation===owned)nextSpokenReply("question",selected.source);
     });
     toggle.addEventListener("click", () => {
-      if (audio.paused) { if (audio.ended) audio.currentTime = 0; startPlayback(); }
+      if (audio.paused) { cancelSpeechWait();voiceSuspended=false;voiceStatus();if (audio.ended) audio.currentTime = 0; startPlayback(); }
       else pause();
     });
     $("#conversation-stop").addEventListener("click", disableVoice);
@@ -746,7 +807,7 @@ window.Conversation = (() => {
       finally { reading = false; $("#conversation-older").disabled = false; }
     });
     document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
-    window.addEventListener("pagehide", () => stop());
+    window.addEventListener("pagehide", () => {pause();stop();});
     window.addEventListener("offline", () => {
       pause(); $("#conversation-state").textContent = "Offline. Replies already loaded remain readable.";
     });
@@ -756,7 +817,7 @@ window.Conversation = (() => {
     if(standalone){$("#conversation-back").hidden=true;$("#conversation-telegram-older").hidden=true;}
     if(readOnly){document.body.classList.toggle("monitor-mode",true);$("#conversation-sent").open=true;}
     setMode(initialMode(), true, false);
-    return {refresh, pause, stop,
+    return {refresh, pause, stop:()=>disableVoice(),
       unauthenticated() { ready=false; failed({status:401,message:"Open your conversation access file to reconnect."}); },
       authenticated() { ready = true; $("#conversation-open").disabled = false; }};
   }
