@@ -1347,6 +1347,17 @@ impl LiveTurnSink {
     }
 
     async fn handle_event(&mut self, event: CodexEvent) -> Result<()> {
+        // Native/store consumers retain the original event before this sink.
+        // Direct answers can inherit the routed protocol from earlier turns.
+        let event = match event {
+            CodexEvent::AssistantText(text) => {
+                CodexEvent::AssistantText(crate::interaction::visible_answer(&text).to_owned())
+            }
+            CodexEvent::FinalAnswerCompleted(text) => CodexEvent::FinalAnswerCompleted(
+                crate::interaction::visible_answer(&text).to_owned(),
+            ),
+            other => other,
+        };
         match event {
             CodexEvent::AssistantText(ref text)
             | CodexEvent::CommentaryCompleted(ref text)
