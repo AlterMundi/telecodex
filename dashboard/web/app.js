@@ -1,8 +1,10 @@
 "use strict";
 const $ = (selector) => document.querySelector(selector);
 const monitorOnly = new URL(location.href).searchParams.get('view') === 'monitor';
-const tg = monitorOnly ? undefined : window.Telegram?.WebApp;
-let monitorAuthorization;
+const standaloneConversation = new URL(location.href).searchParams.get('view') === 'conversation' && (new URL(location.href).searchParams.get('client') === 'standalone' || !window.Telegram?.WebApp?.initData);
+const deviceMode = monitorOnly || standaloneConversation;
+const tg = deviceMode ? undefined : window.Telegram?.WebApp;
+let deviceAuthorization;
 let snapshot,
   csrf,
   filter = "attention",
@@ -47,9 +49,9 @@ const elapsed = (n) =>
       ? `${n}s`
       : `${Math.floor(n / 60)}m ${n % 60}s`;
 function authorizationHeaders() {
-  if(monitorOnly){
-    if(!monitorAuthorization)throw new Error('Open a current monitor credential');
-    return {Authorization:monitorAuthorization};
+  if(deviceMode){
+    if(!deviceAuthorization)throw new Error(monitorOnly ? 'Open a current monitor credential' : 'Open your conversation access file');
+    return {Authorization:deviceAuthorization};
   }
   return sessionToken ? {Authorization:'Bearer '+sessionToken} : {};
 }
@@ -64,6 +66,7 @@ async function api(route, body) {
       ? { "Content-Type": "application/json", "X-Dashboard-CSRF": csrf || "" }
       : {};
     if(monitorOnly && body)throw new Error('This monitor is read-only');
+    if(deviceMode && !route.startsWith('interaction'))throw new Error('This access is limited to your conversation');
     if(route!=="session")Object.assign(headers,authorizationHeaders());
     const response = await fetch(`api/${route}`, {
       signal: controller.signal,
@@ -579,28 +582,46 @@ const conversationView = window.Conversation?.mount({
   modeChanged: (enabled, initial) => { conversationMode = enabled; if (!initial) refresh(true); },
   telegram: tg,
   readOnly: monitorOnly,
+  standalone: standaloneConversation,
 });
 (async () => {
-  if(monitorOnly){
-    const feedback=$('#feedback'),label=el('label','Monitor access file '),file=document.createElement('input');
-    file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label','Monitor credential');label.append(file);feedback.replaceChildren(label);
-    async function openCredential(value){
-      if(value?.scope!=='monitor_readonly' || value.origin!==location.origin || value.prefix!==location.pathname.replace(/\/$/,'') || !/^Companion [A-Za-z0-9_-]{43}$/.test(value.authorization) || !(value.expires>Date.now()/1000))throw Error('Select a current monitor credential for this receiver');
-      monitorAuthorization=value.authorization;
+  if(deviceMode){
+    const storageKey=monitorOnly?'routing-monitor':'interaction-client';
+    const title=monitorOnly?'Routing monitor':'Daimon Interaction';
+    const feedback=$('#feedback'),label=el('label',monitorOnly?'Monitor access file ':'Conversation access file '),file=document.createElement('input');
+    file.type='file';file.accept='.json,application/json';file.setAttribute('aria-label',monitorOnly?'Monitor credential':'Conversation access file');label.append(file);feedback.replaceChildren(label);
+    document.title=title;
+    let accessVersion=0;
+    async function openCredential(value,version=++accessVersion){
+      if(version!==accessVersion)return;
+      const scope=monitorOnly?'monitor_readonly':'interaction_only';
+      const fileScope=value?.scope || (value?.schema==='telecodex.companion-device/v1'?'interaction_only':undefined);
+      if(fileScope!==scope || value.origin!==location.origin || value.prefix!==location.pathname.replace(/\/$/,'') || !/^Companion [A-Za-z0-9_-]{43}$/.test(value.authorization)
+        || monitorOnly && !(value.expires>Date.now()/1000)
+        || !monitorOnly && !/^[A-Za-z0-9_-]{43}$/.test(value.csrf))throw Error('Select a current '+(monitorOnly?'monitor':'conversation')+' access file for this receiver');
+      deviceAuthorization=value.authorization;
+      // The receiving grant is authoritative, including a renewed device whose
+      // unchanged issuance file carries an earlier expiry. Never use cookies.
       const source=await api('interaction/inputs');
-      const sourceLabel=source.viewer?.label || 'Selected receiver';
-      document.title='Routing monitor · '+sourceLabel;
-      sessionStorage.setItem('routing-monitor',JSON.stringify(value));
-      const access=el('details');access.append(el('summary','Change monitor access'),label);
-      authenticated=true;conversationView?.authenticated();feedback.replaceChildren(el('p','Source: '+sourceLabel),el('p','Read-only access until '+new Date((source.viewer?.expires || value.expires)*1000).toLocaleString()+'. Inputs, playback and session controls are disabled.'),access);await refresh(true);schedule();
+      if(version!==accessVersion)return;
+      const sourceLabel=source.viewer?.label || value.label || 'Selected receiver';
+      csrf=source.csrf;
+      document.title=title+' · '+sourceLabel;
+      sessionStorage.setItem(storageKey,JSON.stringify(value));
+      const access=el('details');access.append(el('summary',monitorOnly?'Change monitor access':'Change conversation access'),label);
+      authenticated=true;conversationView?.authenticated();
+      feedback.replaceChildren(el('p','Source: '+sourceLabel),el('p',monitorOnly?'Read-only access until '+new Date((source.viewer?.expires || value.expires)*1000).toLocaleString()+'. Inputs, playback and session controls are disabled.':'Text and voice access to your conversation. Sessions administration is separate.'),access);
+      await refresh(true);schedule();
     }
+    function clearCredential(){accessVersion++;deviceAuthorization=undefined;csrf=undefined;authenticated=false;conversationView?.unauthenticated?.();document.title=title;sessionStorage.removeItem(storageKey);}
     file.addEventListener('change',async()=>{
-      try{const selected=file.files?.[0];if(!selected || selected.size>4096)throw Error('Select the small operator-issued monitor credential');await openCredential(JSON.parse(await selected.text()));}
-      catch(error){monitorAuthorization=undefined;authenticated=false;document.title='Routing monitor';sessionStorage.removeItem('routing-monitor');feedback.replaceChildren(label,el('p',error.message));}
+      const version=++accessVersion;authenticated=false;conversationView?.unauthenticated?.();
+      try{const selected=file.files?.[0];if(!selected || selected.size>4096)throw Error('Select the small operator-issued access file');await openCredential(JSON.parse(await selected.text()),version);}
+      catch(error){if(version===accessVersion){clearCredential();feedback.replaceChildren(label,el('p',error.message));}}
       finally{file.value='';}
     });
-    try{const saved=sessionStorage.getItem('routing-monitor');if(saved)await openCredential(JSON.parse(saved));}
-    catch(_){monitorAuthorization=undefined;authenticated=false;document.title='Routing monitor';sessionStorage.removeItem('routing-monitor');}
+    try{const saved=sessionStorage.getItem(storageKey);if(saved)await openCredential(JSON.parse(saved));}
+    catch(_){clearCredential();}
     return;
   }
   if (!tg?.initData) {

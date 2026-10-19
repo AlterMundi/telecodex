@@ -110,6 +110,26 @@ unrouted; revoked requests are refused before voice buffering or ASR. Both
 fixtures use zero inference. They do not prove a physical button, audible output
 or real Telegram device acceptance.
 
+## Standalone conversation browser
+
+Open `?view=conversation&client=standalone` in an ordinary browser, then select the private
+interaction-only access file issued through the existing enrollment command.
+This entry loads without the Telegram SDK. It uses the same conversation, retained originals, text/voice endpoints and
+selected speech service as Talk. It does not exchange a Telegram login, create
+another native session owner or inherit ambient Sessions cookies.
+
+The selected credential stays in this tab's session storage for reconnects.
+Its receiving grant remains authoritative, including operator renewal. Changing
+or refusing the file clears the selected access instead of falling back to an
+ambient session. Keep the file private; revocation and expiry use the existing
+grant commands above.
+
+The conversation can inspect its own canonical input routing traces. Ordinary
+Telegram-topic history and Sessions administration remain outside this grant.
+Pending native questions can be read and answered through the conversation;
+approval controls require Sessions. Standalone mode does not display controls
+that its grant cannot operate.
+
 ## Standalone read-only routing monitor
 
 The existing browser UI also supports ?view=monitor without Telegram. An

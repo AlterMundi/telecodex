@@ -87,6 +87,25 @@ class Companion(unittest.TestCase):
         self.assertEqual(self.client.get('/api/interaction',headers=duplicate).status_code,401)
         self.assertEqual(len(self.speech.calls),0)
 
+    def test_standalone_shell_has_no_telegram_runtime_dependency(self):
+        standalone=self.client.get('/?view=conversation&client=standalone')
+        self.assertEqual(standalone.status_code,200)
+        self.assertNotIn('https://telegram.org/js/telegram-web-app.js',standalone.text)
+        self.assertIn('assets/app.js',standalone.text)
+        self.assertIn('https://telegram.org/js/telegram-web-app.js',self.client.get('/').text)
+
+    def test_conversation_grant_reads_only_its_existing_input_trace_routes(self):
+        from dashboard.companion import permitted
+        self.provider.conversation_input_trace=lambda ident:{'id':ident,'read_only':True}
+        ident=str(uuid.uuid4())
+        path='/api/interaction/inputs/'+ident+'/trace'
+        self.assertEqual(self.client.get(path,headers=self.headers).json(),{'id':ident,'read_only':True})
+        for route in (path,path+'/original',path+'/'+str(uuid.uuid4())):
+            self.assertTrue(permitted('GET',route))
+            self.assertFalse(permitted('POST',route))
+        for route in ('/api/interaction/telegram-inputs','/api/interaction/inputs/telegram:123/trace','/api/stop','/api/state'):
+            self.assertEqual(self.client.get(route,headers=self.headers).status_code,403)
+
     def test_monitor_grant_is_read_only_and_never_inherits_ambient_owner(self):
         from dashboard.companion import permitted
         output=self.root/'monitor.json'
@@ -102,7 +121,8 @@ class Companion(unittest.TestCase):
         response=self.client.get('/api/interaction/inputs',headers=headers)
         self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(response.json()['viewer'],{'label':'Selected monitor','expires':credential['expires']})
-        self.assertNotIn('viewer',self.client.get('/api/interaction/inputs',headers=self.headers).json())
+        self.assertEqual(self.client.get('/api/interaction/inputs',headers=self.headers).json()['viewer'],
+                         {'label':'Selected fixture button','expires':self.device['expires']})
         self.provider.conversation_telegram_inputs=lambda before,direction:{'items':[],'read_only':True}
         response=self.client.get('/api/interaction/telegram-inputs',headers=headers)
         self.assertEqual(response.status_code,200,response.text)
