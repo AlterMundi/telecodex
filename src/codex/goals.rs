@@ -14,6 +14,18 @@ pub struct NativeGoal {
     pub updated_at: i64,
 }
 impl NativeGoal {
+    pub fn budget_exhausted(&self) -> bool {
+        self.token_budget
+            .is_some_and(|budget| self.tokens_used >= budget)
+    }
+    pub fn ensure_resumable(&self) -> Result<()> {
+        if self.budget_exhausted() {
+            bail!(
+                "This goal's token budget is exhausted. Resume and objective edits preserve usage; increase the token budget through native goal controls before resuming. Inspect /goal for the current usage and budget."
+            );
+        }
+        Ok(())
+    }
     pub fn same_definition(&self, other: &Self) -> bool {
         self.thread_id == other.thread_id
             && self.objective == other.objective
@@ -23,6 +35,7 @@ impl NativeGoal {
     }
     pub fn edited_status(&self) -> &str {
         match self.status.as_str() {
+            "complete" | "budgetLimited" if self.budget_exhausted() => "budgetLimited",
             "complete" | "budgetLimited" => "active",
             other => other,
         }
@@ -107,6 +120,11 @@ pub(super) async fn mutate_live_goal(
     let current = parse_goal(&process.await_response(id).await?, thread_id)?;
     if !super::goal_definitions_match(current.as_ref(), activation.expected.as_ref()) {
         bail!("The goal changed; inspect /goal again.");
+    }
+    if !activation.replace
+        && let Some(goal) = &current
+    {
+        goal.ensure_resumable()?;
     }
     if activation.replace {
         let id = process

@@ -1083,14 +1083,10 @@ where
             );
         }
         if activation.attach_turn.is_none()
-            && activation.objective.is_none()
-            && current
-                .as_ref()
-                .is_some_and(|g| matches!(g.status.as_str(), "complete" | "budgetLimited"))
+            && !activation.replace
+            && let Some(goal) = &current
         {
-            bail!(
-                "This goal is terminal. Edit its objective or create a new goal instead of resuming it."
-            );
+            goal.ensure_resumable()?;
         }
         if session.codex_thread_id.is_some() {
             let id = process
