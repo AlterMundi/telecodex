@@ -31,6 +31,41 @@ impl Store {
                 cfg.targets.push(target);
             }
         }
+        if base.discover_owned_sessions {
+            // Discovery is local metadata only: never enumerate unrelated native
+            // history, start workers, or grant a client access to new targets.
+            let mut q = conn.prepare("SELECT s.thread_id,s.session_title FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.creator_user_id=?1 AND u.allowed=1 AND s.chat_id=?2 AND s.thread_id>0 AND s.thread_id!=?3 AND s.codex_thread_id IS NOT NULL AND s.codex_thread_id!='' AND s.force_fresh_thread=0 ORDER BY s.thread_id")?;
+            let rows = q.query_map(params![base.human_id, base.chat_id, base.topic_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+            })?;
+            for row in rows {
+                let (topic_id, title) = row?;
+                if cfg.targets.iter().any(|t| t.topic_id == topic_id) {
+                    continue;
+                }
+                let fallback = format!("t{topic_id}");
+                let name = title
+                    .filter(|name| {
+                        !name.is_empty()
+                            && name.len() <= 128
+                            && !name.chars().any(|c| {
+                                c.is_whitespace()
+                                    || c.is_control()
+                                    || matches!(c, '#' | '`' | '"' | '\'' | '<' | '>')
+                            })
+                            && !name
+                                .strip_prefix('t')
+                                .or_else(|| name.strip_prefix('T'))
+                                .is_some_and(|v| v.parse::<i64>().is_ok())
+                            && !cfg
+                                .matrix_targets
+                                .iter()
+                                .any(|t| t.name.eq_ignore_ascii_case(name))
+                    })
+                    .unwrap_or(fallback);
+                cfg.targets.push(Target { topic_id, name });
+            }
+        }
         cfg.validate()?;
         Ok(cfg)
     }
@@ -301,6 +336,99 @@ fn eligible(conn: &Connection, operation: &Value) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn discovery_is_opt_in_owned_bound_current_and_preserves_explicit_names() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let defaults = super::super::tests::defaults();
+        let store = Store::open(file.path(), &[100, 101], &defaults).unwrap();
+        for (chat, topic, owner, title) in [
+            (100, 1, 100, "Entry"),
+            (100, 2, 100, "Duplicate"),
+            (100, 3, 100, "Duplicate"),
+            (100, 4, 101, "OtherHuman"),
+            (101, 5, 100, "OtherChat"),
+            (100, 6, 100, "Unbound"),
+            (100, 7, 100, "t999"),
+            (100, 8, 100, "Two Words"),
+            (100, 9, 100, "Retired"),
+            (100, 10, 100, "OriginalTitle"),
+        ] {
+            let key = SessionKey::new(chat, Some(topic));
+            store.ensure_session(key, owner, &defaults).unwrap();
+            store.set_session_title(key, Some(title)).unwrap();
+            if topic != 6 {
+                store
+                    .set_session_codex_thread(key, &format!("native-{topic}"))
+                    .unwrap();
+            }
+        }
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET force_fresh_thread=1 WHERE thread_id=9",
+                [],
+            )
+            .unwrap();
+        let mut cfg = InteractionConfig {
+            human_id: 100,
+            chat_id: 100,
+            topic_id: 1,
+            max_active_workers: 2,
+            discover_owned_sessions: false,
+            matrix_targets: vec![],
+            matrix_transport: None,
+            targets: vec![Target {
+                name: "Explicit".into(),
+                topic_id: 10,
+            }],
+        };
+        assert_eq!(store.interaction_profile(&cfg).unwrap().targets.len(), 1);
+        cfg.discover_owned_sessions = true;
+        let discovered = store.interaction_profile(&cfg).unwrap();
+        assert_eq!(
+            discovered
+                .targets
+                .iter()
+                .map(|t| t.topic_id)
+                .collect::<Vec<_>>(),
+            vec![10, 2, 3, 7, 8]
+        );
+        assert_eq!(discovered.resolve("Duplicate").len(), 2);
+        assert_eq!(
+            discovered.resolve("t3"),
+            vec![SessionKey::new(100, Some(3))]
+        );
+        assert_eq!(discovered.targets[0].name, "Explicit");
+        assert_eq!(discovered.targets[3].name, "t7");
+        assert_eq!(discovered.targets[4].name, "t8");
+        assert!(discovered.resolve("t999").is_empty());
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET creator_user_id=101 WHERE thread_id=2",
+                [],
+            )
+            .unwrap();
+        assert!(
+            store
+                .interaction_profile(&cfg)
+                .unwrap()
+                .resolve("t2")
+                .is_empty()
+        );
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE users SET allowed=0 WHERE tg_user_id=100", [])
+            .unwrap();
+        assert_eq!(store.interaction_profile(&cfg).unwrap().targets.len(), 1);
+    }
+
+    #[test]
     fn creation_reserves_one_plan_and_atomically_enrolls_original() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let defaults = super::super::tests::defaults();
@@ -479,6 +607,7 @@ mod tests {
             chat_id: 100,
             topic_id: 1,
             max_active_workers: 2,
+            discover_owned_sessions: false,
             matrix_targets: vec![],
             matrix_transport: None,
             targets: vec![Target {

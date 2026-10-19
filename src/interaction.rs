@@ -12,6 +12,9 @@ pub struct InteractionConfig {
     pub topic_id: i64,
     #[serde(default)]
     pub targets: Vec<Target>,
+    /// Include existing bound conversations owned by this human in this chat.
+    #[serde(default)]
+    pub discover_owned_sessions: bool,
     #[serde(default)]
     pub matrix_targets: Vec<MatrixTarget>,
     pub matrix_transport: Option<MatrixTransportConfig>,
@@ -434,6 +437,7 @@ mod tests {
             chat_id: 100,
             topic_id: 1,
             max_active_workers: 2,
+            discover_owned_sessions: false,
             matrix_targets: vec![],
             matrix_transport: None,
             targets: vec![
