@@ -290,6 +290,12 @@ pub(super) fn source_on(
             [delivery], |r| r.get(0)).optional()?;
         source["observed_at"] = json!(observed);
     }
+    // Canonical native items keep controller metadata. All reader/player views
+    // use the visible answer, including its hash, length and revision fences.
+    if let Some(text) = source["text"].as_str() {
+        let visible = crate::interaction::visible_answer(text).to_owned();
+        source["text"] = json!(visible);
+    }
     source["entry_binding"] = json!([
         human,
         entry,
@@ -641,6 +647,7 @@ mod tests {
         store
             .record_turn_native_thread(local, "entry-native")
             .unwrap();
+        let original = "Alpha is still working.\n<daimon-result>{\"requests\":[],\"covered\":[],\"completed\":[],\"deferred\":[]}</daimon-result>";
         store
             .record_native_message(
                 local,
@@ -658,7 +665,7 @@ mod tests {
                 "entry-turn",
                 "answer",
                 Some("final_answer"),
-                "Alpha is still working.",
+                original,
             )
             .unwrap();
         let list = store
@@ -680,12 +687,30 @@ mod tests {
             .find(|s| s["kind"] == "integrator_answer")
             .unwrap();
         assert!(source["current"].is_null());
+        assert_eq!(source["preview"], "Alpha is still working.");
+        assert_eq!(
+            source["text_characters"],
+            "Alpha is still working.".chars().count()
+        );
+        assert_eq!(
+            source["text_sha256"],
+            format!("{:x}", Sha256::digest(b"Alpha is still working."))
+        );
         let id = source["id"].as_str().unwrap();
         let revision = source["revision"].as_str().unwrap();
         let part = store
             .interaction_presentation_part(100, entry, id, revision, 0)
             .unwrap();
         assert_eq!(part["text"], "Alpha is still working.");
+        assert!(part["next_offset"].is_null());
+        {
+            let conn = store.conn.lock().unwrap();
+            let retained: String = conn.query_row(
+                "SELECT text FROM interaction_native_messages WHERE native_thread='entry-native' AND item_id='answer'",
+                [], |r| r.get(0),
+            ).unwrap();
+            assert_eq!(retained, original);
+        }
         store
             .set_session_codex_thread(entry, "replacement-entry")
             .unwrap();
