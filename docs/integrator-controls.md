@@ -4,6 +4,14 @@ Status: studied and planned, 2026-10-19. Owner: [Telecodex #210](https://github.
 under [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
 This document does not enable controls, delegation, recovery services or model wakeups.
 
+Human-selected initial policy: explicit human instructions to start, pause,
+resume or clear a selected goal execute without asking for the same permission
+again. An assistant-proposed lifecycle change states target/action/reason and
+waits for human confirmation. A confirmation authorizes that proposal, not a
+different target or a later changed objective. This policy does not authorize
+unattended goal reactivation. Goal controls remain distinct from interruption;
+each global Stop still needs its own fresh explicit human request.
+
 ## Intended experience
 
 The person can direct work, inspect obstacles, answer questions and manage a
@@ -77,8 +85,11 @@ or another session does not establish authority to perform it. Human-directed
 controls through the integrator and future supported delegated controls must
 remain distinguishable.
 
-Telecodex currently labels complete/budget-limited goals terminal for `/goal resume`
-and suggests edit/new goal. That is bridge behavior, not proof that the native
+The inspected baseline labels complete/budget-limited goals terminal for `/goal resume`
+and suggests edit/new goal. [Correction #211](https://github.com/AlterMundi/telecodex/pull/211)
+allows explicit resumption while preserving accounting and checking actual
+budget headroom; it avoids pointless kickoff on exhausted objective edits.
+The old restriction is bridge behavior, not proof that the native
 set API has no active transition. Inspected native state logic keeps an exhausted
 budget limited when asked to become active; setting active does not reset usage.
 Do not clear/recreate a goal to evade accounting. Account availability is also
@@ -159,6 +170,11 @@ Stop always requires its own fresh explicit human request.
    questions to the integrator, apply actual answers to their original responders,
    and sequence a requested goal transition with the following message. Coordinate
    native adapter limitations with #203 and the existing conversation-request API.
+   Requests should lead with one short concrete action, its purpose and how to
+   answer, with detail separately accessible. Associate relevant ordinary voice/text
+   replies without requiring duplicate entry. Retire obsolete agent-issued tasks
+   through existing scoped withdrawals with reason/evidence; do not call them
+   human-completed or fabricate answers to expired channels. Coordinate #61.
 4. **Recovery without work replay.** Consolidate retained-result inspection,
    collector attachment and known-unsent recovery into the same conversation.
    Report missing ACKs, terminal states and external obstacles usefully here.

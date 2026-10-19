@@ -6,6 +6,22 @@ add a native RPC queue, model attention, memory ingestion or a Mini App.
 
 ## Conversation first
 
+Human clarification, 2026-10-19: a pending request must be easy to understand
+from a short phone message or spoken exchange. Lead with the one concrete action,
+briefly explain why it matters, and state how to answer. Keep technical evidence
+and history available in detail rather than making the human reconstruct them.
+Do not bundle an immediate handoff with eventual project acceptance in one task.
+
+When ordinary conversation supplies the answer, associate that actual human input
+with the intended current request through the supported responder/feedback path;
+do not demand duplicate form entry. Ambiguous replies need conversational
+clarification. If continued work makes the requested action unnecessary, withdraw
+the agent-issued task with a short reason and retained evidence. Withdrawal is
+not a declaration that the human performed the action or accepted the product.
+Never manufacture an answer to an expired native channel. The existing manifest
+withdrawal mechanism below is available; integrated reassessment and voice
+usability still need qualification under #61/#208/#210.
+
 Ordinary conversation is the default. Discuss ideas, acknowledge spontaneous
 feedback and answer status questions directly. Native question widgets are useful
 when the human requests one or a consequential choice needs structured input.
