@@ -53,10 +53,10 @@ impl Store {
                                     || c.is_control()
                                     || matches!(c, '#' | '`' | '"' | '\'' | '<' | '>')
                             })
-                            && !name
+                            && name
                                 .strip_prefix('t')
                                 .or_else(|| name.strip_prefix('T'))
-                                .is_some_and(|v| v.parse::<i64>().is_ok())
+                                .is_none_or(|v| v.parse::<i64>().is_err())
                             && !cfg
                                 .matrix_targets
                                 .iter()
