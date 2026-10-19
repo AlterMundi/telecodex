@@ -79,10 +79,11 @@ pub(super) async fn handle(app: &App, message: &Message, human: i64) -> Result<b
     tokio::spawn(async move {
         let _permit = permit;
         let preparation=INTERRUPT_TARGETS.scope(interruption_targets,HUMAN_UPDATE_ID.scope(update,async {
-            let session=app.shared.store.get_session(key)?.context("Voice entry missing")?;
             let source=message.voice.as_ref().context("Missing original voice")?;
-            let inbox=app.session_inbox_dir(&session)?;
-            let attachment=app.download_attachment_bounded(&source.file_id,Some("voice.ogg"),source.mime_type.as_deref(),AttachmentKind::Voice,&inbox,Some(crate::voice::MAX_BYTES as u64)).await?;
+            let database=app.shared.config.db_path.clone();
+            let reservation=tokio::task::spawn_blocking(move || crate::voice::reserve_telegram_download(&database)).await??;
+            let attachment=app.download_attachment_bounded(&source.file_id,Some("voice.ogg"),source.mime_type.as_deref(),AttachmentKind::Voice,&reservation.directory,Some(crate::voice::MAX_BYTES as u64)).await?;
+            drop(reservation);
             let(text,proof)=crate::voice::transcribe(&config,&attachment.path,&source.file_id).await?;
             if app.maintenance_writer_held(&message,human,Some(&text)).await? {bail!("Voice source held during preparation");}
             app.shared.store.voice_commit(update,human,&text,&proof)?;

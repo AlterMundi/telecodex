@@ -241,8 +241,35 @@ def overlapping_first_voices_preserve_entry_generation(binary):
     finally:j.close()
 
 
+def full_download_storage_preserves_input_and_text_control(binary):
+    import tomllib
+    j=Voice(binary)
+    try:
+        j.prepare()
+        database=tomllib.loads(j.config.read_text())['db_path']
+        directory=pathlib.Path(str(database)+'.telegram-voice');directory.mkdir(mode=0o700,exist_ok=True)
+        protected=directory/'unconfirmed-fixture'
+        with protected.open('wb') as stream:stream.truncate(256*1024*1024)
+        protected.chmod(0o600)
+        update,payload,digest=j.voice('#Alpha This recording must not be downloaded or transcribed.')
+        j.wait(lambda:j.row('SELECT phase FROM interaction_voice_inputs WHERE update_id=?',(update,))==[('uncertain',)])
+        assert not j.calls() and not j.instructions(7)
+        retained=json.loads(j.row('SELECT payload_json FROM incoming_updates WHERE update_id=?',(update,))[0][0])
+        assert retained['message']['voice']['file_id']==payload['message']['voice']['file_id']
+        assert protected.stat().st_size==256*1024*1024
+        assert {p.name for p in directory.iterdir()}=={'admission.lock','unconfirmed-fixture'}
+        j.admit('#Alpha Text remains available while audio storage is full.',topic=1)
+        j.wait(lambda:len(j.instructions(7))==1 and j.instructions(7)[0][1]=='accepted')
+        j.answer(7,'Text completed independently of full audio storage.')
+        j.wait(lambda:j.has('Text completed independently of full audio storage.',1))
+        assert not j.calls();j.idle()
+        print('PASS full protected Telegram voice storage retains original identity without ASR/download while text dispatch/results remain available')
+    finally:j.close()
+
+
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
+    full_download_storage_preserves_input_and_text_control(binary)
     semantic_voice_and_responsive_corrections(binary)
     silence_and_restart(binary)
     late_interrupt_keeps_newer_execution(binary)

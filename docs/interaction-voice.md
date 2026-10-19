@@ -121,3 +121,11 @@ interrupted files before retaining a new original. Exact retained retries need n
 additional copy even when full. Capacity never expires or removes uncertain input;
 new audio is refused while text remains available. Committed transcript cleanup
 releases bytes through the existing path.
+
+Telegram integrating-entry recordings use a separate private receiving directory
+with the same 256 MiB / 128-file limit. Admission reserves the maximum 20 MiB
+download while holding a filesystem lock only through media publication, releasing
+it before STT. Completed transcript commit removes that exact file. Failed or
+uncertain clips remain counted, including interrupted temporary files; new voice
+is refused before download when capacity is unavailable. General conversation
+attachments and historical inbox recordings are outside this directory.
