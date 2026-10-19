@@ -101,7 +101,12 @@ topic_id=8
             assert provenance['via'] == 'interaction-controller'
             if provenance.get('author') is None:
                 assert provenance['original_human_author'] == 100
-                assert provenance['source_channel'] == 'telegram:123'
+                # Reuse the worker peer for both existing supported ingresses.
+                if provenance['source_message']['message_id'] is None:
+                    assert provenance['source_channel'] == 'conversation'
+                    assert provenance['original_ingress_update'] is None
+                else:
+                    assert provenance['source_channel'] == 'telegram:123'
             else:
                 assert provenance['original_human_author'] is None
                 assert provenance['authorized_human'] == 100

@@ -8,8 +8,12 @@ A deployment record establishes that receiver's selected source and observed
 behavior; it does not enroll another body or certify every end-to-end scenario.
 
 Current delivery is one body with multiple native work sessions. Cross-body
-activation is deferred. The parent plan still owns combined parallel voice
-acceptance, genuine human routing feedback and the remaining attention evaluation.
+activation is deferred. Combined parallel voice acceptance is recorded in
+[Integrators #4](https://github.com/AlterMundi/daimon-integrators/issues/4#issuecomment-6255807590):
+physical button/Jabra input, transcription, native Alpha/Beta work, a mid-work
+correction, an independent question/answer and reconnect/playback. Genuine human
+routing feedback, subjective voice usability and the remaining attention
+evaluation are separate from that automated acceptance.
 
 ## Using the integrating conversation
 
@@ -387,7 +391,7 @@ and incomparable channels do not establish an automatic precedence rule.
 ## Verification and remaining scope
 
 The native identity and deferred-approval foundations are merged in #121/#123.
-This branch connects the registry, explicit ingress, live steering, question
+The controller connects the registry, explicit ingress, live steering, question
 presentation and correction-aware return. `tests/routing_io.py` exercises the
 process boundary with synthetic Telegram HTTP, native WebSocket and persistent
 SQLite peers. Registry/publication tests distinguish preparation, uncertain
@@ -418,22 +422,42 @@ exact synthetic return bindings and terminal native status were checked
 separately. One cold preparation took about 36 seconds; an active correction
 was acknowledged in about 66 ms and Beta admission in about 759 ms. These are
 individual observations under the test host's load, not latency guarantees.
-Native token totals were recorded; currency cost remains unknown. Real Telegram
-and receiving deployment acceptance remain separate work.
+Native token totals were recorded; currency cost remains unknown. That journey
+used synthetic Telegram receipts; it does not establish live Telegram delivery.
+Receiving adoption was subsequently observed, including blocked/active goal
+preservation and exact collector reattachment, in
+[#113's deployment record](https://github.com/AlterMundi/telecodex/issues/113#issuecomment-6239250452).
+The later voice/device journey above separately qualifies actual native output
+through the adopted device path; deployment health alone is not that evidence.
 
 Routed human-action declarations use the existing validated registration path
 and remain owned by the actual native worker. The controller points to that
-worker's `/pending` surface; entry-wide task presentation is still part of the
-attention work. Invalid declarations remain retained for inspection.
+worker's `/pending` surface. Entry-wide canonical request presentation now exposes
+questions and approvals through the existing owner-local source and authenticated
+client, including full proposal paging and explicit response receipts; see
+`tests/conversation_requests_http_io.py`. Invalid declarations remain retained
+for inspection.
 
 Routed file output remains retained with its worker turn. This text adapter does
 not upload it through the legacy worker-topic uploader: attachment publication
 needs the same per-request correction and return reservation as text.
 
-The remaining product plan includes attachment publication, evaluated semantic routing and justified new-session creation, receiving observer adoption,
-attention across many contexts, unified approval/task presentation, voice,
-device input, derived interviews and authorized cross-body operation. The
-configuration above is opt-in and does not enroll arbitrary new sessions.
+The original roadmap's later increments are tracked in the owning issues rather
+than inferred from this early two-session pilot. The current receiving source
+includes semantic selection/new-session creation, observer/interviews, canonical
+requests/results, text/voice/device input and the evolving routing graph.
+Attachment publication retains the limitation above. Cross-body activation is
+deferred by human direction. The configuration above is opt-in and does not
+enroll arbitrary new sessions.
+
+`tests/attention_io.py` exercises twenty retained contexts with at most two active
+synthetic workers. During sustained Alpha progress it steers Alpha, keeps the
+integrating dialogue available, reads an actionable native question without
+answering it, and reads Beta's completed canonical result directly. It then
+drains the remaining work and waits for committed return receipts. Reported
+delays are observations of the local fixture, with zero model calls; they do not
+measure provider latency, billing or human intent. Real human routing corrections
+and clarification burden remain unqualified by the synthetic routing corpus.
 
 `tests/semantic_routing_io.py` qualifies original-input discovery and dispatch
 through the process boundary: rejected model-authored replacements, one atomic
