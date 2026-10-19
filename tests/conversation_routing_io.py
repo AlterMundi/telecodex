@@ -123,6 +123,8 @@ def direct_after_canonical_work(binary):
         binding=j.read('presentation','list','0','0')['result']['binding']
         j.submit(binding,'#Alpha Start from the web')
         j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='accepted')
+        j.broadcast('native-topic-7','item/completed',{'turnId':j.workers['native-topic-7'],'item':{'id':'web-progress-before-direct','type':'agentMessage','phase':'commentary','text':'Web progress before the direct switch.'}})
+        j.wait(lambda:any(i['kind']=='worker_progress' and i['preview']=='Web progress before the direct switch.' for i in j.read('presentation','list','0','0')['result']['items']))
         j.answer_worker(7,'First web answer.');j.idle();j.messages.clear()
         j.admit('Now I am writing directly in this work topic.',topic=7)
         j.wait(lambda:len(j.direct_packets)==1)
@@ -130,6 +132,7 @@ def direct_after_canonical_work(binary):
         assert len(j.instructions(7))==1
         j.direct_answer('Idle direct answer.')
         j.wait(lambda:j.has('Idle direct answer.',7) and j.has('Idle direct answer. progress',7));j.idle()
+        assert not any('Idle direct answer.' in i['preview'] for i in j.read('presentation','list','0','0')['result']['items']),'Direct output leaked into the web conversation'
         j.submit(binding,'#Alpha Return to the web for new work')
         j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
         j.admit('A raw direct correction while the web worker is still running.',topic=7)
@@ -205,6 +208,16 @@ def canonical_routes(binary):
         journey.answer_worker(8, 'Canonical Beta result arrives first.')
         journey.answer_worker(7, 'Canonical Alpha result incorporates 17.')
         journey.wait(lambda: journey.row('SELECT count(*) FROM interaction_deliveries') == [(2,)])
+        before_read=journey.row('SELECT count(*) FROM turns')
+        capabilities=journey.call('route-conversation-capabilities','capabilities',{})
+        assert {'conversation','conversation_part'} <= set(capabilities['operations'])
+        evidence=journey.call('route-conversation-read','conversation',{})
+        assert evidence['source_data'] is True
+        alpha=next(i for i in evidence['presentation']['items'] if i['kind']=='worker_result' and i['target']['thread_id']==7)
+        full=journey.call('route-conversation-body','conversation_part',{'source':alpha['id'],'revision':alpha['revision']})
+        assert full['kind']=='worker_result' and full['text']=='Canonical Alpha result incorporates 17.'
+        journey.call('route-conversation-invalid','conversation',{'human':101},ok=False)
+        assert journey.row('SELECT count(*) FROM turns')==before_read
         journey.finish(journey.web_thread, journey.web_turn); journey.idle()
         page = journey.read('presentation', 'list', '0', '0')['result']
         assert sum(item['kind'] == 'worker_result' for item in page['items']) == 2

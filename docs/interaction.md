@@ -730,5 +730,14 @@ come from the existing input and native journals; refresh updates existing cards
 rather than adding another copy. The routing graph and full trace remain separate
 inspection tools. Older inputs and replies remain accessible from their existing
 paging controls. Commentary is attributed progress, never a final answer or proof
-of task completion. Worker commentary forwarding and real provider duplex voice
-acceptance remain separate unfinished work; this timeline does not claim them.
+of task completion. Worker commentary is exposed only when the original native observation retained a web return selection; switching to a direct topic never enrolls later direct progress into the web chat. Real provider duplex voice acceptance remains unfinished.
+
+
+The stable integrator controller exposes `conversation` and `conversation_part`
+for the same scoped progress and answer sources the web client displays. Reads
+reuse presentation cursors and source revisions and do not dispatch, synthesize,
+or claim hearing. The integrator can consult returned evidence when the human
+refers to an answer from a worker; it keeps that evidence's session authorship
+rather than injecting it as new human speech. Native worker progress snapshots
+its web source at first observation. Duplicate native observations retain that
+original scope, and old progress without a recorded web source is not imported.

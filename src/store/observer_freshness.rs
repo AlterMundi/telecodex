@@ -394,7 +394,7 @@ mod tests {
         {
             let mut conn = store.conn.lock().unwrap();
             let tx = conn.transaction().unwrap();
-            tx.execute("INSERT INTO interaction_native_messages VALUES('native-source','physical','rolled-back',?1,'commentary','Never committed',?2)",params![turn,now_string()]).unwrap();
+            tx.execute("INSERT INTO interaction_native_messages(native_thread,native_turn,item_id,local_turn,phase,text,observed_at) VALUES('native-source','physical','rolled-back',?1,'commentary','Never committed',?2)",params![turn,now_string()]).unwrap();
             tx.rollback().unwrap();
         }
         assert_eq!(
