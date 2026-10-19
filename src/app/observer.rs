@@ -166,6 +166,7 @@ async fn refresh(
     retry: bool,
     progress: Option<&ReturnRoute>,
 ) -> Result<Refresh> {
+    let cfg = routing::profile(&shared)?;
     let session = shared
         .store
         .get_session(key)?
@@ -206,7 +207,7 @@ async fn refresh(
                     shared.clone(),
                     origin.clone(),
                     format!(
-                        "Synthesizing #{name} from retained original evidence ({} changed entries). Attempt {}. A timeout remains uncertain and is not retried automatically.",
+                        "Preparing synthesis for #{name} from retained original evidence ({} changed entries). Attempt {}. A timeout remains uncertain and is not retried automatically.",
                         attempt.source["delta_indices"]
                             .as_array()
                             .map_or(0, Vec::len),
@@ -215,9 +216,27 @@ async fn refresh(
                 );
             }
             let result = async {
+                // Only synthesis competes for these slots: unchanged checks and
+                // pending-attempt inspection stay responsive during warmup.
+                let _permit = tokio::select! {
+                    biased;
+                    _ = shared.shutdown.cancelled() => bail!("Observer receiver is shutting down"),
+                    permit = shared.observer_preparations.acquire() => permit?,
+                };
+                shared.store.validate_owned_binding(key, human, native)?;
+                let mut synthesis = session.clone();
+                if let Some(model) = &cfg.observer_model {
+                    synthesis.model = Some(model.clone());
+                }
                 let (summary, supports) = shared
                     .codex
-                    .summarize_context(&session, &format!("Observer #{name}"), &context, POLICY)
+                    .summarize_context_with_effort(
+                        &synthesis,
+                        &format!("Observer #{name}"),
+                        &context,
+                        POLICY,
+                        cfg.observer_reasoning_effort.as_deref(),
+                    )
                     .await?;
                 shared
                     .store
