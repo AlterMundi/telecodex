@@ -610,6 +610,18 @@ impl CodexRunner {
         context: &[String],
         instructions: &str,
     ) -> Result<(String, Vec<usize>)> {
+        self.summarize_context_with_effort(session, title, context, instructions, None)
+            .await
+    }
+
+    pub async fn summarize_context_with_effort(
+        &self,
+        session: &SessionRecord,
+        title: &str,
+        context: &[String],
+        instructions: &str,
+        effort: Option<&str>,
+    ) -> Result<(String, Vec<usize>)> {
         tokio::time::timeout(Duration::from_secs(180), async {
             let empty = tempfile::tempdir()?;
             let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
@@ -625,7 +637,9 @@ impl CodexRunner {
             let response=process.await_response(id).await?;
             let thread=response.pointer("/thread/id").and_then(Value::as_str).ok_or_else(||anyhow!("handoff summarizer returned no thread"))?.to_string();
             let prompt=serde_json::to_string(&json!({"selected_topic":title,"source_entries":context}))?;
-            let id=process.send_request("turn/start",json!({"threadId":thread,"input":[{"type":"text","text":prompt,"text_elements":[]}],"outputSchema":{"type":"object","properties":{"summary":{"type":"string"},"recent_indices":{"type":"array","items":{"type":"integer"}}},"required":["summary","recent_indices"],"additionalProperties":false}})).await?;
+            let mut params=json!({"threadId":thread,"input":[{"type":"text","text":prompt,"text_elements":[]}],"outputSchema":{"type":"object","properties":{"summary":{"type":"string"},"recent_indices":{"type":"array","items":{"type":"integer"}}},"required":["summary","recent_indices"],"additionalProperties":false}});
+            if let Some(effort)=effort {params["effort"]=json!(effort);}
+            let id=process.send_request("turn/start",params).await?;
             let response=process.await_response(id).await?;
             let turn=response.pointer("/turn/id").and_then(Value::as_str).ok_or_else(||anyhow!("handoff summarizer returned no turn"))?.to_string();
             let read_result=tokio::time::timeout(Duration::from_secs(120),async {

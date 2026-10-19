@@ -15,6 +15,9 @@ pub struct InteractionConfig {
     /// Include existing bound conversations owned by this human in this chat.
     #[serde(default)]
     pub discover_owned_sessions: bool,
+    /// Independent synthesis settings; omitted values preserve existing behavior.
+    pub observer_model: Option<String>,
+    pub observer_reasoning_effort: Option<String>,
     #[serde(default)]
     pub matrix_targets: Vec<MatrixTarget>,
     pub matrix_transport: Option<MatrixTransportConfig>,
@@ -100,6 +103,16 @@ impl InteractionConfig {
             || !(1..=64).contains(&self.max_active_workers)
         {
             bail!("Invalid interaction owner, entry, target count or active worker limit");
+        }
+        if self.observer_model.as_ref().is_some_and(|v| {
+            v.is_empty() || v.len() > 128 || v.chars().any(|c| c.is_control() || c.is_whitespace())
+        }) || self.observer_reasoning_effort.as_deref().is_some_and(|v| {
+            !matches!(
+                v,
+                "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+            )
+        }) {
+            bail!("Invalid explicit observer model or reasoning effort");
         }
         let mut ids = std::collections::HashSet::new();
         for target in &self.targets {
@@ -438,6 +451,8 @@ mod tests {
             topic_id: 1,
             max_active_workers: 2,
             discover_owned_sessions: false,
+            observer_model: None,
+            observer_reasoning_effort: None,
             matrix_targets: vec![],
             matrix_transport: None,
             targets: vec![

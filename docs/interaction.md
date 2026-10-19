@@ -475,6 +475,25 @@ Telegram. Its narrowly guarded `--resume` continues only the pending second
 entry turn after the recorded reader-method failure; completed turns are never
 replayed.
 
+## Observer synthesis settings and capacity
+
+`interaction.observer_model` and `interaction.observer_reasoning_effort` select
+synthesis independently of source work sessions. Omitted model preserves the
+source model; omitted effort preserves the native default. Select a model/effort
+supported by the receiving account. Existing unchanged cards remain reusable;
+changing synthesis settings does not force a new model call. These settings apply only to ephemeral
+observer summaries; they do not modify source bindings, goals or preferences,
+and do not change other handoff/merge summarizers.
+
+All observer consumers share two synthesis slots across the receiver, including
+concurrent text commands and native tool calls. Original-source reconciliation,
+unchanged-card reuse and inspection of retained attempts do not wait for these
+slots. The retained `summarizing` phase includes queued attempts; it is not proof
+that inference has started. Ownership/native binding is rechecked after waiting.
+Shutdown releases waiters into retained uncertainty, without retrying model work.
+Foreground dialogue and worker capacity remain independent. This is an observer
+capacity bound, not a provider-wide token, spend or inference limit.
+
 ## Discovering existing owned conversations
 
 Set `interaction.discover_owned_sessions = true` to include existing, currently

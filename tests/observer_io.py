@@ -224,8 +224,56 @@ def candidate_reconciliation(binary):
         j.close()
 
 
+def synthesis_profile_and_global_budget(binary):
+    j = Observer(binary)
+    try:
+        j.prepare()
+        j.admit('A second retained Beta perspective.', topic=8)
+        j.wait(lambda:len(j.histories['native-topic-8'])==2)
+        j.idle()
+        for n in range(2):
+            j.admit('A third independent source perspective '+str(n), topic=9)
+            j.wait(lambda: len(j.histories.get('native-topic-9', [])) == n+1)
+            j.idle()
+        j.stop()
+        config=j.config.read_text().replace('[interaction]\n','[interaction]\nobserver_model="observer-fixture-model"\nobserver_reasoning_effort="low"\n',1)
+        config+='\n[[interaction.targets]]\nname="Gamma"\ntopic_id=9\n'
+        j.config.write_text(config)
+        before=j.row('SELECT thread_id,codex_thread_id,model,reasoning_effort FROM sessions WHERE thread_id IN (7,8,9) ORDER BY thread_id')
+        j.start();j.messages.clear();j.block_summary=True
+        j.admit('/interaction observe #Alpha', topic=1)
+        j.admit('/interaction observe #Beta', topic=1)
+        j.wait(lambda:j.summaries==2)
+        j.wait(lambda:len([r for r in j.rpc if r.get('method')=='turn/start' and r['params'].get('threadId','').startswith('summary-')])==2)
+        update=j.admit('/interaction observe #Gamma', topic=1)
+        j.handled(update)
+        # A retained third attempt proves it reached the shared synthesis queue.
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_observer_attempts WHERE phase='summarizing'")==[(3,)])
+        assert j.summaries==2, 'Concurrent commands bypassed receiver-wide observer capacity'
+        # Inspection of an already pending source must not queue behind synthesis.
+        j.admit('/interaction observe #Alpha', topic=1)
+        j.wait(lambda:j.has('Observer attempt is summarizing',1))
+        assert j.summaries==2
+        # Ordinary foreground input still executes while both synthesis slots hold.
+        j.admit('Foreground conversation stays responsive.', topic=10)
+        j.wait(lambda:len(j.histories.get('native-topic-10',[]))==1)
+        assert j.summaries==2
+        j.release_summary.set()
+        j.wait(lambda:j.row('SELECT count(*) FROM interaction_observer_cards')==[(3,)])
+        starts=[r['params'] for r in j.rpc if r.get('method')=='thread/start' and r.get('params',{}).get('ephemeral')]
+        turns=[r['params'] for r in j.rpc if r.get('method')=='turn/start' and r.get('params',{}).get('threadId','').startswith('summary-')]
+        assert len(starts)==len(turns)==3 and all(p['model']=='observer-fixture-model' for p in starts)
+        assert all(p['effort']=='low' for p in turns)
+        after=j.row('SELECT thread_id,codex_thread_id,model,reasoning_effort FROM sessions WHERE thread_id IN (7,8,9) ORDER BY thread_id')
+        assert after==before, 'Observer settings mutated original work-session bindings or preferences'
+        print('PASS explicit observer model/effort, receiver-wide two-synthesis bound, responsive pending inspection and foreground work, unchanged source preferences')
+    finally:
+        j.release_summary.set();j.close()
+
+
 if __name__ == '__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     revisions_and_originals(binary)
     legacy_observer_session_links(binary)
     candidate_reconciliation(binary)
+    synthesis_profile_and_global_budget(binary)

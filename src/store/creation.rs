@@ -376,6 +376,8 @@ mod tests {
             topic_id: 1,
             max_active_workers: 2,
             discover_owned_sessions: false,
+            observer_model: None,
+            observer_reasoning_effort: None,
             matrix_targets: vec![],
             matrix_transport: None,
             targets: vec![Target {
@@ -608,6 +610,8 @@ mod tests {
             topic_id: 1,
             max_active_workers: 2,
             discover_owned_sessions: false,
+            observer_model: None,
+            observer_reasoning_effort: None,
             matrix_targets: vec![],
             matrix_transport: None,
             targets: vec![Target {
