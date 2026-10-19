@@ -250,11 +250,11 @@ an attempted transmission remains uncertain. Delivered or uncertain output is
 never replayed by the recovery command. A failed output attempt produces a
 separate status notice, subject to the same recipient and transport constraints.
 
-Canonical native finals and their per-request return reservations commit in one
+Canonical native finals and their grouped return reservations commit in one
 SQLite transaction. A failure between capture and reservation leaves neither
 committed alone; repeated observations reuse their exact immutable identity.
-Canonical outputs reserve per-request deliveries independently from task
-completion. Each part rechecks corrections after Telegram cooldown and retains
+Canonical outputs reserve one return per requesting conversation independently
+from task completion, retaining every associated request. Each part rechecks corrections after Telegram cooldown and retains
 its exact payload before the HTTP attempt. An obsolete answer is withheld and replaced with
 a notice about its missing correction coverage; another request's result can still be delivered.
 Every confirmed text part has an exact reply binding. A confirmed withholding
@@ -707,3 +707,37 @@ these IDs to link corrections with `amends` or additional material with `context
 If the intended earlier request is absent or ambiguous, ask rather than inventing
 an ID or turning the correction into a new task. Existing native conversations
 can discover this operation through the stable controller's `capabilities` call.
+
+
+## Switching between web and direct conversations
+
+Web routing selects a return surface for the work it admits; it does not take
+permanent ownership of a native session's presentation. A subsequent ordinary
+message in that session's Telegram topic retains raw native ingress and restores
+commentary, answers and artifacts to the direct topic. This also applies when the
+native turn is still running. Selection uses the existing receiver capture order,
+so delayed transcription or dispatch cannot replace a later human selection.
+The small presentation-selection record is not a router source/instruction and
+does not consume routing capacity. Canonical answers already retained in the web
+conversation remain history; switching channels never replays model work.
+
+
+## Standalone conversation timeline
+
+The standalone client presents saved human inputs, integrating-session commentary
+and canonical answers in one chronological stream. Receive/observation timestamps
+come from the existing input and native journals; refresh updates existing cards
+rather than adding another copy. The routing graph and full trace remain separate
+inspection tools. Older inputs and replies remain accessible from their existing
+paging controls. Commentary is attributed progress, never a final answer or proof
+of task completion. Worker commentary is exposed only when the original native observation retained a web return selection; switching to a direct topic never enrolls later direct progress into the web chat. Real provider duplex voice acceptance remains unfinished.
+
+
+The stable integrator controller exposes `conversation` and `conversation_part`
+for the same scoped progress and answer sources the web client displays. Reads
+reuse presentation cursors and source revisions and do not dispatch, synthesize,
+or claim hearing. The integrator can consult returned evidence when the human
+refers to an answer from a worker; it keeps that evidence's session authorship
+rather than injecting it as new human speech. Native worker progress snapshots
+its web source at first observation. Duplicate native observations retain that
+original scope, and old progress without a recorded web source is not imported.

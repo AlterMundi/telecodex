@@ -17,6 +17,22 @@ window.Conversation = (() => {
       if(selection.input){$("#conversation-sent").open=true;card.trace.open=true;readTrace(card);}
       card.box.scrollIntoView({block:"nearest"});
     }}) : undefined;
+    const timeline = standalone ? $("#conversation-timeline") : undefined;
+    if(timeline){
+      timeline.hidden=false;$("#conversation-replies").hidden=true;$("#conversation-sent").hidden=true;
+      timeline.before($("#conversation-inputs-older"),$("#conversation-older"));
+    }
+    function placeInTimeline(box, key, timestamp) {
+      if(!timeline)return;
+      const nearEnd=timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;
+      box.dataset.timelineKey=key;
+      box.dataset.timelineTime=String(Date.parse(timestamp)||Number(box.dataset.timelineTime)||Date.now());
+      const following=[...timeline.children].find(item=>item!==box &&
+        (Number(item.dataset.timelineTime)>Number(box.dataset.timelineTime) ||
+        (item.dataset.timelineTime===box.dataset.timelineTime && item.dataset.timelineKey>key)));
+      timeline.insertBefore(box,following||null);
+      if(nearEnd)timeline.scrollTop=timeline.scrollHeight;
+    }
     let graphCursor=0;
     const cards = new Map();
     const inputs = new Map();
@@ -72,7 +88,7 @@ window.Conversation = (() => {
       card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
     }
     function resetInputs() {
-      graph?.reset();graphCursor=0;
+      graph?.reset();graphCursor=0;timeline?.replaceChildren();
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
       telegramCursor=0;telegramNewest=0;telegramLoaded=false;
@@ -170,6 +186,7 @@ window.Conversation = (() => {
         });
         const trace=node("details",undefined,"routing-trace"),traceSummary=node("summary","Show routing path"),traceState=node("p","","note"),traceContent=node("div"),traceRefresh=node("button","Refresh route");
         traceRefresh.type="button";traceState.setAttribute("role","status");trace.append(traceSummary,traceState,traceContent,traceRefresh);
+        if(timeline){box.classList.add?.("human-message");box.append(node("h3","You"));}
         box.append(text,status,actions,routeBox,imageButton,imageView,trace);
         card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote,trace,traceState,traceContent,traceRefresh,traceText:new Map()};
         trace.addEventListener("toggle",()=>trace.open&&readTrace(card));
@@ -251,7 +268,8 @@ window.Conversation = (() => {
       const container = $("#conversation-inputs");
       const following = [...container.children].find(item => item !== card.box
         && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
-      container.insertBefore(card.box, following || null);
+      if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at);
+      else container.insertBefore(card.box, following || null);
       graph?.input(card.value);
       return card;
     }
@@ -429,7 +447,7 @@ window.Conversation = (() => {
         actions.append(read, listen,reply); box.append(title, status, body, actions, error);
         box.dataset.sequence = String(source.sequence);
         const following = [...container.children].find((item) => Number(item.dataset.sequence) < source.sequence);
-        container.insertBefore(box, following || null);
+        if(!timeline)container.insertBefore(box, following || null);
         card = {source, box, title, status, body, read, listen, error, offset:0, expanded:false};
         cards.set(source.id, card);
         reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
@@ -457,8 +475,10 @@ window.Conversation = (() => {
       if (active?.source.id === source.id && active.source.revision !== source.revision)
         stop("This reply changed. Refresh before listening.");
       card.source = source;
-      card.title.textContent = source.kind === "integrator_answer" ? "Conversation reply" : source.label;
-      card.status.textContent = source.kind === "integrator_answer" ? "Reply from this conversation."
+      const integrator=source.kind.startsWith("integrator_");
+      const progress=source.kind.endsWith("_progress");
+      card.title.textContent = integrator ? "Conversation" : source.label;
+      card.status.textContent = progress ? "Working…" : source.kind === "integrator_answer" ? "Reply from this conversation."
         : source.correction_pending ? "A later correction is pending."
         : !source.native_binding_current ? "From an earlier session."
         : !source.current ? "Instruction coverage has not been confirmed."
@@ -466,7 +486,8 @@ window.Conversation = (() => {
         : source.completed ? "Session reports this request complete." : "Session progress; work may continue.";
       card.box.dataset.pending = String(!!source.correction_pending || source.native_binding_current === false);
       card.listen.hidden = !canListen;
-      graph?.result(source);
+      if(!progress)graph?.result(source);
+      placeInTimeline(card.box,source.id,source.observed_at);
     }
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);

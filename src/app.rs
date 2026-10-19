@@ -689,6 +689,11 @@ impl App {
 
         let session = self.ensure_session(session_key, from.id)?;
         let session = self.resolve_session_codex_binding(session)?;
+        self.shared.store.conversation_select_direct_return(
+            HUMAN_UPDATE_ID.try_with(|id| *id).ok(),
+            session_key,
+            from.id,
+        )?;
         let session = self.maybe_assign_session_title_from_text(session, text)?;
         self.announce_session_if_switched(from.id, &message.chat, session.key, &session)
             .await?;
@@ -2509,6 +2514,11 @@ impl App {
         self.shared
             .store
             .voice_validate(update_id, session_key, from_user_id)?;
+        self.shared.store.conversation_select_direct_return(
+            update_id,
+            session_key,
+            from_user_id,
+        )?;
         let contextual_text =
             nexus::input_prompt(&self.shared, update_id, session_key, from_user_id, text)?;
         if let Some(id) = update_id {

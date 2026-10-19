@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-function boot(readOnly=false) {
+function boot(readOnly=false,standalone=false) {
   const nodes = new Map(), requests = [];
   function element() {
     return {
@@ -32,7 +32,7 @@ function boot(readOnly=false) {
     },
   };
   let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false;
-  const source = n => ({id:`native:${n}`, kind:"integrator_answer", sequence:n,
+  const source = n => ({id:`native:${n}`, kind:standalone&&n===1?"integrator_progress":"integrator_answer", sequence:n, observed_at:new Date(1704067200000+n*1000).toISOString(),
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`});
   const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), nativePosts = [];
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
@@ -118,7 +118,7 @@ function boot(readOnly=false) {
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
-  const ui = context.window.Conversation.mount({api,readOnly,headers:() => ({}),setCsrf() {},modeChanged() {}});
+  const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
   return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audio(parts=false){renderAudio=true;multipart=parts;},
     nativeRequest() {
@@ -163,6 +163,16 @@ function boot(readOnly=false) {
 }
 
 (async () => {
+  const single=boot(false,true);
+  single.originals.set('between',{id:'between',text:'A direction while work continues',sequence:1,phase:'accepted',received_at:'2024-01-01T00:00:04.500Z'});
+  await single.ui.refresh();
+  const stream=single.nodes.get('#conversation-timeline');
+  assert.deepEqual(stream.children.map(c=>c.dataset.timelineKey),['native:1','native:2','native:3','native:4','input:between','native:5','native:6','native:7','native:8']);
+  assert.equal(stream.children[0].children[1].textContent,'Working…');
+  assert.equal(stream.children[4].children[0].textContent,'You');
+  await single.ui.refresh();
+  assert.equal(stream.children.length,9,'Refreshing keeps one card per saved input or native item');
+  assert.equal(single.nodes.get('#conversation-replies').hidden,true);
   const fixture = boot();
   await fixture.ui.refresh();
   fixture.arrive(); // Fifty new replies, then nine more during metadata refresh.

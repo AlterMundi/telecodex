@@ -28,8 +28,10 @@ pub(super) fn record_native_message_on(
     }
     let inserted = conn.execute(
         "INSERT OR IGNORE INTO interaction_native_messages
-             (native_thread,native_turn,item_id,local_turn,phase,text,observed_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+             (native_thread,native_turn,item_id,local_turn,phase,text,observed_at,presentation_input)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,(SELECT p.source_input FROM conversation_returns p
+               JOIN conversation_inputs c ON c.id=p.source_input AND c.human_id=p.human_id
+               JOIN turns t ON t.id=?4 WHERE p.native_thread=?1 AND p.human_id=t.from_user_id))",
         params![thread, turn, item, local_turn, phase, text, now_string()],
     )? == 1;
     if !inserted {
@@ -169,7 +171,12 @@ pub(super) fn admit_on(
     if source.origin.message_id.is_none()
         && let Some(native) = native.as_deref()
     {
-        tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![source.human_id,native,source.event_id,now_string()])?;
+        super::conversation_inputs::select_return_on(
+            tx,
+            source.human_id,
+            native,
+            &source.event_id,
+        )?;
     }
     if !source.target_sessions.contains(&session) {
         return Err(anyhow!(
@@ -308,6 +315,12 @@ impl Store {
             )?;
         {
             let conn = self.conn.lock().expect("store mutex poisoned");
+            let presentation:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('interaction_native_messages') WHERE name='presentation_input')",[],|r|r.get(0))?;
+            if !presentation {
+                conn.execute_batch(
+                    "ALTER TABLE interaction_native_messages ADD COLUMN presentation_input TEXT;",
+                )?;
+            }
             let old:bool=conn.query_row("SELECT [notnull] FROM pragma_table_info('interaction_sources') WHERE name='origin_message'",[],|r|r.get(0))?;
             if old {
                 // Rebuild only this constraint; keep every source, dependency and

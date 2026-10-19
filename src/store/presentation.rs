@@ -4,6 +4,13 @@ use anyhow::bail;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+// Worker progress is visible only through the return selection retained when
+// this native item was first observed. Later direct input never widens its scope.
+const NATIVE_VISIBILITY: &str = "t.from_user_id=?3 AND s.creator_user_id=?3 AND
+    ((t.session_id=?2 AND m.native_thread=?4 AND m.phase IN ('commentary','final_answer'))
+      OR (m.phase='commentary' AND EXISTS(SELECT 1 FROM conversation_inputs c
+          WHERE c.id=m.presentation_input AND c.human_id=?3 AND c.session_id=?2)))";
+
 fn digest(value: &Value) -> String {
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
 }
@@ -109,8 +116,8 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT m.rowid FROM interaction_native_messages m
-            JOIN turns t ON t.id=m.local_turn WHERE m.rowid{comparison}?1 AND t.session_id=?2
-            AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase='final_answer'
+            JOIN turns t ON t.id=m.local_turn JOIN sessions s ON s.id=t.session_id
+            WHERE m.rowid{comparison}?1 AND {NATIVE_VISIBILITY}
             ORDER BY m.rowid {order} LIMIT 9"
         ))?;
         let natives = stmt
@@ -255,19 +262,34 @@ pub(super) fn source_on(
         .and_then(|s| s.parse::<i64>().ok())
         .filter(|n| *n > 0)
     {
-        let found:Option<(String,String,String)>=conn.query_row(
-            "SELECT m.text,m.native_turn,m.item_id FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn
-             WHERE m.rowid=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase='final_answer'",
-             params![row,entry_session,human,entry_native],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        let Some((text, turn, item)) = found else {
+        let found = conn.query_row(&format!(
+            "SELECT m.text,m.native_turn,m.item_id,m.phase,m.observed_at,
+             t.session_id=?2 AND m.native_thread=?4,s.chat_id,s.thread_id,
+             s.codex_thread_id IS m.native_thread AND s.force_fresh_thread=0
+             FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn
+             JOIN sessions s ON s.id=t.session_id WHERE m.rowid=?1 AND {NATIVE_VISIBILITY}"),
+             params![row,entry_session,human,entry_native],|r| {
+                let is_entry:bool=r.get(5)?;
+                let phase:String=r.get(3)?;
+                Ok(json!({"id":id,"kind":if !is_entry {"worker_progress"} else if phase=="commentary" {"integrator_progress"} else {"integrator_answer"},
+                    "text":r.get::<_,String>(0)?,"native_turn":r.get::<_,String>(1)?,"native_item":r.get::<_,String>(2)?,"observed_at":r.get::<_,String>(4)?,
+                    "target":if is_entry {Value::Null} else {json!(SessionKey::new(r.get(6)?,Some(r.get(7)?)))},
+                    "current":Value::Null,"correction_pending":Value::Null,"completed":Value::Null,
+                    "native_binding_current":r.get::<_,bool>(8)?}))
+             }).optional()?;
+        let Some(source) = found else {
             return Ok(None);
         };
-        json!({"id":id,"kind":"integrator_answer","text":text,"native_turn":turn,"native_item":item,
-            "current":Value::Null,"correction_pending":Value::Null,"completed":Value::Null,
-            "native_binding_current":true})
+        source
     } else {
         return Ok(None);
     };
+    if let Some(delivery) = id.strip_prefix("delivery:") {
+        let observed: Option<String> = conn.query_row(
+            "SELECT m.observed_at FROM interaction_deliveries d JOIN interaction_results r ON r.id=d.result_id JOIN interaction_native_messages m ON m.native_thread=r.native_thread AND m.native_turn=r.native_turn AND m.item_id=r.item_id WHERE d.id=?1",
+            [delivery], |r| r.get(0)).optional()?;
+        source["observed_at"] = json!(observed);
+    }
     source["entry_binding"] = json!([
         human,
         entry,
@@ -380,6 +402,105 @@ mod tests {
             )
             .unwrap();
         (file, store, entry, target, instruction, body)
+    }
+
+    #[test]
+    fn worker_progress_keeps_capture_scope_across_direct_switch_and_reobservation() {
+        let (_file, store, entry, _, instruction, _) = setup();
+        let binding = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap()["binding"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"progress-scope").to_string();
+        store
+            .conversation_input_capture(100, entry, &binding, &id, "Follow this work")
+            .unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            super::super::conversation_inputs::select_return_on(&conn, 100, "worker-native", &id)
+                .unwrap();
+        }
+        let local = store
+            .interaction_instruction(&instruction.id, 100)
+            .unwrap()
+            .unwrap()
+            .local_turn
+            .unwrap();
+        store
+            .record_native_message(
+                local,
+                "worker-native",
+                "physical",
+                "web-progress",
+                Some("commentary"),
+                "Progress for the web",
+            )
+            .unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "INSERT INTO original_ingress_order(channel,event_id) VALUES('telegram','10')",
+                [],
+            )
+            .unwrap();
+            super::super::conversation_inputs::select_return_on(
+                &conn,
+                100,
+                "worker-native",
+                "telegram:10",
+            )
+            .unwrap();
+        }
+        assert!(
+            !store
+                .record_native_message(
+                    local,
+                    "worker-native",
+                    "physical",
+                    "web-progress",
+                    Some("commentary"),
+                    "Progress for the web"
+                )
+                .unwrap()
+        );
+        store
+            .record_native_message(
+                local,
+                "worker-native",
+                "physical",
+                "direct-progress",
+                Some("commentary"),
+                "Direct work stays direct",
+            )
+            .unwrap();
+        let page = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap();
+        let progress = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["kind"] == "worker_progress")
+            .collect::<Vec<_>>();
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0]["preview"], "Progress for the web");
+        assert_eq!(progress[0]["target"], json!(SessionKey::new(100, Some(7))));
+        assert!(!page.to_string().contains("Direct work stays direct"));
+        let conn = store.conn.lock().unwrap();
+        let direct: i64 = conn
+            .query_row(
+                "SELECT rowid FROM interaction_native_messages WHERE item_id='direct-progress'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            source_on(&conn, 100, entry, &format!("native:{direct}"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -500,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn entry_answers_exclude_progress_and_retire_with_entry_binding() {
+    fn entry_progress_and_answers_retire_with_entry_binding() {
         let (_file, store, entry, _, _, _) = setup();
         let session = store.get_session(entry).unwrap().unwrap();
         let local = store
@@ -543,7 +664,15 @@ mod tests {
         let list = store
             .interaction_presentation_list(100, entry, 0, 0)
             .unwrap();
-        assert_eq!(list["items"].as_array().unwrap().len(), 2);
+        assert_eq!(list["items"].as_array().unwrap().len(), 3);
+        let progress = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["kind"] == "integrator_progress")
+            .unwrap();
+        assert_eq!(progress["preview"], "Inspecting");
+        assert!(progress["observed_at"].is_string());
         let source = list["items"]
             .as_array()
             .unwrap()

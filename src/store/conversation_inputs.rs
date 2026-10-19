@@ -256,6 +256,47 @@ pub(super) fn eligible_on(conn: &Connection, input: &ConversationInput) -> Resul
     Ok(())
 }
 
+/// Select presentation by receiver capture order, without admitting direct input
+/// to the routing controller. A delayed transcript cannot replace a newer choice.
+pub(super) fn select_return_on(
+    conn: &Connection,
+    human: i64,
+    native: &str,
+    source: &str,
+) -> Result<()> {
+    let order = |id: &str| -> Result<Option<i64>> {
+        let (channel, event) = id
+            .strip_prefix("telegram:")
+            .map_or(("conversation", id), |v| ("telegram", v));
+        Ok(conn
+            .query_row(
+                "SELECT id FROM original_ingress_order WHERE channel=?1 AND event_id=?2",
+                params![channel, event],
+                |r| r.get(0),
+            )
+            .optional()?)
+    };
+    let previous: Option<String> = conn
+        .query_row(
+            "SELECT source_input FROM conversation_returns WHERE human_id=?1 AND native_thread=?2",
+            params![human, native],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(previous) = previous {
+        if previous == source {
+            return Ok(());
+        }
+        if let Some(old) = order(&previous)? {
+            if order(source)?.is_none_or(|new| new <= old) {
+                return Ok(());
+            }
+        }
+    }
+    conn.execute("INSERT INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4) ON CONFLICT(human_id,native_thread) DO UPDATE SET source_input=excluded.source_input,selected_at=excluded.selected_at", params![human,native,source,now_string()])?;
+    Ok(())
+}
+
 impl Store {
     pub(super) fn init_conversation_inputs(&self) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
@@ -780,8 +821,13 @@ impl Store {
         for (sequence, id) in rows.iter().take(8) {
             let input = read_on(&conn, id, human)?;
             let capture:Option<i64>=conn.query_row("SELECT id FROM original_ingress_order WHERE channel='conversation' AND event_id=?1",[id],|r|r.get(0)).optional()?;
+            let received_at: String = conn.query_row(
+                "SELECT created_at FROM conversation_inputs WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )?;
             items.push(serde_json::json!({
-                "id":id,"sequence":sequence,"capture_order":capture,"ordering_unknown":capture.is_none(),"preview":input.text.chars().take(1000).collect::<String>(),
+                "received_at":received_at,"id":id,"sequence":sequence,"capture_order":capture,"ordering_unknown":capture.is_none(),"preview":input.text.chars().take(1000).collect::<String>(),
                 "phase":input.phase,"retired":input.retired,"visual":input.visual,"voice":input.voice,"routing":input.routing,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
                 "clarifiable":input.phase=="awaiting_target" && eligible_on(&conn,&input).is_ok(),
                 "native_binding_current":input.native==native,
@@ -859,7 +905,7 @@ impl Store {
                 // The context may retain this input after the local turn ends,
                 // so the selection survives collectors and logical rebindings.
                 if !input.native.is_empty() {
-                    tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![human,input.native,input.id,now_string()])?;
+                    select_return_on(&tx, human, &input.native, &input.id)?;
                 }
                 ("queued", None)
             }
@@ -913,14 +959,42 @@ impl Store {
         let source: String=conn.query_row("SELECT x.doc FROM interaction_sources x JOIN interaction_instructions i ON i.input_id=x.id WHERE i.id=?1 AND x.human_id=?2",params![id,human],|r|r.get(0))?;
         let source: crate::interaction::SourceInput = serde_json::from_str(&source)?;
         if source.origin.message_id.is_none() {
-            conn.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![human,native,source.event_id,now_string()])?;
+            select_return_on(&conn, human, native, &source.event_id)?;
         }
         Ok(())
     }
 
+    pub fn conversation_select_direct_return(
+        &self,
+        update: Option<i64>,
+        key: SessionKey,
+        human: i64,
+    ) -> Result<()> {
+        let Some(update) = update else {
+            return Ok(());
+        };
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let native: Option<String> = tx.query_row("SELECT codex_thread_id FROM sessions s WHERE chat_id=?1 AND thread_id=?2 AND creator_user_id=?3 AND force_fresh_thread=0 AND EXISTS(SELECT 1 FROM conversation_returns p WHERE p.native_thread=s.codex_thread_id AND p.human_id=?3)",params![key.chat_id,key.thread_id,human],|r|r.get(0)).optional()?.flatten();
+        if let Some(native) = native {
+            let owned:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM incoming_updates WHERE update_id=?1 AND json_extract(payload_json,'$.message.from.id')=?2 AND json_extract(payload_json,'$.message.chat.id')=?3 AND COALESCE(json_extract(payload_json,'$.message.message_thread_id'),0)=?4)",params![update,human,key.chat_id,key.thread_id],|r|r.get(0))?;
+            if !owned {
+                bail!("Direct presentation input owner mismatch");
+            }
+            select_return_on(&tx, human, &native, &format!("telegram:{update}"))?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn conversation_turn_direct_return(&self, local: i64) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM turns t LEFT JOIN sessions s ON s.id=t.session_id JOIN conversation_returns p ON p.native_thread=COALESCE(t.native_thread_id,s.codex_thread_id) AND p.human_id=t.from_user_id WHERE t.id=?1 AND p.source_input LIKE 'telegram:%')",[local],|r|r.get(0))?)
+    }
+
     pub fn conversation_turn_return(&self, local_turn: i64) -> Result<bool> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        let selected:Option<bool>=conn.query_row("SELECT EXISTS(SELECT 1 FROM conversation_returns p WHERE p.native_thread=COALESCE(t.native_thread_id,s.codex_thread_id)) FROM turns t LEFT JOIN sessions s ON s.id=t.session_id WHERE t.id=?1",[local_turn],|r|r.get(0)).optional()?;
+        let selected:Option<bool>=conn.query_row("SELECT EXISTS(SELECT 1 FROM conversation_returns p WHERE p.native_thread=COALESCE(t.native_thread_id,s.codex_thread_id) AND p.human_id=t.from_user_id AND p.source_input NOT LIKE 'telegram:%') FROM turns t LEFT JOIN sessions s ON s.id=t.session_id WHERE t.id=?1",[local_turn],|r|r.get(0)).optional()?;
         // A deleted/unknown execution is not authority to publish its output.
         Ok(selected.unwrap_or(true))
     }
@@ -947,6 +1021,33 @@ impl Store {
 mod tests {
     use super::*;
     use ConversationInputEvent as E;
+
+    #[test]
+    fn native_presentation_selection_follows_capture_order_across_surfaces() {
+        let (_file, store, _, _) = setup();
+        let conn = store.conn.lock().unwrap();
+        for (channel, event) in [
+            ("conversation", "old-voice"),
+            ("telegram", "10"),
+            ("conversation", "new-text"),
+        ] {
+            conn.execute(
+                "INSERT INTO original_ingress_order(channel,event_id) VALUES(?1,?2)",
+                params![channel, event],
+            )
+            .unwrap();
+        }
+        select_return_on(&conn, 100, "entry-native", "old-voice").unwrap();
+        select_return_on(&conn, 100, "entry-native", "telegram:10").unwrap();
+        select_return_on(&conn, 100, "entry-native", "old-voice").unwrap();
+        let selected = || {
+            conn.query_row("SELECT source_input FROM conversation_returns WHERE human_id=100 AND native_thread='entry-native'",[],|r|r.get::<_,String>(0)).unwrap()
+        };
+        assert_eq!(selected(), "telegram:10");
+        select_return_on(&conn, 100, "entry-native", "new-text").unwrap();
+        select_return_on(&conn, 100, "entry-native", "telegram:10").unwrap();
+        assert_eq!(selected(), "new-text");
+    }
 
     fn setup() -> (tempfile::NamedTempFile, Store, SessionKey, String) {
         let file = tempfile::NamedTempFile::new().unwrap();

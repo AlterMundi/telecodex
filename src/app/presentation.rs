@@ -74,7 +74,10 @@ fn source_label(shared: &AppShared, source: &mut serde_json::Value) -> Result<()
     if source["kind"] == "matrix_result" {
         return Ok(());
     }
-    source["label"] = if source["kind"] == "worker_result" {
+    source["label"] = if matches!(
+        source["kind"].as_str(),
+        Some("worker_result" | "worker_progress")
+    ) {
         let target: SessionKey = serde_json::from_value(source["target"].clone())?;
         serde_json::json!(format!("#{}", super::routing::label(shared, target)))
     } else {
