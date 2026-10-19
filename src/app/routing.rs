@@ -1013,9 +1013,16 @@ pub(super) async fn dispatch(app: &App, id: &str, human: i64) -> Result<()> {
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(10)).await;
             let message = if waiting.origin.message_id.is_none() {
-                format!("#{}: your message is saved and waiting for this session to start. You can keep talking; check the saved message's status for updates.", label(&shared, waiting.target))
+                format!(
+                    "#{}: your message is saved and waiting for this session to start. You can keep talking; check the saved message's status for updates.",
+                    label(&shared, waiting.target)
+                )
             } else {
-                format!("#{}: your input is retained, but native submission has not started. The worker may still be preparing or finishing earlier work. Use /interaction input {} to inspect it. This wait does not cancel or replay the input.", label(&shared, waiting.target), waiting.id)
+                format!(
+                    "#{}: your input is retained, but native submission has not started. The worker may still be preparing or finishing earlier work. Use /interaction input {} to inspect it. This wait does not cancel or replay the input.",
+                    label(&shared, waiting.target),
+                    waiting.id
+                )
             };
             notice_when(
                 shared.clone(),
