@@ -246,6 +246,18 @@ class MenuOperator(unittest.TestCase):
                 self.assertEqual(run('restore-menu').returncode,0)
                 self.assertEqual(menu,{'type':'commands'})
                 plain_config = config.read_text()
+                config.write_text(plain_config + 'launcher_url="https://pair.example.test/apps/"\n')
+                self.assertEqual(run('publish-menu').returncode,0)
+                self.assertEqual(menu,{'type':'web_app','text':'Apps','web_app':{'url':'https://pair.example.test/apps/'}})
+                self.assertEqual(run('restore-menu').returncode,0)
+                self.assertEqual(menu,{'type':'commands'})
+                invalid_before=sum(method=='setChatMenuButton' for method,_ in calls)
+                for url in ('https://t.me/OtherBot/matrix','https://user@pair.example.test/apps/', 'https://pair.example.test:invalid/apps/'):
+                    config.write_text(plain_config + 'launcher_url='+json.dumps(url)+'\n')
+                    self.assertNotEqual(run('publish-menu').returncode,0)
+                self.assertEqual(sum(method=='setChatMenuButton' for method,_ in calls),invalid_before)
+                config.write_text(plain_config)
+
                 config.write_text(plain_config + 'miniapp_short_name="sessions"\n')
                 self.assertEqual(run('publish-menu').returncode,0)
                 self.assertEqual(menu['web_app']['url'],'https://t.me/TestBot/sessions?mode=compact')
