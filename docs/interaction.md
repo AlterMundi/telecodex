@@ -586,6 +586,13 @@ execution finishes, including native goal/tool waits; this is not preemptive
 round-robin scheduling. Higher-load provider costs and attention policy still
 require their selected live qualification.
 
+After ten seconds, a still-queued input receives a notice. If its worker is
+waiting for capacity, the notice reports active workers, the configured limit
+and the number waiting, and explains that tools/process waits keep a slot.
+Otherwise it describes conversation preparation or earlier work without
+inventing capacity saturation. The existing queue starts work automatically
+when admitted; the notice itself never cancels or resubmits input.
+
 ## Attributed requests between local work sessions
 
 A selected enrolled worker can use the stable `interaction_controller` envelope

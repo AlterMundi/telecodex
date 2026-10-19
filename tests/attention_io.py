@@ -100,6 +100,11 @@ def retained_load(binary):
         j.wait(lambda:all(j.instructions(n) for n in range(7,27)))
         assert len(j.runs)==2
         metrics['snapshots'].append(attention_snapshot(j,'twenty'))
+        # Hold the real capacity queue beyond its ten-second notice threshold.
+        # Explain saturation without starting or replaying work.
+        j.wait(lambda:j.has('Waiting for worker capacity (2 active, limit 2, 18 waiting)',1),seconds=15)
+        assert len(j.runs)==2
+        assert any('You do not need to resend it.' in m['text'] for m,_ in j.messages)
         # Native approval remains unresolved while sustained progress, steering
         # and front dialogue compete. These peers perform no inference.
         worker=next(send for thread,send in list(j.clients.values()) if thread=='native-topic-8')
