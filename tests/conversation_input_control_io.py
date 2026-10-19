@@ -180,8 +180,11 @@ def mixed_origin_returns(binary):
         journey.admit('Continue the same native context after restart.',topic=1)
         journey.wait(lambda:len(journey.packets)==3)
         journey.finish(journey.web_thread,journey.web_turn);journey.idle()
-        assert not forbidden.intersection(journey.telegram_methods),journey.telegram_methods
-        print('PASS active Telegram-root + immediate browser steer: canonical progress/final/artifact, retained unanswered native question+approval, no Telegram send/edit/upload/typing, selected native-context return preserved after listener restart; zero models')
+        journey.wait(lambda:journey.has('Initial goal turn delivered.',1))
+        assert sum(m['text']=='Initial goal turn delivered.' for m,_ in journey.messages)==1
+        assert journey.packets[-1][1]['input'][0]['text']=='Continue the same native context after restart.'
+        assert journey.row('SELECT count(*) FROM conversation_inputs')==[(1,)],'Direct continuation entered web ingress'
+        print('PASS active Telegram-root + browser steer retains canonical progress/final/artifact and unanswered native requests; after restart a raw direct continuation restores its own topic response once; zero models')
     finally:
         journey.close()
 
