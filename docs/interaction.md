@@ -475,6 +475,27 @@ Telegram. Its narrowly guarded `--resume` continues only the pending second
 entry turn after the recorded reader-method failure; completed turns are never
 replayed.
 
+## Discovering existing owned conversations
+
+Set `interaction.discover_owned_sessions = true` to include existing, currently
+bound conversations owned by the configured human in the same chat. The default
+is false, preserving explicitly selected profiles. Discovery excludes the entry,
+other humans/chats, unbound sources and bindings marked for replacement. It reads
+only receiver metadata: it does not enumerate unrelated native histories, synthesize
+summaries or start work. The resulting registry is shared by observer inventory,
+explicit selectors and dispatch; ownership is checked again by those operations.
+
+Configured and created destinations retain their assigned names. Discovered
+single-token titles are presentation labels; duplicate labels require `#tID`.
+Other titles use `#tID` directly, including titles that could impersonate a stable
+selector or collide with a Matrix target. Discovery does not change client grant
+scope or expiry. Changing the receiving configuration changes its binding bytes;
+existing companion credentials require the supported explicit owner
+reauthorization before they can use that binding. The shared 64-target limit
+still applies; an oversized profile is
+rejected rather than silently omitting candidates. Native tool restoration for
+existing work threads follows the same existing enrolled-session lifecycle.
+
 ## Creating a distinct work session
 
 The stable integrating controller exposes `create` for a clearly distinct task,
