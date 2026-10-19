@@ -10,6 +10,15 @@ real human corrections. Later selected private correction sets use the same sche
 and must retain a source reference and audience. Keep private cases and outputs
 outside the repository. Do not import unrelated sessions into this dataset.
 
+Use `source.kind: human_intent` for a message and expected destination supplied
+by a human for evaluation. Use `human_correction` only for an actual human
+correction of a routing outcome; the two remain separate in `source_counts`.
+Both require nonempty string `reference` and `audience` fields. Keep the selected
+source and context privately with their original attribution. A solicited intent
+example does not establish observed misrouting or production acceptance. Never
+convert synthetic cases, inferred intent or silence into human provenance.
+The unlabeled model export excludes case provenance and acceptable outcomes.
+
 ```sh
 python3 -B scripts/routing_eval.py tests/fixtures/routing-eval-synthetic.json --baseline
 python3 -B scripts/routing_eval.py tests/fixtures/routing-eval-synthetic.json --export-inputs > /private/unlabeled-inputs.json

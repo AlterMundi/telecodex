@@ -5,6 +5,7 @@ import importlib.util
 import hashlib
 import json
 import pathlib
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -60,6 +61,31 @@ class Integrity(unittest.TestCase):
         report = evaluation.score(self.data, evaluation.baseline(self.data))
         self.assertEqual(report['cases'], len(self.data['cases']))
         self.assertEqual(report['latency_ms']['measured_cases'], report['cases'])
+
+    def test_human_intent_and_corrections_keep_distinct_attributed_sources(self):
+        # Mock provenance only: this scoring test contributes no human examples.
+        data=copy.deepcopy(self.data)
+        for case,kind in zip(data['cases'],('human_intent','human_correction')):
+            case['source']={'kind':kind,'reference':'fixture:mock-human-source',
+                            'audience':'synthetic test only; no real person'}
+        with tempfile.TemporaryDirectory() as directory:
+            path=pathlib.Path(directory)/'cases.json'
+            path.write_text(json.dumps(data))
+            loaded=evaluation.load(path)
+            report=evaluation.score(loaded,self.answers)
+            self.assertEqual(report['source_counts'],{'synthetic':22,'human_intent':1,'human_correction':1})
+            self.assertEqual(report['accuracy'],1)
+            projection=json.dumps(evaluation.inputs(loaded))
+            self.assertNotIn('fixture:mock-human-source',projection)
+            self.assertNotIn('acceptable',projection)
+            for kind in ('human_intent','human_correction'):
+                for field in ('reference','audience'):
+                    for value in (None,'',' ',True):
+                        altered=copy.deepcopy(data)
+                        altered['cases'][0]['source'].update(kind=kind,**{field:value})
+                        path.write_text(json.dumps(altered))
+                        with self.subTest(kind=kind,field=field,value=value),self.assertRaises(ValueError):
+                            evaluation.load(path)
 
     def embeddings(self):
         projection = evaluation.embedding_inputs(self.data)
