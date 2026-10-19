@@ -278,6 +278,12 @@ native/model calls. `/interaction sources #Topic` shows bounded original support
 excerpts with their entry and native source references. Native binding changes
 select a separate card lineage; they never relabel an earlier source as current.
 
+Unconfirmed synthesis emits a local warning with the retained attempt ID and a
+fixed `failure_code` (for example `support_outside_source`, `invalid_json` or
+`timeout`). Unclassified failures use `other_refresh_failure`; this label does
+not establish a provider or source diagnosis. Raw native errors and private
+source/summary text are not included in this warning.
+
 Interrupted/uncertain synthesis attempts remain retained across restart. Merely
 asking to observe again does not replay them; `/interaction observe #Topic
 --retry` explicitly selects a new attempt while preserving the old record. Source
