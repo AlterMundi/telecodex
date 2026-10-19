@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 function boot(readOnly=false,standalone=false) {
-  const nodes = new Map(), requests = [];
+  const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
   function element() {
     return {
       children: [], dataset: {}, handlers: {}, classList: {toggle() {}},
@@ -33,7 +33,7 @@ function boot(readOnly=false,standalone=false) {
   };
   let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false;
   const source = n => ({id:`native:${n}`, kind:standalone&&n===1?"integrator_progress":"integrator_answer", sequence:n, observed_at:new Date(1704067200000+n*1000).toISOString(),
-    revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`});
+    revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`,...sourceOverrides.get(n)});
   const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), nativePosts = [];
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
@@ -107,6 +107,7 @@ function boot(readOnly=false,standalone=false) {
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
     URL, URLSearchParams, AbortController, setTimeout, clearTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
     fetch:(_route, options) => {
+      audioCalls.push(JSON.parse(options.body));
       if(renderAudio){
         const selected=JSON.parse(options.body),data=Buffer.from('synthetic audio'),hash=require('node:crypto').createHash('sha256').update(data).digest('hex');
         return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':multipart&&selected.offset===0?'1500':'','x-audio-sha256':hash}}));
@@ -120,10 +121,11 @@ function boot(readOnly=false,standalone=false) {
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audio(parts=false){renderAudio=true;multipart=parts;},
+  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,overrideSource(n,value){sourceOverrides.set(n,value);},addReplies(n){count+=n;},audio(parts=false){renderAudio=true;multipart=parts;},
     nativeRequest() {
       nativeRequests.set("native-request",{id:"native-request",binding:"fixture",revision:"native-revision",state:"pending",actionable:true,kind:"question",title:"Scope",label:"Conversation",body:"Choose scope",choices:[{label:"Selected scope",action:{kind:"option",index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:1,recorded_revisions:[]});
     },
+    advanceNativeRequest() {Object.assign(nativeRequests.get("native-request"),{revision:"native-revision-2",question_index:1,title:"Next question"});},
     holdPart() {
       let release,started;
       const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});
@@ -173,6 +175,44 @@ function boot(readOnly=false,standalone=false) {
   await single.ui.refresh();
   assert.equal(stream.children.length,9,'Refreshing keeps one card per saved input or native item');
   assert.equal(single.nodes.get('#conversation-replies').hidden,true);
+  const until=async check=>{for(let n=0;n<100;n++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error("Voice transition did not finish");};
+  const voice=boot();voice.audio();await voice.ui.refresh();
+  voice.nodes.get('#conversation-voice-replies').handlers.click();
+  assert.equal(voice.audioCalls.length,0,'Enabling voice never recites old history');
+  voice.addReplies(2);await voice.ui.refresh();
+  const voicePlayer=voice.nodes.get('#conversation-audio');
+  await until(()=>voice.audioCalls.length===1&&!voicePlayer.paused);
+  voicePlayer.ended=true;await voicePlayer.handlers.ended();
+  await until(()=>voice.audioCalls.length===2&&!voicePlayer.paused);
+  assert.deepEqual(voice.audioCalls.map(r=>r.source),['native:9','native:10']);
+  voicePlayer.ended=true;await voicePlayer.handlers.ended();await voice.ui.refresh();
+  assert.equal(voice.audioCalls.length,2,'Refresh does not repeat played replies');
+  voice.nodes.get('#conversation-voice-replies').handlers.click();
+  voice.addReplies(1);await voice.ui.refresh();assert.equal(voice.audioCalls.length,2,'Turning voice off retains text without preparing more audio');
+  const compactVoice=boot();compactVoice.audio();await compactVoice.ui.refresh();
+  compactVoice.nodes.get('#conversation-voice-replies').handlers.click();
+  compactVoice.overrideSource(9,{kind:'worker_progress',label:'#Alpha',target:{thread_id:7}});
+  compactVoice.overrideSource(10,{kind:'worker_result',label:'#Alpha',target:{thread_id:7},current:true});
+  compactVoice.addReplies(2);await compactVoice.ui.refresh();
+  await until(()=>compactVoice.audioCalls.length===1&&!compactVoice.nodes.get('#conversation-audio').paused);
+  assert.equal(compactVoice.audioCalls[0].source,'native:10','A final answer replaces pending voice progress from the same worker');
+  const compactPlayer=compactVoice.nodes.get('#conversation-audio');compactPlayer.ended=true;await compactPlayer.handlers.ended();
+  compactVoice.overrideSource(11,{kind:'worker_progress',label:'#Alpha',target:{thread_id:7},observed_at:'2024-01-01T00:00:09.500Z'});
+  compactVoice.addReplies(1);await compactVoice.ui.refresh();
+  assert.equal(compactVoice.audioCalls.length,1,'Late history paging cannot speak old progress after the final answer');
+  compactVoice.ui.stop();
+  const autoQuestion=boot();autoQuestion.audio();await autoQuestion.ui.refresh();
+  autoQuestion.nodes.get('#conversation-voice-replies').handlers.click();autoQuestion.nativeRequest();await autoQuestion.ui.refresh();
+  const questionPlayer=autoQuestion.nodes.get('#conversation-audio');
+  await until(()=>autoQuestion.audioCalls.length===1&&!questionPlayer.paused);
+  assert.equal(autoQuestion.audioCalls[0].source,'request:native-request');
+  questionPlayer.ended=true;await questionPlayer.handlers.ended();
+  autoQuestion.nodes.get('#conversation-message').value='Start another topic instead';
+  await autoQuestion.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+  assert.equal([...autoQuestion.originals.values()][0].reply.context_only,true,'An automatically spoken question cannot force the next human message into its session');
+  assert.equal(autoQuestion.nativePosts.length,0,'Speaking a question never approves or answers it');
+  autoQuestion.advanceNativeRequest();await autoQuestion.ui.refresh();await until(()=>autoQuestion.audioCalls.length===2);assert.equal(autoQuestion.audioCalls[1].revision,'native-revision-2','The next question in one native request must still be spoken');
+  autoQuestion.ui.stop();
   const fixture = boot();
   await fixture.ui.refresh();
   fixture.arrive(); // Fifty new replies, then nine more during metadata refresh.
@@ -213,11 +253,11 @@ function boot(readOnly=false,standalone=false) {
   assert(!spoken.nodes.get('#conversation-focus-label')?.textContent,'A partial spoken question cannot select its answer focus');
   player.ended=true;await player.handlers.ended();
   assert.match(spoken.nodes.get('#conversation-focus-label').textContent,/Reply to Conversation · Scope/);
-  assert.equal(spoken.nodes.get('#conversation-audio-state').textContent,'Question finished. Press Talk to answer.');
+  assert.equal(spoken.nodes.get('#conversation-audio-state').textContent,'Question finished. Press Talk to answer or change topic.');
   assert.equal(spoken.originals.size,0);assert.equal(spoken.nativePosts.length,0);
   const draftAnswer=spoken.nodes.get('#conversation-message');draftAnswer.value='My original answer';
   await spoken.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
-  assert.deepEqual(JSON.parse(JSON.stringify([...spoken.originals.values()][0].reply)),{source:'request:native-request',revision:'native-revision'});
+  assert.deepEqual(JSON.parse(JSON.stringify([...spoken.originals.values()][0].reply)),{source:'request:native-request',revision:'native-revision',context_only:true});
   spoken.ui.stop();
 
   const interrupted=boot();interrupted.nativeRequest();interrupted.audio();await interrupted.ui.refresh();

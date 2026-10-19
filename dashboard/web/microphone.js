@@ -1,6 +1,6 @@
 "use strict";
 window.VoiceInput = (() => {
-  function mount({api, headers, getBinding, onInput, getReply=()=>undefined, getVisual=()=>undefined, onVisualSent=()=>{}, pauseAudio, unauthorized, telegram}) {
+  function mount({api, headers, getBinding, onInput, getReply=()=>undefined, getVisual=()=>undefined, onVisualSent=()=>{}, pauseAudio, onActivity=()=>{}, unauthorized, telegram}) {
     const box=document.querySelector('#conversation-voice'), button=document.querySelector('#conversation-talk');
     const discard=document.querySelector('#conversation-voice-discard'), check=document.querySelector('#conversation-voice-check');
     const state=document.querySelector('#conversation-voice-state');
@@ -14,6 +14,7 @@ window.VoiceInput = (() => {
       button.setAttribute('aria-pressed',String(phase==='recording'));
       discard.hidden=!['permission','recording','ready','finalizing'].includes(phase);
       check.hidden=!pending; check.disabled=uploading;
+      onActivity(uploading || ['permission','recording','ready','finalizing'].includes(phase) || latestSaved?.phase==='preparing');
     }
     function stopTracks() {if(stream)for(const track of stream.getTracks())track.stop();stream=undefined;clearTimeout(timer);}
     function cancelRecording(message='Recording discarded. Nothing was sent.') {
@@ -38,7 +39,7 @@ window.VoiceInput = (() => {
       if(pending!==frozen || frozen.binding!==getBinding())return;
       if(value.id!==frozen.id || value.voice?.audio_sha256!==frozen.audio_sha256)throw Error('Voice capture does not match this recording.');
       if(!!frozen.visual!==!!value.visual||frozen.visual&&Object.keys(frozen.visual).some(k=>JSON.stringify(frozen.visual[k])!==JSON.stringify(value.visual[k])))throw Error('Visual capture does not match this recording.');
-      latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256};
+      latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256,phase:value.phase};
       onInput(value,frozen.focusVersion);onVisualSent(frozen.visual);pending=undefined;phase='idle';
       state.textContent=value.phase==='answered'?'Recording and automatic transcript saved; answer recorded for the selected question.':value.retired?'This saved recording is no longer eligible to start work.':
         value.phase==='retained_unsent'?'Recording saved; no work was submitted. You can keep writing.':
@@ -50,6 +51,7 @@ window.VoiceInput = (() => {
     function observe(value,message) {
       if(!latestSaved || pending || phase!=='idle' || latestSaved.binding!==getBinding()
         || latestSaved.id!==value.id || latestSaved.audio_sha256!==value.voice?.audio_sha256)return;
+      latestSaved.phase=value.phase;controls();
       state.textContent='Recording saved. '+message;
     }
     async function upload() {
@@ -62,7 +64,7 @@ window.VoiceInput = (() => {
       const deadline=setTimeout(()=>active.abort(),20000);state.textContent='Saving your recording…';controls();
       try {
         const response=await fetch('api/interaction/voice',{method:'POST',credentials:'same-origin',signal:active.signal,
-          headers:{...headers(),...(frozen.reply?{'X-Reply-Source':frozen.reply.source,'X-Reply-Revision':frozen.reply.revision}:{}),...(frozen.visual?{'X-Visual-Reference':JSON.stringify(frozen.visual)}:{}),'Content-Type':frozen.mime,'X-Input-Binding':frozen.binding,'X-Input-Id':frozen.id,'X-Audio-Sha256':frozen.audio_sha256},body:frozen.blob});
+          headers:{...headers(),...(frozen.reply?{'X-Reply-Source':(frozen.reply.context_only?'context:':'')+frozen.reply.source,'X-Reply-Revision':frozen.reply.revision}:{}),...(frozen.visual?{'X-Visual-Reference':JSON.stringify(frozen.visual)}:{}),'Content-Type':frozen.mime,'X-Input-Binding':frozen.binding,'X-Input-Id':frozen.id,'X-Audio-Sha256':frozen.audio_sha256},body:frozen.blob});
         const value=await response.json();
         if(!response.ok){const error=new Error('Recording not confirmed');error.status=response.status;if(value.code==='visual_reselection'&&value.submission_attempted===false)error.visualReselection=true;throw error;}
         await confirmed(value,frozen);

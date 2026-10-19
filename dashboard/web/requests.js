@@ -15,7 +15,7 @@ window.RequestControls = (() => {
         unknown:"Earlier response remains unconfirmed.", cancelled:"Cancellation requested.",
         expired:"This request is closed.", source_changed:"This request is no longer current."})[value.state]
       || "This request has no live response channel.";
-  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false, getCanDecide=()=>true}) {
+  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false, getCanDecide=()=>true,onSource=()=>{}}) {
     const cards = new Map(), section = $("#conversation-requests"), container = $("#conversation-request-cards");
     const state = $("#conversation-request-state"), more = $("#conversation-requests-more");
     let generation = 0, observation = 0, cursor = 0, reading = false, probeCursor = 0;
@@ -88,7 +88,12 @@ window.RequestControls = (() => {
       card.title.textContent = `${value.label || "Conversation"} · ${value.title || (value.kind === "approval" ? "Approval" : "Question")}`;
       card.status.textContent = statusText(value) + (!getCanDecide() && value.state==='pending' ? value.kind==='approval' ? ' Open Sessions to review this approval.' : ' Reply through the conversation to answer.' : '');
       updateControls(card);
+      const source=audioSource(value);if(source)onSource(source);
       return true;
+    }
+    function audioSource(value) {
+      if(value?.kind!=="question" || value.state!=="pending" || !value.actionable)return;
+      return {id:`request:${value.id}`,revision:value.revision,kind:"native_question",label:`${value.label || "Conversation"} · ${value.title || "Question"}`};
     }
     function create(value) {
       const box = node("article", undefined, "reply request-card");
@@ -286,7 +291,7 @@ window.RequestControls = (() => {
       } finally {if (owned === generation) {reading = false; more.disabled = false;}}
     }
     more.addEventListener("click", () => refresh(cursor));
-    return {refresh,reset};
+    return {refresh,reset,audioSources:()=>[...cards.values()].map(c=>audioSource(c.meta)).filter(Boolean)};
   }
   return {mount};
 })();
