@@ -38,13 +38,14 @@ def attention_projection(view):
 
 
 class MenuAttention:
-    def __init__(self, sender, provider, path, binding, label='Apps'):
+    def __init__(self, sender, provider, path, binding, label='Apps', selected=None):
         if label != 'Apps':
             raise ValueError('Only the explicitly selected Apps menu is supported')
         self.sender, self.provider, self.path, self.binding = sender, provider, path, binding
         self.next_check = 0
         self.last_level = None
         self.label = label
+        self.selected = selected
 
     def call(self, method, value):
         if not self.provider.authorized(self.provider.human):
@@ -70,6 +71,11 @@ class MenuAttention:
             record = read_json(self.path)
             if record.get('binding') != self.binding:
                 raise MenuUnavailable('menu_binding_changed')
+            # A deliberate configured launcher migration must already be observed
+            # in Telegram. Never reinterpret an unrelated external menu change.
+            if self.selected is not None and current == self.selected and record['original'] != self.selected:
+                record = {**record, 'original':self.selected, 'selected':current, 'pending':None}
+
         else:
             if (not isinstance(current, dict) or current.get('type') != 'web_app'
                     or current.get('text') != self.label or set(current) != {'type','text','web_app'}):

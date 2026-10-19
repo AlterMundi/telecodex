@@ -1,3 +1,7 @@
+# Optional shared launcher in this pair's bot menu; no named/Main registration needed.
+# launcher_url = "https://your-pair.example.org/apps/"
+# Optional exact own-home mounts; each route must preserve Origin and credentials.
+# additional_origins = ["https://your-pair.example.org"]
 # Owner-local configuration; never commit receiving values.
 receiver_config = "/private/telecodex/config.toml"
 native_home = "/private/native-codex"

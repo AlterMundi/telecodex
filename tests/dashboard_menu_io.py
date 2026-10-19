@@ -61,6 +61,31 @@ class MenuTests(unittest.TestCase):
             menu.next_check = 0
             with self.assertRaises(MenuUnavailable): menu.tick(view('critical'))
 
+    def test_explicit_observed_launcher_migration_preserves_attention_and_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            provider=Mock(human=100);provider.authorized.return_value=True
+            sender=Mock(spec=['call','verify','assert_binding'])
+            current={'type':'web_app','text':'Apps','web_app':{'url':'https://example.test/old/'}}
+            def call(method,data):
+                nonlocal current
+                if method=='getChatMenuButton':return {'ok':True,'result':current}
+                current=data['menu_button'];return {'ok':True,'result':True}
+            sender.call.side_effect=call
+            path=Path(tmp)/'menu.json'
+            MenuAttention(sender,provider,path,'binding').tick(view())
+            selected={**current,'web_app':{'url':'https://pair.example.test/apps/'}}
+            # Merely configuring another URL cannot authorize an external menu.
+            current={**current,'web_app':{'url':'https://unrelated.example/apps/'}}
+            replacement=MenuAttention(sender,provider,path,'binding',selected=selected)
+            with self.assertRaises(MenuUnavailable):replacement.tick(view('warning'))
+            current=selected  # Supported operator has observed this exact selection.
+            replacement.next_check=0
+            self.assertEqual(replacement.tick(view('warning')),'observed')
+            self.assertEqual(current['text'],'🟠 Apps')
+            self.assertEqual(current['web_app'],selected['web_app'])
+            self.assertEqual(read_json(path)['binding'],'binding')
+            self.assertEqual(read_json(path)['original'],selected)
+
     def test_ambiguous_setter_reconciles_without_extra_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             provider = Mock(human=100); provider.authorized.return_value = True

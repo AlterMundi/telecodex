@@ -6,13 +6,26 @@ import re
 from pathlib import Path
 import tomllib
 import urllib.request
+from urllib.parse import urlsplit
 
 from scripts.activity_indicator import Telegram
 from .private_state import private_directory, read_json, write_json
 
 
 def menu_selection(config):
-    """Select only this bot's explicitly registered named app or the HTTPS page."""
+    """Select the shared HTTPS launcher or this bot's existing Sessions entry."""
+    launcher = config.get('launcher_url')
+    if launcher is not None:
+        try:
+            if not isinstance(launcher, str) or any(c.isspace() or c in "\\\"'<>" for c in launcher):
+                raise ValueError()
+            parsed = urlsplit(launcher); parsed.port
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
+                    or parsed.query or parsed.fragment or parsed.hostname in ('t.me','telegram.me','telegram.dog')):
+                raise ValueError()
+        except ValueError:
+            raise SystemExit('Invalid HTTPS launcher URL; no menu mutation requested') from None
+        return {'type':'web_app','text':'Apps','web_app':{'url':launcher}}
     short_name = config.get('miniapp_short_name')
     if short_name is None:
         url = config['origin'].rstrip('/') + config.get('prefix', '/sessions') + '/'

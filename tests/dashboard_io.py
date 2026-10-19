@@ -86,6 +86,26 @@ class DashboardHTTP(unittest.TestCase):
         csrf=self.login()
         self.assertEqual(self.client.post('/api/stop',json={'nonce':'action-123456789012','path':'/other'},headers={**self.headers,'x-dashboard-csrf':csrf}).status_code,400)
         self.assertEqual(self.provider.calls,[])
+    def test_paired_origin_keeps_owner_signature_and_action_boundaries(self):
+        app = create_app({**self.config, 'additional_origins':['https://pair.example.test']},
+                         self.provider, lambda raw,bot:int(raw))
+        with TestClient(app,base_url='https://pair.example.test') as client:
+            headers={'origin':'https://pair.example.test'}
+            self.assertEqual(client.post('/api/session',json={'init_data':'101'},headers=headers).status_code,403)
+            self.assertEqual(client.post('/api/session',json={'init_data':'100'},headers={'origin':'https://foreign.example.test'}).status_code,403)
+            opened=client.post('/api/session',json={'init_data':'100'},headers=headers)
+            self.assertEqual(opened.status_code,200)
+            auth={'authorization':'Bearer '+opened.json()['session_token']}
+            state=client.get('/api/state',headers=auth)
+            self.assertEqual(state.status_code,200)
+            self.assertEqual(client.post('/api/resume',json={'nonce':'origin-123456789012','operation':'op-A'},headers={**headers,**auth}).status_code,403)
+            self.assertEqual(self.provider.calls,[])
+            self.assertEqual(self.provider.resumes,[])
+        for bad in (['https://pair.example.test/path'], ['https://pair.example.test:invalid'],
+                    ['https://user@pair.example.test'], ['https://pair.example.test?secret=x'],
+                    ['https://pair.example.test'] * 9, 'https://pair.example.test', [None]):
+            with self.assertRaises(ValueError):create_app({**self.config,'additional_origins':bad},self.provider)
+
     def test_stop_persists_one_intent_across_http_loss_and_service_restart(self):
         csrf=self.login();nonce='action-123456789012'
         self.assertEqual(self.stop(nonce,csrf).json()['state'],'stopping')
@@ -226,6 +246,18 @@ class MenuOperator(unittest.TestCase):
                 self.assertEqual(run('restore-menu').returncode,0)
                 self.assertEqual(menu,{'type':'commands'})
                 plain_config = config.read_text()
+                config.write_text(plain_config + 'launcher_url="https://pair.example.test/apps/"\n')
+                self.assertEqual(run('publish-menu').returncode,0)
+                self.assertEqual(menu,{'type':'web_app','text':'Apps','web_app':{'url':'https://pair.example.test/apps/'}})
+                self.assertEqual(run('restore-menu').returncode,0)
+                self.assertEqual(menu,{'type':'commands'})
+                invalid_before=sum(method=='setChatMenuButton' for method,_ in calls)
+                for url in ('https://t.me/OtherBot/matrix','https://user@pair.example.test/apps/', 'https://pair.example.test:invalid/apps/'):
+                    config.write_text(plain_config + 'launcher_url='+json.dumps(url)+'\n')
+                    self.assertNotEqual(run('publish-menu').returncode,0)
+                self.assertEqual(sum(method=='setChatMenuButton' for method,_ in calls),invalid_before)
+                config.write_text(plain_config)
+
                 config.write_text(plain_config + 'miniapp_short_name="sessions"\n')
                 self.assertEqual(run('publish-menu').returncode,0)
                 self.assertEqual(menu['web_app']['url'],'https://t.me/TestBot/sessions?mode=compact')

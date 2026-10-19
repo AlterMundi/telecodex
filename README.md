@@ -564,3 +564,22 @@ Cross-repository decisions and repository-specific implications are indexed in
 [the Daimon Field projection](docs/daimon-field.md). The existing private
 [AlterMundi Project 13](https://github.com/orgs/AlterMundi/projects/13) is the canonical decision and roadmap surface;
 repository access and Project access are separate.
+
+### Shared Apps menu and own-home Sessions
+
+A receiving dashboard can set `launcher_url = "https://your-pair.example.org/apps/"`
+and run the existing `dashboard.operator publish-menu` operation to select **Apps**
+in that human's own bot. No Main/named BotFather registration is needed for this
+HTTPS menu entry. Omitting the setting preserves the existing Sessions menu.
+The launcher URL must not be another bot's Telegram deep link.
+
+When Sessions also has a private proxy mount on that pair's home, declare its exact
+HTTPS origin in `additional_origins`. Keep the current prefix and preserve Origin,
+Cookie, Authorization and Set-Cookie through that private route. Never copy the
+public launcher's credential stripping or rewrite Origin to simulate authorization.
+Additional origins grant no bot/user, resource, companion or control permission.
+
+For an existing alert-decorated Apps menu migration, select the configuration and
+menu while only the web sidecar is stopped, then start it. Attention adopts the new
+target only after observing that exact configured menu under its existing binding.
+Keep previous menu/config receipts; do not restore delivery journals or native state.
