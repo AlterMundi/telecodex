@@ -15,6 +15,7 @@ import re
 import stat
 import subprocess
 import sys
+import wave
 
 from speech_render import (RenderError, atomic, canonical, directory, lock,
                            private_bytes, sync_directory)
@@ -40,9 +41,20 @@ def probe_duration(source):
     stream = next(iter(info.get('streams', [])), {})
     durations = [float(value) for value in (stream.get('duration'),
                  info.get('format', {}).get('duration')) if value]
-    if not durations or any(not math.isfinite(value) or not 0 < value <= 120 for value in durations):
+    if any(not math.isfinite(value) or not 0 < value <= 120 for value in durations):
         raise RenderError('interaction-asr-duration-bound')
-    return max(durations)
+    if durations:
+        return max(durations), None
+    # MediaRecorder emits streaming WebM without a declared duration. Decode at
+    # most one second beyond our bound, then give the existing file helper a
+    # finalized WAV. No provider is contacted and no disk payload is written yet.
+    pcm = subprocess.check_output(['ffmpeg', '-v', 'error', '-nostdin', '-i', str(source),
+        '-t', '121', '-vn', '-ac', '1', '-ar', '16000', '-f', 's16le', 'pipe:1'],
+        timeout=15, stderr=subprocess.DEVNULL)
+    duration = len(pcm) / 32000
+    if len(pcm) % 2 or not 0 < duration <= 120:
+        raise RenderError('interaction-asr-duration-bound')
+    return duration, pcm
 
 
 def config(binding):
@@ -101,9 +113,11 @@ def retire_preparation(job, state):
     sources = manifest.get('sources')
     if (not isinstance(sources, list) or len(sources) != 1
             or sources[0].get('path') != str(helper_job / 'source.media')
-            or sources[0].get('sha256') != state['source_sha256']):
+            or sources[0].get('sha256') != state.get('prepared_source_sha256', state['source_sha256'])):
         raise RenderError('asr-preparation-source-mismatch')
-    media = [(helper_job / 'source.media', state['source_sha256'])]
+    media = [(helper_job / 'source.media', sources[0]['sha256'])]
+    if 'prepared_source_sha256' in state:
+        media.append((preparation / 'input.wav', state['prepared_source_sha256']))
     for chunk in manifest['chunks']:
         if not re.fullmatch(r'chunks/[0-9]{5}\.wav', chunk['file']):
             raise RenderError('asr-preparation-chunk-mismatch')
@@ -148,10 +162,20 @@ def process(source, binding):
                     or state.get('result_sha256') != digest(canonical(state.get('result')))):
                 raise RenderError('retained-asr-outcome-no-automatic-retry')
         else:
-            probe_duration(source)
+            _, pcm = probe_duration(source)
             state = {**identity, 'phase': 'intent'}
             reserve(root, job, state, cfg.get('max_cache_bytes', DEFAULT_BUDGET))
             preparation = directory(job / 'preparation')
+            helper_source = Path(source)
+            if pcm is not None:
+                helper_source = preparation / 'input.wav'
+                with wave.open(str(helper_source), 'wb') as output:
+                    output.setnchannels(1)
+                    output.setsampwidth(2)
+                    output.setframerate(16000)
+                    output.writeframes(pcm)
+                state['prepared_source_sha256'] = digest(private_bytes(helper_source, MAX_SOURCE))
+                atomic(state_path, canonical(state))
             local_route = {**selected_route, 'cache_root': str(preparation)}
             atomic(job / 'route.json', canonical(local_route))
             # Same helper/provider behavior, isolated disposable preparation root.
@@ -160,7 +184,7 @@ def process(source, binding):
                 spec = importlib.util.spec_from_file_location('selected_voice_note', helper)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                result = module.process(Path(source), job / 'route.json')
+                result = module.process(helper_source, job / 'route.json')
                 if (not isinstance(result.get('text'), str) or not result['text'].strip()
                         or len(result['text'].encode()) > 16000
                         or digest(helper.read_bytes()) != helper_hash
