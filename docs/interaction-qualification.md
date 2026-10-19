@@ -151,6 +151,9 @@ and retention; routine audio follows the existing deletion/cache policy.
 Human requirements added 2026-10-19; pending implementation. A habitual integrating
 conversation should also make session lifecycle understandable in Telegram,
 without requiring the dashboard or CLI.
+The [harness control study and delivery plan](integrator-controls.md) records the
+installed capability inventory, supported external controls, recovery choices
+and exact distinction between human-directed commands and delegated autonomy.
 
 - Distinguish an active native goal (suggested marker: target) from actual
   execution without an active goal (suggested marker: lightning). An active goal
