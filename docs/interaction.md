@@ -11,6 +11,9 @@ The current MVP is a single **web conversation** for text and two-way voice, coo
 Acceptance must demonstrate the entire actual client/controller/native/return journey: visible input retention, attributable intermediate communication, appropriate destination or clarification, mid-work corrections, and one canonical response in the requesting conversation. Historical unresolved work must not repeatedly fan out the same answer. Worker relays include the current attributed input once. Native history retains earlier messages; only later-captured related deltas accompany a delayed dispatch so an older message cannot override a newer correction. Unrelated topic inputs and repeated policy walls are not sent. Native mobile/badge and cross-body activation remain deferred.
 
 Owning plan: [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
+Next acceptance campaign and product sequence:
+[qualification and roadmap](interaction-qualification.md). The first functional
+baseline is distinct from daily-use acceptance.
 Implementation: #109–#119. The controller runs inside the existing listener.
 The single-body native controller and browser monitor have a qualified receiving
 deployment, recorded in [#170](https://github.com/AlterMundi/telecodex/issues/170).
@@ -723,6 +726,31 @@ can discover this operation through the stable controller's `capabilities` call.
 
 
 ## Switching between web and direct conversations
+
+### Requested next behavior: visible session parity — 2026-10-19
+
+The human requested that a session's Telegram topic also show the integrator
+activity visible in its CLI. This supersedes exclusive return-surface selection
+as the desired presentation design. It is a pending implementation requirement,
+not a claim that the deployed baseline already mirrors those events.
+
+Project the attributed input/transcript arriving through the integrator, useful
+native progress and canonical answers into that same owned session's topic.
+Keep the correlated response in the requesting integrator conversation. Label
+the origin concisely, without displaying relay JSON or internal coverage tails.
+Use the existing audience bindings; this grants no other audience access.
+
+These are projections of the same events, not new human inputs, controller
+admissions or native executions. A topic projection must never feed back into
+routing, trigger another response or multiply copies per associated request.
+Retain per-destination publication identity and uncertainty using existing
+delivery mechanisms. Failure to mirror must not cause replay of native work or
+prevent the canonical integrator return. Ordinary direct topic input remains
+ordinary native ingress, outside the router quota and without controller wrapping.
+Textual visibility does not require retaining raw audio or sending a second
+spoken copy. Qualify coexistence with direct interaction in the same session.
+
+### Baseline behavior before session parity
 
 Web routing selects a return surface for the work it admits; it does not take
 permanent ownership of a native session's presentation. A subsequent ordinary
