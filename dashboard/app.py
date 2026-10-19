@@ -58,6 +58,20 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     speech = Speech(config['speech']) if config.get('speech') else None
     origin = config['origin']
     prefix = config.get('prefix', '/sessions')
+    additional_origins = config.get('additional_origins', [])
+    if not isinstance(additional_origins, list) or len(additional_origins) > 8:
+        raise ValueError('Bounded exact additional origins required')
+    for candidate in additional_origins:
+        if not isinstance(candidate, str) or any(c.isspace() or c in "\\\"'<>" for c in candidate):
+            raise ValueError('Exact HTTPS additional origin required')
+        parsed = urlparse(candidate)
+        try:
+            parsed.port
+        except ValueError:
+            raise ValueError('Exact HTTPS additional origin required') from None
+        if parsed.scheme != 'https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
+            raise ValueError('Exact HTTPS additional origin required')
+
     launcher_origins = config.get('alerts', {}).get('launcher_origins', [])
     if not isinstance(launcher_origins, list) or len(launcher_origins) > 8:
         raise ValueError('Bounded exact launcher origins required')
@@ -138,7 +152,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             except HTTPException as exc:
                 return JSONResponse({'detail':exc.detail}, status_code=exc.status_code)
         if request.method == 'POST':
-            allowed = launcher_origins if request.url.path == '/api/alerts/attention' else [origin]
+            allowed = launcher_origins if request.url.path == '/api/alerts/attention' else [origin, *additional_origins]
             if request.headers.get('origin') not in allowed:
                 return JSONResponse({'detail': 'Wrong request origin'}, status_code=403)
             # Bound chunked bodies as well as Content-Length before parsing them.
