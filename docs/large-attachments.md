@@ -43,3 +43,27 @@ an immediate cloud rollback or run simultaneous cloud/local consumers. If local
 qualification fails after migration, stop polling, preserve all journals and
 local server state, and follow the official close/logOut timing before restoring
 the cloud endpoint; never restore an older offset/database.
+
+
+## Attachments during an active direct conversation
+
+Downloaded images, documents, text files and videos can use the existing native
+`turn/steer` channel, including forwarded Telegram media. Their exact local paths
+are included in the message; images also use native `localImage` inputs. Caption
+and later text remain in the same execution. The input journal records native
+acceptance separately from file download. A definite native rejection queues the
+same downloaded files for the next turn; an unknown acknowledgment never permits
+replay. Files remain readable until that native execution completes; unconfirmed
+completion retains them for explicit recovery.
+
+Audio/voice keeps the existing media preparation/transcription route. Files that
+must wait behind an active execution receive a notice in their originating topic,
+explaining that they are downloaded but not yet submitted and that intervening
+text can reach the current turn first. A queued attachment must not be reported as
+lost or already received by the active model. Native command/review and existing
+Tribu admission boundaries remain unchanged.
+
+The receiving report in #202 was traced to a screenshot downloaded while a long
+turn was active, then delivered in the next turn. That establishes a queue delay
+for the selected case, not loss of every forwarded/shared attachment or complete
+coverage of all Telegram media variants.

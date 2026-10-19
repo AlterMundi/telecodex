@@ -327,10 +327,12 @@ pub(super) async fn process_turn(
     let turn_workspace = prepare_turn_workspace(&session, turn_id)?;
 
     let (steer_tx, steer_rx) = mpsc::unbounded_channel();
+    let steered_files = Arc::new(SteeredFiles::default());
     if queued.request.review_mode.is_none() {
         let active = ActiveTurnSteerHandle {
             turn_id,
             sender: steer_tx,
+            attachments: steered_files.clone(),
         };
         *steer_slot.lock().expect("steer mutex poisoned") = Some(active.clone());
         if let Some(id) = registration.as_deref() {
@@ -828,6 +830,9 @@ pub(super) async fn process_turn(
     } else {
         run.await
     };
+    steered_files
+        .completed
+        .store(run_result.is_ok(), std::sync::atomic::Ordering::Release);
     if run_result
         .as_ref()
         .err()
@@ -1867,17 +1872,10 @@ fn prepare_turn_workspace(
     Ok(TurnWorkspace { root, out_dir })
 }
 
-pub(super) fn prepare_runtime_request(
-    session: &crate::models::SessionRecord,
-    request: &TurnRequest,
-    workspace: &TurnWorkspace,
-) -> TurnRequest {
-    let mut user_prompt_sections = Vec::new();
-    let mut instruction_sections = Vec::new();
-    let non_transcript_attachment_lines = request
-        .attachments
+pub(super) fn attachment_lines(attachments: &[LocalAttachment]) -> Vec<String> {
+    attachments
         .iter()
-        .filter(|attachment| !has_preferred_audio_transcript(attachment))
+        .filter(|a| !has_preferred_audio_transcript(a))
         .map(|attachment| {
             let mime = attachment.mime_type.as_deref().unwrap_or("unknown");
             format!(
@@ -1887,7 +1885,17 @@ pub(super) fn prepare_runtime_request(
                 attachment_kind_label(attachment.kind)
             )
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+pub(super) fn prepare_runtime_request(
+    session: &crate::models::SessionRecord,
+    request: &TurnRequest,
+    workspace: &TurnWorkspace,
+) -> TurnRequest {
+    let mut user_prompt_sections = Vec::new();
+    let mut instruction_sections = Vec::new();
+    let non_transcript_attachment_lines = attachment_lines(&request.attachments);
     let transcript_texts = request
         .attachments
         .iter()

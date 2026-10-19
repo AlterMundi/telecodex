@@ -459,6 +459,7 @@ async fn sends_plain_text_to_the_active_turn() {
             steer: Arc::new(StdMutex::new(Some(ActiveTurnSteerHandle {
                 turn_id: 17,
                 sender: steer_tx,
+                attachments: Arc::new(SteeredFiles::default()),
             }))),
         },
     );
@@ -494,6 +495,7 @@ async fn falls_back_when_the_active_turn_rejects_steering() {
             steer: Arc::new(StdMutex::new(Some(ActiveTurnSteerHandle {
                 turn_id: 17,
                 sender: steer_tx,
+                attachments: Arc::new(SteeredFiles::default()),
             }))),
         },
     );
@@ -530,6 +532,7 @@ async fn keeps_steering_pending_past_the_previous_timeout() {
             steer: Arc::new(StdMutex::new(Some(ActiveTurnSteerHandle {
                 turn_id: 17,
                 sender: steer_tx,
+                attachments: Arc::new(SteeredFiles::default()),
             }))),
         },
     );

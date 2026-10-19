@@ -130,7 +130,7 @@ def main(binary):
         threading.Thread(target=server.serve_forever, daemon=True).start()
         native = root / 'codex'
         native.write_text('''#!/usr/bin/python3
-import hashlib,json,pathlib,sys,time,uuid
+import hashlib,json,pathlib,sys,time,uuid,threading
 root=pathlib.Path(__file__).parent
 if sys.argv[1:]==['login','status']:
     print('Logged in using synthetic local auth');sys.exit(0)
@@ -154,14 +154,19 @@ for line in sys.stdin:
         with (root/'receipts.jsonl').open('a') as stream:stream.write(json.dumps(receipt)+'\\n')
         turn='sticker-turn-'+str(time.time_ns())
         print(json.dumps({'id':request['id'],'result':{'turn':{'id':turn}}}),flush=True)
-        if 'Hold this turn for a sticker reply.' in prompt:
-            deadline=time.monotonic()+20
-            while not (root/'release').exists() and time.monotonic()<deadline:time.sleep(.02)
-        print(json.dumps({'method':'item/completed','params':{'threadId':params['threadId'],
-            'turnId':turn,'item':{'type':'agentMessage','id':'answer',
-            'phase':'final_answer','text':'Synthetic sticker input received.'}}}),flush=True)
-        print(json.dumps({'method':'turn/completed','params':{'threadId':params['threadId'],
-            'turn':{'id':turn,'status':'completed'}}}),flush=True)
+        def complete(selected=params['threadId'],selected_turn=turn,held='Hold this turn for a sticker reply.' in prompt):
+            if held:
+                deadline=time.monotonic()+20
+                while not (root/'release').exists() and time.monotonic()<deadline:time.sleep(.02)
+            print(json.dumps({'method':'item/completed','params':{'threadId':selected,
+                'turnId':selected_turn,'item':{'type':'agentMessage','id':'answer',
+                'phase':'final_answer','text':'Synthetic sticker input received.'}}}),flush=True)
+            print(json.dumps({'method':'turn/completed','params':{'threadId':selected,
+                'turn':{'id':selected_turn,'status':'completed'}}}),flush=True)
+        threading.Thread(target=complete,daemon=True).start()
+        continue
+    elif method=='turn/steer':
+        print(json.dumps({'id':request['id'],'error':{'code':-32600,'message':'Synthetic native peer rejects active media'}}),flush=True)
         continue
     else:raise RuntimeError('unexpected RPC '+method)
     print(json.dumps({'id':request['id'],'result':result}),flush=True)
@@ -355,7 +360,9 @@ import_desktop_history=false
             settled(hold)
             delivered(followup, 9)
             rpc = [json.loads(line) for line in (root / 'rpc.jsonl').read_text().splitlines()]
-            assert not any(request.get('method') == 'turn/steer' for request in rpc)
+            steers = [request for request in rpc if request.get('method') == 'turn/steer']
+            assert len(steers) == 1
+            assert any(item.get('type') == 'localImage' for item in steers[0]['params']['input'])
             stop()
             process = start()
             wait(lambda: sum(method == 'setMyCommands' for method, _ in calls) == 2)
@@ -366,7 +373,7 @@ import_desktop_history=false
             print('PASS: full/quoted static WebP, unchanged transparent image bytes at native input, '
                   'two images, user/chat/topic isolation, metadata journal, still-preview labels, '
                   'missing-preview/download/interruption feedback, binding preservation, '
-                  'duplicate/restart safety and queued media reply; no live model calls')
+                  'duplicate/restart safety and definite-rejection queued media fallback; no live model calls')
         finally:
             (root / 'release').touch()
             try:

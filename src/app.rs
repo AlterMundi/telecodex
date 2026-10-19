@@ -170,6 +170,40 @@ struct SessionWorkerHandle {
 struct ActiveTurnSteerHandle {
     turn_id: i64,
     sender: mpsc::UnboundedSender<CodexSteerRequest>,
+    attachments: Arc<SteeredFiles>,
+}
+
+/// Keep downloaded steer inputs alive through their exact native execution.
+/// A disconnected/uncertain execution retains them for explicit recovery.
+#[derive(Default)]
+struct SteeredFiles {
+    files: StdMutex<Vec<LocalAttachment>>,
+    completed: std::sync::atomic::AtomicBool,
+}
+
+impl SteeredFiles {
+    fn release(&self, attachments: &[LocalAttachment]) {
+        self.files
+            .lock()
+            .expect("attachment mutex poisoned")
+            .retain(|file| {
+                !attachments
+                    .iter()
+                    .any(|attachment| attachment.path == file.path)
+            });
+    }
+}
+
+impl Drop for SteeredFiles {
+    fn drop(&mut self) {
+        if self.completed.load(std::sync::atomic::Ordering::Acquire) {
+            for attachment in self.files.get_mut().expect("attachment mutex poisoned") {
+                if fs::remove_file(&attachment.path).is_err() {
+                    tracing::warn!("failed to clean up a completed steered attachment");
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -716,6 +750,22 @@ impl App {
         }
 
         let prompt = io::sticker_input_prompt(&message, text);
+        if !attachments.is_empty()
+            && attachments
+                .iter()
+                .all(|a| !matches!(a.kind, AttachmentKind::Audio | AttachmentKind::Voice))
+            && !self
+                .shared
+                .config
+                .tribu
+                .as_ref()
+                .is_some_and(|p| p.key() == session.key)
+            && self
+                .try_steer_active_input(session.key, from.id, &prompt, &attachments)
+                .await?
+        {
+            return Ok(());
+        }
         let request = TurnRequest {
             session_key,
             from_user_id: from.id,
@@ -2434,6 +2484,13 @@ impl App {
             stopping::input_epoch(&self.shared, request.session_key)?
         };
         let handle = self.worker_for(request.session_key).await?;
+        let queued_media = !request.attachments.is_empty()
+            && handle
+                .cancel
+                .lock()
+                .expect("cancel mutex poisoned")
+                .is_some();
+        let media_destination = request.session_key;
         let update_id = if stop_resume.is_some() {
             None
         } else {
@@ -2480,6 +2537,15 @@ impl App {
             }
         }
         queued?;
+        if queued_media {
+            let telegram = self.shared.telegram.clone();
+            tokio::spawn(async move {
+                let notice = SendMessage::html(media_destination.chat_id, Some(media_destination.thread_id).filter(|id| *id != 0), "Files downloaded and queued for the next turn. They have not reached Codex yet; the current turn must finish first. Text sent meanwhile can reach the current turn before these files.".to_string());
+                if telegram.send_message(notice).await.is_err() {
+                    tracing::warn!("queued attachment notice delivery is unconfirmed");
+                }
+            });
+        }
         Ok(())
     }
 
@@ -2489,6 +2555,17 @@ impl App {
         session_key: SessionKey,
         from_user_id: i64,
         text: &str,
+    ) -> Result<bool> {
+        self.try_steer_active_input(session_key, from_user_id, text, &[])
+            .await
+    }
+
+    async fn try_steer_active_input(
+        &self,
+        session_key: SessionKey,
+        from_user_id: i64,
+        text: &str,
+        attachments: &[LocalAttachment],
     ) -> Result<bool> {
         let active = {
             let workers = self.workers.lock().await;
@@ -2519,16 +2596,32 @@ impl App {
             session_key,
             from_user_id,
         )?;
-        let contextual_text =
+        let mut contextual_text =
             nexus::input_prompt(&self.shared, update_id, session_key, from_user_id, text)?;
+        if !attachments.is_empty() {
+            contextual_text.push_str(&format!(
+                "\n\nLocal files attached to this message:\n{}\nUse these exact files if relevant.",
+                turns::attachment_lines(attachments).join("\n")
+            ));
+        }
         if let Some(id) = update_id {
             self.shared.store.begin_update_steer(id, active.turn_id)?;
         }
         let (response_tx, response_rx) = oneshot::channel();
+        active
+            .attachments
+            .files
+            .lock()
+            .expect("attachment mutex poisoned")
+            .extend_from_slice(attachments);
         if active
             .sender
             .send(CodexSteerRequest {
-                images: vec![],
+                images: attachments
+                    .iter()
+                    .filter(|a| a.kind == AttachmentKind::Image)
+                    .map(|a| a.path.clone())
+                    .collect(),
                 admission_check: Some({
                     let shared = self.shared.clone();
                     Arc::new(move || {
@@ -2545,6 +2638,7 @@ impl App {
             })
             .is_err()
         {
+            active.attachments.release(attachments);
             if let Some(id) = update_id {
                 self.shared.store.reject_update_steer(id)?;
             }
@@ -2573,6 +2667,7 @@ impl App {
                 Ok(true)
             }
             Ok(Ok(Err(CodexSteerError::Rejected(error)))) => {
+                active.attachments.release(attachments);
                 if let Some(id) = update_id {
                     self.shared.store.reject_update_steer(id)?;
                 }

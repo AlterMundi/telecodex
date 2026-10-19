@@ -172,6 +172,7 @@ jobs:
       - run: python3 -B tests/conversation_context_http_io.py target/release/telecodex
       - run: python3 -B tests/conversation_visual_http_io.py target/release/telecodex
       - run: python3 -B tests/conversation_direct_routing_http_io.py target/release/telecodex
+      - run: python3 -B tests/media_steer_io.py target/release/telecodex
       - run: python3 -B tests/conversation_cold_entry_http_io.py target/release/telecodex
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
