@@ -304,6 +304,57 @@ def failed_synthesis_diagnostic(binary):
         j.close()
 
 
+def owner_observer_commands(binary):
+    import subprocess
+    j = Observer(binary)
+    try:
+        j.prepare(); j.stop()
+        socket = j.root / 'observer-control.sock'
+        j.config.write_text(j.config.read_text() + f'\n[session_control]\nsocket_path="{socket}"\nhuman_id=101\n')
+        def control(*args):
+            return subprocess.run([binary,'--control',str(j.config),'observer',*args],capture_output=True,text=True,timeout=15)
+        j.start(); j.wait_control_socket(socket)
+        assert control('observe','#Alpha').returncode != 0
+        assert j.summaries == 0, 'Different configured owner reached the observer'
+        j.stop(); j.config.write_text(j.config.read_text().replace('human_id=101','human_id=100'))
+        j.start(); j.wait_control_socket(socket)
+        before = j.row('SELECT thread_id,codex_thread_id FROM sessions ORDER BY thread_id')
+        before_turns = j.row('SELECT count(*) FROM turns')
+        assert control('observe','#Missing').returncode != 0
+        assert control('observe','#Alpha','--unknown').returncode != 0
+        original = j.handle_extra_rpc
+        def invalid_support(request, send):
+            def substitute(value):
+                item = value.get('params',{}).get('item',{})
+                if value.get('method') == 'item/completed' and item.get('id') == 'summary-answer':
+                    item['text'] = json.dumps({'summary':'Derived text','recent_indices':[999]})
+                send(value)
+            return original(request, substitute)
+        j.handle_extra_rpc = invalid_support
+        reply = control('observe','#Alpha')
+        assert reply.returncode == 0, reply.stderr
+        assert json.loads(reply.stdout)['result']['synthesis_confirmed'] is False
+        j.wait(lambda:j.row('SELECT phase FROM interaction_observer_attempts') == [('uncertain',)])
+        assert control('observe','#Alpha').returncode == 0
+        j.wait(lambda:bool(j.row("SELECT id FROM audit_log WHERE action='canonical_routing_notice' AND details_json LIKE '%Observer attempt is uncertain%'")))
+        assert j.summaries == 1
+        j.handle_extra_rpc = original
+        assert control('observe','#Alpha','--retry').returncode == 0
+        j.wait(lambda:j.card() is not None)
+        assert j.row('SELECT phase FROM interaction_observer_attempts ORDER BY rowid') == [('uncertain',),('committed',)]
+        assert j.summaries == 2
+        for command, notice in [('summary','Derived observer card'),('sources','Original support')]:
+            reply = control(command,'#Alpha')
+            assert reply.returncode == 0, reply.stderr
+            inspected = json.loads(reply.stdout)['result']
+            assert inspected['model_call'] is False and notice in inspected['text']
+        assert j.summaries == 2 and j.row('SELECT count(*) FROM turns') == before_turns
+        assert j.row('SELECT thread_id,codex_thread_id FROM sessions ORDER BY thread_id') == before
+        print('PASS owner observer commands enforce human/source scope, retain uncertainty, allow explicit retry and never dispatch source work')
+    finally:
+        j.close()
+
+
 if __name__ == '__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     revisions_and_originals(binary)
@@ -311,3 +362,4 @@ if __name__ == '__main__':
     candidate_reconciliation(binary)
     synthesis_profile_and_global_budget(binary)
     failed_synthesis_diagnostic(binary)
+    owner_observer_commands(binary)

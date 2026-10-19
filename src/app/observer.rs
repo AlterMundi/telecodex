@@ -38,6 +38,107 @@ fn render_checked(
     text
 }
 
+fn retained_inspection(
+    shared: &AppShared,
+    key: SessionKey,
+    human: i64,
+    native: &str,
+    name: &str,
+    verb: &str,
+) -> Result<String> {
+    let card = shared.store.observer_card(key, human, native)?;
+    if verb == "summary" {
+        return Ok(card
+            .as_ref()
+            .map(|c| render_checked(shared, key, human, name, c))
+            .unwrap_or_else(|| {
+                "No retained observer card for this native source. Use /interaction observe #Topic."
+                    .into()
+            }));
+    }
+    let Some(card) = card else {
+        return Ok("No retained observer support for this native source.".into());
+    };
+    let originals = shared
+        .store
+        .observer_originals(key, human, native, card.revision)?;
+    let source = &originals["source"];
+    let entries = source["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            source["in_progress_entries"]
+                .as_array()
+                .into_iter()
+                .flatten(),
+        )
+        .collect::<Vec<_>>();
+    let mut text = format!(
+        "Original support for #{name}, observer revision {}, native {}\nSource revision: {}\nExcerpts below are bounded; full captured source remains retained.\n",
+        card.revision, card.native, card.source_revision
+    );
+    for index in &card.supports {
+        if let Some(entry) = entries.get(*index).and_then(|e| e.as_str()) {
+            let excerpt: String = entry.chars().take(1000).collect();
+            text.push_str(&format!("\n[Source entry {index}]\n{excerpt}\n"));
+        }
+    }
+    Ok(text)
+}
+
+/// Owner-local adapter for the same explicit commands offered by Telegram.
+/// Observe acknowledges scheduling only. Inspections return retained evidence
+/// directly; operational notices stay in local audit, never fabricated Telegram input.
+pub(super) fn owner_command(app: &App, human: i64, command: &str) -> Result<serde_json::Value> {
+    let cfg = routing::profile(&app.shared)?;
+    if human != cfg.human_id {
+        bail!("Observer owner does not match the configured interaction human");
+    }
+    let args = command.split_whitespace().collect::<Vec<_>>();
+    if !matches!(
+        args.as_slice(),
+        ["observe" | "summary" | "sources", _] | ["observe", _, "--retry"]
+    ) || !args[1].starts_with('#')
+        || cfg.resolve(&args[1][1..]).len() != 1
+    {
+        bail!(
+            "Select observer observe #Topic [--retry], summary #Topic or sources #Topic with one unambiguous enrolled source"
+        );
+    }
+    if args[0] != "observe" {
+        let key = cfg.resolve(&args[1][1..])[0];
+        let session = app
+            .shared
+            .store
+            .get_session(key)?
+            .context("Missing observer source")?;
+        let native = session
+            .codex_thread_id
+            .as_deref()
+            .context("Unbound observer source")?;
+        let name = &cfg
+            .targets
+            .iter()
+            .find(|t| t.topic_id == key.thread_id)
+            .context("Missing observer selector")?
+            .name;
+        let text = retained_inspection(&app.shared, key, human, native, name, args[0])?;
+        return Ok(
+            serde_json::json!({"kind":"observer_retained_inspection","command":args[0],"selector":args[1],"text":text,"model_call":false}),
+        );
+    }
+    let origin = ReturnRoute {
+        chat_id: cfg.chat_id,
+        thread_id: cfg.topic_id,
+        message_id: None,
+    };
+    handle(app, human, origin, &args)?;
+    Ok(
+        serde_json::json!({"kind":"observer_command_scheduled","command":args[0],"selector":args[1],"retry_requested":args.get(2)==Some(&"--retry"),"synthesis_confirmed":false,"detail":"Acknowledgement only. Use observer summary/sources to inspect retained evidence before repeating. Operational notices are local canonical_routing_notice audit records, not Telegram delivery. No source work was dispatched."}),
+    )
+}
+
 pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) -> Result<bool> {
     if !args
         .first()
@@ -89,45 +190,8 @@ pub(super) fn handle(app: &App, human: i64, origin: ReturnRoute, args: &[&str]) 
         .unwrap()
         .name
         .clone();
-    let card = shared.store.observer_card(key, human, &native)?;
-    if args[0] == "summary" {
-        routing::notice(shared.clone(),origin,card.as_ref().map(|c|render_checked(&shared,key,human,&name,c)).unwrap_or_else(||"No retained observer card for this native source. Use /interaction observe #Topic.".into()));
-        return Ok(true);
-    }
-    if args[0] == "sources" {
-        let Some(card) = card else {
-            routing::notice(
-                shared,
-                origin,
-                "No retained observer support for this native source.".into(),
-            );
-            return Ok(true);
-        };
-        let originals = shared
-            .store
-            .observer_originals(key, human, &native, card.revision)?;
-        let source = &originals["source"];
-        let entries = source["entries"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .chain(
-                source["in_progress_entries"]
-                    .as_array()
-                    .into_iter()
-                    .flatten(),
-            )
-            .collect::<Vec<_>>();
-        let mut text = format!(
-            "Original support for #{name}, observer revision {}, native {}\nSource revision: {}\nExcerpts below are bounded; full captured source remains retained.\n",
-            card.revision, card.native, card.source_revision
-        );
-        for index in &card.supports {
-            if let Some(entry) = entries.get(*index).and_then(|e| e.as_str()) {
-                let excerpt: String = entry.chars().take(1000).collect();
-                text.push_str(&format!("\n[Source entry {index}]\n{excerpt}\n"));
-            }
-        }
+    if args[0] != "observe" {
+        let text = retained_inspection(&shared, key, human, &native, &name, args[0])?;
         routing::notice(shared, origin, text);
         return Ok(true);
     }
