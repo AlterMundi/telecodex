@@ -118,8 +118,15 @@ fn summary(goal: &NativeGoal) -> String {
     text.push_str("\n\n/goal edit · /goal clear");
     match goal.status.as_str() {
         "active" => text.push_str(" · /goal pause"),
-        "paused" | "blocked" | "usageLimited" => text.push_str(" · /goal resume"),
+        "paused" | "blocked" | "usageLimited" | "complete" | "budgetLimited"
+            if !goal.budget_exhausted() =>
+        {
+            text.push_str(" · /goal resume")
+        }
         _ => {}
+    }
+    if goal.budget_exhausted() {
+        text.push_str("\nToken budget exhausted; resume and objective edits do not reset usage.");
     }
     text
 }
@@ -242,11 +249,7 @@ async fn command(app: &App, message: &Message, requester: i64, args: &str) -> Re
         }
         "resume" => {
             let goal = current.context("No goal currently set")?;
-            if matches!(goal.status.as_str(), "complete" | "budgetLimited") {
-                bail!(
-                    "This goal is terminal. Edit its objective or create a new goal instead of resuming it."
-                );
-            }
+            goal.ensure_resumable()?;
             activate(app, message, requester, &session, Some(goal), None, false).await
         }
         "edit" => {

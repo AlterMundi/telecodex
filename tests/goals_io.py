@@ -237,6 +237,56 @@ def long_summary(binary):
         print('PASS full-length literal goal summary is chunked without a model turn')
     finally:j.close()
 
+def resume_preserves_goal(binary, status, live):
+    j=Goals(binary,'hold')
+    try:
+        j.start();j.admit('Establish native binding');j.wait(lambda:bool(j.holding))
+        thread,turn=next(iter(j.holding.items()))
+        if not live:
+            j.holding.clear();j.finish(thread,turn);j.idle()
+        created=int(time.time())-120
+        j.goals[thread]={'threadId':thread,'objective':'Retained objective','status':status,
+                         'tokenBudget':200,'tokensUsed':81,'timeUsedSeconds':7,
+                         'createdAt':created,'updatedAt':created}
+        j.command('/goal','/goal resume')
+        checkpoint=len(j.rpc)
+        j.admit('/goal resume')
+        j.wait(lambda:j.goals[thread]['status']=='active')
+        j.wait(lambda:j.has('Goal: active') if live else j.native_turns==2)
+        current=j.goals[thread]
+        assert current['objective']=='Retained objective' and current['createdAt']==created
+        assert current['tokensUsed']==81 and current['timeUsedSeconds']==7 and current['tokenBudget']==200
+        calls=j.rpc[checkpoint:]
+        assert not any(x.get('method') in ('thread/goal/clear','turn/interrupt') for x in calls)
+        assert sum(x.get('method')=='turn/start' for x in calls)==(0 if live else 1)
+        print(f'PASS explicit {status} resume, live={live}, preserves definition/accounting without replacement')
+    finally:j.close()
+
+def exhausted_budget(binary):
+    j=Goals(binary,'hold')
+    try:
+        j.start();j.admit('Establish native binding');j.wait(lambda:bool(j.holding))
+        thread,turn=next(iter(j.holding.items()));j.holding.clear();j.finish(thread,turn);j.idle()
+        for status in ('complete','budgetLimited','paused'):
+            j.goals[thread]={'threadId':thread,'objective':'Preserve exhausted goal','status':status,
+                             'tokenBudget':81,'tokensUsed':81,'timeUsedSeconds':7,
+                             'createdAt':int(time.time()),'updatedAt':int(time.time())}
+            checkpoint=len(j.rpc)
+            j.command('/goal resume',"token budget is exhausted")
+            assert j.goals[thread]['status']==status
+            assert not any(x.get('method') in ('thread/goal/set','thread/goal/clear','turn/start','turn/interrupt') for x in j.rpc[checkpoint:])
+            checkpoint=len(j.rpc)
+            j.command('/goal edit Revised exhausted objective','Goal: paused' if status=='paused' else 'Goal: budgetLimited')
+            assert j.goals[thread]['objective']=='Revised exhausted objective'
+            assert j.goals[thread]['tokensUsed']==81 and j.goals[thread]['tokenBudget']==81
+            assert not any(x.get('method') in ('thread/goal/clear','turn/start','turn/interrupt') for x in j.rpc[checkpoint:])
+        print('PASS exhausted resume rejected without effects; objective edits retain usage and explicit pause')
+    finally:j.close()
+
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     lifecycle(binary);live_controls(binary);unsupported(binary);staged_controls(binary,'pause');staged_controls(binary,'clear');adopt_live_turn(binary);delayed_snapshot(binary);long_summary(binary)
+    resume_preserves_goal(binary,'complete',False)
+    resume_preserves_goal(binary,'complete',True)
+    resume_preserves_goal(binary,'budgetLimited',False)
+    exhausted_budget(binary)
