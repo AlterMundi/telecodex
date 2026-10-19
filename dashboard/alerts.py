@@ -211,9 +211,11 @@ class Receiver:
             provider.binding_bytes.hex(), getattr(self.sender, 'token', '')], sort_keys=True).encode()).hexdigest()
         root = private_directory(private_directory(config['state_dir']) / 'alerts')
         from .menu_attention import MenuAttention
+        from .operator import menu_selection
         if type(settings.get('menu_attention', False)) is not bool:
             raise ValueError('Invalid menu attention setting')
-        self.menu = (MenuAttention(self.sender, provider, root / 'menu-attention.json', self.binding)
+        self.menu = (MenuAttention(self.sender, provider, root / 'menu-attention.json', self.binding,
+                                   selected=menu_selection(config) if config.get('launcher_url') else None)
                      if settings.get('menu_attention', False) else None)
         self.db_path = root / 'delivery.sqlite3'
         if self.db_path.exists() or self.db_path.is_symlink():
