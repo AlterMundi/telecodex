@@ -169,7 +169,12 @@ pub(super) fn admit_on(
     if source.origin.message_id.is_none()
         && let Some(native) = native.as_deref()
     {
-        tx.execute("INSERT OR IGNORE INTO conversation_returns(human_id,native_thread,source_input,selected_at) VALUES(?1,?2,?3,?4)",params![source.human_id,native,source.event_id,now_string()])?;
+        super::conversation_inputs::select_return_on(
+            tx,
+            source.human_id,
+            native,
+            &source.event_id,
+        )?;
     }
     if !source.target_sessions.contains(&session) {
         return Err(anyhow!(

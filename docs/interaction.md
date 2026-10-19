@@ -707,3 +707,16 @@ these IDs to link corrections with `amends` or additional material with `context
 If the intended earlier request is absent or ambiguous, ask rather than inventing
 an ID or turning the correction into a new task. Existing native conversations
 can discover this operation through the stable controller's `capabilities` call.
+
+
+## Switching between web and direct conversations
+
+Web routing selects a return surface for the work it admits; it does not take
+permanent ownership of a native session's presentation. A subsequent ordinary
+message in that session's Telegram topic retains raw native ingress and restores
+commentary, answers and artifacts to the direct topic. This also applies when the
+native turn is still running. Selection uses the existing receiver capture order,
+so delayed transcription or dispatch cannot replace a later human selection.
+The small presentation-selection record is not a router source/instruction and
+does not consume routing capacity. Canonical answers already retained in the web
+conversation remain history; switching channels never replays model work.

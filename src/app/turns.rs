@@ -334,6 +334,16 @@ pub(super) async fn process_turn(
             super::routing::started(&app, session.key, id, active)?;
         }
     }
+    if queued.interaction.is_none()
+        && queued.conversation_input.is_none()
+        && queued.tribu_admission.is_none()
+    {
+        shared.store.conversation_select_direct_return(
+            queued.update_id,
+            session.key,
+            queued.request.from_user_id,
+        )?;
+    }
     let canonical_origin = queued
         .interaction
         .as_deref()
@@ -432,7 +442,7 @@ pub(super) async fn process_turn(
     sink.lock().await.turn_id = Some(turn_id);
     // Legacy native launches retain their original presentation, but its HTTP
     // waits must not hold the native event pump once the topic is enrolled.
-    let (presentation_tx, presentation_task) = if registration.is_some() && !routed {
+    let (presentation_tx, presentation_task) = if registration.is_some() {
         let (tx, mut rx) = mpsc::channel::<CodexEvent>(128);
         let present_sink = sink.clone();
         let task = tokio::spawn(async move {
@@ -713,7 +723,7 @@ pub(super) async fn process_turn(
                                 if !shared.store.nexus_local_requests(turn_id)?.is_empty() {
                                     if let Some(native)=physical_turn.lock().expect("native correlation mutex poisoned").as_deref() {shared.store.nexus_final(turn_id,native,&text)?;}
                                 }
-                                if !routed{
+                                if !routed || shared.store.conversation_turn_direct_return(turn_id)? {
                                     if let Some(tx)=&presentation_tx {retain_presentation_gap(&shared,turn_id,tx.try_send(CodexEvent::FinalAnswerCompleted(text)).is_err())?;}
                                     else {sink.lock().await.handle_event(CodexEvent::FinalAnswerCompleted(text)).await?;}
                                 }
@@ -795,7 +805,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             other => {
-                                if !routed{
+                                if !routed || shared.store.conversation_turn_direct_return(turn_id)? {
                                     if let Some(tx)=&presentation_tx {retain_presentation_gap(&shared,turn_id,tx.try_send(other).is_err())?;}
                                     else {sink.lock().await.handle_event(other).await?;}
                                 }
@@ -864,7 +874,9 @@ pub(super) async fn process_turn(
         .interaction
         .as_deref()
         .or_else(|| attached.last().map(|i| i.id.as_str()));
-    if routed || !attached.is_empty() || shared.store.conversation_turn_return(turn_id)? {
+    if (routed || !attached.is_empty() || shared.store.conversation_turn_return(turn_id)?)
+        && !shared.store.conversation_turn_direct_return(turn_id)?
+    {
         shared.store.set_session_busy(session.key, false)?;
         let status = match &run_result {
             Ok(_) => "completed",

@@ -91,6 +91,58 @@ topic_id=8
         self.broadcast(native, 'turn/completed', {'turn': {'id': self.workers[native], 'status': 'completed'}})
 
 
+def direct_after_canonical_work(binary):
+    class Switching(CanonicalRouting):
+        def __init__(self, binary):
+            self.direct_packets=[]
+            super().__init__(binary)
+        def handle_extra_rpc(self, message, send):
+            method=message.get('method');params=message.get('params',{})
+            if self.routing and method in ('turn/start','turn/steer') and params.get('clientUserMessageId','').startswith('telegram:'):
+                self.direct_packets.append(params)
+                native=params['threadId']
+                if method=='turn/start':
+                    self.workers[native]='direct-surface-'+str(len(self.direct_packets))
+                    send({'id':message['id'],'result':{'turn':{'id':self.workers[native]}}})
+                    self.broadcast(native,'turn/started',{'turn':{'id':self.workers[native],'status':'inProgress'}})
+                else:
+                    send({'id':message['id'],'result':{'turnId':self.workers[native]}})
+                return True
+            return super().handle_extra_rpc(message,send)
+        def direct_answer(self, text, end=True):
+            native='native-topic-7';turn=self.workers[native]
+            for suffix,phase,body in [('progress','commentary',text+' progress'),('final','final_answer',text)]:
+                self.broadcast(native,'item/completed',{'turnId':turn,'item':{'id':text+suffix,'type':'agentMessage','phase':phase,'text':body}})
+            if end:self.broadcast(native,'turn/completed',{'turn':{'id':turn,'status':'completed'}})
+    j=Switching(binary)
+    try:
+        j.start()
+        for topic in (7,8,1):
+            j.admit('Seed owned context',topic=topic);j.wait(lambda:j.has('Initial goal turn delivered.',topic));j.idle()
+        j.stop();j.config.write_text(j.config.read_text()+j.target_config);j.start();j.wait_control_socket(j.socket);j.routing=True
+        binding=j.read('presentation','list','0','0')['result']['binding']
+        j.submit(binding,'#Alpha Start from the web')
+        j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='accepted')
+        j.answer_worker(7,'First web answer.');j.idle();j.messages.clear()
+        j.admit('Now I am writing directly in this work topic.',topic=7)
+        j.wait(lambda:len(j.direct_packets)==1)
+        assert j.direct_packets[-1]['input'][0]['text']=='Now I am writing directly in this work topic.'
+        assert len(j.instructions(7))==1
+        j.direct_answer('Idle direct answer.')
+        j.wait(lambda:j.has('Idle direct answer.',7) and j.has('Idle direct answer. progress',7));j.idle()
+        j.submit(binding,'#Alpha Return to the web for new work')
+        j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
+        j.admit('A raw direct correction while the web worker is still running.',topic=7)
+        j.wait(lambda:len(j.direct_packets)==2)
+        assert j.direct_packets[-1]['input'][0]['text']=='A raw direct correction while the web worker is still running.'
+        assert len(j.instructions(7))==2,'Direct steer entered the router journal'
+        j.direct_answer('Busy direct answer.')
+        j.wait(lambda:j.has('Busy direct answer.',7) and j.has('Busy direct answer. progress',7));j.idle()
+        assert sum(m['text']=='Busy direct answer.' for m,_ in j.messages)==1
+        print('PASS web to same-session direct idle and busy steer: raw input, own commentary/final exactly once, no new router admission; zero models')
+    finally:j.close()
+
+
 def canonical_routes(binary):
     journey = CanonicalRouting(binary)
     try:
@@ -271,5 +323,6 @@ def cumulative_results_are_not_old_request_fanout(binary):
 
 if __name__ == '__main__':
     cumulative_results_are_not_old_request_fanout(str(Path(sys.argv[1]).resolve()))
+    direct_after_canonical_work(str(Path(sys.argv[1]).resolve()))
     canonical_routes(str(Path(sys.argv[1]).resolve()))
     original_references_beyond_recent_window(str(Path(sys.argv[1]).resolve()))
