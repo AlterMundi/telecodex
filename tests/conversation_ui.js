@@ -170,7 +170,7 @@ function boot(readOnly=false,standalone=false) {
   await single.ui.refresh();
   const stream=single.nodes.get('#conversation-timeline');
   assert.deepEqual(stream.children.filter(c=>c.dataset.timelineKey).map(c=>c.dataset.timelineKey),['native:1','native:2','native:3','native:4','input:between','native:5','native:6','native:7','native:8']);
-  assert.equal(stream.children.find(c=>c.dataset.timelineKey==='native:1').children[1].textContent,'Working…');
+  assert.equal(stream.children.find(c=>c.dataset.timelineKey==='native:1').children[1].textContent,'Progress update.');
   assert.equal(stream.children.find(c=>c.dataset.timelineKey==='input:between').children[0].textContent,'You');
   await single.ui.refresh();
   assert.equal(stream.children.filter(c=>c.dataset.timelineKey).length,9,'Refreshing keeps one card per saved input or native item');

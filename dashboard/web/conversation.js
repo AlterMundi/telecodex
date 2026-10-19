@@ -539,7 +539,7 @@ window.Conversation = (() => {
       const integrator=source.kind.startsWith("integrator_");
       const progress=source.kind.endsWith("_progress");
       card.title.textContent = integrator ? "Conversation" : source.label;
-      card.status.textContent = progress ? "Working…" : source.kind === "integrator_answer" ? "Reply from this conversation."
+      card.status.textContent = progress ? "Progress update." : source.kind === "integrator_answer" ? "Reply from this conversation."
         : source.correction_pending ? "A later correction is pending."
         : !source.native_binding_current ? "From an earlier session."
         : !source.current ? "Instruction coverage has not been confirmed."

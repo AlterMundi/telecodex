@@ -119,7 +119,7 @@ def direct_after_canonical_work(binary):
         j.start()
         for topic in (7,8,1):
             j.admit('Seed owned context',topic=topic);j.wait(lambda:j.has('Initial goal turn delivered.',topic));j.idle()
-        j.stop();j.config.write_text(j.config.read_text()+j.target_config);j.start();j.wait_control_socket(j.socket);j.routing=True
+        j.stop();j.config.write_text(j.config.read_text()+'\nmax_active_workers=1\n'+j.target_config);j.start();j.wait_control_socket(j.socket);j.routing=True
         binding=j.read('presentation','list','0','0')['result']['binding']
         j.submit(binding,'#Alpha Start from the web')
         j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='accepted')
@@ -142,6 +142,47 @@ def direct_after_canonical_work(binary):
         j.direct_answer('Busy direct answer.')
         j.wait(lambda:j.has('Busy direct answer.',7) and j.has('Busy direct answer. progress',7));j.idle()
         assert sum(m['text']=='Busy direct answer.' for m,_ in j.messages)==1
+        # An older web input can wait behind another worker while a later raw
+        # direct correction reaches this session. Dispatch order is not capture
+        # order; the late relay must identify the newer native-history context.
+        j.submit(binding,'#Beta Occupy the single routed worker slot.')
+        j.wait(lambda:j.instructions(8) and j.instructions(8)[0][1]=='accepted')
+        earlier,_=j.submit(binding,'#Alpha Earlier retained requirement13.')
+        j.wait(lambda:len(j.instructions(7))==3 and j.instructions(7)[2][1]=='queued')
+        direct_text='Later raw direct correction: use requirement17 instead.'
+        direct=j.admit(direct_text,topic=7)
+        j.wait(lambda:len(j.direct_packets)==3)
+        assert j.direct_packets[-1]['input'][0]['text']==direct_text
+        assert len(j.instructions(7))==3,'Direct correction entered router admission'
+        j.wait(lambda:j.instructions(7)[2][1]=='accepted')
+        # Native preparation may include the queued relay as another input
+        # part of the direct turn/start, rather than a separate turn/steer.
+        def routed_packet(instruction):
+            return next(part['text'] for packet in j.worker_packets['native-topic-7']+j.direct_packets
+                for part in packet['input'] if 'Current instruction: '+instruction in part.get('text',''))
+        packet=routed_packet(j.instructions(7)[2][0])
+        assert direct_text in packet,'Late routed input lost the newer raw direct correction chronology'
+        assert 'Later direct context already in native history' in packet
+        assert packet.count(direct_text)==1
+        assert j.row('SELECT count(*) FROM interaction_sources WHERE update_id=?',(direct,))==[(0,)]
+        assert j.row('SELECT busy FROM sessions WHERE thread_id=8')==[(1,)]
+        j.answer_worker(7,'Late original preserves requirement17.')
+        j.wait(lambda:j.has('Late original preserves requirement17.',7))
+        j.answer_worker(8,'Other routed work complete.');j.idle()
+        held,_=j.submit(binding,'#Missing Earlier original still awaiting its destination.')
+        later_text='Later direct requirement23, before the older original is clarified.'
+        later_direct=j.admit(later_text,topic=7)
+        j.wait(lambda:len(j.direct_packets)==4)
+        j.direct_answer('Direct requirement23 acknowledged.')
+        j.wait(lambda:j.has('Direct requirement23 acknowledged.',7))
+        j.wait(lambda:j.row('SELECT busy FROM sessions WHERE thread_id=7')==[(0,)])
+        j.read('input','route',json.dumps({'binding':binding,'id':held['id'],'selector':'t7'}))
+        j.wait(lambda:len(j.instructions(7))==4 and j.instructions(7)[3][1]=='accepted')
+        packet=routed_packet(j.instructions(7)[3][0])
+        assert later_text in packet and direct_text not in packet
+        assert '"input_ref":'+str(later_direct) in packet
+        assert len(j.direct_packets)==4 and j.row('SELECT count(*) FROM interaction_sources WHERE update_id=?',(later_direct,))==[(0,)]
+        j.answer_worker(7,'Clarified old original preserves requirement23.');j.idle()
         print('PASS web to same-session direct idle and busy steer: raw input, own commentary/final exactly once, no new router admission; zero models')
     finally:j.close()
 

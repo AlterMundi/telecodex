@@ -2610,13 +2610,57 @@ impl App {
         let shared = self.shared.clone();
         let workers = Arc::downgrade(&self.workers);
         tokio::spawn(async move {
-            while let Some(turn) = rx.recv().await {
+            let mut pending = std::collections::VecDeque::new();
+            loop {
+                let turn = match pending.pop_front() {
+                    Some(turn) => turn,
+                    None => match rx.recv().await {
+                        Some(turn) => turn,
+                        None => break,
+                    },
+                };
                 let Some(workers) = workers.upgrade() else {
                     break;
                 };
                 let app = App {
                     shared: shared.clone(),
                     workers,
+                };
+                if let Some(id) = turn.interaction.as_deref()
+                    && shared
+                        .store
+                        .interaction_instruction(id, turn.request.from_user_id)
+                        .is_ok_and(|input| {
+                            input.is_some_and(|input| {
+                                input.phase != crate::interaction::TransportPhase::Queued
+                            })
+                        })
+                {
+                    continue; // A pending copy may already have joined a native turn.
+                }
+                // A routed capacity wait must not occupy the native writer's
+                // input queue. A later ordinary input can start that writer;
+                // routing::begin/native_started retain and steer the older
+                // queued instruction into it under the existing correlation.
+                let (turn, capacity) = if turn.interaction.is_some() {
+                    let wait_cancel = CancellationToken::new();
+                    *cancel.lock().expect("cancel mutex poisoned") = Some(wait_cancel.clone());
+                    let wait = shared.worker_budget.acquire(key, &wait_cancel);
+                    tokio::pin!(wait);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = wait_cancel.cancelled() => break (turn, Err(anyhow!("Worker capacity wait cancelled before native preparation"))),
+                            next = rx.recv() => match next {
+                                Some(next) if next.interaction.is_none() => break (next, Ok(None)),
+                                Some(next) => pending.push_back(next),
+                                None => break (turn, Err(anyhow!("Worker input queue closed"))),
+                            },
+                            result = &mut wait => break (turn, result.map(Some)),
+                        }
+                    }
+                } else {
+                    (turn, Ok(None))
                 };
                 let requester = turn.request.from_user_id;
                 let target = turn.request.session_key;
@@ -2627,14 +2671,20 @@ impl App {
                 let conversation_input_id = turn.conversation_input.clone();
                 let (registration, result) = match routing::begin(&shared, &turn) {
                     Ok(registration) => {
-                        let result = process_turn(
-                            app.clone(),
-                            cancel.clone(),
-                            steer.clone(),
-                            turn,
-                            registration.clone(),
-                        )
-                        .await;
+                        let result = match capacity {
+                            Ok(lease) => {
+                                process_turn(
+                                    app.clone(),
+                                    cancel.clone(),
+                                    steer.clone(),
+                                    turn,
+                                    registration.clone(),
+                                    lease,
+                                )
+                                .await
+                            }
+                            Err(error) => Err(error),
+                        };
                         (registration, result)
                     }
                     Err(error) => (None, Err(error)),
