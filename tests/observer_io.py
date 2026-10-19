@@ -85,7 +85,8 @@ def revisions_and_originals(binary):
         j.hold_source = True
         j.admit('A new factual correction: retain rate 17.',topic=7)
         j.wait(lambda:'native-topic-7' in j.holding)
-        j.wait(lambda:j.row("SELECT phase FROM interaction_instructions ORDER BY sequence DESC LIMIT 1") == [('accepted',)])
+        j.wait(lambda:j.row("SELECT t.status FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.thread_id=7 ORDER BY t.id DESC LIMIT 1") == [('running',)])
+        assert j.row("SELECT count(*) FROM interaction_instructions") == [(0,)], 'Observer eligibility must not capture direct native input'
         j.block_summary = True
         j.admit('/interaction observe #Alpha', topic=1)
         j.wait(j.summary_held.is_set)
