@@ -250,11 +250,11 @@ an attempted transmission remains uncertain. Delivered or uncertain output is
 never replayed by the recovery command. A failed output attempt produces a
 separate status notice, subject to the same recipient and transport constraints.
 
-Canonical native finals and their per-request return reservations commit in one
+Canonical native finals and their grouped return reservations commit in one
 SQLite transaction. A failure between capture and reservation leaves neither
 committed alone; repeated observations reuse their exact immutable identity.
-Canonical outputs reserve per-request deliveries independently from task
-completion. Each part rechecks corrections after Telegram cooldown and retains
+Canonical outputs reserve one return per requesting conversation independently
+from task completion, retaining every associated request. Each part rechecks corrections after Telegram cooldown and retains
 its exact payload before the HTTP attempt. An obsolete answer is withheld and replaced with
 a notice about its missing correction coverage; another request's result can still be delivered.
 Every confirmed text part has an exact reply binding. A confirmed withholding
@@ -720,3 +720,15 @@ so delayed transcription or dispatch cannot replace a later human selection.
 The small presentation-selection record is not a router source/instruction and
 does not consume routing capacity. Canonical answers already retained in the web
 conversation remain history; switching channels never replays model work.
+
+
+## Standalone conversation timeline
+
+The standalone client presents saved human inputs, integrating-session commentary
+and canonical answers in one chronological stream. Receive/observation timestamps
+come from the existing input and native journals; refresh updates existing cards
+rather than adding another copy. The routing graph and full trace remain separate
+inspection tools. Older inputs and replies remain accessible from their existing
+paging controls. Commentary is attributed progress, never a final answer or proof
+of task completion. Worker commentary forwarding and real provider duplex voice
+acceptance remain separate unfinished work; this timeline does not claim them.

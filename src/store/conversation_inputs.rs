@@ -821,8 +821,13 @@ impl Store {
         for (sequence, id) in rows.iter().take(8) {
             let input = read_on(&conn, id, human)?;
             let capture:Option<i64>=conn.query_row("SELECT id FROM original_ingress_order WHERE channel='conversation' AND event_id=?1",[id],|r|r.get(0)).optional()?;
+            let received_at: String = conn.query_row(
+                "SELECT created_at FROM conversation_inputs WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )?;
             items.push(serde_json::json!({
-                "id":id,"sequence":sequence,"capture_order":capture,"ordering_unknown":capture.is_none(),"preview":input.text.chars().take(1000).collect::<String>(),
+                "received_at":received_at,"id":id,"sequence":sequence,"capture_order":capture,"ordering_unknown":capture.is_none(),"preview":input.text.chars().take(1000).collect::<String>(),
                 "phase":input.phase,"retired":input.retired,"visual":input.visual,"voice":input.voice,"routing":input.routing,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
                 "clarifiable":input.phase=="awaiting_target" && eligible_on(&conn,&input).is_ok(),
                 "native_binding_current":input.native==native,

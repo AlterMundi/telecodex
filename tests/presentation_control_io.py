@@ -28,6 +28,11 @@ def qualify(binary,dashboard=False):
         j.admit('NATURAL-ROUTE Work on Alpha and Beta independently.',topic=1)
         j.wait(lambda:len(j.outputs)==5)
         j.wait(lambda:all(len(j.instructions(t))==1 and j.instructions(t)[0][1]=='accepted' for t in (7,8)))
+        progress={'method':'item/completed','params':{'threadId':j.entry,'turnId':j.entry_turn,
+            'item':{'id':'integrator-live-progress','type':'agentMessage','phase':'commentary','text':'Alpha and Beta are working independently.'}}}
+        j.entry_send(progress)
+        j.wait(lambda:any(i['preview']=='Alpha and Beta are working independently.' for i in j.read('list',0,0)['result']['items']))
+        j.entry_send(progress)  # Re-observation must retain one progress card.
         j.entry_send({'method':'item/completed','params':{'threadId':j.entry,'turnId':j.entry_turn,
             'item':{'id':'integrator-answer','type':'agentMessage','phase':'final_answer','text':'Both requests are underway.'}}})
         j.entry_send({'method':'turn/completed','params':{'threadId':j.entry,'turn':{'id':j.entry_turn,'status':'completed'}}})
@@ -37,8 +42,8 @@ def qualify(binary,dashboard=False):
         j.idle()
         packets=sum(map(len,j.packets.values()))
         listing=j.read('list',0,0)['result']
-        assert len(listing['items'])==3
-        assert {i['kind'] for i in listing['items']}=={'worker_result','integrator_answer'}
+        assert len(listing['items'])==5,[(i['kind'],i['preview']) for i in listing['items']]
+        assert {i['kind'] for i in listing['items']}=={'worker_result','integrator_answer','integrator_progress'}
         assert all(i['label'] and i['sequence']>0 for i in listing['items'])
         recent=j.read('before',0,0)['result']
         assert {i['id'] for i in recent['items']}=={i['id'] for i in listing['items']}
@@ -73,7 +78,7 @@ def qualify(binary,dashboard=False):
                     assert observed.status_code==200,observed.text
                     assert observed.json()['can_listen'] and observed.json()['csrf']==headers['x-dashboard-csrf']
                     history=client.get('/api/interaction?direction=before',headers=headers)
-                    assert history.status_code==200 and len(history.json()['items'])==3
+                    assert history.status_code==200 and len(history.json()['items'])==5
                     body={'source':selected['id'],'revision':selected['revision'],'offset':0}
                     audio=client.post('/api/interaction/audio',json=body,headers=headers)
                     assert audio.status_code==200,audio.text

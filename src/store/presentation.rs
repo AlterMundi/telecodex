@@ -110,7 +110,7 @@ impl Store {
         let mut stmt = conn.prepare(&format!(
             "SELECT m.rowid FROM interaction_native_messages m
             JOIN turns t ON t.id=m.local_turn WHERE m.rowid{comparison}?1 AND t.session_id=?2
-            AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase='final_answer'
+            AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase IN ('commentary','final_answer')
             ORDER BY m.rowid {order} LIMIT 9"
         ))?;
         let natives = stmt
@@ -255,19 +255,25 @@ pub(super) fn source_on(
         .and_then(|s| s.parse::<i64>().ok())
         .filter(|n| *n > 0)
     {
-        let found:Option<(String,String,String)>=conn.query_row(
-            "SELECT m.text,m.native_turn,m.item_id FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn
-             WHERE m.rowid=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase='final_answer'",
-             params![row,entry_session,human,entry_native],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-        let Some((text, turn, item)) = found else {
+        let found:Option<(String,String,String,String,String)>=conn.query_row(
+            "SELECT m.text,m.native_turn,m.item_id,m.phase,m.observed_at FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn
+             WHERE m.rowid=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND m.native_thread=?4 AND m.phase IN ('commentary','final_answer')",
+             params![row,entry_session,human,entry_native],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        let Some((text, turn, item, phase, observed_at)) = found else {
             return Ok(None);
         };
-        json!({"id":id,"kind":"integrator_answer","text":text,"native_turn":turn,"native_item":item,
+        json!({"id":id,"kind":if phase == "commentary" {"integrator_progress"} else {"integrator_answer"},"text":text,"native_turn":turn,"native_item":item,"observed_at":observed_at,
             "current":Value::Null,"correction_pending":Value::Null,"completed":Value::Null,
             "native_binding_current":true})
     } else {
         return Ok(None);
     };
+    if let Some(delivery) = id.strip_prefix("delivery:") {
+        let observed: Option<String> = conn.query_row(
+            "SELECT m.observed_at FROM interaction_deliveries d JOIN interaction_results r ON r.id=d.result_id JOIN interaction_native_messages m ON m.native_thread=r.native_thread AND m.native_turn=r.native_turn AND m.item_id=r.item_id WHERE d.id=?1",
+            [delivery], |r| r.get(0)).optional()?;
+        source["observed_at"] = json!(observed);
+    }
     source["entry_binding"] = json!([
         human,
         entry,
@@ -500,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn entry_answers_exclude_progress_and_retire_with_entry_binding() {
+    fn entry_progress_and_answers_retire_with_entry_binding() {
         let (_file, store, entry, _, _, _) = setup();
         let session = store.get_session(entry).unwrap().unwrap();
         let local = store
@@ -543,7 +549,15 @@ mod tests {
         let list = store
             .interaction_presentation_list(100, entry, 0, 0)
             .unwrap();
-        assert_eq!(list["items"].as_array().unwrap().len(), 2);
+        assert_eq!(list["items"].as_array().unwrap().len(), 3);
+        let progress = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["kind"] == "integrator_progress")
+            .unwrap();
+        assert_eq!(progress["preview"], "Inspecting");
+        assert!(progress["observed_at"].is_string());
         let source = list["items"]
             .as_array()
             .unwrap()

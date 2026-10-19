@@ -537,3 +537,10 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 }
 @media (max-width: 480px) { #routing-graph-viewport { height: 60vh; } }
 @media (prefers-reduced-motion: reduce) { #routing-graph-viewport { scroll-behavior: auto; } }
+
+/* The standalone client keeps human inputs and attributed session updates together. */
+#conversation-timeline { flex: 1 0 min(58dvh, 32rem); min-height: 180px; max-height: 58dvh; overflow-y: auto; overscroll-behavior: contain; padding: .5rem; }
+#conversation-timeline .reply { margin-block: .75rem; }
+#conversation-timeline .human-message { margin-inline-start: min(10%, 3rem); }
+
+#conversation-timeline:empty { display: none; }
