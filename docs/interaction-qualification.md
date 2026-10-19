@@ -146,6 +146,55 @@ audiences. Do not build a raw-audio archive or publish private conversations as 
 research corpus. An explicitly selected diagnostic sample needs its own purpose
 and retention; routine audio follows the existing deletion/cache policy.
 
+## Goals, directed controls and visible session lifecycle
+
+Human requirements added 2026-10-19; pending implementation. A habitual integrating
+conversation should also make session lifecycle understandable in Telegram,
+without requiring the dashboard or CLI.
+
+- Distinguish an active native goal (suggested marker: target) from actual
+  execution without an active goal (suggested marker: lightning). An active goal
+  can be waiting; its marker must not claim current execution. Idle sessions
+  need no ordinary activity marker. Paused/blocked goals and human questions
+  remain inspectable and must not be mistaken for completed work.
+- Offer a compact inventory such as active goals, executing sessions without
+  goals, and currently passive sessions with conversational activity in the
+  last configurable X days. Seven days is an initial proposal. Count actual
+  attributed exchanges, not status reads, metadata polling or title updates.
+  Expose observation freshness and unknown lifecycle state. A topic and a
+  renewed native thread are not automatically two user-visible conversations.
+- Preserve human titles, topic icons, stable selectors and native bindings.
+  Status decoration must not become canonical identity or a rename loop. Reuse
+  the existing activity observer/catalog; this calls for no second Telegram
+  consumer, model wakeups or new background attention.
+- Accept explicit human-directed goal controls through the integrator, with
+  a resolved target and native outcome. For example, a human's instruction to
+  resume one session's goal or clear it before proceeding with a replacement
+  should not require manually visiting that topic to type a slash command.
+  Keep control intent separate from text forwarded to the worker; validate
+  the current goal/binding and retain the actual acknowledgment. Quoted slash
+  commands or a model's proposal are not themselves human control requests.
+- Clear is not interrupt, and changing a goal does not itself undo completed
+  effects or cancel running work. An ambiguous target or replacement requires
+  clarification. Do not clear a goal merely to make an unrelated next message
+  fit. Concurrent human changes must invalidate a stale control selection.
+
+Current native `update_goal` permits complete, blocked, and explicitly requested
+pause, but not resume or limit changes. The checked native runtime can also mark
+goals blocked on turn errors or execution unavailability. Improving agent-owned
+lifecycle control requires a supported harness capability and an explicit
+delegation model. Sending the same agent-originated decision through another
+session or a user-origin API must not manufacture human authorship. Today's
+integrator-directed human controls and future delegated autonomy are separate
+capabilities to evaluate.
+
+Extend Q13/Q14/Q18 to exercise: active-goal/idle vs executing/no-goal display,
+completion and blocking, recent-idle count ageing, observer disconnect, explicit
+human resume/clear, ambiguous targets, stale goal changes and exactly one control
+effect. Reads and projections must never activate or clear a goal. Preserve
+budget, explicit pause and Stop semantics. Unknown resume/control outcomes are
+inspected, never automatically replayed.
+
 ## Development sequence and creative horizon
 
 1. **Usable surface and broad qualification.** Implement the human's simple
