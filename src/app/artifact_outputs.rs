@@ -87,49 +87,38 @@ pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
         };
         let shared = shared.clone();
         let cfg = cfg.clone();
-        tokio::task::spawn_blocking(move || {
-            let result = (|| -> Result<()> {
-                let out = Path::new(
-                    doc["out"]
-                        .as_str()
-                        .context("Missing retained output directory")?,
-                );
-                let source = anchor(out)?.context("Output directory anchor unsupported")?;
-                #[cfg(unix)]
+        tokio::spawn(async move {
+            let mut result: Result<()> =
+                Err(std::io::Error::from(std::io::ErrorKind::WouldBlock).into());
+            for attempt in 0..60 {
+                if shared.shutdown.is_cancelled() {
+                    break;
+                }
+                let worker = shared.clone();
+                let cfg = cfg.clone();
+                let doc = doc.clone();
+                result = match tokio::task::spawn_blocking(move || {
+                    copy_job(&worker, &cfg, local, human, &doc)
+                })
+                .await
                 {
-                    use std::os::unix::fs::MetadataExt;
-                    let meta = source.metadata()?;
-                    if Some(meta.dev()) != doc["device"].as_u64()
-                        || Some(meta.ino()) != doc["inode"].as_u64()
-                    {
-                        bail!("Retained output directory identity changed");
-                    }
+                    Ok(result) => result,
+                    Err(error) => Err(error.into()),
+                };
+                if !result.as_ref().is_err_and(|e| {
+                    e.downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock)
+                }) || attempt == 59
+                {
+                    break;
                 }
-                for attempt in 0..60 {
-                    if shared.shutdown.is_cancelled() {
-                        return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock).into());
-                    }
-                    match snapshot(
-                        &shared,
-                        &cfg,
-                        local,
-                        human,
-                        out,
-                        Some(&source),
-                        &doc["output"],
-                    ) {
-                        Err(e)
-                            if e.downcast_ref::<std::io::Error>()
-                                .is_some_and(|e| e.kind() == std::io::ErrorKind::WouldBlock)
-                                && attempt < 59 =>
-                        {
-                            std::thread::sleep(Duration::from_millis(250));
-                        }
-                        result => return result,
-                    }
+                // Waiting for storage owns no blocking thread. Runtime shutdown
+                // can cancel this wait, leaving the durable byte job recoverable.
+                tokio::select! {
+                    _=shared.shutdown.cancelled()=>break,
+                    _=sleep(Duration::from_millis(250))=>{}
                 }
-                unreachable!()
-            })();
+            }
             let phase = match &result {
                 Ok(()) => "done",
                 Err(e)
@@ -153,6 +142,38 @@ pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
         });
     }
     Ok(())
+}
+
+fn copy_job(
+    shared: &AppShared,
+    cfg: &crate::interaction::ArtifactConfig,
+    local: i64,
+    human: i64,
+    doc: &serde_json::Value,
+) -> Result<()> {
+    let out = Path::new(
+        doc["out"]
+            .as_str()
+            .context("Missing retained output directory")?,
+    );
+    let source = anchor(out)?.context("Output directory anchor unsupported")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = source.metadata()?;
+        if Some(meta.dev()) != doc["device"].as_u64() || Some(meta.ino()) != doc["inode"].as_u64() {
+            bail!("Retained output directory identity changed");
+        }
+    }
+    snapshot(
+        shared,
+        cfg,
+        local,
+        human,
+        out,
+        Some(&source),
+        &doc["output"],
+    )
 }
 
 #[cfg(not(unix))]
