@@ -6,16 +6,32 @@ import json
 import pathlib
 import sys
 import threading
+import urllib.request
 from merge_io import Merge
 
 
 class Observer(Merge):
     def __init__(self, binary):
+        self.acknowledged_updates = True
         self.hold_source = False
         self.block_summary = False
         self.summary_held = threading.Event()
         self.release_summary = threading.Event()
         super().__init__(binary)
+
+    def wait(self, condition, seconds=15):
+        try:
+            return super().wait(condition, seconds)
+        except AssertionError:
+            try:
+                print('OBSERVER-DIAGNOSTIC '+json.dumps({
+                    'incoming':self.row('SELECT update_id,status FROM incoming_updates ORDER BY update_id DESC LIMIT 8'),
+                    'sessions':self.row('SELECT thread_id,busy FROM sessions ORDER BY thread_id'),
+                    'histories':{key:len(value) for key,value in self.histories.items()},
+                    'queued_updates':[update['update_id'] for update in self.updates]}), flush=True)
+            except Exception as error:
+                print('OBSERVER-DIAGNOSTIC unavailable: '+type(error).__name__, flush=True)
+            raise
 
     def handle_extra_rpc(self, request, send):
         p = request.get('params', {})
@@ -55,6 +71,25 @@ topic_id=8
     def card(self):
         rows = self.row('SELECT doc FROM interaction_observer_cards ORDER BY revision DESC LIMIT 1')
         return json.loads(rows[0][0]) if rows else None
+
+
+def polling_receipt_retention(binary):
+    j = Observer(binary)
+    try:
+        original = j.admit('Retain this update until acknowledged.', topic=8)
+        url = f'http://127.0.0.1:{j.telegram.server_address[1]}/botsynthetic-question-token/getUpdates'
+        def poll(offset):
+            request = urllib.request.Request(url, data=json.dumps({'offset': offset}).encode(),
+                                            headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request) as response:
+                return json.load(response)['result']
+        assert [u['update_id'] for u in poll(None)] == [original]
+        assert [u['update_id'] for u in poll(original)] == [original], 'Unacknowledged poll lost its update'
+        assert poll(original + 1) == []
+        assert not j.rpc, 'Polling fixture qualification started native work'
+        print('PASS observer polling retains an unacknowledged update across a lost response; only an explicit offset acknowledges it')
+    finally:
+        j.close()
 
 
 def revisions_and_originals(binary):
@@ -359,6 +394,7 @@ def owner_observer_commands(binary):
 
 if __name__ == '__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
+    polling_receipt_retention(binary)
     revisions_and_originals(binary)
     legacy_observer_session_links(binary)
     candidate_reconciliation(binary)

@@ -2,6 +2,7 @@
 """Selected findings become independent interviews; synthetic peers, zero models."""
 import copy
 import json
+import sqlite3
 from pathlib import Path
 import sys
 from observer_io import Observer
@@ -69,6 +70,10 @@ def qualify(binary,busy,large=False):
         assert selected['label']=='Alpha' and selected['evidence']['semantic']['revision']==card['revision']
         caps=j.tool('capabilities','capabilities',{});assert 'interview' in caps['operations']
         args={'input_ref':original,'name':'InterviewAlpha','reason':'An explicitly requested interview is independent from continuing the source work.','context_selectors':['Alpha']}
+        absent=j.tool('absent-status','creation_status',{'input_ref':original})
+        assert absent['phase']=='not_found' and absent['input_ref']==original
+        j.tool('foreign-status','creation_status',{'input_ref':original+100000},ok=False)
+        assert j.topic_calls==0 and j.row('SELECT count(*) FROM interaction_creations')==[(0,)]
         j.tool('missing-source','interview',{**args,'context_selectors':[]},ok=False)
         assert j.topic_calls==0
         source_before=j.row('SELECT id,codex_thread_id,busy FROM sessions WHERE thread_id=7')
@@ -76,7 +81,20 @@ def qualify(binary,busy,large=False):
         mutations_before=[m for m in j.rpc if m.get('method') in ('turn/start','turn/steer','turn/interrupt') and m.get('params',{}).get('threadId')=='native-topic-7']
         result=j.tool('create','interview',args)
         assert result['kind']=='created_destination' and result['selector']=='t77'
+        retained=j.tool('retained-status','creation_status',{'input_ref':original})
+        assert retained['phase']=='ready'
+        # Preparation reads the retained context too. Do not inject a corrupt
+        # status record until the independent worker has accepted its context.
         j.wait(lambda:j.instructions(77) and j.instructions(77)[0][1]=='accepted')
+        # A corrupt retained intent must never be mistaken for permission to
+        # start again. This fixture alone owns its synthetic SQLite database.
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            saved=db.execute('SELECT id,doc FROM interaction_creations').fetchone()
+            db.execute("UPDATE interaction_creations SET doc='not-json' WHERE id=?",(saved[0],))
+        j.tool('corrupt-status','creation_status',{'input_ref':original},ok=False)
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute('UPDATE interaction_creations SET doc=? WHERE id=?',(saved[1],saved[0]))
+        assert j.topic_calls==1
         operation=result['operation'];context=operation['intent']['context'];source=context['sources'][0]
         assert context['purpose']=='interview' and context['derivation']=='pinned_observer_sources'
         assert context['exact_native_fork'] is False

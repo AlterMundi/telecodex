@@ -77,17 +77,29 @@ impl Store {
         creation_on(&conn, id, human)
     }
 
+    #[cfg(test)]
     pub fn interaction_creation_for_input(
         &self,
         key: SessionKey,
         human: i64,
         update: impl Into<InputReference>,
     ) -> Result<Value> {
+        self.interaction_find_creation_for_input(key, human, update)?
+            .context("No retained creation for this original input")
+    }
+
+    /// Absence is distinct from an unreadable or corrupt retained intent.
+    pub fn interaction_find_creation_for_input(
+        &self,
+        key: SessionKey,
+        human: i64,
+        update: impl Into<InputReference>,
+    ) -> Result<Option<Value>> {
         let update = update.into();
         update.validate()?;
         let conn = self.conn.lock().expect("store mutex poisoned");
-        let id:String=conn.query_row("SELECT id FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4",params![human,key.chat_id,key.thread_id,update],|r|r.get(0))?;
-        creation_on(&conn, &id, human)
+        let id:Option<String>=conn.query_row("SELECT id FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND input_update=?4",params![human,key.chat_id,key.thread_id,update],|r|r.get(0)).optional()?;
+        id.map(|id| creation_on(&conn, &id, human)).transpose()
     }
 
     /// Freeze one original, attributed context package before a topic RPC.
