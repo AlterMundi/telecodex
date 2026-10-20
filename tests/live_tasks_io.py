@@ -55,7 +55,9 @@ def qualify(binary):
         # A task declared by a later direct turn is not silently imported into the integrator.
         j.broadcast('native-topic-7','turn/completed',{'turn':{'id':j.runs['native-topic-7'],'status':'completed'}})
         j.wait(lambda:j.row("SELECT count(*) FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.thread_id=7 AND t.status='running'")==[(0,)])
+        before_direct=len(j.packets['native-topic-7'])
         j.admit('Direct work with its own observation.',topic=7)
+        j.wait(lambda:len(j.packets['native-topic-7'])>before_direct)
         j.wait(lambda:j.row("SELECT count(*) FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.thread_id=7 AND t.status='running'")==[(1,)])
         context=j.packets['native-topic-7'][-1]['additionalContext']['telecodex.runtime']['value']
         manifest=Path(re.search(r'explicitly declare it in (\S+human-requests\.json)',context).group(1))
