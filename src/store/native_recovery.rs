@@ -42,6 +42,32 @@ impl Store {
         Ok(())
     }
 
+    pub fn claim_collector_intent(
+        &self,
+        key: SessionKey,
+        expected: Option<&str>,
+        intent: &str,
+    ) -> Result<bool> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let name = format!("goal_intent:{}:{}", key.chat_id, key.thread_id);
+        let actual: Option<String> = tx
+            .query_row("SELECT value FROM bot_state WHERE key=?", [&name], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if actual.as_deref() != expected {
+            return Ok(false);
+        }
+        let queued:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM incoming_updates WHERE status IN ('received','processing','queued','steering') AND json_extract(payload_json,'$.message.chat.id')=?1 AND COALESCE(json_extract(payload_json,'$.message.message_thread_id'),0)=?2)",params![key.chat_id,key.thread_id],|r|r.get(0))?;
+        if queued {
+            return Ok(false);
+        }
+        tx.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![name,intent])?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub fn native_collection_rejected(&self, local: i64) -> Result<()> {
         self.conn.lock().expect("store mutex poisoned").execute("UPDATE native_collections SET phase='rejected',detail='Native explicitly rejected this input' WHERE local_turn=? AND first_turn=''",[local])?;
         Ok(())
@@ -567,6 +593,29 @@ mod tests {
         assert_eq!(
             columns, 2,
             "Previous binary's positional registration INSERT must remain valid"
+        );
+    }
+    #[test]
+    fn observation_attachment_cannot_replace_a_newer_human_goal_intent() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let (_, key) = start(&s);
+        assert!(s.claim_collector_intent(key, None, "initial").unwrap());
+        let name = format!("goal_intent:{}:{}", key.chat_id, key.thread_id);
+        s.save_bot_state(&name, "new-human-request").unwrap();
+        assert!(
+            !s.claim_collector_intent(key, Some("initial"), "stale-observer")
+                .unwrap()
+        );
+        assert_eq!(
+            s.bot_state_value(&name).unwrap().as_deref(),
+            Some("new-human-request")
+        );
+        let update:crate::telegram::Update=serde_json::from_value(json!({"update_id":55,"message":{"message_id":55,"message_thread_id":7,"from":{"id":100,"is_bot":false,"first_name":"Synthetic"},"chat":{"id":100,"type":"private"},"text":"New queued human input"}})).unwrap();
+        s.admit_update(&update).unwrap();
+        assert!(
+            !s.claim_collector_intent(key, Some("new-human-request"), "observer")
+                .unwrap()
         );
     }
 }
