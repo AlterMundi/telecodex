@@ -124,6 +124,11 @@ Persisted tool registration must not restrict acceptance to fresh test threads.
 | V07 | Inspect companion with parallel activity; select two unrelated per-being vocabularies and client defaults; reuse pack labels with changed bytes; inject missing/invalid/stale hint; test reduced motion, hidden screen and narrow keyboard layout | Exact receiver-selected catalog digest and actual response/turn bind cosmetic hints; whole composition fits or uses its description. One finite local sequence, no duplicate/old-source replay; readable operational states independent of artistic meaning and no animation inference loop. Q17/Q18 |
 | V08 | Download artifact; hold file copying while continuing the same session; restart a retained byte job; fail one of several files; expire/revoke grant; renew logical session; lose Telegram delivery acknowledgment | Actual retained bytes/hash/audience and original output provenance, useful partial/unavailable state, no old-current-binding requirement after supported renewal and no duplicate execution. Hold an actual source-file upload while the same session receives direct and routed input: text must progress, direct output/files must not leak into the integrating audience, late captions identify the original answer, and lost upload ACKs remain uncertain after restart. Q21 |
 
+For V02, include a file produced by the confirmed goal: verify its actual bytes,
+ordered follow-up and first useful native turn, then download it through the
+integrating audience. A goal metadata acknowledgment alone does not establish
+file return. Retained output must recover across service restart without replay.
+
 For V02, review a proposal in the main conversation surface, preserve an existing
 composer draft, then confirm or decline through an actual submitted human message.
 Review alone must not execute or create an original. Inspect retained partial and

@@ -225,6 +225,7 @@ impl Store {
             return Err(anyhow!("Invalid artifact reference"));
         }
         let conn = self.conn.lock().expect("store mutex poisoned");
+        goal_return_audiences_on(&conn, human, Some(id))?;
         let row:Option<String>=conn.query_row("SELECT json_object('id',a.id,'name',a.name,'sha256',a.sha256,'bytes',a.bytes,'expires_at',a.expires_at,'source_session',a.source_session,'source_local',a.source_local,'native_thread',a.native_thread,'native_turn',a.native_turn,'native_item',a.native_item) FROM interaction_artifacts a JOIN interaction_artifact_audiences v ON v.artifact=a.id JOIN sessions e ON e.id=v.session_id JOIN sessions s ON s.id=a.source_session JOIN users u ON u.tg_user_id=a.human_id WHERE a.id=?1 AND a.human_id=?2 AND v.human_id=?2 AND e.creator_user_id=?2 AND s.creator_user_id=?2 AND u.allowed=1 AND e.chat_id=?3 AND e.thread_id=?4 AND a.phase='ready' AND julianday(a.expires_at)>julianday('now')",params![id,human,entry.chat_id,entry.thread_id],|r|r.get(0)).optional()?;
         serde_json::from_str(
             &row.context("Artifact unavailable, expired or outside this conversation")?,
@@ -234,12 +235,13 @@ impl Store {
 
     pub fn artifact_list(&self, human: i64, entry: SessionKey) -> Result<Value> {
         let conn = self.conn.lock().expect("store mutex poisoned");
+        goal_return_audiences_on(&conn, human, None)?;
         let session: i64 = conn.query_row(
             "SELECT id FROM sessions WHERE chat_id=?1 AND thread_id=?2 AND creator_user_id=?3",
             params![entry.chat_id, entry.thread_id, human],
             |r| r.get(0),
         )?;
-        let mut q=conn.prepare("SELECT j.phase,m.rowid,r.id FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN interaction_native_messages m ON m.local_turn=j.local AND m.native_thread=json_extract(j.doc,'$.output.native') AND m.native_turn=json_extract(j.doc,'$.output.turn') AND m.item_id=json_extract(j.doc,'$.output.item') LEFT JOIN interaction_results r ON r.native_thread=m.native_thread AND r.native_turn=m.native_turn AND r.item_id=m.item_id WHERE j.human=?1 AND t.from_user_id=?1 AND s.creator_user_id=?1 AND u.allowed=1 AND (t.session_id=?2 OR EXISTS(SELECT 1 FROM interaction_deliveries d WHERE d.result_id=r.id AND d.human_id=?1 AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4)) ORDER BY j.local DESC LIMIT 128")?;
+        let mut q=conn.prepare("SELECT j.phase,m.rowid,r.id FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN interaction_native_messages m ON m.local_turn=j.local AND m.native_thread=json_extract(j.doc,'$.output.native') AND m.native_turn=json_extract(j.doc,'$.output.turn') AND m.item_id=json_extract(j.doc,'$.output.item') LEFT JOIN interaction_results r ON r.native_thread=m.native_thread AND r.native_turn=m.native_turn AND r.item_id=m.item_id WHERE j.human=?1 AND t.from_user_id=?1 AND s.creator_user_id=?1 AND u.allowed=1 AND (t.session_id=?2 OR EXISTS(SELECT 1 FROM interaction_deliveries d WHERE d.result_id=r.id AND d.human_id=?1 AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4) OR (m.phase='final_answer' AND r.id IS NULL AND EXISTS(SELECT 1 FROM conversation_inputs c JOIN interaction_goal_controls g ON g.human_id=c.human_id AND g.entry_chat=?3 AND g.entry_topic=?4 AND g.phase='acknowledged' AND json_extract(g.doc,'$.worker_execution.local')=m.local_turn AND json_extract(g.doc,'$.worker_execution.native')=m.native_thread WHERE c.id=m.presentation_input AND c.human_id=?1 AND c.session_id=?2))) ORDER BY j.local DESC LIMIT 128")?;
         let jobs=q.query_map(params![human,session,entry.chat_id,entry.thread_id],|r|Ok(json!({"phase":r.get::<_,String>(0)?,"native_source":format!("native:{}",r.get::<_,i64>(1)?),"result_id":r.get::<_,Option<String>>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(
             json!({"schema":"telecodex.artifacts/v1","items":views_on(&conn,human,session,None,None,true)?,"jobs":jobs}),
@@ -287,8 +289,37 @@ pub(super) fn views_on(
     native: Option<i64>,
     all: bool,
 ) -> Result<Vec<Value>> {
+    goal_return_audiences_on(conn, human, None)?;
     let mut q=conn.prepare("SELECT a.id,a.name,a.sha256,a.bytes,a.expires_at,a.source_session,a.source_local,(a.phase='ready' AND julianday(a.expires_at)>julianday('now') AND b.present=1),r.id,m.rowid FROM interaction_artifacts a JOIN interaction_artifact_audiences v ON v.artifact=a.id JOIN sessions e ON e.id=v.session_id JOIN sessions s ON s.id=a.source_session JOIN users u ON u.tg_user_id=a.human_id LEFT JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 JOIN interaction_native_messages m ON m.native_thread=a.native_thread AND m.native_turn=a.native_turn AND m.item_id=a.native_item LEFT JOIN interaction_results r ON r.native_thread=a.native_thread AND r.native_turn=a.native_turn AND r.item_id=a.native_item WHERE a.human_id=?1 AND v.human_id=?1 AND e.creator_user_id=?1 AND s.creator_user_id=?1 AND u.allowed=1 AND e.id=?2 AND (?3 OR r.id=?4 OR m.rowid=?5) ORDER BY a.rowid DESC LIMIT ?6")?;
     Ok(q.query_map(params![human,entry,all,result,native,if all{128}else{20}],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"sha256":r.get::<_,Option<String>>(2)?,"bytes":r.get::<_,Option<i64>>(3)?,"expires_at":r.get::<_,String>(4)?,"source_session":r.get::<_,i64>(5)?,"source_local":r.get::<_,i64>(6)?,"available":r.get::<_,bool>(7)?,"result_id":r.get::<_,Option<String>>(8)?,"native_source":r.get::<_,Option<i64>>(9)?.map(|id|format!("native:{id}"))})))?.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Goal collectors return canonical native items, without routed coverage
+/// envelopes. Reuse their acknowledged execution and frozen presentation input,
+/// never a later direct return selection. Read-time materialization also fixes
+/// already copied files and acknowledgment/copy races without replaying work.
+fn goal_return_audiences_on(conn: &Connection, human: i64, id: Option<&str>) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO interaction_artifact_audiences(artifact,session_id,human_id)
+         SELECT a.id,c.session_id,a.human_id FROM interaction_artifacts a
+         JOIN interaction_native_messages m ON m.local_turn=a.source_local
+           AND m.native_thread=a.native_thread AND m.native_turn=a.native_turn AND m.item_id=a.native_item
+         JOIN turns t ON t.id=m.local_turn AND t.native_thread_id=m.native_thread AND t.session_id=a.source_session
+         JOIN conversation_inputs c ON c.id=m.presentation_input AND c.human_id=a.human_id
+         JOIN sessions e ON e.id=c.session_id AND e.creator_user_id=a.human_id
+         JOIN sessions s ON s.id=a.source_session AND s.creator_user_id=a.human_id
+         JOIN users u ON u.tg_user_id=a.human_id AND u.allowed=1
+         WHERE a.human_id=?1 AND t.from_user_id=?1 AND m.phase='final_answer'
+           AND (?2 IS NULL OR a.id=?2)
+           AND EXISTS(SELECT 1 FROM interaction_goal_controls g WHERE g.human_id=?1
+             AND g.entry_chat=e.chat_id AND g.entry_topic=e.thread_id AND g.phase='acknowledged'
+             AND json_extract(g.doc,'$.worker_execution.local')=m.local_turn
+             AND json_extract(g.doc,'$.worker_execution.native')=m.native_thread)
+           AND NOT EXISTS(SELECT 1 FROM interaction_results r WHERE r.native_thread=m.native_thread
+             AND r.native_turn=m.native_turn AND r.item_id=m.item_id)",
+        params![human, id],
+    )?;
+    Ok(())
 }
 
 pub(super) fn status_on(
@@ -304,6 +335,11 @@ mod tests {
     use super::*;
     use crate::interaction::{RequestRelation, ReturnRoute, SourceInput, TransportPhase as P};
     fn setup() -> (tempfile::NamedTempFile, Store, i64, SessionKey, SessionKey) {
+        setup_with_coverage(true)
+    }
+    fn setup_with_coverage(
+        covered: bool,
+    ) -> (tempfile::NamedTempFile, Store, i64, SessionKey, SessionKey) {
         let file = tempfile::NamedTempFile::new().unwrap();
         let defaults = super::super::tests::defaults();
         let store = Store::open(file.path(), &[100, 101], &defaults).unwrap();
@@ -366,10 +402,14 @@ mod tests {
         store
             .interaction_transport(&input.id, 100, local, P::Accepted, Some("physical"))
             .unwrap();
-        let body = format!(
-            "Output\n<daimon-result>{}</daimon-result>",
-            json!({"requests":input.requests,"covered":[input.id]})
-        );
+        let body = if covered {
+            format!(
+                "Output\n<daimon-result>{}</daimon-result>",
+                json!({"requests":input.requests,"covered":[input.id]})
+            )
+        } else {
+            "Goal output without a routed envelope".into()
+        };
         store
             .record_native_message(
                 local,
@@ -396,6 +436,118 @@ mod tests {
                 &(Utc::now() + Duration::hours(24)).to_rfc3339(),
             )
             .unwrap()
+    }
+    #[test]
+    fn goal_files_follow_acknowledged_execution_and_frozen_origin_without_replay() {
+        let (file, s, local, entry, worker) = setup_with_coverage(false);
+        let original = Uuid::now_v7().to_string();
+        let later = Uuid::now_v7().to_string();
+        let other = SessionKey::new(100, Some(8));
+        let entry_id = s.get_session(entry).unwrap().unwrap().id;
+        let other_id = s.get_session(other).unwrap().unwrap().id;
+        {
+            let conn = s.conn.lock().unwrap();
+            for (id, session) in [(&original, entry_id), (&later, other_id)] {
+                conn.execute("INSERT INTO conversation_inputs(id,human_id,session_id,native_thread,phase,doc,instance_id,created_at) VALUES(?1,100,?2,'other-native','accepted','{}','fixture',?3)",params![id,session,now_string()]).unwrap();
+            }
+            conn.execute(
+                "UPDATE interaction_native_messages SET presentation_input=?1 WHERE local_turn=?2",
+                params![original, local],
+            )
+            .unwrap();
+            // A later surface selection must not grant this completed file.
+            conn.execute(
+                "INSERT INTO conversation_returns VALUES(100,'old-native',?1,?2)",
+                params![later, now_string()],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO interaction_goal_controls VALUES('goal',100,100,1,100,7,'submitted',?1,NULL,'fixture')",[json!({"worker_execution":{"local":local,"native":"wrong-native"}}).to_string()]).unwrap();
+        }
+        s.artifact_job_stage(
+            local,
+            100,
+            &json!({"output":{"native":"old-native","turn":"physical","item":"final"}}),
+        )
+        .unwrap();
+        let id = register(&s, local, "goal.json");
+        assert!(s.artifact_get(100, entry, &id).is_err());
+        assert!(
+            s.artifact_list(100, entry).unwrap()["jobs"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(s.artifact_get(100, worker, &id).is_ok());
+        s.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE interaction_goal_controls SET phase='acknowledged'",
+                [],
+            )
+            .unwrap();
+        assert!(
+            s.artifact_get(100, entry, &id).is_err(),
+            "Wrong execution cannot grant file access"
+        );
+        s.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE interaction_goal_controls SET doc=?1",
+                [json!({"worker_execution":{"local":local,"native":"old-native"}}).to_string()],
+            )
+            .unwrap();
+        assert_eq!(s.artifact_get(100, entry, &id).unwrap().id, id);
+        assert_eq!(
+            s.artifact_list(100, entry).unwrap()["jobs"][0]["phase"],
+            "pending"
+        );
+        assert!(s.artifact_get(100, other, &id).is_err());
+        assert!(s.artifact_get(101, entry, &id).is_err());
+        assert_eq!(
+            s.artifact_list(100, entry).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        // Simulate a file registered by the previous version, then recover it
+        // through its retained proof after restart rather than running the goal.
+        s.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM interaction_artifact_audiences WHERE artifact=?1 AND session_id=?2",
+                params![id, entry_id],
+            )
+            .unwrap();
+        drop(s);
+        let reopened =
+            Store::open(file.path(), &[100, 101], &super::super::tests::defaults()).unwrap();
+        assert_eq!(
+            reopened.artifact_get(100, entry, &id).unwrap().sha256,
+            "ab".repeat(32)
+        );
+        assert_eq!(
+            reopened.artifact_list(100, entry).unwrap()["items"][0]["id"],
+            id
+        );
+        let conn = reopened.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM turns", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM interaction_artifact_audiences WHERE artifact=?1",
+                [id],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
     }
     #[test]
     fn file_publications_keep_logical_ownership_and_never_retry_unknown_receipts() {
