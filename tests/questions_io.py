@@ -90,7 +90,7 @@ class Journey:
                         if getattr(owner, 'acknowledged_updates', False):
                             # A response can be lost during listener replacement.
                             # Telegram confirms updates only through the next offset.
-                            while owner.updates and owner.updates[0]['update_id'] < payload.get('offset', 0):
+                            while owner.updates and owner.updates[0]['update_id'] < (payload.get('offset') or 0):
                                 owner.updates.popleft()
                             result = list(owner.updates)[:1]
                         else:

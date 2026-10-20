@@ -19,6 +19,20 @@ class Observer(Merge):
         self.release_summary = threading.Event()
         super().__init__(binary)
 
+    def wait(self, condition, seconds=15):
+        try:
+            return super().wait(condition, seconds)
+        except AssertionError:
+            try:
+                print('OBSERVER-DIAGNOSTIC '+json.dumps({
+                    'incoming':self.row('SELECT update_id,status FROM incoming_updates ORDER BY update_id DESC LIMIT 8'),
+                    'sessions':self.row('SELECT thread_id,busy FROM sessions ORDER BY thread_id'),
+                    'histories':{key:len(value) for key,value in self.histories.items()},
+                    'queued_updates':[update['update_id'] for update in self.updates]}), flush=True)
+            except Exception as error:
+                print('OBSERVER-DIAGNOSTIC unavailable: '+type(error).__name__, flush=True)
+            raise
+
     def handle_extra_rpc(self, request, send):
         p = request.get('params', {})
         if self.block_summary and request.get('method') == 'turn/start' and p.get('threadId', '').startswith('summary-'):
@@ -69,7 +83,7 @@ def polling_receipt_retention(binary):
                                             headers={'Content-Type': 'application/json'})
             with urllib.request.urlopen(request) as response:
                 return json.load(response)['result']
-        assert [u['update_id'] for u in poll(original)] == [original]
+        assert [u['update_id'] for u in poll(None)] == [original]
         assert [u['update_id'] for u in poll(original)] == [original], 'Unacknowledged poll lost its update'
         assert poll(original + 1) == []
         assert not j.rpc, 'Polling fixture qualification started native work'
