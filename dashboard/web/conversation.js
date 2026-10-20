@@ -464,7 +464,8 @@ window.Conversation = (() => {
     function voiceStatus() {
       const button=$("#conversation-voice-replies");
       button.setAttribute("aria-pressed",String(voiceEnabled));
-      button.textContent=voiceEnabled?voiceSuspended?"Voice replies paused · tap to resume":`Voice replies on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read new replies aloud";
+      button.textContent=voiceEnabled?voiceSuspended?"Voice paused · resume":`Voice on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read aloud";
+      button.title=voiceSuspended?"Voice replies paused · tap to resume":"Read new replies aloud";
     }
     function enableVoice() {
       if(readOnly || !canListen)return;

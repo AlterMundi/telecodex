@@ -666,3 +666,33 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-sound-status { color:var(--muted); font-size:0.85em; }
 #conversation-sound label { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
 #conversation-sound-score { padding-inline-start:1.4em; overflow-wrap:anywhere; }
+
+/* Keep a readable conversation above compact, full-size touch controls. */
+.standalone-conversation #conversation-compose { padding: 8px; }
+.standalone-conversation #conversation-compose > label {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.standalone-conversation #conversation-message { height: 60px; }
+.standalone-conversation #conversation-compose > .conversation-tools { margin-top: 4px; }
+.standalone-conversation #conversation-visual { padding: 0; margin: 0; }
+.standalone-conversation #conversation-visual > summary { min-height: 44px; padding: 10px 8px; }
+.standalone-conversation #conversation-audio-tools { gap: 4px 8px; }
+.standalone-conversation #conversation-voice { padding: 0; min-width: 0; }
+.standalone-conversation #conversation-voice .conversation-tools { gap: 8px; }
+.standalone-conversation #conversation-audio-tools button { padding-inline: 10px; font-size: 14px; }
+.standalone-conversation #conversation-talk { min-height: 44px; min-width: 84px; }
+.standalone-conversation #conversation-player:not([hidden]) {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; gap: 4px 8px; padding-top: 4px;
+}
+.standalone-conversation #conversation-player > .conversation-tools { display: contents; }
+.standalone-conversation #conversation-playing { grid-column: 1; grid-row: 1; font-size: 14px; }
+.standalone-conversation #conversation-stop { grid-column: 2; grid-row: 2; }
+.standalone-conversation #conversation-play { grid-column: 1; grid-row: 2; }
+.standalone-conversation #conversation-audio { grid-column: 1; grid-row: 2; height: 44px; margin: 0; }
+.standalone-conversation #conversation-audio-state { grid-column: 2; grid-row: 1; margin: 0; font-size: 14px; }
+@media (max-width: 480px) {
+  .standalone-conversation #conversation-companion pre { font-size: 11px; }
+  .standalone-conversation #conversation-companion { padding-block: 2px; }
+}
