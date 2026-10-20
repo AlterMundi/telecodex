@@ -103,7 +103,8 @@ def qualify(binary):
         footer=json.dumps({'requests':instruction['requests'],'covered':[instruction['id']],'completed':instruction['requests'],'deferred':[]},separators=(',',':'))
         j.finish_goal('native-topic-8','The corrected Beta goal result.\n<daimon-result>'+footer+'</daimon-result>')
         j.wait(lambda:j.row('SELECT busy FROM sessions WHERE thread_id=8')==[(0,)])
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered'")==[(0,)])
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries")==[(1,)])
+        assert j.row("SELECT phase FROM interaction_deliveries")==[('reserved',)],'A canonical web result has no Telegram/hearing receipt' 
         visible=j.cli(entry,'conversation')['presentation']['items']
         matching=[item for item in visible if item.get('preview')=='The corrected Beta goal result.']
         assert len(matching)==1 and matching[0]['id'].startswith('delivery:'),visible
@@ -117,6 +118,7 @@ def qualify(binary):
         j.wait(lambda:j.row('SELECT busy FROM sessions WHERE thread_id=7')==[(0,)])
         visible=j.cli(entry,'conversation')['presentation']['items']
         assert not any(item.get('preview')=='This later goal reply belongs to direct Alpha.' for item in visible)
+        j.wait(lambda:j.has('This later goal reply belongs to direct Alpha.',7))
         assert j.row('SELECT count(*) FROM interaction_sources')==[(1,)],'Only the explicit correction was a router input'
         thread='native-topic-9';j.broadcast(thread,'turn/completed',{'turn':{'id':j.runs[thread],'status':'completed'}});j.idle()
         print('PASS cold/busy conditional goal activation, no priming turn, immutable retry, canonical goal result and later direct-surface selection; synthetic native peers')

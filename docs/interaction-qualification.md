@@ -116,13 +116,23 @@ Persisted tool registration must not restrict acceptance to fresh test threads.
 | ID | Additional action | Required observation / evidence |
 | --- | --- | --- |
 | V01 | Two existing sessions overlap; switch one to direct Telegram input; answer its live question; receive an artifact and reconnect | Real native task effects, retained attribution, independent primary return and deduplicated destination publications; ordinary direct ingress stays outside the router. Q04/Q07/Q10/Q13/Q21 |
-| V02 | Confirm an assistant goal proposal; explicitly change another goal; cancel/stale/repeat a confirmation; say “yes, then ask X” | Exactly scoped human control transaction, single-use confirmation, ordered child input once, no inferred interrupt/accounting reset. Include old integrator/worker paths and allowed/denied device grants |
+| V02 | Confirm an assistant goal proposal; explicitly change another goal; cancel/stale/repeat a confirmation; say “yes, then ask X” | Exactly scoped human control transaction, single-use confirmation and exact human follow-up admitted once after the native control precondition succeeds, through a joint native admission or an acknowledged correlated child. No inferred interrupt/accounting reset. Include old integrator/worker paths and allowed/denied device grants |
 | V03 | Inject native model/external goal mutation between read and set/clear; fail between replacement clear/set | A stale operation cannot mutate the replacement goal. Native preconditions or honest refusal; partial/unknown outcome retained. Wrapper precheck alone is not a pass |
 | V04 | Withdraw an obsolete task while its issuer runs; change binding; answer a stale question; attempt an approval with a read-only credential | Scoped attributable withdrawal distinct from human completion, no fabricated live responder or approval; relevant ordinary answers accepted without repeated entry. Q07/Q18 |
 | V05 | Switch return surfaces and lose Telegram acknowledgment after an accepted send | Shared canonical event/destination identity prevents ordinary/projected duplication; ambiguous delivery remains uncertain without resend or task replay; primary return independent. Q12/Q13 |
 | V06 | Cancel during interreply/interchunk silence, start capture, hide/disable/change source, fail one TTS, then reconnect | Generation-owned waiting cancels even with no active audio element; next reply remains usable, question priority visible, late progress does not displace final, no historical autoplay. Q09/Q10/Q11/Q15 |
 | V07 | Inspect companion with parallel activity; select two unrelated per-being vocabularies and client defaults; reuse pack labels with changed bytes; inject missing/invalid/stale hint; test reduced motion, hidden screen and narrow keyboard layout | Exact receiver-selected catalog digest and actual response/turn bind cosmetic hints; whole composition fits or uses its description. One finite local sequence, no duplicate/old-source replay; readable operational states independent of artistic meaning and no animation inference loop. Q17/Q18 |
 | V08 | Download artifact; fail one of several files; expire/revoke grant; renew logical session; lose Telegram delivery acknowledgment | Actual retained bytes/hash/audience and original output provenance, useful partial/unavailable state, no old-current-binding requirement after supported renewal and no duplicate execution. Q21 |
+
+For V02/V03, include an idle worker and a busy existing collector. Verify the
+current invocation context and selected human follow-up on the first useful
+model step after control admission, not only in the client payload. Distinguish queued/claimed control
+from a native write attempt. A newer explicit goal command must retire an older
+queued activation before it can reactivate work. Exercise a goal reply followed
+by a routed correction in that collector: its final item has one canonical
+return, not a native copy plus a routed delivery. A later direct input still
+selects its own surface. Native admission remains distinct from incorporation,
+completion, Telegram delivery and physical hearing.
 
 The final campaign report must distinguish synthetic fault injection, real native
 execution, browser observations, receiving adoption and human judgments. Required
