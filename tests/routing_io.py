@@ -105,6 +105,8 @@ topic_id=8
             text = '\n'.join(part.get('text', '') for part in p['input'])
             provenance = json.loads(next(line.removeprefix('Transport provenance: ') for line in text.splitlines() if line.startswith('Transport provenance: ')))
             assert text.startswith('[Interaction controller]')
+            assert 'Delivery role: receiving work session.' in text
+            assert 'Preserve every restriction on the delegated work.' in text
             assert provenance['via'] == 'interaction-controller'
             if provenance.get('author') is None:
                 assert provenance['original_human_author'] == 100
