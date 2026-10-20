@@ -1078,7 +1078,18 @@ where
     let mut goal_active = false;
     let mut staged_goal = false;
     let mut goal_snapshot_request_id = None;
-    if let Some(activation) = goal_activation {
+    if let Some(activation) = goal_activation.filter(|a|a.conditional.is_some()) {
+        if activation.native_thread.as_deref() != Some(thread_id.as_str()) || activation.attach_turn.is_some() {
+            bail!("Conditional goal activation binding changed before submission");
+        }
+        let params = build_turn_start_params(&thread_id, &effective_session, request);
+        let _ = on_event(CodexEvent::NativeTurnSubmitting).await?;
+        initial_write_possible = true;
+        let (goal, turn) = goals::conditional_activation(&mut process, &thread_id, activation.conditional.as_ref().expect("selected conditional activation"), params.get("additionalContext").cloned().unwrap_or(Value::Null)).await?;
+        goal_active = goal.status == "active";
+        adopted_turn = Some(turn);
+        collecting_existing = true;
+    } else if let Some(activation) = goal_activation {
         if activation.native_thread != session.codex_thread_id {
             bail!("goal source binding changed; inspect /goal before continuing");
         }
@@ -1328,6 +1339,22 @@ where
                 Some(steer) => {
                     if cancel.is_cancelled() {
                         let _=steer.response.send(Err(CodexSteerError::Rejected("native interruption pending".to_string())));
+                        continue;
+                    }
+                    if let Some(GoalControl::Activate(activation))=steer.goal.as_ref()
+                        && let Some(control)=activation.conditional.as_ref() {
+                        let context=control.context.clone().unwrap_or(Value::Null);
+                        match goals::conditional_activation(&mut process,&thread_id,control,context).await {
+                            Ok((goal,turn))=>{
+                                goal_snapshot_request_id=None;goal_active=goal.status=="active";staged_goal=false;
+                                if active_turn_id.as_ref()!=Some(&turn) {
+                                    active_turn_id=Some(turn.clone());turn_completed=false;assistant_message_completed=false;
+                                    let _=on_event(CodexEvent::NativeTurnStarted(turn.clone())).await?;
+                                }
+                                let _=steer.response.send(Ok(Some(turn)));
+                            },
+                            Err(error)=>{let _=steer.response.send(Err(CodexSteerError::Undetermined(error.to_string())));},
+                        }
                         continue;
                     }
                     if let Some(GoalControl::ConditionalMetadata(control))=steer.goal.as_ref() {

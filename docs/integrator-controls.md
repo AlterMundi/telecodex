@@ -4,13 +4,29 @@ Status: studied and planned, 2026-10-19. Owner: [Telecodex #210](https://github.
 under [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
 This document does not enable controls, delegation, recovery services or model wakeups.
 
-Development checkpoint: scoped `goal_inspect` reads a native definition revision,
-execution state and receiver bookkeeping separately. Missing snapshot capability
-returns unknown; it never falls back to an invented revision. Ownership and
-logical/native bindings are checked around asynchronous reads. This read-only
-slice neither changes a goal nor loads, resumes or attaches to its thread.
-Mutating transactions, receiving adoption and the finished real-session campaign
-remain required by #210.
+Development checkpoint: `goal_inspect` reads the native definition revision,
+execution state and receiver bookkeeping separately. Durable `goal_prepare`,
+`goal_decide`, `goal_status` and `goal_execute` retain human originals, explicit
+controls and single-use confirmed proposals. Conditional metadata writes run on
+the existing selected writer. The context-aware activation path uses the same
+continuation collector and native goal-state permit to start or steer useful
+work with its current invocation context, preserving goal accounting. A retained
+human command can outlive the model turn that interpreted it; its frozen target,
+owner, incarnation, deadline, holds and newer human directions still constrain
+its one submission attempt. Restart does not replay it.
+
+This is development source, not receiving adoption. The native dependency is
+[compaii/codex #5](https://github.com/compaii/codex/pull/5); older receivers must
+refuse unsupported conditional activation rather than stage a legacy goal or
+insert a priming model turn. Canonical results from the linked goal collector
+return to the selected integrating conversation, while a later direct input
+still selects its own presentation surface. For activating controls, an exact frozen human follow-up travels in the same
+conditional context admission: the native goal CAS succeeds first, then the
+clause reaches the first useful or steered model step. The matched response
+acknowledges both admissions without a separate priming turn or an extra
+application race. Incorporation remains distinct. The process fixture uses synthetic
+native peers; native qualification, metadata-only control follow-ups, receiving
+adoption and the finished real-session campaign remain required by #210.
 
 Human-selected initial policy: explicit human instructions to start, pause,
 resume or clear a selected goal execute without asking for the same permission

@@ -9,8 +9,14 @@ use tokio_util::sync::CancellationToken;
 // this native item was first observed. Later direct input never widens its scope.
 const NATIVE_VISIBILITY: &str = "t.from_user_id=?3 AND s.creator_user_id=?3 AND
     ((t.session_id=?2 AND m.native_thread=?4 AND m.phase IN ('commentary','final_answer'))
-      OR (m.phase='commentary' AND EXISTS(SELECT 1 FROM conversation_inputs c
-          WHERE c.id=m.presentation_input AND c.human_id=?3 AND c.session_id=?2)))";
+      OR (EXISTS(SELECT 1 FROM conversation_inputs c
+          WHERE c.id=m.presentation_input AND c.human_id=?3 AND c.session_id=?2)
+          AND (m.phase='commentary' OR (m.phase='final_answer' AND EXISTS(
+              SELECT 1 FROM interaction_goal_controls g WHERE g.human_id=?3
+              AND g.phase='acknowledged' AND json_extract(g.doc,'$.worker_execution.local')=m.local_turn
+              AND json_extract(g.doc,'$.worker_execution.native')=m.native_thread)
+              AND NOT EXISTS(SELECT 1 FROM interaction_results r WHERE r.native_thread=m.native_thread
+                  AND r.native_turn=m.native_turn AND r.item_id=m.item_id)))))";
 
 fn companion_hint_key(native: &str, physical: &str) -> String {
     format!(
@@ -410,7 +416,7 @@ pub(super) fn source_on(
              params![row,entry_session,human,entry_native],|r| {
                 let is_entry:bool=r.get(5)?;
                 let phase:String=r.get(3)?;
-                Ok(json!({"id":id,"kind":if !is_entry {"worker_progress"} else if phase=="commentary" {"integrator_progress"} else {"integrator_answer"},
+                Ok(json!({"id":id,"kind":if !is_entry {if phase=="commentary" {"worker_progress"} else {"worker_result"}} else if phase=="commentary" {"integrator_progress"} else {"integrator_answer"},
                     "text":r.get::<_,String>(0)?,"native_turn":r.get::<_,String>(1)?,"native_item":r.get::<_,String>(2)?,"observed_at":r.get::<_,String>(4)?,
                     "target":if is_entry {Value::Null} else {json!(SessionKey::new(r.get(6)?,Some(r.get(7)?)))},
                     "current":Value::Null,"correction_pending":Value::Null,"completed":Value::Null,
@@ -430,21 +436,29 @@ pub(super) fn source_on(
         source["observed_at"] = json!(observed);
     }
     // Only a returned final source carries its immutable per-turn cosmetic choice.
-    let hint_source: Option<(String, String)> = if source["kind"] == "worker_result" {
-        conn.query_row(
-            "SELECT native_thread,native_turn FROM interaction_results WHERE id=?",
-            [source["result_id"].as_str().unwrap_or("")],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?
-    } else if source["kind"] == "integrator_answer" {
-        Some((
-            entry_native.clone(),
-            source["native_turn"].as_str().unwrap_or("").to_owned(),
-        ))
-    } else {
-        None
-    };
+    let hint_source: Option<(String, String)> =
+        if source["kind"] == "worker_result" && id.starts_with("native:") {
+            conn.query_row(
+                "SELECT native_thread,native_turn FROM interaction_native_messages WHERE rowid=?",
+                [id.trim_start_matches("native:").parse::<i64>()?],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+        } else if source["kind"] == "worker_result" {
+            conn.query_row(
+                "SELECT native_thread,native_turn FROM interaction_results WHERE id=?",
+                [source["result_id"].as_str().unwrap_or("")],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+        } else if source["kind"] == "integrator_answer" {
+            Some((
+                entry_native.clone(),
+                source["native_turn"].as_str().unwrap_or("").to_owned(),
+            ))
+        } else {
+            None
+        };
     if let Some((native, physical)) = hint_source {
         let raw: Option<String> = conn
             .query_row(

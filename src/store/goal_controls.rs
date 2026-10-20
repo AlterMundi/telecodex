@@ -108,9 +108,38 @@ fn read_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Result
         "result":result.map(|s|serde_json::from_str::<Value>(&s)).transpose()?}),
     )
 }
+fn command_generation_on(conn: &Connection, target: SessionKey) -> Result<Option<String>> {
+    conn.query_row(
+        "SELECT value FROM bot_state WHERE key=?",
+        [format!(
+            "goal_intent:{}:{}",
+            target.chat_id, target.thread_id
+        )],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+fn activating_on(doc: &Value) -> bool {
+    matches!(
+        doc["plan"]["action"].as_str(),
+        Some("start" | "resume" | "replace")
+    ) || (doc["plan"]["action"] == "edit" && doc["plan"]["expected"]["goal"]["status"] == "active")
+}
 fn eligible_on(conn: &Connection, human: i64, entry: SessionKey, value: &Value) -> Result<()> {
     let d = &value["intent"];
     let target: SessionKey = serde_json::from_value(d["target"].clone())?;
+    let generation = serde_json::to_value(command_generation_on(conn, target)?)?;
+    let owns_generation = activating_on(d)
+        && matches!(value["phase"].as_str(), Some("claimed" | "submitted"))
+        && generation == value["id"];
+    if (!owns_generation && generation != d["goal_command_generation"])
+        || (activating_on(d)
+            && matches!(value["phase"].as_str(), Some("claimed" | "submitted"))
+            && !owns_generation)
+    {
+        bail!("A later explicit goal command replaced this selected control generation");
+    }
     if binding_on(conn, human, entry)? != d["entry_binding"]
         || binding_on(conn, human, target)? != d["target_binding"]
         || d["expires_at"]
@@ -163,12 +192,32 @@ fn claim_source_on(conn: &Connection, human: i64, source: &Value, id: &str) -> R
     Ok(())
 }
 
+fn validate_claimed_on(
+    conn: &Connection,
+    instance: &str,
+    human: i64,
+    entry: SessionKey,
+    id: &str,
+) -> Result<()> {
+    let value = read_on(conn, human, entry, id)?;
+    let owned:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_controls WHERE id=?1 AND phase IN ('claimed','submitted') AND instance_id=?2)",params![id,instance],|r|r.get(0))?;
+    if !owned {
+        bail!("Goal attempt is no longer owned by this submission");
+    }
+    let d = &value["intent"];
+    let newer:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_controls WHERE human_id=?1 AND target_chat=?2 AND target_topic=?3 AND id!=?4 AND json_extract(doc,'$.authorization_order')>?5)",params![human,d["target"]["chat_id"].as_i64(),d["target"]["thread_id"].as_i64(),id,d["authorization_order"].as_i64()],|r|r.get(0))?;
+    if newer {
+        bail!("Later captured human goal direction superseded this submission");
+    }
+    eligible_on(conn, human, entry, &value)
+}
+
 impl Store {
     pub(super) fn init_goal_controls(&self) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch("CREATE TABLE IF NOT EXISTS interaction_goal_controls(id TEXT PRIMARY KEY,human_id INTEGER NOT NULL,entry_chat INTEGER NOT NULL,entry_topic INTEGER NOT NULL,target_chat INTEGER NOT NULL,target_topic INTEGER NOT NULL,phase TEXT NOT NULL,doc TEXT NOT NULL,result TEXT,instance_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS interaction_goal_inputs(human_id INTEGER NOT NULL,source_kind TEXT NOT NULL,source_event TEXT NOT NULL,control_id TEXT NOT NULL REFERENCES interaction_goal_controls(id),PRIMARY KEY(human_id,source_kind,source_event));")?;
-        conn.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='submitted' THEN 'uncertain' ELSE 'retained_unsent' END WHERE instance_id!=?1 AND phase IN ('prepared','submitted')",[&self.instance_id])?;
+        conn.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='submitted' THEN 'uncertain' ELSE 'retained_unsent' END WHERE instance_id!=?1 AND phase IN ('prepared','claimed','submitted')",[&self.instance_id])?;
         Ok(())
     }
     pub fn goal_control_read(&self, human: i64, entry: SessionKey, id: &str) -> Result<Value> {
@@ -274,10 +323,10 @@ impl Store {
             "awaiting_confirmation"
         };
         let doc = json!({"entry":actor.key,"entry_binding":entry_binding,"target":target,"target_binding":actual_binding,
-            "plan":plan,"reason":reason,"original":source,"proposal":source.is_none(),"confirmation":null,
+            "goal_command_generation":command_generation_on(&tx,target)?,"plan":plan,"reason":reason,"original":source,"proposal":source.is_none(),"confirmation":null,
             "proposal_capture_barrier":barrier,"authorization_order":source.as_ref().map(|s|&s["capture_order"]),"expires_at":Utc::now().timestamp()+900,
             "actor":{"native":actor.native,"physical":actor.physical,"local":actor.local},"created_at":now_string()});
-        let value = json!({"intent":doc});
+        let value = json!({"id":id,"phase":phase,"intent":doc});
         eligible_on(&tx, actor.human, actor.key, &value)?;
         tx.execute("INSERT INTO interaction_goal_controls(id,human_id,entry_chat,entry_topic,target_chat,target_topic,phase,doc,instance_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,actor.human,actor.key.chat_id,actor.key.thread_id,target.chat_id,target.thread_id,phase,doc.to_string(),self.instance_id])?;
         if let Some(source) = source {
@@ -379,8 +428,12 @@ impl Store {
                 "Target has an unconfirmed goal-control outcome; inspect it before another mutation"
             );
         }
+        if activating_on(d) {
+            let target: SessionKey = serde_json::from_value(d["target"].clone())?;
+            tx.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![format!("goal_intent:{}:{}",target.chat_id,target.thread_id),id])?;
+        }
         tx.execute(
-            "UPDATE interaction_goal_controls SET phase='submitted',instance_id=?2 WHERE id=?1",
+            "UPDATE interaction_goal_controls SET phase='claimed',instance_id=?2 WHERE id=?1",
             params![id, self.instance_id],
         )?;
         if closed.is_cancelled() {
@@ -399,17 +452,90 @@ impl Store {
     ) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         super::live_tasks::actor_on(&conn, actor, closed)?;
-        let value = read_on(&conn, actor.human, actor.key, id)?;
-        let owned:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_controls WHERE id=?1 AND phase='submitted' AND instance_id=?2)",params![id,self.instance_id],|r|r.get(0))?;
-        if !owned {
-            bail!("Goal attempt is no longer owned by this submission");
+        drop(conn);
+        self.goal_control_begin_native_submission(actor.human, actor.key, id)
+    }
+    /// A claimed human command survives its interpreting model turn. Ownership,
+    /// generation, holds and newer human direction still constrain the one attempt.
+    pub(crate) fn goal_control_validate_retained_submission(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        validate_claimed_on(&conn, &self.instance_id, human, entry, id)
+    }
+    /// Mark the write boundary atomically, separately from a queued/claimed job.
+    pub(crate) fn goal_control_begin_native_submission(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        validate_claimed_on(&tx, &self.instance_id, human, entry, id)?;
+        tx.execute("UPDATE interaction_goal_controls SET phase='submitted' WHERE id=?1 AND phase='claimed' AND instance_id=?2",params![id,self.instance_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Link the actual selected collector, without making another human ingress.
+    pub(crate) fn goal_control_link_execution(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        local: i64,
+        native: &str,
+    ) -> Result<()> {
+        self.goal_control_validate_retained_submission(human, entry, id)?;
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let value = read_on(&tx, human, entry, id)?;
+        eligible_on(&tx, human, entry, &value)?;
+        let mut doc = value["intent"].clone();
+        let matched: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM turns WHERE id=?1 AND session_id=?2 AND from_user_id=?3)",
+            params![local, doc["target_binding"][1].as_i64(), human],
+            |r| r.get(0),
+        )?;
+        if !matched || doc["target_binding"][2] != native {
+            bail!("Goal collector does not match the retained target");
         }
-        let d = &value["intent"];
-        let newer:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_controls WHERE human_id=?1 AND target_chat=?2 AND target_topic=?3 AND id!=?4 AND json_extract(doc,'$.authorization_order')>?5)",params![actor.human,d["target"]["chat_id"].as_i64(),d["target"]["thread_id"].as_i64(),id,d["authorization_order"].as_i64()],|r|r.get(0))?;
-        if newer {
-            bail!("Later captured human goal direction superseded this submission");
+        let execution = json!({"local":local,"native":native});
+        if !doc["worker_execution"].is_null() && doc["worker_execution"] != execution {
+            bail!("Goal control already belongs to another collector");
         }
-        eligible_on(&conn, actor.human, actor.key, &value)
+        doc["worker_execution"] = execution;
+        let selected = if doc["confirmation"].is_null() {
+            &doc["original"]
+        } else {
+            &doc["confirmation"]["original"]
+        };
+        let reference: InputReference = serde_json::from_value(selected["input_ref"].clone())?;
+        let source = match reference {
+            InputReference::Conversation(id) => id,
+            InputReference::Telegram(update) => format!("telegram:{update}"),
+        };
+        super::conversation_inputs::select_return_on(&tx, human, native, &source)?;
+        let changed=tx.execute("UPDATE interaction_goal_controls SET doc=?2 WHERE id=?1 AND phase IN ('claimed','submitted') AND instance_id=?3",params![id,doc.to_string(),self.instance_id])?;
+        if changed != 1 {
+            bail!("Goal submission no longer owned");
+        }
+        tx.commit()?;
+        Ok(())
+    }
+    pub(crate) fn goal_control_retire_execution(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='claimed' THEN 'known_unsent' ELSE 'uncertain' END,result=?5 WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase IN ('claimed','submitted') AND instance_id=?6",params![id,human,entry.chat_id,entry.thread_id,json!({"error":"Selected collector ended before retaining a goal-control receipt","automatic_retry":false}).to_string(),self.instance_id])?;
+        Ok(())
     }
     pub fn goal_control_finish(
         &self,
@@ -428,7 +554,7 @@ impl Store {
         }
         let conn = self.conn.lock().expect("store mutex poisoned");
         // Preserve receipts after a binding/grant changes in flight; do not restore permission or resubmit.
-        let changed=conn.execute("UPDATE interaction_goal_controls SET phase=?5,result=?6 WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase='submitted' AND instance_id=?7",params![id,human,entry.chat_id,entry.thread_id,phase,result.to_string(),self.instance_id])?;
+        let changed=conn.execute("UPDATE interaction_goal_controls SET phase=?5,result=?6 WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase IN ('claimed','submitted') AND instance_id=?7",params![id,human,entry.chat_id,entry.thread_id,phase,result.to_string(),self.instance_id])?;
         if changed == 0 {
             let retained:(String,Option<String>)=conn.query_row("SELECT phase,result FROM interaction_goal_controls WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4",params![id,human,entry.chat_id,entry.thread_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
             if retained != (phase.to_owned(), Some(result.to_string())) {

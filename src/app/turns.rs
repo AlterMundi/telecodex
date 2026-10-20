@@ -14,6 +14,8 @@ pub(super) async fn process_turn(
     prepared_worker_lease: Option<super::attention::WorkerLease>,
 ) -> Result<()> {
     let shared = app.shared.clone();
+    let _goal_execution =
+        super::goal_controls::GoalExecutionGuard::new(shared.clone(), queued.goal.as_ref());
     let initial_binding = if queued.request.review_mode.is_none()
         && shared.config.interaction.as_ref().is_some_and(|p| {
             p.entry() == queued.request.session_key && p.human_id == queued.request.from_user_id
@@ -298,6 +300,20 @@ pub(super) async fn process_turn(
             queued.interaction.as_deref(),
         )?,
     };
+    if let Some((human, entry, id)) = queued
+        .goal
+        .as_ref()
+        .and_then(|g| g.conditional.as_ref())
+        .and_then(|c| c.scope.as_ref())
+    {
+        let native = session
+            .codex_thread_id
+            .as_deref()
+            .context("Controlled goal native binding unavailable")?;
+        shared
+            .store
+            .goal_control_link_execution(*human, *entry, id, turn_id, native)?;
+    }
     if let Some(id) = queued.nexus.as_deref() {
         shared.store.nexus_link(id, turn_id)?;
     }
@@ -607,7 +623,12 @@ pub(super) async fn process_turn(
         c.human_id == runtime_request.from_user_id
             && ((c.entry() == session.key
                 && (queued.conversation_input.is_some() || c.telegram_ingress))
-                || (routed && super::routing::enrolled(&shared, session.key)))
+                || ((routed
+                    || queued
+                        .goal
+                        .as_ref()
+                        .is_some_and(|g| g.conditional.is_some()))
+                    && super::routing::enrolled(&shared, session.key)))
     });
     if controller_selected && let Some(hint) = controller_hint {
         runtime_request

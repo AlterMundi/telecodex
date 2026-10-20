@@ -59,6 +59,7 @@ pub(super) async fn attach_active(app: &App, human: i64, args: &str) -> Result<s
         objective: None,
         replace: false,
         attach_turn: Some(physical.to_string()),
+        conditional: None,
     };
     app.enqueue_goal_turn(
         TurnRequest {
@@ -462,6 +463,7 @@ async fn activate(
             objective,
             replace,
             attach_turn: None,
+            conditional: None,
         };
         let (response, ack) = oneshot::channel();
         attached.sender.send(CodexSteerRequest{ images:vec![], admission_check: None,client_message_id:None,text:String::new(),goal:Some(GoalControl::Activate(Box::new(activation))),response})
@@ -510,6 +512,7 @@ async fn activate(
             objective,
             replace,
             attach_turn: None,
+            conditional: None,
         };
         let prompt="Continue the native goal requested by the human. Use its native state and account for progress there.".to_string();
         app.enqueue_goal_turn(

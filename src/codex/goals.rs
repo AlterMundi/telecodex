@@ -67,6 +67,8 @@ pub struct GoalActivation {
     pub replace: bool,
     /// Collector-only attachment: never start a turn or mutate goal metadata.
     pub attach_turn: Option<String>,
+    /// Frozen integrator intent, admitted through the native context-aware CAS.
+    pub conditional: Option<Box<GoalMetadataControl>>,
 }
 
 pub(super) fn parse_goal(response: &Value, thread_id: &str) -> Result<Option<NativeGoal>> {
@@ -137,6 +139,19 @@ pub(super) async fn mutate_live_goal(
 ) -> Result<NativeGoal> {
     if activation.native_thread.as_deref() != Some(thread_id) {
         bail!("goal control belongs to another native thread");
+    }
+    if let Some(control) = &activation.conditional {
+        let (goal, _) = conditional_activation(
+            process,
+            thread_id,
+            control,
+            control
+                .context
+                .clone()
+                .context("Current writer invocation context missing")?,
+        )
+        .await?;
+        return Ok(goal);
     }
     let id = process
         .send_request("thread/goal/get", json!({"threadId":thread_id}))
@@ -270,12 +285,17 @@ mod snapshot_tests {
     }
 }
 
+pub type GoalSettlement = Arc<dyn Fn(&str, &Value) -> Result<()> + Send + Sync>;
+
 /// A current worker processes metadata controls on its own subscribed connection.
 #[derive(Clone)]
 pub struct GoalMetadataControl {
     pub plan: crate::store::GoalPlan,
     pub admission: SteerAdmissionCheck,
     pub receipt: Arc<std::sync::Mutex<Option<(String, Value)>>>,
+    pub context: Option<Value>,
+    pub scope: Option<(i64, crate::models::SessionKey, String)>,
+    pub settled: Option<GoalSettlement>,
 }
 impl std::fmt::Debug for GoalMetadataControl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -394,4 +414,105 @@ impl CodexRunner {
         let _ = tokio::time::timeout(Duration::from_secs(2), process.shutdown()).await;
         result
     }
+}
+
+/// Use the existing subscribed collector for a context-aware native activation.
+/// The receipt is retained before returning an error or collecting model work.
+pub(super) async fn conditional_activation(
+    process: &mut AppServerProcess,
+    thread: &str,
+    control: &GoalMetadataControl,
+    context: Value,
+) -> Result<(NativeGoal, String)> {
+    use crate::store::GoalAction;
+    let mut context = context;
+    let mut sent = false;
+    let mut cleared: Option<Value> = None;
+    let mut acknowledged: Option<Value> = None;
+    let result = tokio::time::timeout(Duration::from_secs(12), async {
+        control.plan.validate()?;
+        if !matches!(control.plan.action, GoalAction::Start | GoalAction::Resume | GoalAction::Replace | GoalAction::Edit) {
+            bail!("Selected goal control is not an activation");
+        }
+        if context.as_object().is_none_or(|v| v.is_empty()) {
+            bail!("Fresh invocation context required before native activation");
+        }
+        if let Some(followup)=&control.plan.followup {
+            let (human,entry,id)=control.scope.as_ref().context("Attributed follow-up control scope required")?;
+            // The native CAS must succeed before this context is admitted to useful
+            // work. Carry the frozen clause in that same admission, never a later
+            // priming/steering turn which can lose a race with the first answer.
+            context["telecodex.goal.followup"]=json!({"kind":"application","value":format!("This is an attributed continuation of the actual human goal-control instruction retained by this receiver, not another input or assistant proposal. Authorized human: {human}; originating conversation: {}:{}; control: {id}. The following exact human-selected clause belongs to the same accepted control. Incorporate it while carrying out the selected goal. Native admission is not a declaration that you incorporated or completed it.\nCurrent attributed human follow-up:\n{followup}",entry.chat_id,entry.thread_id)});
+        }
+        let mut revision = control.plan.expected.revision.clone();
+        if matches!(control.plan.action, GoalAction::Replace) {
+            (control.admission)()?;
+            sent = true;
+            let id = process.send_request("thread/goal/conditionalClear", json!({"threadId":thread,"expectedRevision":revision,"origin":"user"})).await?;
+            let response = process.await_response(id).await?;
+            // A matched clear is already an effect even if its revision is malformed.
+            cleared = Some(response.clone());
+            if response["cleared"] != true { bail!("Conditional replacement clear was not confirmed"); }
+            revision = response["revision"].as_str().filter(|v|!v.is_empty()).context("Conditional replacement clear has no revision")?.to_owned();
+        }
+        let mut args = json!({"threadId":thread,"expectedRevision":revision,"origin":"user","additionalContext":context});
+        if let Some(objective) = &control.plan.objective { args["objective"] = json!(objective); }
+        if let Some(budget) = control.plan.token_budget { args["tokenBudget"] = json!(budget); }
+        (control.admission)()?;
+        sent = true;
+        let id = process.send_request("thread/goal/conditionalActivate", args).await?;
+        let response = process.await_response(id).await?;
+        acknowledged = Some(response.clone());
+        let goal = parse_goal_snapshot(&response, thread)?.goal.context("Activation returned no goal")?;
+        match response["activation"]["kind"].as_str() {
+            Some("started" | "steered") => {
+                let turn = response["activation"]["turnId"].as_str().filter(|v|!v.is_empty()).context("Native activation has no physical turn")?;
+                Ok::<_,anyhow::Error>((goal, turn.to_owned()))
+            }
+            _ => bail!("Native goal metadata committed without confirmed work admission: {}", response["activation"]),
+        }
+    }).await;
+    let (phase, receipt) = match &result {
+        Ok(Ok(_)) => (
+            "acknowledged",
+            json!({"native_receipt":acknowledged,"replacement_clear":cleared,"followup_admitted":control.plan.followup.is_some(),"meaning":"Native goal metadata and work admission acknowledged; incorporation, completion and hearing are separate."}),
+        ),
+        _ => {
+            let error = match &result {
+                Ok(Err(error)) => error.to_string(),
+                _ => "Context-aware goal activation acknowledgment timed out".into(),
+            };
+            let code = match &result {
+                Ok(Err(error)) => error.downcast_ref::<RpcError>().and_then(|e| e.code),
+                _ => None,
+            };
+            let phase = if cleared.is_some()
+                || acknowledged
+                    .as_ref()
+                    .is_some_and(|r| r["activation"]["kind"] == "notStarted")
+            {
+                "partial"
+            } else if acknowledged.is_some() {
+                "uncertain"
+            } else if !sent {
+                "known_unsent"
+            } else if matches!(code, Some(-32602..=-32600)) {
+                "rejected"
+            } else {
+                "uncertain"
+            };
+            (
+                phase,
+                json!({"error":error,"native_error_code":code,"native_receipt":acknowledged,"replacement_clear":cleared,"automatic_retry":false}),
+            )
+        }
+    };
+    *control
+        .receipt
+        .lock()
+        .expect("goal control receipt mutex poisoned") = Some((phase.into(), receipt.clone()));
+    if let Some(settled) = &control.settled {
+        settled(phase, &receipt)?;
+    }
+    result.context("Context-aware goal activation timed out; inspect retained control, never replay automatically")?
 }
