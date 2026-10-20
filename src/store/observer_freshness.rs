@@ -201,6 +201,94 @@ impl Store {
         cut_on(&conn, session, native)
     }
 
+    /// Native text history omits structured question/answer RPCs. Preserve their
+    /// scoped journal evidence beside the matching original turn, without
+    /// equating a recorded answer with native incorporation or completion.
+    pub fn observer_question_evidence(
+        &self,
+        key: SessionKey,
+        human: i64,
+        source: &mut serde_json::Value,
+    ) -> Result<()> {
+        let native = source["native"]
+            .as_str()
+            .context("Observer source missing native")?
+            .to_owned();
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let session = observer_cards::binding(&conn, key, human, &native)?;
+        let mut stmt = conn.prepare("SELECT h.id,h.state,h.payload_json,d.doc FROM human_interactions h LEFT JOIN conversation_decisions d ON d.request_id=h.id AND d.human_id=h.requester WHERE h.session_id=?1 AND h.requester=?2 AND h.native_thread=?3 AND h.kind='native' ORDER BY h.created_at DESC,h.id,d.created_at LIMIT 65")?;
+        let rows = stmt
+            .query_map(params![session, human, native], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut remaining = 8000usize;
+        if rows.len() > 64 {
+            source["bounded"] = serde_json::json!(true);
+        }
+        for (id, state, payload, decision) in rows.into_iter().take(64) {
+            let item: serde_json::Value = serde_json::from_str(&payload)?;
+            if item["source"]["kind"] != "question" {
+                continue;
+            }
+            let Some(turn) = item["source"]["turnId"].as_str() else {
+                continue;
+            };
+            let prefix = format!("[Native source turn {turn};");
+            let receipt = decision
+                .as_deref()
+                .map(serde_json::from_str::<serde_json::Value>)
+                .transpose()?;
+            let secret = item["source"]["request"]["questions"]
+                .as_array()
+                .is_some_and(|qs| qs.iter().any(|q| q["isSecret"] == true));
+            let evidence = serde_json::json!({"request":id,"state":state,"question":item["action"],
+                "recorded_answer":if secret {serde_json::json!("[Secret response omitted]")}else{receipt.as_ref().map(|r|r["resolved"].clone()).unwrap_or(serde_json::Value::Null)},
+                "recorded_at":receipt.as_ref().map(|r|r["recorded_at"].clone()),
+                "meaning":"Local structured request journal, not new human speech. Recorded answer is distinct from native incorporation or task completion. An answered request is not an unanswered question; unknown/cancelled/withdrawn outcomes are not answers."});
+            let text = format!(
+                "\n[Structured question evidence] {}",
+                serde_json::to_string(&evidence)?
+            );
+            if text.len() > remaining {
+                source["bounded"] = serde_json::json!(true);
+                continue;
+            }
+            for field in ["entries", "in_progress_entries"] {
+                if let Some(entries) = source[field].as_array_mut() {
+                    if let Some(entry) = entries
+                        .iter_mut()
+                        .find(|e| e.as_str().is_some_and(|v| v.starts_with(&prefix)))
+                    {
+                        *entry = serde_json::json!(entry.as_str().unwrap().to_owned() + &text);
+                        remaining -= text.len();
+                        break;
+                    }
+                }
+            }
+        }
+        // Answer-only changes must invalidate an otherwise unchanged native cut.
+        source["revision"] = serde_json::json!(
+            Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                serde_json::to_string(&serde_json::json!([
+                    source["revision"],
+                    source["entries"],
+                    source["in_progress_entries"],
+                    source["bounded"]
+                ]))?
+                .as_bytes()
+            )
+            .to_string()
+        );
+        Ok(())
+    }
+
     pub fn observer_freshness(
         &self,
         key: SessionKey,
@@ -232,6 +320,113 @@ mod tests {
         json!({"native":"native-source","revision":revision,"boundary":"physical","turn_ids":["physical"],
             "entries":["[Native source turn physical] Human request and attributed assistant statement"],
             "in_progress_entries":[],"bounded":false,"text_truncated":false,"observer_activity_cut":cut,"observer_checked_at":"2026-10-16T01:02:03+00:00"})
+    }
+
+    #[test]
+    fn structured_answers_change_observer_source_without_claiming_incorporation() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let defaults = super::super::tests::defaults();
+        let store = Store::open(file.path(), &[100], &defaults).unwrap();
+        let key = SessionKey::new(100, Some(7));
+        let session = store.ensure_session(key, 100, &defaults).unwrap();
+        store
+            .set_session_codex_thread(key, "native-source")
+            .unwrap();
+        let turn = store
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: key,
+                    from_user_id: 100,
+                    prompt: "Request".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        let item = HumanInteraction {
+            id: "question".into(),
+            kind: "native".into(),
+            state: "pending".into(),
+            requester: 100,
+            native_thread: "native-source".into(),
+            local_turn: turn,
+            title: "Format".into(),
+            action: "Table or chart?".into(),
+            blocking: true,
+            source: json!({"kind":"question","turnId":"physical","request":{"questions":[{"isSecret":false}]}}),
+        };
+        store.save_interaction(key, &item, None).unwrap();
+        let base = json!({"native":"native-source","revision":"native-cut","boundary":"physical","turn_ids":["physical"],
+            "entries":["[Native source turn physical; native status completed; completed]\nassistant: Done"],"in_progress_entries":[],"bounded":false});
+        let mut pending = base.clone();
+        store
+            .observer_question_evidence(key, 100, &mut pending)
+            .unwrap();
+        assert!(pending["entries"][0].as_str().unwrap().contains("pending"));
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE human_interactions SET state='answered' WHERE id='question'",
+                [],
+            )
+            .unwrap();
+            let receipt = json!({"resolved":{"answer":"Original color sums"},"recorded_at":"2026-10-20T10:58:39Z"});
+            conn.execute("INSERT INTO conversation_decisions(human_id,entry_session,entry_chat,entry_topic,request_id,revision,doc,created_at) VALUES(100,?1,100,7,'question','choice',?2,'now')",params![session.id,receipt.to_string()]).unwrap();
+        }
+        let mut answered = base.clone();
+        store
+            .observer_question_evidence(key, 100, &mut answered)
+            .unwrap();
+        let text = answered["entries"][0].as_str().unwrap();
+        assert!(
+            text.contains("Original color sums")
+                && text.contains("answered")
+                && text.contains("distinct from native incorporation")
+        );
+        assert_ne!(pending["revision"], answered["revision"]);
+        assert_eq!(answered["turn_ids"], base["turn_ids"]);
+        let mut repeat = base.clone();
+        store
+            .observer_question_evidence(key, 100, &mut repeat)
+            .unwrap();
+        assert_eq!(answered, repeat);
+        assert!(
+            store
+                .observer_question_evidence(key, 101, &mut base.clone())
+                .is_err()
+        );
+        let mut foreign = base.clone();
+        foreign["native"] = json!("other-native");
+        assert!(
+            store
+                .observer_question_evidence(key, 100, &mut foreign)
+                .is_err()
+        );
+        let mut omitted = base.clone();
+        omitted["entries"][0] = json!("[Native source turn different; completed] unrelated");
+        store
+            .observer_question_evidence(key, 100, &mut omitted)
+            .unwrap();
+        assert!(!omitted.to_string().contains("Original color sums"));
+        let mut secret = item.clone();
+        secret.source["request"]["questions"][0]["isSecret"] = json!(true);
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE human_interactions SET payload_json=?1 WHERE id='question'",
+                [serde_json::to_string(&secret).unwrap()],
+            )
+            .unwrap();
+        }
+        let mut redacted = base;
+        store
+            .observer_question_evidence(key, 100, &mut redacted)
+            .unwrap();
+        assert!(!redacted.to_string().contains("Original color sums"));
+        assert!(redacted.to_string().contains("Secret response omitted"));
     }
 
     #[test]

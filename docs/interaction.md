@@ -319,6 +319,15 @@ before reserving one read-only synthesis. The summary describes purpose,
 decisions/corrections, current work and open questions. It is an attributed
 interpretation of source statements, not verified completion or new authority.
 
+The same owned native turn also carries its scoped structured-question journal
+when native text history omits the question/answer RPC. The observer sees the
+request's current recorded state and any retained conversation decision, with
+secret answers omitted. A recorded answer is distinct from native incorporation
+or task completion; an answered question must not be summarized as unanswered.
+Answer-only changes invalidate the source revision. Evidence stays attached to
+its original turn and preserves native boundaries, support indices and bounded
+history; missing turns do not import unrelated question records.
+
 The retained source, summary support indices, processed boundary and expected
 summary revision commit together. A concurrent or late response cannot overwrite
 a newer revision. Unchanged source revisions reuse the existing card without a
