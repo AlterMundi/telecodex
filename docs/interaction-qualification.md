@@ -199,8 +199,8 @@ and retention; routine audio follows the existing deletion/cache policy.
 
 ## Goals, directed controls and visible session lifecycle
 
-Human requirements added 2026-10-19; pending implementation. A habitual integrating
-conversation should also make session lifecycle understandable in Telegram,
+Human requirements added 2026-10-19; receiving qualification remains required.
+A habitual integrating conversation should also make session lifecycle understandable in Telegram,
 without requiring the dashboard or CLI.
 The [harness control study and delivery plan](integrator-controls.md) records the
 installed capability inventory, supported external controls, recovery choices
@@ -221,6 +221,7 @@ and exact distinction between human-directed commands and delegated autonomy.
   Status decoration must not become canonical identity or a rename loop. Reuse
   the existing activity observer/catalog; this calls for no second Telegram
   consumer, model wakeups or new background attention.
+
 - Accept explicit human-directed goal controls through the integrator, with
   a resolved target and native outcome. For example, a human's instruction to
   resume one session's goal or clear it before proceeding with a replacement
@@ -232,6 +233,17 @@ and exact distinction between human-directed commands and delegated autonomy.
   effects or cancel running work. An ambiguous target or replacement requires
   clarification. Do not clear a goal merely to make an unrelated next message
   fit. Concurrent human changes must invalidate a stale control selection.
+
+For the catalog/activity implementation, exercise the existing observer with
+`--topic-markers` and inspect its finite `--inventory --activity-days 7` output.
+Include an idle active goal, working without an active goal, paused/blocked
+metadata, stale/disconnected observations, a renewed binding and a human rename.
+The marker must preserve the complete canonical title and icon; retiring the
+observer or using `--restore-topic-markers` restores only acknowledged owned
+decoration. Inject a lost title-edit acknowledgment and restart: its uncertain
+attempt must remain inspectable without replay. Metadata and tool-only activity
+must not inflate the recent-conversation count. These source fixtures complement,
+and do not replace, the actual receiving Telegram observations.
 
 Current native `update_goal` permits complete, blocked, and explicitly requested
 pause, but not resume or limit changes. The checked native runtime can also mark

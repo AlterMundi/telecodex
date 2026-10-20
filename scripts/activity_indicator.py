@@ -155,13 +155,20 @@ class Native:
         return thread.get('status', {'type': 'unknown'})
 
     def goal(self, thread_id):
+        return self.goal_observation(thread_id)['goal']
+
+    def goal_observation(self, thread_id):
         response = self.rpc('thread/goal/get', {'threadId': thread_id})
-        if response is None:
-            return None  # Older servers may not support this read-only surface.
+        if not isinstance(response, dict) or 'goal' not in response:
+            return {'state': 'unknown', 'goal': None}
         goal = response.get('goal')
-        if goal is not None and goal.get('threadId') != thread_id:
+        if goal is not None and (not isinstance(goal, dict) or goal.get('threadId') != thread_id):
             raise ValueError('native goal thread mismatch')
-        return goal
+        state = goal.get('status') if goal else 'absent'
+        if state not in ('absent', 'active', 'paused', 'blocked', 'usageLimited',
+                         'budgetLimited', 'complete'):
+            state = 'unknown'
+        return {'state': state, 'goal': goal}
 
     def close(self):
         self.closed.set()
@@ -192,6 +199,7 @@ class Rollout:
         self.request_id = None
         self.pending_since = None
         self.last_exchange = None
+        self.last_conversation_at = None
         self.skipping = False
 
     def consume(self, value):
@@ -246,6 +254,11 @@ class Rollout:
                     self.agents.discard(agent)
             elif item.get('type') == 'CollabAgentToolCall':
                 self.agents.update(item.get('receiver_thread_ids', []))
+            if item.get('type') in ('UserMessage', 'AgentMessage'):
+                observed = timestamp(value.get('timestamp'))
+                if observed is not None and (self.last_conversation_at is None or
+                                             observed > self.last_conversation_at):
+                    self.last_conversation_at = observed
 
     def refresh(self):
         with self.path.open('rb') as stream:
@@ -260,6 +273,7 @@ class Rollout:
                 self.started = self.turn_id = self.last_signal = None
                 self.work_running = self.request_id = None
                 self.last_exchange = None
+                self.last_conversation_at = None
                 self.skipping = False
                 self.offset = max(0, info.st_size - 4 * 1024 * 1024)
                 self.identity = identity
@@ -630,7 +644,7 @@ class Telegram:
         self.schedule_lock = threading.Lock()
 
     def call(self, method, payload, *, background=False):
-        if method not in ('sendMessage', 'editMessageText', 'deleteMessage'):
+        if method not in ('sendMessage', 'editMessageText', 'deleteMessage', 'editForumTopic'):
             raise ValueError('observer Telegram method forbidden')
         chat = payload['chat_id']
         with self.schedule_lock:
@@ -948,18 +962,222 @@ def latest_input(database, chat, topic):
         (chat, topic)).fetchone()
 
 
+def topic_activity_inventory(database, snapshot, days=7, now=None):
+    """Join current authorized bindings with dated native facts, never cached counts."""
+    if not 1 <= days <= 365:
+        raise ValueError('choose 1–365 activity days')
+    now = time.time() if now is None else now
+    observations = snapshot.get('observations', {})
+    connected = snapshot.get('connected') is True
+    counts = dict.fromkeys(('active_goal', 'working_without_active_goal', 'passive',
+                            'unknown', 'passive_recent', 'passive_recency_unknown'), 0)
+    rows = database.execute('''SELECT s.id,s.chat_id,s.thread_id,s.creator_user_id,
+        s.codex_thread_id,s.force_fresh_thread,s.session_title,b.value AS catalog,
+        (SELECT MAX(t.started_at) FROM turns t WHERE t.session_id=s.id
+            AND t.from_user_id=s.creator_user_id) AS bridge_conversation_at
+        FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
+        LEFT JOIN bot_state b ON b.key='topic_catalog:'||s.chat_id||':'||s.thread_id
+        WHERE u.allowed=1 ORDER BY s.id DESC LIMIT 513''').fetchall()
+    items = []
+    for row in rows[:512]:
+        key = f"{row['chat_id']}:{row['thread_id']}"
+        observed = observations.get(key, {})
+        at = observed.get('observed_at')
+        age = now - at if isinstance(at, (int, float)) and math.isfinite(at) else None
+        matched = (observed.get('native') == row['codex_thread_id'] and
+                   observed.get('human') == row['creator_user_id'] and
+                   row['codex_thread_id'] is not None and not row['force_fresh_thread'])
+        fresh = connected and matched and age is not None and 0 <= age <= 20
+        execution = observed.get('execution', 'unknown') if fresh else 'unknown'
+        goal = observed.get('goal_state', 'unknown') if fresh else 'unknown'
+        if execution not in ('working', 'idle'):
+            execution = 'unknown'
+        if goal not in ('absent', 'active', 'paused', 'blocked', 'usageLimited',
+                        'budgetLimited', 'complete'):
+            goal = 'unknown'
+        if goal == 'active':
+            category, marker = 'active_goal', '🎯'
+        elif goal == 'unknown' or execution == 'unknown':
+            category, marker = 'unknown', '?'
+        elif execution == 'working':
+            category, marker = 'working_without_active_goal', '⚙'
+        else:
+            category, marker = 'passive', ''
+        counts[category] += 1
+        # A bounded native tail can prove recent conversation, never its absence.
+        candidates = [timestamp(row['bridge_conversation_at'])]
+        if matched:
+            native_at = observed.get('last_conversation_at')
+            if isinstance(native_at, (int, float)) and math.isfinite(native_at):
+                candidates.append(native_at)
+        last = max((value for value in candidates if value is not None and value <= now), default=None)
+        recent = True if last is not None and now - last <= days * 86400 else None
+        if category == 'passive':
+            counts['passive_recent' if recent else 'passive_recency_unknown'] += 1
+        catalog = json.loads(row['catalog']) if row['catalog'] else None
+        items.append({'session': row['id'], 'key': key, 'native': row['codex_thread_id'],
+                      'human': row['creator_user_id'], 'telegram': catalog,
+                      'title_summary': row['session_title'], 'category': category,
+                      'marker': marker, 'execution': execution, 'goal_state': goal,
+                      'fresh': fresh, 'observed_at': at if matched else None,
+                      'last_observed_conversation_at': last, 'recent_conversation': recent})
+    return {'schema': 'telecodex.topic-activity/v1', 'observed_at': now,
+            'connected': connected, 'activity_days': days, 'counts': counts,
+            'items': items, 'truncated': len(rows) > 512,
+            'recency_scope': 'attributed bridge turns and bounded native conversation tail; absence is unknown'}
+
+
+def inventory_source(database):
+    path = database.execute('PRAGMA database_list').fetchone()['file']
+    info = os.stat(path)
+    return hashlib.sha256(f'{path}:{info.st_dev}:{info.st_ino}'.encode()).hexdigest()
+
+
+def read_owner_json(path):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor) as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                    info.st_mode & 0o077 or info.st_size > 1024 * 1024):
+                raise ValueError('inventory snapshot must be bounded and owner-only')
+            retained = json.load(stream)
+        if not isinstance(retained, dict):
+            raise ValueError('expected an inventory object')
+        return retained
+    except FileNotFoundError:
+        return {}
+
+
+def topic_name_revision(item, name):
+    return hashlib.sha256(json.dumps([item['human'], name], sort_keys=True).encode()).hexdigest()
+
+
+def read_topic_inventory(database, path, days=7):
+    retained = read_owner_json(path)
+    snapshot = retained if (retained.get('schema') == 'telecodex.topic-observations/v1' and
+                           retained.get('source') == inventory_source(database)) else {}
+    view = topic_activity_inventory(database, snapshot, days)
+    marker_record = read_owner_json(path.with_name('topic-markers.json'))
+    markers = marker_record.get('items', {}) if marker_record.get('source') == inventory_source(database) else {}
+    for item in view['items']:
+        entry = markers.get(item['key'], {})
+        name = (item.get('telegram') or {}).get('name')
+        if name and entry.get('revision') == topic_name_revision(item, name):
+            item['title_projection'] = {field: entry.get(field) for field in
+                                       ('phase', 'applied', 'desired', 'attempted_at')}
+    return view
+
+
+class TopicMarkers:
+    """Optional reversible title projection; canonical names/icons are never mutated."""
+    def __init__(self, telegram, path):
+        self.telegram, self.path = telegram, path
+        retained = read_owner_json(path)
+        if retained and retained.get('schema') != 'telecodex.topic-markers/v1':
+            raise ValueError('unknown topic marker receipt schema')
+        self.source = retained.get('source')
+        self.state = retained.get('items', {})
+
+    def save(self):
+        atomic_json(self.path, {'schema': 'telecodex.topic-markers/v1',
+                               'source': self.source, 'items': self.state})
+
+    def update(self, database, snapshot, *, restore=False, now=None):
+        now = time.time() if now is None else now
+        source = inventory_source(database)
+        if self.source is not None and self.source != source:
+            raise ValueError('topic marker receipts belong to another database')
+        self.source = source
+        view = topic_activity_inventory(database, snapshot, now=now)
+        for item in view['items']:
+            key = item['key']
+            if int(key.split(':')[1]) <= 0:
+                continue
+            name = (item.get('telegram') or {}).get('name')
+            if not isinstance(name, dict) or not isinstance(name.get('value'), str):
+                continue  # Never decorate a guessed native/summary title.
+            base = name['value']
+            revision = topic_name_revision(item, name)
+            entry = self.state.get(key, {})
+            if entry and entry.get('revision') != revision:
+                # A new canonical name supersedes our old decoration. Do not
+                # restore the previous human title or strip arbitrary prefixes.
+                self.state.pop(key, None)
+                self.save()
+                entry = {}
+            marker = item['marker'] if item['fresh'] and not restore else ''
+            if item['category'] == 'unknown':
+                marker = ''  # Restore our known decoration instead of guessing.
+            desired = f'{marker} {base}' if marker else base
+            if len(desired) > 128:
+                desired = base  # Keep the whole canonical name, including long titles.
+            lifecycle = (item.get('telegram') or {}).get('lifecycle', {}).get('value')
+            if lifecycle == 'deleted' or (lifecycle != 'open' and not entry.get('applied')):
+                continue
+            if (entry.get('phase') in ('attempting', 'uncertain') or
+                    (now < entry.get('retry_at', 0) and not (restore and entry.get('phase') == 'applied')) or
+                    entry.get('applied') == desired or
+                    (not entry.get('applied') and desired == base)):
+                continue
+            if not entry and len(self.state) >= 512:
+                continue  # Retain uncertain receipts rather than evicting them.
+            # Recheck the actual allowed creator and name immediately before the
+            # API call. This projection never changes the native binding/title.
+            current = database.execute('''SELECT b.value FROM sessions s
+                JOIN users u ON u.tg_user_id=s.creator_user_id
+                JOIN bot_state b ON b.key='topic_catalog:'||s.chat_id||':'||s.thread_id
+                WHERE s.id=? AND s.creator_user_id=? AND u.allowed=1''',
+                (item['session'], item['human'])).fetchone()
+            if not current or json.loads(current['value']).get('name') != name:
+                continue
+            entry.update({'revision': revision, 'human': item['human'], 'base': base,
+                          'desired': desired, 'phase': 'attempting', 'attempted_at': now})
+            self.state[key] = entry
+            self.save()  # Lost ACK/restart cannot replay this attempt.
+            chat, topic = (int(value) for value in key.split(':'))
+            response = self.telegram.call('editForumTopic',
+                {'chat_id': chat, 'message_thread_id': topic, 'name': desired}, background=True)
+            if response is None:
+                entry['phase'] = 'uncertain'
+            elif response.get('ok') is True and response.get('result') is True:
+                entry.update({'phase': 'applied', 'applied': desired, 'retry_at': now + 30})
+            else:
+                retry = response.get('parameters', {}).get('retry_after', 60)
+                entry.update({'phase': 'rejected', 'retry_at': now + max(30, retry)})
+            self.save()
+
+
 def run(args):
     config = tomllib.loads(pathlib.Path(args.config).read_text())
     state = pathlib.Path(args.state_dir)
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     if state.stat().st_uid != os.getuid() or state.stat().st_mode & 0o077:
         raise ValueError('activity state directory must be owner-only')
+    if args.inventory:
+        database = readonly(config['db_path'])
+        try:
+            print(json.dumps(read_topic_inventory(database, state / 'topics.json', args.activity_days)))
+        finally:
+            database.close()
+        return
     lock = open(state / 'observer.lock', 'a', opener=lambda p, f: os.open(p, f, 0o600))
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     bridge = readonly(config['db_path'])
+    if args.restore_topic_markers:
+        try:
+            markers = TopicMarkers(Telegram(config['telegram']), state / 'topic-markers.json')
+            markers.update(bridge, {}, restore=True)
+            print(json.dumps({'schema': 'telecodex.topic-marker-retirement/v1',
+                              'outcomes': {key: item['phase'] for key, item in markers.state.items()}}))
+        finally:
+            bridge.close()
+            lock.close()
+        return
     native_home = pathlib.Path(os.environ.get('CODEX_HOME', pathlib.Path.home() / '.codex'))
     native_db = readonly(native_home / 'state_5.sqlite')
     publisher = None if args.probe else Publisher(Telegram(config['telegram']), state / 'messages.json')
+    markers = TopicMarkers(publisher.telegram, state / 'topic-markers.json') if publisher and args.topic_markers else None
     stopped = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
@@ -967,6 +1185,8 @@ def run(args):
     weekly = WeeklyLimit()
     cache = StatusCache()
     status_worker = None
+    topic_snapshot = {'schema': 'telecodex.topic-observations/v1',
+                      'source': inventory_source(bridge), 'connected': False, 'observations': {}}
     if publisher and args.status_requests:
         status_worker = threading.Thread(target=watch_status_requests,
             args=(config, state, cache, stopped, publisher.telegram, publisher), daemon=True)
@@ -977,6 +1197,7 @@ def run(args):
             reports = {}
             bindings = {}
             contexts = {}
+            topic_observations = {}
             publications = []
             try:
                 if native is None:
@@ -985,7 +1206,7 @@ def run(args):
                 topics = bridge.execute('''SELECT s.chat_id,s.thread_id,s.codex_thread_id,s.creator_user_id,
                     (SELECT status FROM turns WHERE session_id=s.id ORDER BY id DESC LIMIT 1) AS turn_status
                     FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id
-                    WHERE s.codex_thread_id IS NOT NULL AND u.allowed=1''').fetchall()
+                    WHERE s.codex_thread_id IS NOT NULL AND s.force_fresh_thread=0 AND u.allowed=1''').fetchall()
                 known = set()
                 for topic in topics:
                     tid = topic['codex_thread_id']
@@ -1017,13 +1238,20 @@ def run(args):
                                 if linked_child(native_db, child, tid)]
                     now = time.time()
                     report = status_report(status, reader, children, now)
-                    goal = goal_line(native.goal(tid))
+                    observed_goal = native.goal_observation(tid)
+                    goal = goal_line(observed_goal['goal'])
                     active_text = status_line(status, reader, children, now)
                     text = status_line(status, reader, children, now, automatic=True)
                     if command:
                         report = active_text = command['line']
                         text = command['line'] if now-command['started'] >= 30 else None
                     work_active = bool(active_text)
+                    topic_observations[key] = {
+                        'native': tid, 'human': topic['creator_user_id'], 'observed_at': now,
+                        'execution': ('working' if work_active else 'idle')
+                            if status.get('type') in ('active', 'idle', 'notLoaded') else 'unknown',
+                        'goal_state': observed_goal['state'],
+                        'last_conversation_at': reader.last_conversation_at}
                     update = pending_update_line(args.pending_update_record, key, now)
                     report, active_text, text = combine_update_status(report, active_text, text, update)
                     pending = pending_requests(bridge,topic['chat_id'],topic['thread_id'],topic['creator_user_id'])
@@ -1067,7 +1295,13 @@ def run(args):
                                              active_text, position, pending_markup(pending)))
                 # Publish the native snapshot before automatic Telegram delivery can wait.
                 cache.update(reports, bindings, weekly, contexts)
+                topic_snapshot['connected'] = True
+                topic_snapshot['observations'] = topic_observations
+                atomic_json(state / 'topics.json', topic_snapshot)
+                inventory = topic_activity_inventory(bridge, topic_snapshot, args.activity_days)
                 if publisher:
+                    if markers:
+                        markers.update(bridge, topic_snapshot)
                     for publication in publications:
                         publisher.update(*publication[:6], active_text=publication[6],
                                          position=publication[7], markup=publication[8])
@@ -1076,6 +1310,8 @@ def run(args):
                             publisher.retire(key, entry)
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
                             'topics': len(observations), 'active': sum(x['working'] for x in observations),
+                            'topic_activity': {'observed_at': inventory['observed_at'],
+                                               'counts': inventory['counts']},
                             'weekly_available': weekly.available,
                             'weekly_resets_at': weekly.resets_at,
                             'status_requests_alive': status_worker.is_alive() if status_worker else False,
@@ -1099,16 +1335,24 @@ def run(args):
                         publisher.update(key, entry['chat_id'], entry['topic'], entry['turn'],
                                          '⚠️ Native connection unavailable · activity unconfirmed', time.time())
                 atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': False})
+                topic_snapshot['connected'] = False
+                atomic_json(state / 'topics.json', topic_snapshot)
+                if markers:
+                    markers.update(bridge, topic_snapshot)
                 if args.probe:
                     raise RuntimeError('native activity probe unavailable') from None
             stopped.wait(8)
     finally:
         stopped.set()
+        topic_snapshot['connected'] = False
+        atomic_json(state / 'topics.json', topic_snapshot)
         if status_worker:
             status_worker.join(timeout=2)
         if native:
             native.close()
         if publisher:
+            if markers:
+                markers.update(bridge, topic_snapshot, restore=True)
             for key, entry in publisher.snapshot().items():
                 publisher.retire(key, entry)
         bridge.close()
@@ -1121,7 +1365,16 @@ if __name__ == '__main__':
     parser.add_argument('--config', required=True)
     parser.add_argument('--state-dir', required=True)
     parser.add_argument('--pending-update-record', help='owner-only heartbeat receipt for an explicitly configured finite bot updater')
-    parser.add_argument('--probe', action='store_true', help='read-only; no token or Telegram calls')
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument('--probe', action='store_true', help='read-only; no token or Telegram calls')
+    action.add_argument('--inventory', action='store_true',
+                        help='finite cached topic inventory; no native attachment or Telegram calls')
+    action.add_argument('--restore-topic-markers', action='store_true',
+                        help='finite retirement of acknowledged owned markers; no native attachment')
+    parser.add_argument('--topic-markers', action='store_true',
+                        help='opt in to reversible goal/work markers on known canonical topic names')
+    parser.add_argument('--activity-days', type=int, choices=range(1, 366), default=7,
+                        metavar='DAYS', help='recent conversation window, 1–365 days (default 7)')
     parser.add_argument('--status-requests', action='store_true',
                         help='supplement newly handled /status commands with activity and weekly quota')
     try:

@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('activity', pathlib.Path(__file__).resolve().parents[1] / 'scripts/activity_indicator.py')
 activity = importlib.util.module_from_spec(spec)
@@ -30,7 +31,7 @@ class ActivityIO(unittest.TestCase):
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 method = self.path.rsplit('/', 1)[-1]
                 owner.calls.append((method, payload))
-                default = True if method == 'deleteMessage' else {
+                default = True if method in ('deleteMessage', 'editForumTopic') else {
                     'message_id': payload.get('message_id', 100 + sum(m == 'sendMessage' for m, _ in owner.calls)),
                     'chat': {'id': payload['chat_id']},
                     'message_thread_id': payload.get('message_thread_id', 7)}
@@ -826,6 +827,297 @@ class ActivityIO(unittest.TestCase):
         restarted.update('100:7', 100, 7, 'request-a', 'Working', 200, requested=True)
         self.assertEqual(len(self.calls), 2)
 
+
+
+    def marker_database(self):
+        database = sqlite3.connect(self.root / 'markers.sqlite')
+        database.row_factory = sqlite3.Row
+        database.executescript('''CREATE TABLE users(tg_user_id INTEGER,allowed INTEGER);
+            INSERT INTO users VALUES(100,1);
+            CREATE TABLE sessions(id INTEGER,chat_id INTEGER,thread_id INTEGER,
+                creator_user_id INTEGER,codex_thread_id TEXT,force_fresh_thread INTEGER,session_title TEXT);
+            INSERT INTO sessions VALUES(1,100,7,100,'one',0,'Unverified summary');
+            CREATE TABLE turns(session_id INTEGER,from_user_id INTEGER,started_at TEXT);
+            CREATE TABLE bot_state(key TEXT,value TEXT);''')
+        database.execute('INSERT INTO bot_state VALUES(?,?)', ('topic_catalog:100:7',
+            json.dumps({'name': {'value': 'Human title', 'source': {'kind': 'rename_receipt'}},
+                        'lifecycle': {'value': 'open'}, 'icon_color': {'value': 123}})))
+        self.addCleanup(database.close)
+        return database
+
+    def marker_snapshot(self, now):
+        return {'connected': True, 'observations': {'100:7': {'native': 'one', 'human': 100,
+            'observed_at': now, 'goal_state': 'active', 'execution': 'idle'}}}
+
+    def test_topic_markers_preserve_canonical_names_and_icons_and_restore_without_loop(self):
+        database = self.marker_database()
+        path = self.root / 'markers.json'
+        markers = activity.TopicMarkers(self.telegram, path)
+        now = time.time()
+        snapshot = self.marker_snapshot(now)
+        before = database.execute('SELECT value FROM bot_state').fetchone()[0]
+        markers.update(database, snapshot, now=now)
+        self.assertEqual(self.calls, [('editForumTopic',
+            {'chat_id': 100, 'message_thread_id': 7, 'name': '🎯 Human title'})])
+        self.assertEqual(database.execute('SELECT value FROM bot_state').fetchone()[0], before)
+        restarted = activity.TopicMarkers(self.telegram, path)
+        restarted.update(database, snapshot, now=now + 1)
+        self.assertEqual(len(self.calls), 1)
+        # Graceful retirement restores only our own acknowledged decoration,
+        # without waiting thirty seconds or changing the canonical/native name.
+        restarted.update(database, snapshot, restore=True, now=now + 2)
+        self.assertEqual(self.calls[-1][1]['name'], 'Human title')
+        restarted.update(database, snapshot, restore=True, now=now + 3)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_uncertain_topic_marker_is_not_replayed_or_restored_after_restart(self):
+        database = self.marker_database()
+        path = self.root / 'markers.json'
+        markers = activity.TopicMarkers(self.telegram, path)
+        now = time.time()
+        snapshot = self.marker_snapshot(now)
+        self.answers = [None]  # Server accepted body, connection lost before ACK.
+        markers.update(database, snapshot, now=now)
+        self.assertEqual(markers.state['100:7']['phase'], 'uncertain')
+        restarted = activity.TopicMarkers(self.telegram, path)
+        snapshot['observations']['100:7']['observed_at'] = now + 90
+        restarted.update(database, snapshot, now=now + 90)
+        restarted.update(database, snapshot, restore=True, now=now + 91)
+        self.assertEqual(len(self.calls), 1)
+        # A genuine newly observed human name supersedes the old projection.
+        database.execute('UPDATE bot_state SET value=?', (json.dumps({
+            'name': {'value': 'A new human title', 'source': {'kind': 'telegram_update', 'update_id': 99}},
+            'lifecycle': {'value': 'open'}}),))
+        restarted.update(database, snapshot, now=now + 92)
+        self.assertEqual(self.calls[-1][1]['name'], '🎯 A new human title')
+        self.assertEqual(len(self.calls), 2)
+
+    def test_topic_marker_rejection_binding_changes_revocation_and_long_names(self):
+        database = self.marker_database()
+        markers = activity.TopicMarkers(self.telegram, self.root / 'markers.json')
+        now = time.time()
+        snapshot = self.marker_snapshot(now)
+        self.answers = [{'ok': False, 'error_code': 429, 'parameters': {'retry_after': 60}}]
+        markers.update(database, snapshot, now=now)
+        snapshot['observations']['100:7']['observed_at'] = now + 40
+        markers.update(database, snapshot, now=now + 40)
+        self.assertEqual(len(self.calls), 1)
+        snapshot['observations']['100:7']['observed_at'] = now + 61
+        markers.update(database, snapshot, now=now + 61)
+        self.assertEqual(len(self.calls), 2)
+        database.execute("UPDATE sessions SET codex_thread_id='different'")
+        markers.update(database, snapshot, now=now + 92)
+        self.assertEqual(self.calls[-1][1]['name'], 'Human title')  # No stale working claim.
+        database.execute('UPDATE users SET allowed=0')
+        markers.update(database, snapshot, now=now + 123)
+        self.assertEqual(len(self.calls), 3)
+        database.execute('UPDATE users SET allowed=1')
+        database.execute("UPDATE sessions SET codex_thread_id='one'")
+        database.execute('UPDATE bot_state SET value=?', (json.dumps({
+            'name': {'value': 'a'*128}, 'lifecycle': {'value': 'open'}}),))
+        snapshot['observations']['100:7']['observed_at'] = now + 124
+        markers.update(database, snapshot, now=now + 124)
+        self.assertEqual(len(self.calls), 3)  # Never truncate a human name to add a marker.
+
+    def test_finite_marker_retirement_uses_receipts_without_a_native_connection(self):
+        database = self.marker_database()
+        database.commit()
+        state = self.root / 'marker-state'
+        state.mkdir(mode=0o700)
+        markers = activity.TopicMarkers(self.telegram, state / 'topic-markers.json')
+        now = time.time()
+        markers.update(database, self.marker_snapshot(now), now=now)
+        config = self.root / 'marker-config.toml'
+        config.write_text(f'db_path = {json.dumps(str(self.root / "markers.sqlite"))}\n'
+            '[telegram]\n' + f'bot_token_file = {json.dumps(str(self.root / "bot.token"))}\n'
+            f'api_base = {json.dumps(self.telegram.base)}\n')
+        result = subprocess.run(['python3', '-B', str(pathlib.Path(activity.__file__)),
+            '--config', str(config), '--state-dir', str(state), '--restore-topic-markers'],
+            capture_output=True, text=True, timeout=5, check=True)
+        self.assertEqual(json.loads(result.stdout)['outcomes']['100:7'], 'applied')
+        self.assertEqual(self.calls[-1][1]['name'], 'Human title')
+        self.assertEqual(len(self.calls), 2)
+        restored = activity.TopicMarkers(self.telegram, state / 'topic-markers.json')
+        other = sqlite3.connect(self.root / 'another-database.sqlite')
+        other.row_factory = sqlite3.Row
+        try:
+            with self.assertRaises(ValueError):
+                restored.update(other, {}, restore=True)
+        finally:
+            other.close()
+        self.assertEqual(len(self.calls), 2)
+
+
+class TopicActivityIO(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.temporary.name)
+        self.path = self.root / 'bridge.sqlite'
+        self.database = sqlite3.connect(self.path)
+        self.database.row_factory = sqlite3.Row
+        self.database.executescript('''CREATE TABLE users(tg_user_id INTEGER,allowed INTEGER);
+            INSERT INTO users VALUES(100,1),(101,0);
+            CREATE TABLE sessions(id INTEGER,chat_id INTEGER,thread_id INTEGER,
+                creator_user_id INTEGER,codex_thread_id TEXT,force_fresh_thread INTEGER,session_title TEXT);
+            CREATE TABLE turns(session_id INTEGER,from_user_id INTEGER,started_at TEXT);
+            CREATE TABLE bot_state(key TEXT,value TEXT);
+            INSERT INTO sessions VALUES(1,100,7,100,'one',0,'Summary only'),
+                (2,100,8,100,'two',0,NULL),(3,100,9,100,'three',0,NULL),
+                (4,100,10,100,'four',0,NULL),(5,100,11,100,NULL,0,NULL),
+                (6,100,12,101,'denied',0,NULL);''')
+        self.now = time.time()
+        def observation(native, goal, execution='idle'):
+            return {'native': native, 'human': 100, 'goal_state': goal,
+                    'execution': execution, 'observed_at': self.now,
+                    'last_conversation_at': None}
+        self.snapshot = {'schema': 'telecodex.topic-observations/v1',
+                         'source': activity.inventory_source(self.database), 'connected': True,
+                         'observations': {'100:7': observation('one', 'active'),
+                            '100:8': observation('two', 'absent', 'working'),
+                            '100:9': observation('three', 'paused'),
+                            '100:10': observation('four', 'blocked')}}
+
+    def tearDown(self):
+        self.database.close()
+        self.temporary.cleanup()
+
+    def inventory(self, **kwargs):
+        return activity.topic_activity_inventory(self.database, self.snapshot, now=self.now, **kwargs)
+
+    def test_goal_work_passive_and_unknown_are_separate_with_evidence_only_recency(self):
+        self.snapshot['observations']['100:9']['last_conversation_at'] = self.now - 60
+        self.database.execute('INSERT INTO bot_state VALUES(?,?)', ('topic_catalog:100:7',
+            json.dumps({'name': {'value': 'Human title', 'source': {'kind': 'telegram_update'}}})))
+        view = self.inventory()
+        self.assertEqual(view['counts'], {'active_goal': 1, 'working_without_active_goal': 1,
+            'passive': 2, 'unknown': 1, 'passive_recent': 1, 'passive_recency_unknown': 1})
+        items = {row['key']: row for row in view['items']}
+        self.assertEqual(items['100:7']['marker'], '🎯')  # Active goal, idle execution.
+        self.assertEqual(items['100:7']['execution'], 'idle')
+        self.assertEqual(items['100:7']['telegram']['name']['value'], 'Human title')
+        self.assertEqual(items['100:7']['title_summary'], 'Summary only')
+        self.assertEqual(items['100:8']['marker'], '⚙')
+        self.assertEqual(items['100:9']['goal_state'], 'paused')
+        self.assertEqual(items['100:9']['marker'], '')
+        self.assertIsNone(items['100:10']['recent_conversation'])
+        self.assertNotIn('100:12', items)
+        # Tool/metadata polling is not conversation and cannot make an old tail recent.
+        self.snapshot['observations']['100:9']['last_conversation_at'] = self.now - 8*86400
+        self.assertEqual(self.inventory()['counts']['passive_recent'], 0)
+        self.assertEqual(self.inventory(days=9)['counts']['passive_recent'], 1)
+
+    def test_current_bindings_authorization_and_per_row_freshness_are_revalidated(self):
+        self.snapshot['observations']['100:7']['observed_at'] -= 21
+        self.snapshot['observations']['100:8']['goal_state'] = 'unknown'
+        self.database.execute("UPDATE sessions SET codex_thread_id='replacement' WHERE id=3")
+        self.database.execute('UPDATE sessions SET force_fresh_thread=1 WHERE id=4')
+        self.assertEqual(self.inventory()['counts']['unknown'], 5)
+        self.snapshot['observations']['100:7']['observed_at'] = self.now + 1
+        self.assertEqual(self.inventory()['counts']['unknown'], 5)  # Future clocks unconfirmed.
+        self.database.execute('UPDATE users SET allowed=0 WHERE tg_user_id=100')
+        self.assertEqual(self.inventory()['items'], [])
+
+    def test_disconnect_keeps_history_without_live_claims_or_cached_counts(self):
+        self.snapshot['connected'] = False
+        self.snapshot['counts'] = {'active_goal': 999}
+        self.snapshot['observations']['100:9']['last_conversation_at'] = self.now - 60
+        view = self.inventory()
+        self.assertEqual(view['counts']['unknown'], 5)
+        passive = next(row for row in view['items'] if row['key'] == '100:9')
+        self.assertEqual(passive['goal_state'], 'unknown')
+        self.assertTrue(passive['recent_conversation'])
+
+    def test_goal_absence_and_unsupported_read_are_different_without_mutation(self):
+        native = object.__new__(activity.Native)
+        calls = []
+        responses = iter(({'goal': None}, None, {}, {'goal': {'threadId': 'one', 'status': 'blocked'}}))
+        native.rpc = lambda method, params: (calls.append((method, params)) or next(responses))
+        self.assertEqual([native.goal_observation('one')['state'] for _ in range(4)],
+                         ['absent', 'unknown', 'unknown', 'blocked'])
+        self.assertTrue(all(method == 'thread/goal/get' for method, _ in calls))
+
+    def test_rollout_recency_does_not_reset_on_task_start_or_change_on_tools(self):
+        reader = activity.Rollout(self.root / 'unused', 'one')
+        stamp = '2026-10-20T00:00:00Z'
+        reader.consume({'timestamp': stamp, 'payload': {'type': 'item_completed',
+            'item': {'type': 'UserMessage', 'id': 'human'}}})
+        expected = reader.last_conversation_at
+        reader.consume({'timestamp': '2026-10-20T01:00:00Z',
+                        'payload': {'type': 'task_started', 'turn_id': 'later'}})
+        reader.consume({'timestamp': '2026-10-20T02:00:00Z', 'type': 'response_item',
+                        'payload': {'type': 'function_call', 'call_id': 'call', 'name': 'read'}})
+        self.assertEqual(reader.last_conversation_at, expected)
+
+    def test_finite_cli_reads_cached_inventory_without_token_native_or_publication(self):
+        self.database.commit()
+        state = self.root / 'state'
+        state.mkdir(mode=0o700)
+        activity.atomic_json(state / 'topics.json', self.snapshot)
+        config = self.root / 'config.toml'
+        config.write_text(f'db_path = {json.dumps(str(self.path))}\n')
+        result = subprocess.run(['python3', '-B', str(pathlib.Path(activity.__file__)),
+            '--config', str(config), '--state-dir', str(state), '--inventory'],
+            capture_output=True, text=True, timeout=5, check=True)
+        view = json.loads(result.stdout)
+        self.assertEqual(view['counts']['active_goal'], 1)
+        self.assertFalse((state / 'observer.lock').exists())
+        self.assertFalse((state / 'messages.json').exists())
+        self.snapshot['source'] = 'a different database'
+        activity.atomic_json(state / 'topics.json', self.snapshot)
+        self.assertEqual(activity.read_topic_inventory(self.database, state / 'topics.json')['counts']['unknown'], 5)
+        (state / 'topics.json').chmod(0o644)
+        with self.assertRaises(ValueError):
+            activity.read_topic_inventory(self.database, state / 'topics.json')
+
+    def test_observer_sweep_persists_actual_binding_observations_before_retirement(self):
+        from types import SimpleNamespace
+        import contextlib
+        import io
+        self.database.executescript('''ALTER TABLE turns ADD COLUMN status TEXT;
+            ALTER TABLE turns ADD COLUMN id INTEGER;
+            CREATE TABLE incoming_updates(update_id INTEGER,payload_json TEXT,updated_at TEXT);''')
+        self.database.commit()
+        home = self.root / 'native'
+        (home / 'sessions').mkdir(parents=True)
+        rollout = home / 'sessions' / 'one.jsonl'
+        rollout.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'one'}})+'\n')
+        with sqlite3.connect(home / 'state_5.sqlite') as database:
+            database.execute('CREATE TABLE threads(id TEXT,archived INTEGER,rollout_path TEXT,source TEXT)')
+            database.execute('INSERT INTO threads VALUES(?,0,?,NULL)', ('one', str(rollout)))
+        database.close()
+        config = self.root / 'config.toml'
+        config.write_text(f'db_path = {json.dumps(str(self.path))}\n[codex]\n')
+        state = self.root / 'observer'
+        class Native:
+            def __init__(self, binary):
+                pass
+            def rpc(self, method, params):
+                assert method == 'account/rateLimits/read'
+                return None
+            def status(self, thread):
+                assert thread == 'one'
+                return {'type': 'idle'}
+            def goal_observation(self, thread):
+                assert thread == 'one'
+                return {'state': 'active', 'goal': {'status': 'active', 'objective': 'Private objective'}}
+            def close(self):
+                pass
+        args = SimpleNamespace(config=config, state_dir=state, inventory=False,
+            restore_topic_markers=False, probe=True, topic_markers=False,
+            status_requests=False, pending_update_record=None, activity_days=7)
+        with (mock.patch.object(activity, 'Native', Native),
+              mock.patch.object(activity.signal, 'signal'),
+              mock.patch.dict(os.environ, {'CODEX_HOME': str(home)}),
+              contextlib.redirect_stdout(io.StringIO())):
+            activity.run(args)
+        retained = json.loads((state / 'topics.json').read_text())
+        self.assertFalse(retained['connected'])  # Probe ended, no live observer claimed.
+        self.assertEqual(retained['observations']['100:7']['native'], 'one')
+        self.assertEqual(retained['observations']['100:7']['goal_state'], 'active')
+        self.assertNotIn('Private objective', (state / 'topics.json').read_text())
+        health = json.loads((state / 'health.json').read_text())
+        self.assertEqual(health['topic_activity']['counts']['active_goal'], 1)
+        self.assertFalse((state / 'messages.json').exists())
 
 
 if __name__ == '__main__':

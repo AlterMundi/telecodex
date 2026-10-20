@@ -43,10 +43,12 @@ name and native name; its response distinguishes partial acknowledgments.
 Do not infer legacy names from native titles or backfill them from first-message
 summaries. Unknown metadata needs retained evidence or human confirmation.
 
-The next #108 step connects the existing activity observer's goal/execution
-observations to compact counts and reversible status decoration, preserving
-canonical human titles/icons. That step and receiving qualification are not
-claimed by this catalog implementation. #215 separately owns attributed exchange
-projection and shared publication deduplication.
+The existing activity observer now provides dated native goal/execution counts
+and opt-in reversible title markers, preserving canonical human titles/icons.
+Its finite `--inventory` joins current authorization/bindings with those observed
+facts; see [activity-indicator.md](activity-indicator.md#topic-lifecycle-and-compact-activity)
+for freshness, unknown states, recency and retirement. Source fixtures do not
+establish receiving adoption. #215 separately owns attributed exchange projection
+and shared publication deduplication.
 
 Wire fields follow the [Telegram service-message contract](https://core.telegram.org/bots/api#forumtopiccreated), including explicit empty emoji resets.
