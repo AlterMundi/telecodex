@@ -186,11 +186,9 @@ async fn send_file(
             mime.as_deref(),
             Some(&caption),
             || {
-                if (!publication.direct && !enabled(shared, key, human)
-                    || publication.direct
-                        && shared
-                            .store
-                            .conversation_turn_return(publication.local_turn)?)
+                // Immutable file audiences and the explicit source projection
+                // are independent of a later text return-surface selection.
+                if !enabled(shared, key, human)
                     || shared
                         .store
                         .artifact_get(human, key, &publication.source)

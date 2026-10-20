@@ -654,21 +654,20 @@ pub(super) async fn process_turn(
     } else {
         runner
     };
-    let runner = runner.with_client_message_id(
-        queued
-            .conversation_input
-            .as_ref()
-            .map(|id| format!("conversation:{id}"))
-            .or_else(|| queued.interaction.clone())
-            .or_else(|| {
-                queued.update_id.map(|id| {
-                    format!(
-                        "telegram:{}:{}:{id}",
-                        session.key.chat_id, queued.request.from_user_id
-                    )
-                })
-            }),
-    );
+    let client_message_id = queued
+        .conversation_input
+        .as_ref()
+        .map(|id| format!("conversation:{id}"))
+        .or_else(|| queued.interaction.clone())
+        .or_else(|| {
+            queued.update_id.map(|id| {
+                format!(
+                    "telegram:{}:{}:{id}",
+                    session.key.chat_id, queued.request.from_user_id
+                )
+            })
+        });
+    let runner = runner.with_client_message_id(client_message_id.clone());
     let controller_selected = shared.config.interaction.as_ref().is_some_and(|c| {
         c.human_id == runtime_request.from_user_id
             && ((c.entry() == session.key
@@ -703,6 +702,7 @@ pub(super) async fn process_turn(
                 let admission_epoch=queued.admission_epoch.clone();
                 let interaction=queued.interaction.clone();
                 let conversation_input=queued.conversation_input.clone();
+                let client_message_id=client_message_id.clone();
                 let conversation_native=conversation_native.clone();
                 let result_root=execution_root.clone();
                 let attach_native=queued.goal.as_ref().filter(|g|g.attach_turn.is_some()).and_then(|g|g.native_thread.clone());
@@ -720,6 +720,7 @@ pub(super) async fn process_turn(
                     let admission_epoch=admission_epoch.clone();
                     let interaction=interaction.clone();
                     let conversation_input=conversation_input.clone();
+                    let client_message_id=client_message_id.clone();
                     let conversation_native=conversation_native.clone();
                     let result_root=result_root.clone();
                     let routing_app=routing_app.clone();
@@ -852,7 +853,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnSubmitting => {
-                                shared.store.native_collection_submitting(turn_id)?;
+                                shared.store.native_collection_submitting(turn_id,client_message_id.as_deref())?;
                                 shared.store.voice_validate(voice_update,session_key,requester_user_id)?;
                                 if let Some(native)=attach_native.as_deref() {shared.store.validate_owned_binding(session_key,requester_user_id,native)?;}
                                 if let Some(id)=interaction.as_deref() {

@@ -49,11 +49,8 @@ pub(super) fn retain(
             .as_ref()
             .context("Missing output directory anchor")?
             .metadata()?;
-        let publish_files = shared
-            .config
-            .interaction
-            .as_ref()
-            .is_some_and(|c| c.telegram_projection)
+        let source_key = shared.store.native_interaction_source(local, human)?.0;
+        let publish_files = super::topic_publications::enabled(&shared, source_key, human)
             && shared.store.topic_projection_active(local)?;
         shared.store.artifact_job_stage(
             local,

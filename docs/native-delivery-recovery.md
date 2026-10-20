@@ -35,6 +35,11 @@ effects. Missing boundaries and unobservable native state remain visible in stat
 An internally generated preparation-failure notice can return to the same
 authorized topic before any native binding is observed. It claims no native
 acceptance or output; the owner and allowlist are checked before publication.
+New browser, routed and other-participant executions retain a boundary without
+enrolling another direct observer. An unconfirmed successor permits recovery of
+the last proven checkpoint, never unrelated later output. Immutable file jobs
+retain their explicit source-projection enrollment and captured audiences across
+later text return-surface changes; direct text durability does not enable files.
 
 A proved terminal history observation releases a collector still waiting for a
 lost event, without turn interruption. An orphaned existing active writer can be

@@ -48,7 +48,7 @@ impl Store {
     /// Never backfill an old stream with unknown historical Telegram receipts.
     pub fn native_collection_started(&self, local: i64, physical: &str) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute("INSERT INTO native_collections(local_turn,anchor,first_turn) SELECT local_turn,?2,?2 FROM topic_projection_turns WHERE local_turn=?1 AND EXISTS(SELECT 1 FROM direct_topic_turns d WHERE d.local_turn=topic_projection_turns.local_turn) ON CONFLICT(local_turn) DO UPDATE SET anchor=excluded.anchor,first_turn=excluded.first_turn WHERE native_collections.first_turn=''",params![local,physical])?;
+        conn.execute("INSERT INTO native_collections(local_turn,anchor,first_turn,phase) SELECT t.id,?2,?2,CASE WHEN EXISTS(SELECT 1 FROM direct_topic_turns d WHERE d.local_turn=t.id) THEN 'open' ELSE 'boundary' END FROM turns t JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=t.from_user_id WHERE t.id=?1 AND t.native_thread_id=s.codex_thread_id AND s.force_fresh_thread=0 AND u.allowed=1 ON CONFLICT(local_turn) DO UPDATE SET anchor=excluded.anchor,first_turn=excluded.first_turn WHERE native_collections.first_turn=''",params![local,physical])?;
         Ok(())
     }
 
@@ -83,9 +83,11 @@ impl Store {
         Ok(())
     }
 
-    pub fn native_collection_submitting(&self, local: i64) -> Result<()> {
+    pub fn native_collection_submitting(&self, local: i64, client: Option<&str>) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute("INSERT OR IGNORE INTO native_collections(local_turn,anchor,first_turn,client_id) SELECT p.local_turn,'','','telegram:'||s.chat_id||':'||t.from_user_id||':'||MIN(i.update_id) FROM topic_projection_turns p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=t.session_id JOIN incoming_updates i ON i.turn_id=t.id WHERE p.local_turn=?1 AND EXISTS(SELECT 1 FROM direct_topic_turns d WHERE d.local_turn=p.local_turn) GROUP BY p.local_turn",[local])?;
+        // Routed/browser/other-participant executions are observation boundaries,
+        // never new direct observers or implicit projection enrollment.
+        conn.execute("INSERT OR IGNORE INTO native_collections(local_turn,anchor,first_turn,client_id,phase) SELECT t.id,'','',?2,CASE WHEN EXISTS(SELECT 1 FROM direct_topic_turns d WHERE d.local_turn=t.id) THEN 'open' ELSE 'boundary' END FROM turns t JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=t.from_user_id WHERE t.id=?1 AND t.native_thread_id=s.codex_thread_id AND s.force_fresh_thread=0 AND u.allowed=1",params![local,client])?;
         Ok(())
     }
 
@@ -187,7 +189,21 @@ impl Store {
                     })
                 })
         });
-        let turns = &turns[..end.unwrap_or(turns.len())];
+        // A later admission without a proved history boundary cannot authorize
+        // reading past this observer's last checkpoint. Still recover that
+        // checkpoint, so a definitely unaccepted successor cannot block it.
+        let limit = end.unwrap_or_else(|| {
+            if selected.next_local.is_some() {
+                turns
+                    .iter()
+                    .position(|t| t["id"] == selected.anchor)
+                    .unwrap_or(0)
+                    + 1
+            } else {
+                turns.len()
+            }
+        });
+        let turns = &turns[..limit];
         if selected.anchor.is_empty() {
             let first = turns.first().context("Native input receipt missing")?;
             let matched = first["items"].as_array().is_some_and(|items| {
@@ -340,6 +356,81 @@ mod tests {
     }
     fn snapshot(id: &str, status: &str, text: &str) -> Value {
         json!({"id":id,"status":status,"items":[{"id":format!("{id}-answer"),"type":"agentMessage","phase":"final_answer","text":text}]})
+    }
+    #[test]
+    fn routed_successor_bounds_direct_recovery_without_enrolling_an_observer() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let (old, key) = start(&s);
+        s.record_turn_finished(old, "failed", None).unwrap();
+        let session = s
+            .ensure_session(key, 100, &super::super::tests::defaults())
+            .unwrap();
+        let next = s
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: key,
+                    from_user_id: 100,
+                    prompt: "Browser input".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        s.record_turn_native_thread(next, "native").unwrap();
+        s.native_collection_submitting(next, Some("conversation:next"))
+            .unwrap();
+        let selected = s.native_collection_next().unwrap().unwrap();
+        assert_eq!(selected.local, old);
+        assert_eq!(selected.next_local, Some(next));
+        assert_eq!(selected.stop_client.as_deref(), Some("conversation:next"));
+        // An unconfirmed successor still permits this last proven checkpoint,
+        // but cannot authorize unrelated later output to enter its direct queue.
+        s.native_collection_observed(
+            &selected,
+            &[
+                snapshot("first", "completed", "Old reply"),
+                snapshot("second", "completed", "Other surface reply"),
+            ],
+            true,
+        )
+        .unwrap();
+        s.native_collection_started(next, "second").unwrap();
+        let selected = s.native_collection_next().unwrap().unwrap();
+        assert_eq!(selected.stop_before.as_deref(), Some("second"));
+        s.native_collection_observed(
+            &selected,
+            &[
+                snapshot("first", "completed", "Old reply"),
+                snapshot("second", "completed", "Other surface reply"),
+            ],
+            false,
+        )
+        .unwrap();
+        assert!(s.native_collection_next().unwrap().is_none());
+        assert!(!s.topic_projection_active(next).unwrap());
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM topic_publications WHERE body='Old reply'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM topic_publications WHERE body='Other surface reply'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
     }
     #[test]
     fn explicit_session_removal_retires_delivery_without_erasing_original_receipts() {
