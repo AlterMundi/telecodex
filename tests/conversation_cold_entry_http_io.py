@@ -160,5 +160,34 @@ def temporary_review(binary):
         if b:b.client.close()
         j.close()
 
+def sonic_registry(binary):
+    """The sound score shares actual routing membership, without native reads."""
+    j=ColdEntry(binary);b=None
+    try:
+        j.prepare();j.stop()
+        j.config.write_text(j.config.read_text().replace('[interaction]\n','[interaction]\ndiscover_owned_sessions=true\n'))
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.row_factory=sqlite3.Row
+            row=dict(db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone())
+            row.pop('id');row.update(thread_id=19,codex_thread_id='synthetic-discovered-binding',session_title='Discovered19',busy=0)
+            db.execute('INSERT INTO sessions('+','.join(row)+') VALUES('+','.join('?'for _ in row)+')',list(row.values()))
+        j.start();j.wait_control_socket(j.socket);b=Browser(j)
+        choices=b.get('/api/interaction/inputs')['routing_choices']
+        expected={'100:1',*(f"100:{int(v['selector'][1:])}"for v in choices)}
+        sound=b.get('/api/interaction/sonic')
+        assert {v['id']for v in sound['sources']}==expected
+        discovered=next(v for v in sound['sources']if v['id']=='100:19')
+        assert discovered['label']=='Discovered19' and not discovered['fresh']
+        assert not sound['configured'] and not sound['connected']
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute('UPDATE sessions SET force_fresh_thread=1 WHERE thread_id=19')
+        assert '100:19'not in {v['id']for v in b.get('/api/interaction/sonic')['sources']}
+        assert not j.packets and b.provider.native is None
+        assert j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=1')==[(None,)]
+        print('PASS actual control/SQLite/HTTP sound membership matches discovered routing choices, retires replaced binding, and starts no native observer or cold integrator; synthetic native peers, zero models.')
+    finally:
+        if b:b.client.close()
+        j.close()
+
 if __name__=='__main__':
-    binary=str(Path(sys.argv[1]).resolve());first_text(binary);first_voice(binary);temporary_review(binary)
+    binary=str(Path(sys.argv[1]).resolve());first_text(binary);first_voice(binary);temporary_review(binary);sonic_registry(binary)

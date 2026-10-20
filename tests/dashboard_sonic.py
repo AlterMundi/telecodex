@@ -58,11 +58,20 @@ topic_id=8
             'origin':'https://example.test','bot_id':123,'activity_state_dir':str(self.state),
             'companion':{'enabled':True,'grants_dir':str(self.root/'grants')}}
         self.provider=Provider(self.config)
+        # Registry selection is owned by the receiving control service. These
+        # cache/HTTP cases isolate that read; conversation_cold_entry_http_io
+        # covers the actual registry rather than duplicating its SQL here.
+        self.choices=[{'selector':'t7','label':'Alpha'},{'selector':'t8','label':'Selected but not owned'}]
+        self.registry=patch.object(self.provider,'presentation',side_effect=self.presentation)
+        self.registry.start()
         self.client=TestClient(create_app(self.config,self.provider,lambda raw,bot:int(raw)),base_url=self.config['origin'])
         login=self.client.post('/api/session',json={'init_data':'100'},headers={'origin':self.config['origin']})
         self.owner={'authorization':'Bearer '+login.json()['session_token']}
     def save(self):atomic_json(self.state/'topics.json',self.observation)
-    def tearDown(self):self.client.close();self.provider.close();self.temp.cleanup()
+    def presentation(self,command):
+        self.assertEqual(command,f'input list {2**63-1} after')
+        return {'routing_choices':self.choices}
+    def tearDown(self):self.client.close();self.provider.close();self.registry.stop();self.temp.cleanup()
     def sources(self):
         response=self.client.get('/api/interaction/sonic',headers=self.owner)
         self.assertEqual(response.status_code,200,response.text)
@@ -106,6 +115,21 @@ topic_id=8
         (self.state/'topics.json').chmod(0o644)
         self.assertEqual(self.client.get('/api/interaction/sonic',headers=self.owner).status_code,503)
         self.assertIsNone(self.provider.native)
+
+    def test_dynamic_membership_comes_from_canonical_registry_not_static_config(self):
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute("INSERT INTO sessions VALUES(4,100,9,100,'discovered',0,'Discovered')")
+            db.commit()
+        self.choices.append({'selector':'t9','label':'Live discovered label'})
+        items=self.sources()
+        self.assertIn('100:9',items)
+        self.assertEqual(items['100:9']['label'],'Live discovered label')
+        self.assertEqual(items['100:9']['session'],4)
+        self.assertFalse(items['100:9']['fresh'])
+        self.choices=[{'selector':'t9','label':'Renamed'}]
+        self.assertEqual(set(self.sources()),{'100:1','100:9'})
+        self.choices=[{'selector':'invalid','label':'Invalid'}]
+        self.assertEqual(self.client.get('/api/interaction/sonic',headers=self.owner).status_code,503)
 
 
 if __name__=='__main__':unittest.main()
