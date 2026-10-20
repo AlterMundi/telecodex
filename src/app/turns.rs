@@ -351,6 +351,15 @@ pub(super) async fn process_turn(
         c.human_id == queued.request.from_user_id
             && (c.entry() == session.key || super::routing::enrolled(&shared, session.key))
     });
+    if queued.request.review_mode.is_none()
+        && super::topic_publications::enabled(&shared, session.key, queued.request.from_user_id)
+    {
+        shared.store.topic_projection_register(
+            turn_id,
+            queued.request.from_user_id,
+            session.key,
+        )?;
+    }
     // A dormant local lease changes no direct input, tool registration or admission.
     // Its hint is disclosed only when actual integrator/routed input arrives.
     let mut controller_request = queued.request.clone();
@@ -485,7 +494,11 @@ pub(super) async fn process_turn(
         )
         .await?
     };
-    sink.lock().await.turn_id = Some(turn_id);
+    {
+        let mut sink = sink.lock().await;
+        sink.turn_id = Some(turn_id);
+        sink.topic_projection = shared.store.topic_projection_active(turn_id)?;
+    }
     // Legacy native launches retain their original presentation, but its HTTP
     // waits must not hold the native event pump once the topic is enrolled.
     let (presentation_tx, presentation_task) = if registration.is_some() {
@@ -759,6 +772,7 @@ pub(super) async fn process_turn(
                                 if shared.store.interaction_instruction(&client_id,requester_user_id)?.is_some() {
                                     shared.store.interaction_transport(&client_id,requester_user_id,turn_id,crate::interaction::TransportPhase::Accepted,Some(&native_id))?;
                                 }
+                                super::topic_publications::wake(shared.clone(),session_key);
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeInputAccepted(native_id) => {
@@ -768,6 +782,7 @@ pub(super) async fn process_turn(
 
                                 shared.store.merge_input_accepted(turn_id,&native_id)?;
                                 shared.store.nexus_input_accepted(turn_id,&native_id)?;
+                                super::topic_publications::wake(shared.clone(),session_key);
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeMessageCompleted { thread_id, turn_id: native_turn, item_id, phase, text } => {
@@ -778,6 +793,7 @@ pub(super) async fn process_turn(
                                 } else {
                                     shared.store.record_native_message(turn_id, &thread_id, &native_turn, &item_id, phase.as_deref(), &text)?;
                                 }
+                                super::topic_publications::wake(shared.clone(),session_key);
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::FinalAnswerCompleted(text) => {
@@ -1384,6 +1400,7 @@ pub(super) fn saved_thread_is_unavailable(error: &anyhow::Error) -> bool {
 
 struct LiveTurnSink {
     turn_id: Option<i64>,
+    topic_projection: bool,
     shared: Arc<AppShared>,
     session_key: SessionKey,
     messages: Vec<TelegramMessageRef>,
@@ -1424,6 +1441,7 @@ impl LiveTurnSink {
             shared,
             session_key: session.key,
             turn_id: None,
+            topic_projection: false,
             messages: placeholder.into_iter().collect(),
             draft_id: None,
             limits_inline,
@@ -1446,6 +1464,7 @@ impl LiveTurnSink {
             shared,
             session_key: session.key,
             turn_id: None,
+            topic_projection: false,
             messages: Vec::new(),
             draft_id: Some(draft_id),
             limits_inline,
@@ -1459,6 +1478,19 @@ impl LiveTurnSink {
     }
 
     async fn handle_event(&mut self, event: CodexEvent) -> Result<()> {
+        if self.topic_projection
+            && matches!(
+                &event,
+                CodexEvent::AssistantText(_)
+                    | CodexEvent::CommentaryCompleted(_)
+                    | CodexEvent::FinalAnswerCompleted(_)
+                    | CodexEvent::Progress(_)
+            )
+        {
+            // The same canonical item/destination queue owns both direct and
+            // relayed publication. No second permanent stream can duplicate it.
+            return Ok(());
+        }
         // Native/store consumers retain the original event before this sink.
         // Direct answers can inherit the routed protocol from earlier turns.
         let event = match event {

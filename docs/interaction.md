@@ -8,6 +8,12 @@ The current MVP is a single **web conversation** for text and two-way voice, coo
 
 `interaction.telegram_ingress` defaults to false. The optional legacy Telegram adapter applies only to the explicitly configured integrating entry. Even when enabled, ordinary work topics, replies and literal selectors bypass routing. The current receiving MVP uses the web client; do not silently enable the legacy adapter to make a test or deployment appear successful.
 
+Independent `interaction.telegram_projection` enables attributed work-topic
+copies without changing ingress. It shares canonical event/destination identity
+with direct answers and retains uncertain delivery without replay; see
+[work-topic projections](topic-projections.md). It starts disabled until selected
+in the receiving configuration.
+
 Acceptance must demonstrate the entire actual client/controller/native/return journey: visible input retention, attributable intermediate communication, appropriate destination or clarification, mid-work corrections, and one canonical response in the requesting conversation. Historical unresolved work must not repeatedly fan out the same answer. Worker relays include the current attributed input once. Native history retains earlier messages; only later-captured related deltas accompany a delayed dispatch so an older message cannot override a newer correction. Unrelated topic inputs and repeated policy walls are not sent. Native mobile/badge and cross-body activation remain deferred.
 
 Owning plan: [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).

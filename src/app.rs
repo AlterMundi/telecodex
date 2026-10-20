@@ -42,6 +42,7 @@ mod routing;
 mod session_requests;
 mod stopping;
 mod support;
+mod topic_publications;
 mod tribu;
 mod turns;
 mod voice;
@@ -387,6 +388,7 @@ impl App {
     }
 
     pub async fn run(self) -> Result<()> {
+        topic_publications::recover(self.shared.clone())?;
         tribu::start(self.clone()).await?;
         nexus::start(self.clone()).await?;
         let mut menu = default_bot_commands();
@@ -533,6 +535,8 @@ impl App {
                     self.shared.shutdown.cancel();
                     return;
                 }
+            } else if topic_publications::recover(self.shared.clone()).is_err() {
+                tracing::warn!("Retained topic publication recovery unconfirmed");
             }
         }
     }

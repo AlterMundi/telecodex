@@ -41,6 +41,7 @@ mod observer_freshness;
 mod presentation;
 pub use observer_cards::{ObserverCard, ObserverPreparation};
 pub use observer_freshness::ObserverFreshness;
+mod topic_publications;
 mod topics;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};
@@ -116,6 +117,7 @@ impl Store {
         store.init_tribu()?;
         store.init_interactions()?;
         store.init_interaction()?;
+        store.init_topic_publications()?;
         store.init_voice()?;
         store.init_interaction_creation()?;
         store.init_routing()?;

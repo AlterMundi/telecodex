@@ -47,6 +47,7 @@ pub(super) fn record_native_message_on(
             ));
         }
     }
+    super::topic_publications::native_on(conn, local_turn, thread, turn, item, text)?;
     Ok(inserted)
 }
 
@@ -585,6 +586,9 @@ impl Store {
             "UPDATE interaction_instructions SET phase=?2,doc=?3 WHERE id=?1",
             params![id, phase.as_str(), serde_json::to_string(&instruction)?],
         )?;
+        if phase == P::Accepted {
+            super::topic_publications::accepted_on(&tx, &instruction)?;
+        }
         tx.commit()?;
         Ok(instruction)
     }
