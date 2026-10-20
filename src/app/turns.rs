@@ -453,7 +453,10 @@ pub(super) async fn process_turn(
     let draft_id = turn_id;
     let routed =
         execution_root.is_some() || queued.conversation_input.is_some() || canonical_return;
-    let sink = if routed || !shared.config.telegram.show_unfinished_messages {
+    let sink = if routed
+        || shared.store.topic_projection_active(turn_id)?
+        || !shared.config.telegram.show_unfinished_messages
+    {
         Arc::new(Mutex::new(LiveTurnSink::new_preview(
             shared.clone(),
             &session,
@@ -1668,6 +1671,9 @@ impl LiveTurnSink {
     }
 
     async fn flush(&mut self, force: bool) -> Result<()> {
+        if self.topic_projection || self.pending_text.trim().is_empty() {
+            return Ok(());
+        }
         if let Some(local) = self.turn_id
             && self.shared.store.conversation_turn_return(local)?
         {

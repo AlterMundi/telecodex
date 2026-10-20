@@ -120,7 +120,7 @@ def qualify(binary):
         j.wait(lambda: j.row('SELECT count(*) FROM sessions WHERE busy=1') == [(0,)], seconds=10)
         j.freeze_live = False
         j.admit('Continue normally after the recovered completion.')
-        j.wait(lambda: j.native_turns == 2)
+        j.wait(lambda: j.native_turns == 2 and 'native-topic-7' in j.holding)
         j.complete('Subsequent direct reply.')
         j.wait(lambda: j.exact('Subsequent direct reply.') == 1)
         j.idle()
@@ -216,7 +216,7 @@ def shared_participant(binary):
         with sqlite3.connect(j.root/'state.sqlite') as d:
             d.execute("INSERT OR REPLACE INTO users(tg_user_id,role,allowed,created_at,updated_at) VALUES(101,'admin',1,datetime('now'),datetime('now'))")
         j.admit('Allowed participant source.',user=101)
-        j.wait(lambda:j.native_turns==2)
+        j.wait(lambda:j.native_turns==2 and 'native-topic-7' in j.holding)
         j.complete('Allowed participant reply.')
         j.wait(lambda:j.exact('Allowed participant reply.')==1);j.idle()
         j.command('/status','Current Telegram session',user=101)
