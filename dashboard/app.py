@@ -230,7 +230,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         body = (public / 'index.html').read_text()
         if request.query_params.get('view') == 'conversation' and request.query_params.get('client') == 'standalone':
             body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
-        for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'conversation.js', 'style.css'):
+        for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         if appearance:
@@ -242,7 +242,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/assets/{name}')
     def asset(name: str, request: Request):
-        if name not in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -479,6 +479,17 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Provide one finalized recording of at most 20 MiB') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Voice capture unconfirmed; check its status before retrying this recording') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/sonic')
+    async def conversation_sonic_state(request: Request):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.sonic_activity)
+        except (ValueError,KeyError,ProviderUnavailable,OSError,sqlite3.Error):
+            raise HTTPException(503,'Session sound state unavailable; conversation work is unchanged') from None
         authorize(request)
         return result
 

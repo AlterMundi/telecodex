@@ -14,7 +14,7 @@ import threading
 import time
 import tomllib
 
-from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp
+from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp, read_topic_inventory, topic_activity_inventory
 from scripts.speech_render import sync_directory
 
 
@@ -186,6 +186,39 @@ class Provider:
             raise ValueError('Invalid Matrix presentation cursor')
         suffix='' if matrix is None else f' {matrix}'
         return self.presentation(f'presentation {operation} {delivery} {native}'+suffix)
+
+    def sonic_activity(self):
+        """Finite read of the existing database-bound observer, never native work.
+
+        Missing, stale or replaced observation is unknown. Limit the audience to
+        this configured integrating entry and targets owned by its actual human.
+        """
+        self.assert_binding()
+        profile=self.receiver.get('interaction',{})
+        if profile.get('human_id')!=self.human or not self.authorized(self.human):
+            raise ProviderUnavailable('Interaction state audience unavailable')
+        selected={f"{profile['chat_id']}:{profile['topic_id']}":'Conversation'}
+        for target in profile.get('targets',[])[:64]:
+            selected.setdefault(f"{profile['chat_id']}:{target['topic_id']}",str(target['name'])[:128])
+        directory=self.config.get('activity_state_dir')
+        with closing(readonly(self.receiver['db_path'])) as db:
+            inventory=read_topic_inventory(db,Path(directory)/'topics.json') if directory else topic_activity_inventory(db,{})
+            owned={item['key']:item for item in inventory['items'] if item['human']==self.human}
+            items=[]
+            for key,label in selected.items():
+                item=owned.get(key,{})
+                items.append({'id':key,'label':label,'session':item.get('session'),
+                    'observed_at':item.get('observed_at'),'fresh':item.get('fresh',False),
+                    'execution':item.get('execution','unknown'),'goal_state':item.get('goal_state','unknown'),
+                    'waiting_for_human':item.get('waiting_for_human')})
+        self.assert_binding()
+        if not self.authorized(self.human):
+            raise ProviderUnavailable('Interaction state audience changed')
+        from dashboard.sonic import descriptor
+        return {**descriptor(self.config),'schema':'telecodex.sonic-state/v1','observed_at':time.time(),
+            'configured':bool(directory),'connected':inventory['connected'],
+            'scope':'configured entry and targets; current owned bindings only',
+            'sources':items,'truncated':inventory['truncated'] or len(profile.get('targets',[]))>64}
 
     def presentation_part(self, source, revision, offset):
         import re

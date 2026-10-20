@@ -1019,6 +1019,7 @@ def topic_activity_inventory(database, snapshot, days=7, now=None):
                       'human': row['creator_user_id'], 'telegram': catalog,
                       'title_summary': row['session_title'], 'category': category,
                       'marker': marker, 'execution': execution, 'goal_state': goal,
+                      'waiting_for_human': observed.get('waiting_for_human') if fresh and type(observed.get('waiting_for_human')) is bool else None,
                       'fresh': fresh, 'observed_at': at if matched else None,
                       'last_observed_conversation_at': last, 'recent_conversation': recent})
     return {'schema': 'telecodex.topic-activity/v1', 'observed_at': now,
@@ -1251,6 +1252,7 @@ def run(args):
                         'execution': ('working' if work_active else 'idle')
                             if status.get('type') in ('active', 'idle', 'notLoaded') else 'unknown',
                         'goal_state': observed_goal['state'],
+                        'waiting_for_human': any(flag in status.get('activeFlags', []) for flag in ('waitingOnApproval','waitingOnUserInput')) if status.get('type') in ('active','idle','notLoaded') else None,
                         'last_conversation_at': reader.last_conversation_at}
                     update = pending_update_line(args.pending_update_record, key, now)
                     report, active_text, text = combine_update_status(report, active_text, text, update)

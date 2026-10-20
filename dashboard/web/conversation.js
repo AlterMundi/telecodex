@@ -49,6 +49,9 @@ window.Conversation = (() => {
     }
     let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext;
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
+    const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential});
+    const presentState=patch=>{companion?.update(patch);sound?.update(patch);};
+    if(standalone)$("#conversation-diagnostics").open=false;
     const speechGaps={chunk:180,reply:450,question:1200};
     let speechWait;
     const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
@@ -58,7 +61,7 @@ window.Conversation = (() => {
       clearFocus();voiceContext=undefined;draft.value=message;draft.focus?.();compose.scrollIntoView?.({block:"nearest"});return true;
     }});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;companion?.update({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -145,11 +148,11 @@ window.Conversation = (() => {
       card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
     }
     function inputActivity() {
-      companion?.update({transcribing:[...inputs.values()].some(c=>c.value.voice && c.value.phase==="preparing"),
+      presentState({transcribing:[...inputs.values()].some(c=>c.value.voice && c.value.phase==="preparing"),
         routing:[...inputs.values()].some(c=>["requested","queued","submitting","steering"].includes(c.value.routing?.phase))});
     }
     function resetInputs() {
-      companion?.reset();goalControls?.reset();presentationProfile=undefined;
+      companion?.reset();sound?.reset();goalControls?.reset();presentationProfile=undefined;
       disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren(historyTools);
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
@@ -528,7 +531,7 @@ window.Conversation = (() => {
       if(voiceEnabled && !voiceSuspended)disableVoice();else {enableVoice();drainVoice();}
     });
     function stop(text = "Audio stopped.") {
-      companion?.update({playback:undefined});
+      presentState({playback:undefined});
       cancelSpeechWait();voiceBusy=false;generation++;
       requestAbort?.abort(); requestAbort = undefined;
       active = undefined;
@@ -541,7 +544,7 @@ window.Conversation = (() => {
       $("#conversation-player").hidden = true;
     }
     function pause() {
-      companion?.update({playback:undefined});
+      presentState({playback:undefined});
       cancelSpeechWait();voiceBusy=false;voiceQueue.length=0;
       voiceSuspended=true;voiceStatus();
       generation++;
@@ -568,11 +571,11 @@ window.Conversation = (() => {
         history.replaceState(null, "", url);
       }
       try { telegram?.BackButton?.[enabled ? "show" : "hide"]?.(); } catch (_) {}
-      if (!enabled) {pause(); microphone?.deactivate();}
+      if (!enabled) {pause(); sound?.reset(); microphone?.deactivate();}
       modeChanged(enabled, initial);
     }
     function failed(error) {
-      companion?.update({connected:false});
+      presentState({connected:false});
       if (error.status === 401 || error.status === 403) {
         clearFiles();
         pause();stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
@@ -665,6 +668,7 @@ window.Conversation = (() => {
       }
       companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
+      void sound?.refresh();
       binding = value.binding;
       canFiles=!readOnly && value.can_download_files===true;
       if(!canFiles)clearFiles();
@@ -733,7 +737,7 @@ window.Conversation = (() => {
         if(!readOnly){
           await requestControls.refresh();
           const questions=requestControls.audioSources?.()||[];
-          companion?.update({question:questions.length>0});
+          presentState({question:questions.length>0});
           const current=source=>questions.some(q=>q.id===source.id && q.revision===source.revision);
           for(let n=voiceQueue.length-1;n>=0;n--)
             if(voiceQueue[n].kind==="native_question" && !current(voiceQueue[n]))voiceQueue.splice(n,1);
@@ -778,7 +782,7 @@ window.Conversation = (() => {
           ?{source:selected.source.id,revision:selected.source.revision,context_only:true}:undefined;
         toggle.textContent = "Pause audio";
         audioState("Playing this reply.");
-        companion?.update({playback:"playing"});
+        presentState({playback:"playing"});
       } catch (e) {
         if (active !== selected || generation !== owned) return;
         selected.verifying = false;
@@ -801,7 +805,7 @@ window.Conversation = (() => {
       const selected = active;
       $("#conversation-player").hidden = false;
       $("#conversation-playing").textContent = source.kind === "integrator_answer" ? "Conversation reply" : source.label;
-      companion?.update({playback:"preparing"});
+      presentState({playback:"preparing"});
       audioState("Preparing audio…"); toggle.disabled = true;
       requestAbort = new AbortController();
       const controller = requestAbort;
@@ -845,13 +849,13 @@ window.Conversation = (() => {
         return {failed:true,generation};
       } finally { clearTimeout(deadline); if (requestAbort === controller) requestAbort = undefined; }
     }
-    audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort)companion?.update({playback:undefined});});
+    audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort)presentState({playback:undefined});});
     audio.addEventListener("playing",()=>{
-      if(active && !active.verifying && !audio.muted)companion?.update({playback:"playing"});
+      if(active && !active.verifying && !audio.muted)presentState({playback:"playing"});
     });
     audio.addEventListener("ended", async () => {
       if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || document.hidden || !enabled) return;
-      companion?.update({playback:undefined});
+      presentState({playback:undefined});
       const selected=active, owned=generation;selected.segmentEnded=true;
       if (selected.next !== null) {
         audioState("A short pause before continuing…");
@@ -878,7 +882,7 @@ window.Conversation = (() => {
       if (audio.paused) { cancelSpeechWait();voiceSuspended=false;voiceStatus();if (audio.ended) audio.currentTime = 0; startPlayback(); }
       else pause();
     });
-    $("#conversation-stop").addEventListener("click", disableVoice);
+    $("#conversation-stop").addEventListener("click",()=>{sound?.disable();disableVoice();});
     $("#conversation-open").addEventListener("click", () => setMode(true));
     $("#conversation-back").addEventListener("click", () => setMode(false));
     $("#conversation-refresh").addEventListener("click", () => refresh(true));
@@ -893,7 +897,7 @@ window.Conversation = (() => {
     document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
     window.addEventListener("pagehide", () => {pause();stop();clearFiles();});
     window.addEventListener("offline", () => {
-      companion?.update({connected:false});
+      presentState({connected:false});
       pause(); $("#conversation-state").textContent = "Offline. Replies already loaded remain readable.";
     });
     window.addEventListener("online", () => { if (enabled && ready && !document.hidden) refresh(true); });
@@ -902,7 +906,7 @@ window.Conversation = (() => {
     if(standalone){$("#conversation-back").hidden=true;$("#conversation-telegram-older").hidden=true;}
     if(readOnly){document.body.classList.toggle("monitor-mode",true);$("#conversation-sent").open=true;}
     setMode(initialMode(), true, false);
-    return {refresh, pause, stop:()=>disableVoice(),
+    return {refresh, pause, stop:()=>{sound?.disable();disableVoice();},
       unauthenticated() { ready=false; failed({status:401,message:"Open your conversation access file to reconnect."}); },
       authenticated() { ready = true; $("#conversation-open").disabled = false; }};
   }

@@ -12,6 +12,7 @@
     <script src="assets/visual.js" defer></script>
     <script src="assets/routing_graph.js" defer></script>
     <script src="assets/companion.js" defer></script>
+    <script src="assets/sonic.js" defer></script>
     <script src="assets/conversation.js" defer></script>
     <script src="assets/app.js" defer></script>
   </head>
@@ -76,13 +77,22 @@
 <span class="note">You can write again while sessions work.</span><button id="conversation-send" type="submit" disabled>Send</button></div>
           <p id="conversation-send-state" role="status" aria-live="polite"></p>
         </form>
+        <div id="conversation-audio-tools">
         <section id="conversation-voice" hidden aria-label="Speak to your conversation">
           <div class="conversation-tools"><button id="conversation-voice-replies" type="button" aria-pressed="false">Read new replies aloud</button><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
           <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
         </section>
+        <div class="conversation-tools"><button id="conversation-sound-toggle" type="button" aria-pressed="false">≈ State sound</button></div>
+        </div>
         <details id="conversation-diagnostics" open>
         <summary>Under the hood <span aria-hidden="true">↗</span></summary>
         <div class="conversation-diagnostics-content">
+        <details id="conversation-sound"><summary>Session sound <span id="conversation-sound-status" role="status">Off</span></summary>
+          <p id="conversation-sound-vocabulary" class="note"></p>
+          <label>State sound volume <input id="conversation-sound-volume" type="range" min="0" max="1" step="0.05" value="0.3"></label>
+          <p class="note">Each session contributes to the chord. Ratios are an authored vocabulary to explore; unknown state stays visible. Voice capture and replies quiet this layer. Hiding this page stops it.</p>
+          <ol id="conversation-sound-score" aria-label="Current session sound contributions"></ol>
+        </details>
         <details id="conversation-flow" hidden><summary>Routing monitor</summary>
         <section id="routing-graph" hidden aria-label="Live conversation routing graph">
           <div class="conversation-tools"><h2>Conversation flow</h2><button id="routing-graph-live" type="button" hidden>Return to live →</button></div>
