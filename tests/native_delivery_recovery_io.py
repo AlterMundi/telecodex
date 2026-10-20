@@ -145,6 +145,7 @@ def lost_initial(binary):
         j.lose_initial=True
         j.start()
         original=j.admit('An original input whose initial native acknowledgment is lost.')
+        j.wait(lambda:j.native_turns==1)
         j.wait(lambda:j.row("SELECT count(*) FROM turns WHERE status='failed'")==[(1,)])
         j.wait(lambda:j.has('Initial receipt recovered.'),seconds=45)
         assert j.exact('Initial receipt recovered.')==1

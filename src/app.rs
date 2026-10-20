@@ -542,10 +542,11 @@ impl App {
             } else if topic_publications::recover(self.shared.clone()).is_err() {
                 tracing::warn!("Retained topic publication recovery unconfirmed");
             }
-            if !self.shared.shutdown.is_cancelled() && self.shared.config.codex.shared_app_server {
-                if native_recovery::tick(self).await.is_err() {
-                    tracing::warn!("Native output recovery remains pending; no input replayed");
-                }
+            if !self.shared.shutdown.is_cancelled()
+                && self.shared.config.codex.shared_app_server
+                && native_recovery::tick(self).await.is_err()
+            {
+                tracing::warn!("Native output recovery remains pending; no input replayed");
             }
             if !self.shared.shutdown.is_cancelled()
                 && artifact_outputs::recover(self.shared.clone()).is_err()

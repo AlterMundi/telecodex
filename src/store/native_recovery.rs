@@ -114,7 +114,7 @@ impl Store {
         if !owns {
             return Ok(String::new());
         }
-        let (ready,uncertain):(i64,i64)=conn.query_row("SELECT COALESCE(SUM(p.phase IN ('ready','publishing')),0),COALESCE(SUM(p.phase='uncertain'),0) FROM topic_publications p JOIN sessions s ON s.id=p.session_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3",params![key.chat_id,key.thread_id,human],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        let (ready,uncertain,rejected):(i64,i64,i64)=conn.query_row("SELECT COALESCE(SUM(p.phase IN ('ready','publishing')),0),COALESCE(SUM(p.phase='uncertain'),0),COALESCE(SUM(p.phase='rejected'),0) FROM topic_publications p JOIN sessions s ON s.id=p.session_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3",params![key.chat_id,key.thread_id,human],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         let observation:Option<String>=conn.query_row("SELECT n.detail FROM native_collections n JOIN turns t ON t.id=n.local_turn JOIN sessions s ON s.id=t.session_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND t.from_user_id=?3 ORDER BY n.local_turn DESC LIMIT 1",params![key.chat_id,key.thread_id,human],|r|r.get(0)).optional()?;
         let accepted:i64=conn.query_row("SELECT COUNT(*) FROM native_input_receipts n JOIN incoming_updates i ON i.update_id=n.update_id JOIN turns t ON t.id=i.turn_id JOIN sessions s ON s.id=t.session_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND t.from_user_id=?3 AND i.status='undetermined'",params![key.chat_id,key.thread_id,human],|r|r.get(0))?;
         let mut text = String::new();
@@ -125,6 +125,9 @@ impl Store {
         }
         if uncertain > 0 {
             text.push_str(&format!("\nTelegram delivery unconfirmed: {uncertain} messages; no automatic duplicate sends. /history opens their native conversation here."));
+        }
+        if rejected > 0 {
+            text.push_str(&format!("\nTelegram rejected {rejected} retained messages; /history opens their native conversation here."));
         }
         if accepted > 0 {
             text.push_str(&format!("\nCodex accepted {accepted} retained inputs; their execution/collection ended separately. Do not resend them."));
