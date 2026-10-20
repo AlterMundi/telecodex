@@ -44,10 +44,17 @@ class Interview(Observer, Routing):
         return json.loads(result['contentItems'][0]['text']) if ok else result
 
 
-def qualify(binary,busy):
+def qualify(binary,busy,large=False):
     j=Interview(binary)
     try:
         j.prepare();j.routed=True
+        if large:
+            # A real long source exceeded the creation budget even though each
+            # observer window was independently bounded. Keep original positions.
+            for index in range(14):
+                j.histories['native-topic-7'].insert(index,{'id':f'long-source-{index}',
+                    'status':'completed','items':[{'type':'agentMessage',
+                    'text':'Attributed original source evidence. 叙事 '+('"\\\n'*1100)}]})
         j.admit('/interaction observe #Alpha',topic=1);j.wait(lambda:j.card() is not None)
         original=j.admit('Please interview the work behind the selected Alpha finding. Explain the correction and the alternatives; do not continue or publish its task.',topic=1)
         j.wait(lambda:j.entry_send is not None)
@@ -79,6 +86,14 @@ def qualify(binary,busy):
         assert source['local_work_running_at_selection'] is busy
         assert 'Preserve original narrative' in json.dumps(source['pinned_originals'])
         assert 'Correct the decision' in json.dumps(source['pinned_originals'])
+        if large:
+            captured=json.loads(j.row('SELECT source_doc FROM interaction_observer_attempts WHERE source_revision=?',(card['source_revision'],))[0][0])
+            assert len(json.dumps(captured,ensure_ascii=False).encode())>48000
+            assert len(json.dumps(context,ensure_ascii=False,separators=(',',':')).encode())<=48000
+            assert source['pinned_originals']['text_truncated'] is True
+            assert source['pinned_originals']['interview_excerpt']['truncated_entry_indices']
+            assert len(source['pinned_originals']['entries'])==len(captured['entries'])
+            assert source['pinned_originals']['turn_ids']==captured['turn_ids']
         child=j.row('SELECT codex_thread_id,session_prompt FROM sessions WHERE thread_id=77')[0]
         assert child[0]!='native-topic-7' and 'independent interview' in child[1]
         packet=j.packets[child[0]][0]['input'][0]['text']
@@ -114,4 +129,4 @@ def qualify(binary,busy):
 
 
 if __name__=='__main__':
-    binary=str(Path(sys.argv[1]).resolve());qualify(binary,False);qualify(binary,True)
+    binary=str(Path(sys.argv[1]).resolve());qualify(binary,False);qualify(binary,True);qualify(binary,True,large=True)

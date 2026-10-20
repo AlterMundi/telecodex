@@ -49,7 +49,10 @@ class Goals(Journey):
         sock.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+b'\r\n\r\n')
         write_lock=threading.Lock();thread=None;turn=None
         def send(v):
-            data=json.dumps(v).encode();header=bytes([129,len(data)]) if len(data)<126 else b'\x81\x7e'+struct.pack('!H',len(data))
+            data=json.dumps(v).encode()
+            if len(data)<126:header=bytes([129,len(data)])
+            elif len(data)<65536:header=b'\x81\x7e'+struct.pack('!H',len(data))
+            else:header=b'\x81\x7f'+struct.pack('!Q',len(data))
             with write_lock:sock.sendall(header+data)
         try:
             while True:
