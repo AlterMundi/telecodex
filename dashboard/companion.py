@@ -34,6 +34,9 @@ def permitted(method, path, scope='interaction_only'):
 class Grants:
     def __init__(self, config, provider):
         selected = config.get('companion', {})
+        self.default_profile = selected.get('presentation_profile', 'simple')
+        if self.default_profile not in ('simple', 'explorer'):
+            raise ValueError('Unknown companion presentation profile')
         self.root = None
         self.provider = provider
         self.config = config
@@ -54,6 +57,7 @@ class Grants:
             now = time.time()
             if (grant.get('schema') != 'telecodex.companion-grant/v1'
                     or grant.get('scope') not in ('interaction_only','monitor_readonly')
+                    or grant.get('presentation_profile', self.default_profile) not in ('simple','explorer')
                     or grant.get('authority') != authority(self.config, self.provider)
                     or type(grant.get('human')) is not int
                     or type(grant.get('expires')) is not int
@@ -62,11 +66,15 @@ class Grants:
                     or not re.fullmatch(r'[A-Za-z0-9_-]{43}', grant['csrf'])
                     or not self.provider.authorized(grant['human'])):
                 return None
+            grant.setdefault('presentation_profile', self.default_profile)
             return grant
         except (OSError, ValueError, KeyError, TypeError):
             return None
 
-    def enroll(self, label, output, seconds, *, scope='interaction_only'):
+    def enroll(self, label, output, seconds, *, scope='interaction_only', profile=None):
+        profile = self.default_profile if profile is None else profile
+        if profile not in ('simple','explorer'):
+            raise ValueError('Unknown companion presentation profile')
         if (scope not in ('interaction_only','monitor_readonly') or self.root is None or not isinstance(label, str) or not 1 <= len(label) <= 64
                 or any(ord(c) < 32 for c in label)
                 or type(seconds) is not int or not 60 <= seconds <= 30 * 86400):
@@ -85,6 +93,7 @@ class Grants:
         ident = hashlib.sha256(token.encode()).hexdigest()
         grant = {'schema':'telecodex.companion-grant/v1', 'scope':scope,
             'label':label, 'human':human, 'authority':authority(self.config, self.provider),
+            'presentation_profile':profile,
             'expires':int(time.time()) + seconds, 'csrf':csrf}
         credential = {'schema':'telecodex.companion-device/v1',
             'origin':self.config['origin'], 'prefix':self.config.get('prefix', '/sessions'),
@@ -214,6 +223,7 @@ def main():
     enroll.add_argument('--output', required=True, type=Path)
     enroll.add_argument('--seconds', type=int, default=86400)
     enroll.add_argument('--scope', choices=['interaction_only','monitor_readonly'], default='interaction_only')
+    enroll.add_argument('--profile', choices=['simple','explorer'])
     revoke = commands.add_parser('revoke')
     revoke.add_argument('grant_id')
     renew = commands.add_parser('renew')
@@ -230,7 +240,7 @@ def main():
         provider = Provider(config)
         grants = Grants(config, provider)
         if args.command == 'enroll':
-            result = grants.enroll(args.label, args.output, args.seconds, scope=args.scope)
+            result = grants.enroll(args.label, args.output, args.seconds, scope=args.scope, profile=args.profile)
         elif args.command == 'renew':
             result = grants.renew(args.grant_id, args.seconds)
         elif args.command == 'reauthorize':

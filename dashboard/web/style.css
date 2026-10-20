@@ -579,3 +579,70 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .timeline-history { display: none; position: sticky; top: 0; z-index: 1; background: var(--bg); padding-block: 4px; }
 .timeline-history:has(button:not([hidden])) { display: flex; }
 .timeline-history button { font-size: 14px; min-height: 44px; }
+
+/* Conversation-first shell. One scroll owner for each deliberately opened area. */
+#conversation-diagnostics { display: contents; }
+#conversation-diagnostics > summary { display: none; }
+.standalone-conversation main { max-width: 900px; gap: 4px; }
+.standalone-conversation header { border-bottom-width: 1px; padding-bottom: 10px; }
+.standalone-conversation main > #conversation {
+  display: grid; grid-template-rows: auto minmax(120px, 1fr) auto auto auto auto auto;
+  gap: 6px; overflow: auto; min-height: 0;
+}
+.standalone-conversation #conversation-requests { grid-row: 1; max-height: 30dvh; }
+.standalone-conversation #conversation-timeline {
+  grid-row: 2; min-height: 120px; max-height: none; padding: 4px 8px;
+  scrollbar-gutter: stable;
+}
+.standalone-conversation #conversation-compose { grid-row: 3; margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--dm-radius, 16px); background: var(--panel); }
+.standalone-conversation #conversation-message { background: var(--bg); resize: vertical; min-height: 60px; max-height: 22dvh; }
+.standalone-conversation #conversation-compose > label { font-size: 14px; color: var(--muted); }
+.standalone-conversation #conversation-send { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.standalone-conversation #conversation-voice { grid-row: 4; padding: 4px 0; }
+.standalone-conversation #conversation-talk { border-radius: 100px; min-height: 52px; min-width: 132px; border-color: var(--accent); }
+.standalone-conversation #conversation-talk[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
+.standalone-conversation #conversation-player { grid-row: 5; }
+.standalone-conversation #conversation-diagnostics {
+  display: block; grid-row: 6; min-width: 0; border-top: 1px solid var(--line);
+}
+.standalone-conversation #conversation-diagnostics > summary {
+  display: flex; align-items: center; justify-content: space-between; cursor: pointer;
+  min-height: 44px; color: var(--muted); font-size: 14px;
+}
+.standalone-conversation #conversation-diagnostics[open] > summary { color: var(--accent); }
+.standalone-conversation .conversation-diagnostics-content { max-height: 45dvh; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: var(--dm-radius, 12px); }
+.standalone-conversation #conversation-flow { max-height: none; overflow: visible; }
+.standalone-conversation .human-message { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.standalone-conversation .reply { border-radius: var(--dm-radius, 16px); }
+@media (max-width: 480px) {
+  .standalone-conversation main { padding-inline: 10px; }
+  .standalone-conversation .header-tools { gap: 6px; }
+  .standalone-conversation #conversation-voice-replies { font-size: 14px; }
+}
+
+/* The portrait is decorative. The adjacent activity chips carry the meaning. */
+.standalone-conversation main > #conversation { grid-template-rows: auto auto minmax(120px, 1fr) auto auto auto auto; }
+.standalone-conversation #conversation-companion { grid-row: 1; }
+.standalone-conversation #conversation-requests { grid-row: 2; }
+.standalone-conversation #conversation-timeline { grid-row: 3; }
+.standalone-conversation #conversation-compose { grid-row: 4; }
+.standalone-conversation #conversation-voice { grid-row: 5; }
+.standalone-conversation #conversation-player { grid-row: 6; }
+.standalone-conversation #conversation-diagnostics { grid-row: 7; }
+#conversation-companion {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 18px; min-width: 0;
+  padding: 8px 14px; border-radius: var(--dm-radius, 16px);
+  background: radial-gradient(ellipse at 40px 50%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 70%);
+}
+#conversation-companion pre { flex: none; margin: 0; font: 13px/1.05 ui-monospace, monospace; color: var(--accent); transform-origin: 50% 90%; }
+#conversation-companion pre[data-fallback="true"] { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
+#conversation-companion > div { min-width: 0; }
+.companion-caption { font-size: 18px; font-weight: 500; margin: 0 0 6px; }
+.companion-phases { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.companion-phases > span { display: inline-flex; gap: 6px; align-items: center; font-size: 14px; color: var(--muted); }
+.companion-phases > span > span { color: var(--accent); font-size: 17px; }
+@media (max-width: 480px) {
+  #conversation-companion { gap: 10px; padding: 6px 0; }
+  .companion-caption { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { #conversation-companion pre { animation: none; } }

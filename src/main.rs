@@ -1,4 +1,5 @@
 mod app;
+mod ascii;
 mod codex;
 mod codex_history;
 mod commands;

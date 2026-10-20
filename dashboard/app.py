@@ -230,7 +230,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         body = (public / 'index.html').read_text()
         if request.query_params.get('view') == 'conversation' and request.query_params.get('client') == 'standalone':
             body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
-        for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'conversation.js', 'style.css'):
+        for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         if appearance:
@@ -242,7 +242,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/assets/{name}')
     def asset(name: str, request: Request):
-        if name not in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -307,7 +307,9 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         except (ProviderUnavailable, OSError, ValueError):
             raise HTTPException(503, 'Integrating conversation unavailable; refresh before continuing') from None
         authorize(request)
-        return {**result, 'csrf':session['csrf'], 'can_listen':speech is not None,
+        return {**result, 'csrf':session['csrf'],
+                'presentation_profile':dict(session).get('presentation_profile', companions.default_profile),
+                'can_listen':speech is not None,
                 'can_speak':bool(getattr(provider, 'receiver', {}).get('voice'))}
 
     @app.get('/api/interaction/inputs')

@@ -9,12 +9,13 @@ window.Conversation = (() => {
   };
   function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false, standalone=false}) {
     let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext;
+    const companion=standalone?window.ConversationCompanion?.mount():undefined;
     const speechGaps={chunk:180,reply:450,question:1200};
     let speechWait;
     const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:value=>{captureBusy=value;if(!value)drainVoice();},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;companion?.update({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -26,6 +27,9 @@ window.Conversation = (() => {
     const timeline = standalone ? $("#conversation-timeline") : undefined;
     const historyTools=timeline?node("div",undefined,"conversation-tools timeline-history"):undefined;
     if(timeline){
+      const diagnostics=$("#conversation-diagnostics");
+      diagnostics.open=false;
+      diagnostics.querySelector?.(".conversation-diagnostics-content")?.prepend($("#conversation-observation"));
       $("#conversation-message").rows=2;
       $("#conversation-visual summary").textContent="Add an image";
       timeline.hidden=false;$("#conversation-replies").hidden=true;$("#conversation-sent").hidden=true;
@@ -48,7 +52,7 @@ window.Conversation = (() => {
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
     const sendState = $("#conversation-send-state");
-    let replyFocus, focusVersion = 0, routingChoices = [];
+    let replyFocus, focusVersion = 0, routingChoices = [], presentationProfile;
     let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0, latestComposerId;
     let telegramCursor=0,telegramNewest=0,telegramLoaded=false,telegramReading=false;
     const phaseText = value => value.origin_kind==="telegram" ? `Telegram input retained (${value.phase}). Inspect its routing path for delivery evidence.${value.ordering_unknown?" Historical capture order unavailable.":""}` : value.retired ? "Saved from an earlier conversation binding."
@@ -97,7 +101,12 @@ window.Conversation = (() => {
       card.routeButton.disabled=card.routeBusy || card.value.retired || (!card.routePending && !card.select.value);
       card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
     }
+    function inputActivity() {
+      companion?.update({transcribing:[...inputs.values()].some(c=>c.value.voice && c.value.phase==="preparing"),
+        routing:[...inputs.values()].some(c=>["requested","queued","submitting","steering"].includes(c.value.routing?.phase))});
+    }
     function resetInputs() {
+      companion?.reset();presentationProfile=undefined;
       disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren(historyTools);
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
@@ -248,7 +257,7 @@ window.Conversation = (() => {
         microphone?.observe(card.value,phaseText(card.value));
         card.retry.hidden = readOnly || !!card.value.phase || !card.value.binding;
         if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
-        renderRoute(card);graph?.input(card.value);return card;
+        renderRoute(card);graph?.input(card.value);inputActivity();return card;
       }
       // Native acceptance and retirement cannot be undone by a late snapshot.
       if (["answered","matrix_requested","retained_unsent"].includes(card.value.phase) ||
@@ -281,6 +290,7 @@ window.Conversation = (() => {
       if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at);
       else container.insertBefore(card.box, following || null);
       graph?.input(card.value);
+      inputActivity();
       return card;
     }
     async function inputPage(before = 0, direction = "before", remember = true) {
@@ -475,6 +485,7 @@ window.Conversation = (() => {
       if(voiceEnabled && !voiceSuspended)disableVoice();else {enableVoice();drainVoice();}
     });
     function stop(text = "Audio stopped.") {
+      companion?.update({playback:undefined});
       cancelSpeechWait();voiceBusy=false;generation++;
       requestAbort?.abort(); requestAbort = undefined;
       active = undefined;
@@ -487,6 +498,7 @@ window.Conversation = (() => {
       $("#conversation-player").hidden = true;
     }
     function pause() {
+      companion?.update({playback:undefined});
       cancelSpeechWait();voiceBusy=false;voiceQueue.length=0;
       voiceSuspended=true;voiceStatus();
       generation++;
@@ -517,6 +529,7 @@ window.Conversation = (() => {
       modeChanged(enabled, initial);
     }
     function failed(error) {
+      companion?.update({connected:false});
       if (error.status === 401 || error.status === 403) {
         pause();stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
@@ -596,6 +609,16 @@ window.Conversation = (() => {
         newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
+      if(standalone){
+        const profile=value.presentation_profile==="explorer"?"explorer":"simple";
+        if(profile!==presentationProfile){
+          $("#conversation-diagnostics").open=profile==="explorer";
+          document.body.dataset.presentationProfile=profile;
+          presentationProfile=profile;
+        }
+      }
+      companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
+      companion?.observe(value.activity);
       binding = value.binding;
       microphone?.configure(value.can_speak);
       setCsrf(value.csrf);
@@ -603,6 +626,7 @@ window.Conversation = (() => {
       if(!canListen && (voiceEnabled || active || speechWait))pause();
       $("#conversation-voice-replies").disabled=!canListen;
       for (const source of value.items)upsert(source);
+      if(direction==="after")for(const source of value.items)companion?.reply(source);
       if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0)))offerVoice(source);
       for (const card of cards.values()) card.listen.hidden = !canListen;
       if (direction === "before" && rememberHistory) {
@@ -657,6 +681,7 @@ window.Conversation = (() => {
         if(!readOnly){
           await requestControls.refresh();
           const questions=requestControls.audioSources?.()||[];
+          companion?.update({question:questions.length>0});
           const current=source=>questions.some(q=>q.id===source.id && q.revision===source.revision);
           for(let n=voiceQueue.length-1;n>=0;n--)
             if(voiceQueue[n].kind==="native_question" && !current(voiceQueue[n]))voiceQueue.splice(n,1);
@@ -701,6 +726,7 @@ window.Conversation = (() => {
           ?{source:selected.source.id,revision:selected.source.revision,context_only:true}:undefined;
         toggle.textContent = "Pause audio";
         audioState("Playing this reply.");
+        companion?.update({playback:"playing"});
       } catch (e) {
         if (active !== selected || generation !== owned) return;
         selected.verifying = false;
@@ -723,6 +749,7 @@ window.Conversation = (() => {
       const selected = active;
       $("#conversation-player").hidden = false;
       $("#conversation-playing").textContent = source.kind === "integrator_answer" ? "Conversation reply" : source.label;
+      companion?.update({playback:"preparing"});
       audioState("Preparing audio…"); toggle.disabled = true;
       requestAbort = new AbortController();
       const controller = requestAbort;
@@ -766,8 +793,13 @@ window.Conversation = (() => {
         return {failed:true,generation};
       } finally { clearTimeout(deadline); if (requestAbort === controller) requestAbort = undefined; }
     }
+    audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort)companion?.update({playback:undefined});});
+    audio.addEventListener("playing",()=>{
+      if(active && !active.verifying && !audio.muted)companion?.update({playback:"playing"});
+    });
     audio.addEventListener("ended", async () => {
       if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || document.hidden || !enabled) return;
+      companion?.update({playback:undefined});
       const selected=active, owned=generation;selected.segmentEnded=true;
       if (selected.next !== null) {
         audioState("A short pause before continuing…");
@@ -809,6 +841,7 @@ window.Conversation = (() => {
     document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
     window.addEventListener("pagehide", () => {pause();stop();});
     window.addEventListener("offline", () => {
+      companion?.update({connected:false});
       pause(); $("#conversation-state").textContent = "Offline. Replies already loaded remain readable.";
     });
     window.addEventListener("online", () => { if (enabled && ready && !document.hidden) refresh(true); });

@@ -1,0 +1,83 @@
+{
+  "schema": "daimon.ascii-expression/v1",
+  "id": "compaii-source-intervals",
+  "revision": "1",
+  "authorship": "CompAII / Source; exploratory example, not another being’s default",
+  "defaults": {
+    "cli": {
+      "expression": "presence",
+      "variant": "field",
+      "columns": 80,
+      "rows": 24
+    },
+    "telegram": {
+      "expression": "presence",
+      "variant": "spark",
+      "columns": 28,
+      "rows": 10
+    },
+    "app": {
+      "expression": "weave",
+      "variant": "field",
+      "columns": 48,
+      "rows": 18
+    }
+  },
+  "expressions": {
+    "presence": {
+      "alt": "Two distinct arcs meet through an interval.",
+      "variants": {
+        "field": {
+          "frames": [
+            "        .     .\n     .-' '-.-' '-.\n----(     :     )----\n     '-. .'-'. .-'\n        '     '"
+          ],
+          "frame_ms": 240
+        },
+        "spark": {
+          "frames": [
+            " .-. .-.\n(   :   )\n '-' '-'"
+          ],
+          "frame_ms": 240
+        }
+      }
+    },
+    "inquiry": {
+      "alt": "A space opens between two related patterns.",
+      "variants": {
+        "field": {
+          "frames": [
+            "    .-.       .-.\n---(   )--:--(   )---\n    '-'       '-'",
+            "    .-.         .-.\n---(   )---:---(   )---\n    '-'         '-'"
+          ],
+          "frame_ms": 300
+        },
+        "spark": {
+          "frames": [
+            "(.) : (.)",
+            "(.)  :  (.)"
+          ],
+          "frame_ms": 300
+        }
+      }
+    },
+    "weave": {
+      "alt": "Two oscillating patterns weave without losing their difference.",
+      "variants": {
+        "field": {
+          "frames": [
+            " .--.    .--.\n'    '--'    '\n.    .--.    .\n '--'    '--'",
+            ".    .--.    .\n '--'    '--'\n .--.    .--.\n'    '--'    '"
+          ],
+          "frame_ms": 360
+        },
+        "spark": {
+          "frames": [
+            "~ ~ : ~ ~",
+            " ~ ~:~ ~ "
+          ],
+          "frame_ms": 360
+        }
+      }
+    }
+  }
+}

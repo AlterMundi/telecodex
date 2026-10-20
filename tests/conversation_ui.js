@@ -111,7 +111,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", can_listen:true,
+    return {binding:"fixture", csrf:"synthetic", can_listen:true,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
@@ -136,6 +136,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
   return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,clock,
+    profile(value){presentationProfile=value;},
     event(name){for(const fn of windowEvents.get(name)||[])fn();},
     hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
     show(){document.hidden=false;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
@@ -187,6 +188,15 @@ function boot(readOnly=false,standalone=false,options={}) {
 }
 
 (async () => {
+  const profile=boot(false,true);
+  profile.profile("explorer");await profile.ui.refresh();
+  assert.equal(profile.nodes.get("#conversation-diagnostics").open,true);
+  profile.nodes.get("#conversation-diagnostics").open=false;await profile.ui.refresh();
+  assert.equal(profile.nodes.get("#conversation-diagnostics").open,false,"polling cannot override a person's read-only panel choice");
+  profile.profile("simple");await profile.ui.refresh();
+  assert.equal(profile.nodes.get("#conversation-diagnostics").open,false);
+  profile.nodes.get("#conversation-diagnostics").open=true;await profile.ui.refresh();
+  assert.equal(profile.nodes.get("#conversation-diagnostics").open,true,"simple still permits looking under the hood");
   const single=boot(false,true);
   single.originals.set('between',{id:'between',text:'A direction while work continues',sequence:1,phase:'accepted',received_at:'2024-01-01T00:00:04.500Z'});
   await single.ui.refresh();

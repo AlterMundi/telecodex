@@ -2,7 +2,87 @@ use super::support::is_message_thread_not_found;
 use super::*;
 use crate::{codex::CodexApprovalRequest, codex_history::read_thread_runtime};
 use html_escape::encode_safe;
+use serde_json::json;
 use uuid::Uuid;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompanionHint {
+    gesture: String,
+    rest: String,
+    pack: Option<String>,
+    revision: Option<String>,
+    catalog: Option<String>,
+}
+
+pub(super) fn companion_capability(app: &App) -> Result<serde_json::Value> {
+    if let Some(pack) = app
+        .shared
+        .config
+        .interaction
+        .as_ref()
+        .and_then(|c| c.expression_pack.as_ref())
+    {
+        return Ok(
+            json!({"arguments":{"catalog":pack.fingerprint()?,"gesture":"play or none","rest":pack.expressions.keys().collect::<Vec<_>>(),"pack":pack.id,"revision":pack.revision},"description":"Optional one immutable cosmetic expression from this receiver-selected per-being pack for the current actual native turn. Use exact pack/revision. Local finite playback only; no extra inference, operational claims, text or authority."}),
+        );
+    }
+    Ok(
+        json!({"arguments":{"gesture":"wave, nod or none","rest":"calm, curious, focused, listening, speaking, delighted or uncertain"},
+        "description":"Optional cosmetic choice for this actual native turn, at most one immutable registration before its final reply. Finite local gesture and resting portrait only; never controls operational state, message text or authority. Missing hints use local defaults. No extra model call or animation loop."}),
+    )
+}
+
+pub(super) async fn companion_hint(
+    app: &App,
+    key: SessionKey,
+    human: i64,
+    request: &crate::codex::DynamicToolRequest,
+    args: serde_json::Value,
+    closed: &CancellationToken,
+) -> Result<serde_json::Value> {
+    let hint: CompanionHint = serde_json::from_value(args)?;
+    let pack = app
+        .shared
+        .config
+        .interaction
+        .as_ref()
+        .and_then(|c| c.expression_pack.as_ref());
+    if pack.map(|p| (p.id.as_str(), p.revision.as_str()))
+        != hint.pack.as_deref().zip(hint.revision.as_deref())
+        || hint.pack.is_some() != hint.revision.is_some()
+        || pack.map(|p| p.fingerprint()).transpose()? != hint.catalog
+    {
+        bail!("Companion pack selection changed; inspect capabilities");
+    }
+    let local = app
+        .workers
+        .lock()
+        .await
+        .get(&key)
+        .and_then(|w| {
+            w.steer
+                .lock()
+                .expect("steer mutex poisoned")
+                .as_ref()
+                .map(|s| s.turn_id)
+        })
+        .context("Companion hint has no current receiving execution")?;
+    let fresh = app.shared.store.interaction_companion_hint(
+        key,
+        human,
+        local,
+        &request.thread_id,
+        &request.turn_id,
+        &hint.gesture,
+        &hint.rest,
+        pack,
+        closed,
+    )?;
+    Ok(
+        json!({"kind":"companion_hint","scope":"native_turn","registered":true,"new_registration":fresh}),
+    )
+}
 
 /// Scope all automatic native presentation, including cooldown/fallback paths.
 pub(super) fn turn_telegram(shared: &Arc<AppShared>, local: Option<i64>) -> TelegramClient {
@@ -60,6 +140,29 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
             "Expected presentation list|before DELIVERY_CURSOR NATIVE_CURSOR or part SOURCE REVISION OFFSET"
         ),
     }?;
+    if result["schema"] == "telecodex.presentation-list/v1" {
+        let targets = cfg
+            .targets
+            .iter()
+            .map(|target| {
+                (
+                    SessionKey::new(cfg.chat_id, Some(target.topic_id)),
+                    target.name.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        result["expression_pack_sha256"] = serde_json::to_value(
+            cfg.expression_pack
+                .as_ref()
+                .map(|p| p.fingerprint())
+                .transpose()?,
+        )?;
+        result["expression_pack"] = serde_json::to_value(&cfg.expression_pack)?;
+        result["activity"] = app
+            .shared
+            .store
+            .interaction_activity(human, cfg.entry(), &targets)?;
+    }
     if let Some(items) = result["items"].as_array_mut() {
         for item in items {
             source_label(&app.shared, item)?;
