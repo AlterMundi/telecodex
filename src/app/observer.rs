@@ -272,6 +272,9 @@ async fn refresh(
     let card = shared.store.observer_card(key, human, native)?;
     let activity_cut = shared.store.observer_activity_cut(key, human, native)?;
     let mut source = shared.codex.merge_history(native).await?;
+    shared
+        .store
+        .observer_question_evidence(key, human, &mut source)?;
     source["observer_activity_cut"] = serde_json::json!(activity_cut);
     source["observer_checked_at"] = serde_json::json!(Utc::now().to_rfc3339());
     match shared.store.observer_prepare(
