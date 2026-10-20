@@ -16,6 +16,7 @@ pub struct InteractionConfig {
     /// Secondary work-topic presentation, never routing ingress.
     #[serde(default)]
     pub telegram_projection: bool,
+    pub artifact_store: Option<ArtifactConfig>,
     #[serde(default)]
     pub targets: Vec<Target>,
     /// Include existing bound conversations owned by this human in this chat.
@@ -31,6 +32,27 @@ pub struct InteractionConfig {
     pub matrix_transport: Option<MatrixTransportConfig>,
     #[serde(default = "default_active_workers")]
     pub max_active_workers: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactConfig {
+    pub directory: std::path::PathBuf,
+    #[serde(default = "artifact_hours")]
+    pub retention_hours: u64,
+    #[serde(default = "artifact_file_limit")]
+    pub max_file_bytes: u64,
+    #[serde(default = "artifact_total_limit")]
+    pub max_total_bytes: u64,
+}
+fn artifact_hours() -> u64 {
+    24
+}
+fn artifact_file_limit() -> u64 {
+    64 * 1024 * 1024
+}
+fn artifact_total_limit() -> u64 {
+    512 * 1024 * 1024
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,6 +126,16 @@ impl InteractionConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(a) = &self.artifact_store
+            && (!a.directory.is_absolute()
+                || a.directory.parent().is_none()
+                || !(1..=168).contains(&a.retention_hours)
+                || !(1..=256 * 1024 * 1024).contains(&a.max_file_bytes)
+                || a.max_total_bytes < a.max_file_bytes
+                || a.max_total_bytes > 4 * 1024 * 1024 * 1024)
+        {
+            bail!("Invalid explicit artifact storage placement or retention limits");
+        }
         if let Some(pack) = &self.expression_pack {
             pack.validate()?;
         }
@@ -478,6 +510,7 @@ mod tests {
             topic_id: 1,
             telegram_ingress: false,
             telegram_projection: false,
+            artifact_store: None,
             max_active_workers: 2,
             discover_owned_sessions: false,
             observer_model: None,

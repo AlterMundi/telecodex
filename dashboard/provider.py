@@ -220,6 +220,53 @@ class Provider:
                 'current':True, 'playback':'not_observed'}
         return self.presentation(f'presentation part {source} {revision} {offset}')
 
+    def artifacts(self):
+        if not self.receiver.get('interaction', {}).get('artifact_store'):
+            raise ProviderUnavailable('Retained files are not configured')
+        return self.presentation('presentation artifacts list')
+
+    def artifact_detail(self, ident):
+        self.input_id(ident)
+        return self.presentation('presentation artifacts detail '+ident)
+
+    def artifact_open(self, ident):
+        """Return an authenticated descriptor, never a model/client-selected path."""
+        import re
+        ref = self.artifact_detail(ident)
+        selected = self.receiver.get('interaction', {}).get('artifact_store')
+        if (not isinstance(selected, dict) or not re.fullmatch('[a-f0-9]{64}', ref.get('sha256', ''))
+                or type(ref.get('bytes')) is not int or not 0 <= ref['bytes'] <= selected.get('max_file_bytes', 64*1024*1024)):
+            raise ValueError('Artifact storage or reference unavailable')
+        root = os.open(selected['directory'], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        stream = None
+        try:
+            meta = os.fstat(root)
+            if meta.st_uid != os.getuid() or meta.st_mode & 0o077:
+                raise ValueError('Artifact storage unavailable')
+            descriptor = os.open(ref['sha256'], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=root)
+            stream = os.fdopen(descriptor, 'rb')
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_size != ref['bytes'] or info.st_mode & 0o077
+                    or hashlib.file_digest(stream, 'sha256').hexdigest() != ref['sha256']):
+                raise ValueError('Artifact bytes changed or are unavailable')
+            stream.seek(0)
+            # Recheck the actual logical grant after disk I/O. Renewal does not
+            # demand that the old physical native thread remain current.
+            current = self.artifact_detail(ident)
+            if ({k:v for k,v in current.items() if k != 'entry_binding'} !=
+                    {k:v for k,v in ref.items() if k != 'entry_binding'} or
+                    current.get('entry_binding', [])[:3] != ref.get('entry_binding', [])[:3]):
+                raise ValueError('Artifact changed while opening')
+            return ref, stream
+        except BaseException:
+            if stream is not None:
+                stream.close()
+            raise
+        finally:
+            os.close(root)
+
     @staticmethod
     def input_id(ident):
         import uuid

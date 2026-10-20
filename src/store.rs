@@ -9,6 +9,8 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+mod artifacts;
+pub(crate) use artifacts::ArtifactRecord;
 mod conversation_entry;
 mod conversation_inputs;
 mod conversation_routing;
@@ -41,7 +43,7 @@ mod observer_freshness;
 mod presentation;
 pub use observer_cards::{ObserverCard, ObserverPreparation};
 pub use observer_freshness::ObserverFreshness;
-mod topic_publications;
+pub(crate) mod topic_publications;
 mod topics;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};
@@ -117,6 +119,7 @@ impl Store {
         store.init_tribu()?;
         store.init_interactions()?;
         store.init_interaction()?;
+        store.init_artifacts()?;
         store.init_topic_publications()?;
         store.init_voice()?;
         store.init_interaction_creation()?;

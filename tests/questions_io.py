@@ -71,7 +71,17 @@ class Journey:
             def do_POST(self):
                 method = self.path.rsplit('/', 1)[-1]
                 if hasattr(owner,'telegram_methods'):owner.telegram_methods.append(method)
-                payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))) or b'{}')
+                raw = self.rfile.read(int(self.headers.get('Content-Length', '0')))
+                if self.headers.get_content_type()=='multipart/form-data':
+                    assert hasattr(owner,'multipart_reply'),'Unexpected multipart upload'
+                    response=owner.multipart_reply(method,self.headers,raw)
+                    if response is False:return
+                    body=json.dumps(response).encode()
+                    self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers()
+                    try:self.wfile.write(body)
+                    except (BrokenPipeError,ConnectionResetError):pass
+                    return
+                payload = json.loads(raw or b'{}')
                 if method == 'getMe':
                     result = {'id': 123, 'is_bot': True, 'first_name': 'Fixture',
                               'username': 'FixtureBot', 'has_topics_enabled': True}

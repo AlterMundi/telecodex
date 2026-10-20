@@ -108,6 +108,23 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
         bail!("Interaction presentation owner mismatch");
     }
     let fields: Vec<_> = args.split_whitespace().collect();
+    if let ["artifacts", rest @ ..] = fields.as_slice() {
+        let mut result = match rest {
+            ["list"] => app.shared.store.artifact_list(human, cfg.entry())?,
+            ["detail", id] => {
+                let mut value =
+                    serde_json::to_value(app.shared.store.artifact_get(human, cfg.entry(), id)?)?;
+                value["schema"] = json!("telecodex.artifact/v1");
+                value
+            }
+            _ => bail!("Expected artifacts list or detail ID"),
+        };
+        result["entry_binding"] = app
+            .shared
+            .store
+            .artifact_entry_binding(human, cfg.entry())?;
+        return Ok(result);
+    }
     let mut result = match fields.as_slice() {
         ["goals", "list", before] => {
             app.shared

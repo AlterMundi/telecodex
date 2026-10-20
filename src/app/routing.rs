@@ -1609,7 +1609,17 @@ fn publish(shared: Arc<AppShared>, delivery: crate::interaction::Delivery, human
 
 pub(super) fn retained_artifacts(shared: Arc<AppShared>, root: &str, human: i64) {
     if let Ok(Some(i)) = shared.store.interaction_instruction(root, human) {
-        notice(shared,i.origin,"Generated files remain retained with the worker turn. This router currently returns text; file delivery is not yet enabled.".into());
+        let text = if shared
+            .config
+            .interaction
+            .as_ref()
+            .is_some_and(|c| c.artifact_store.is_some())
+        {
+            "Generated files are being prepared separately. Authorized downloads appear with the reply; you can keep chatting."
+        } else {
+            "Generated files remain retained with the worker turn. File download storage is not configured."
+        };
+        notice(shared, i.origin, text.into());
     }
 }
 

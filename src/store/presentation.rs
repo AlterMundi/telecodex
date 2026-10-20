@@ -490,6 +490,21 @@ pub(super) fn source_on(
     source["text_characters"] = json!(source["text"].as_str().unwrap_or("").chars().count());
     source["revision"] = json!(digest(&source));
     source["playback"] = json!("not_observed");
+    // File availability may change after a reply starts playing. It must not
+    // invalidate the immutable spoken-text revision or replay narration.
+    source["artifact_status"] = json!(super::artifacts::status_on(
+        conn,
+        source["result_id"].as_str(),
+        id.strip_prefix("native:").and_then(|s| s.parse().ok())
+    )?);
+    source["artifacts"] = json!(super::artifacts::views_on(
+        conn,
+        human,
+        entry_session,
+        source["result_id"].as_str(),
+        id.strip_prefix("native:").and_then(|s| s.parse().ok()),
+        false
+    )?);
     Ok(Some(source))
 }
 

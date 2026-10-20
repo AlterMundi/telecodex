@@ -195,6 +195,9 @@ jobs:
       - run: python3 -B tests/request_turn_lifetime_io.py target/release/telecodex
       - run: python3 -B tests/conversation_voice_http_io.py target/release/telecodex
       - run: python3 -B tests/artifacts_io.py target/release/telecodex
+      - run: python3 -B tests/artifact_access_http.py
+      - run: python3 -B tests/artifact_return_io.py target/release/telecodex
+      - run: python3 -B tests/artifact_projection_io.py target/release/telecodex
       - name: Qualify isolated interaction journeys
         run: |
           python3 - <<'PYTHON'
@@ -204,8 +207,9 @@ jobs:
               return suite, result
           failed = False
           # Each suite owns its temporary database, native/HTTP peers and ports.
-          # Bound fixture concurrency; retain every log and nonzero exit result.
-          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+          # Bound the existing isolated fixture concurrency at four; retain every
+          # case, log and nonzero exit result.
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
               jobs = [pool.submit(qualify, suite) for suite in ('routing_io.py', 'observer_io.py', 'observer_tool_io.py', 'observer_interview_io.py', 'semantic_routing_io.py', 'creation_io.py', 'creation_recovery_io.py', 'attention_io.py', 'session_requests_io.py', 'presentation_control_io.py', 'conversation_input_control_io.py', 'conversation_routing_io.py', 'conversation_clarification_io.py')]
               for job in concurrent.futures.as_completed(jobs):
                   suite, result = job.result()
@@ -223,9 +227,10 @@ jobs:
               return suite, result
           failed = False
           # Every suite owns its temporary native/HTTP peers, sockets and store.
-          # Keep all existing gates and logs, with the same two-process bound.
+          # Keep all existing gates and logs; at most four synthetic fixture processes.
+          # Native/model work and physical devices are never shared by these suites.
           suites = ('pending_io.py', 'merge_io.py', 'stopping_io.py', 'attachment_io.py', 'voice_io.py', 'goals_io.py', 'nexus_io.py', 'nexus_context_io.py', 'icons_io.py', 'stickers_io.py', 'reactions_io.py', 'fork_io.py', 'tribu_io.py', 'topic_projection_io.py')
-          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
               jobs = [pool.submit(qualify, suite) for suite in suites]
               for job in concurrent.futures.as_completed(jobs):
                   suite, result = job.result()
