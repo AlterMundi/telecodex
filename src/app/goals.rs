@@ -59,6 +59,7 @@ pub(super) async fn attach_active(app: &App, human: i64, args: &str) -> Result<s
         objective: None,
         replace: false,
         attach_turn: Some(physical.to_string()),
+        conditional: None,
     };
     app.enqueue_goal_turn(
         TurnRequest {
@@ -462,6 +463,7 @@ async fn activate(
             objective,
             replace,
             attach_turn: None,
+            conditional: None,
         };
         let (response, ack) = oneshot::channel();
         attached.sender.send(CodexSteerRequest{ images:vec![], admission_check: None,client_message_id:None,text:String::new(),goal:Some(GoalControl::Activate(Box::new(activation))),response})
@@ -510,6 +512,7 @@ async fn activate(
             objective,
             replace,
             attach_turn: None,
+            conditional: None,
         };
         let prompt="Continue the native goal requested by the human. Use its native state and account for progress there.".to_string();
         app.enqueue_goal_turn(
@@ -722,6 +725,11 @@ pub(super) async fn control_live(
     let Some(attached) = attached else {
         return Ok(false);
     };
+    let wait = if matches!(control, GoalControl::ConditionalMetadata(_)) {
+        Duration::from_secs(18)
+    } else {
+        Duration::from_secs(12)
+    };
     let (response, ack) = oneshot::channel();
     attached
         .sender
@@ -734,9 +742,105 @@ pub(super) async fn control_live(
             response,
         })
         .map_err(|_| anyhow!("Goal subscriber finished; inspect /goal before retrying"))?;
-    match tokio::time::timeout(Duration::from_secs(12), ack).await {
+    match tokio::time::timeout(wait, ack).await {
         Ok(Ok(Ok(_))) => Ok(true),
         Ok(Ok(Err(error))) => bail!("Goal mutation was not confirmed: {error:?}"),
         _ => bail!("Goal acknowledgment unavailable; inspect /goal before retrying"),
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GoalInspection {
+    selector: String,
+}
+
+/// Inspect only: a native goal status is never a proxy for current execution.
+pub(super) async fn inspect(
+    app: &App,
+    human: i64,
+    args: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let args: GoalInspection = serde_json::from_value(args)?;
+    let cfg = super::routing::profile(&app.shared)?;
+    if cfg.human_id != human {
+        bail!("Goal inspection owner mismatch");
+    }
+    let selector = args
+        .selector
+        .strip_prefix("/self#")
+        .or_else(|| args.selector.strip_prefix('#'))
+        .unwrap_or(&args.selector);
+    let targets = cfg.resolve(selector);
+    if targets.len() != 1 {
+        return Ok(
+            json!({"kind":"clarification_required","selector":args.selector,"candidates":targets,"read_only":true}),
+        );
+    }
+    let target = targets[0];
+    let binding = app
+        .shared
+        .store
+        .conversation_request_binding(human, target)?;
+    let session = app
+        .shared
+        .store
+        .get_session(target)?
+        .context("Selected session is unavailable")?;
+    let Some(native) = session.codex_thread_id.as_deref() else {
+        if app
+            .shared
+            .store
+            .conversation_request_binding(human, target)?
+            != binding
+        {
+            bail!("Selected session changed during inspection");
+        }
+        return Ok(
+            json!({"kind":"goal_inspection","target":target,"availability":"not_materialized","receiver_busy":session.busy,"read_only":true}),
+        );
+    };
+    app.shared
+        .store
+        .validate_owned_binding(target, human, native)?;
+    let began = Utc::now().to_rfc3339();
+    let (snapshot, activity) = tokio::join!(
+        app.shared.codex.get_goal_snapshot(native),
+        app.shared.codex.native_activity(native)
+    );
+    app.shared
+        .store
+        .validate_owned_binding(target, human, native)?;
+    if app
+        .shared
+        .store
+        .conversation_request_binding(human, target)?
+        != binding
+    {
+        bail!("Selected session changed during inspection");
+    }
+    let requests = app
+        .shared
+        .store
+        .interactions_page(target, human, 0, false)?;
+    let mut result = json!({"kind":"goal_inspection","target":target,"label":super::routing::label(&app.shared,target),
+        "native_thread":native,"target_binding":binding,"receiver_busy":session.busy,"native_activity":activity.ok(),
+        "pending_human_actions":requests.pending_total,"unconfirmed_human_receipts":requests.actionable_total-requests.pending_total,
+        "stop_held":app.shared.store.stop_fenced(target)?,"maintenance_held":app.shared.store.maintenance_writer_held(target)?,
+        "observation_started_at":began,"observation_finished_at":Utc::now().to_rfc3339(),"read_only":true,
+        "meaning":"Goal definition, native activity and receiver bookkeeping are separate observations. Blocked status alone does not establish its cause. No goal change, resume, attachment or new turn was requested."});
+    match snapshot {
+        Ok(snapshot) => {
+            let snapshot: crate::codex::NativeGoalSnapshot = snapshot;
+            result["availability"] = json!("observed");
+            result["snapshot"] = serde_json::to_value(snapshot)?;
+        }
+        Err(_) => {
+            result["availability"] = json!("unknown");
+            result["detail"] = json!(
+                "Native goal snapshot was not observed. Check the selected native connection/capability; no legacy revision was invented."
+            );
+        }
+    }
+    Ok(result)
 }

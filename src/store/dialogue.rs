@@ -196,6 +196,9 @@ impl Store {
         let mut refs = entry_inputs_on(&conn, key, human, native, None)?
             .into_iter()
             .map(|u| InputReference::Telegram(u.update_id))
+            .filter(|reference| {
+                original_on(&conn, key, human, native, reference, "", false).is_ok()
+            })
             .collect::<Vec<_>>();
         let mut query=conn.prepare("SELECT id FROM conversation_inputs WHERE human_id=?1 AND native_thread=?2 AND retired=0 AND phase IN ('sending','steering','accepted','routed') ORDER BY created_at DESC LIMIT 12")?;
         let ids = query

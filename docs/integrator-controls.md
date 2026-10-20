@@ -1,8 +1,48 @@
 # Integrator controls and recovery: harness study and delivery plan
 
-Status: studied and planned, 2026-10-19. Owner: [Telecodex #210](https://github.com/AlterMundi/telecodex/issues/210),
+Status: implementation and qualification in progress, 2026-10-20. Owner: [Telecodex #210](https://github.com/AlterMundi/telecodex/issues/210),
 under [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
 This document does not enable controls, delegation, recovery services or model wakeups.
+
+Development checkpoint: `goal_inspect` reads the native definition revision,
+execution state and receiver bookkeeping separately. Durable `goal_prepare`,
+`goal_decide`, `goal_status` and `goal_execute` retain human originals, explicit
+controls and single-use confirmed proposals. Conditional metadata writes run on
+the existing selected writer. The context-aware activation path uses the same
+continuation collector and native goal-state permit to start or steer useful
+work with its current invocation context, preserving goal accounting. A retained
+human command can outlive the model turn that interpreted it; its frozen target,
+owner, incarnation, deadline, holds and newer human directions still constrain
+each separately identified submission attempt. A proven unsent outcome may retry
+the unchanged intent without a second human confirmation, retaining earlier
+outcomes. Attempt fences prevent late retirement/receipts from changing a newer
+attempt. Restart does not replay uncertain or partially applied work.
+
+This is development source, not receiving adoption. The native dependency is
+[compaii/codex #5](https://github.com/compaii/codex/pull/5); older receivers must
+refuse unsupported conditional activation rather than stage a legacy goal or
+insert a priming model turn. Canonical results from the linked goal collector
+return to the selected integrating conversation, while a later direct input
+still selects its own presentation surface. For activating controls, an exact frozen human follow-up travels in the same
+conditional context admission: the native goal CAS succeeds first, then the
+clause reaches the first useful or steered model step. The matched response
+acknowledges both admissions without a separate priming turn or an extra
+application race. Incorporation remains distinct. The process fixture uses synthetic
+native peers. Metadata-only controls with a human follow-up use the same collector:
+its matched CAS precedes the exact attributed clause through ordinary native
+start/steer, preserving paused/absent goal state. A committed metadata receipt is
+retained before follow-up submission; failure retains a partial outcome and never
+repeats the mutation. Actual native qualification of this path, receiving adoption
+and the finished real-session campaign remain required by #210.
+
+The conversation surface lists retained controls and shows each proposal’s target,
+action, reason, selected goal, replacement and ordered clause for review. Confirm
+and decline draft an explicit message in the existing composer; only the human’s
+Send creates a new original. An existing draft is preserved. Read-only device and
+monitor grants may inspect these views but gain no goal mutation endpoint. Control
+outcomes distinguish queued, acknowledged, rejected, partial and uncertain; an
+expired selection never hides an already retained partial effect. These are
+receiver observations; the native CAS still checks the definition at execution.
 
 Human-selected initial policy: explicit human instructions to start, pause,
 resume or clear a selected goal execute without asking for the same permission
@@ -252,3 +292,29 @@ References: [official Goals guide](https://developers.openai.com/cookbook/exampl
 [official App Server lifecycle](https://learn.chatgpt.com/docs/app-server),
 [whole-experience qualification](interaction-qualification.md),
 [current goal control task](https://github.com/AlterMundi/telecodex/issues/210).
+
+## Conditional controls development checkpoint — 2026-10-20
+
+The stable integrator now retains goal interpretations and assistant proposals in
+the existing journal database. Original human speech, interpreted payload, logical
+incarnation/native target, native definition revision, authoring execution, capture
+chronology, expiry, confirmation and outcome remain separate. A later captured
+confirmation can select a proposal once; an earlier capture cannot authorize it.
+A control-selected original cannot also receive an independent routing/creation/
+question-answer plan. Later retained human controls supersede earlier ones for the
+same target even if tools invoke them backwards.
+
+The metadata execution slice supports pause, clear and edits of inactive goals,
+using only the native conditional RPCs. Unknown internal/transport outcomes stay
+uncertain and prevent automatic replay; a native invalid-request refusal stays
+rejected. An existing receiving worker processes the control on its own subscribed
+connection, so acknowledging pause/clear retires a staged legacy activation. Source
+ownership, bindings, holds and chronology are checked again at the write boundary.
+No ordinary topic input is intercepted and pause/clear do not interrupt work.
+
+The initial controller journey passed with synthetic native peers before the owning
+writer correction. That correction and its staged-activation regression are under
+qualification in PR223. Active transitions (start/resume/replace or active edits),
+ordered child admission, durable proposal presentation and receiving rollout still
+need integration. They are refused before mutation in this slice; #210 remains open
+and the full plan and real-session protocol retain those requirements.

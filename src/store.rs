@@ -19,9 +19,11 @@ mod conversation_requests;
 pub use conversation_requests::ConversationRequest;
 mod creation;
 mod dialogue;
+mod goal_controls;
 mod interaction;
 mod interactions;
 mod live_tasks;
+pub use goal_controls::{GoalAction, GoalPlan};
 pub use live_tasks::LiveTaskActor;
 mod matrix;
 mod merging;
@@ -124,6 +126,7 @@ impl Store {
         store.init_conversation_entry()?;
         store.init_conversation_requests()?;
         store.init_matrix()?;
+        store.init_goal_controls()?;
         store.init_observer_cards()?;
         store.init_observer_freshness()?;
         // A restarted process cannot continue a previous command's activity lease.

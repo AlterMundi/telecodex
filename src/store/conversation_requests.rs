@@ -288,6 +288,7 @@ impl Store {
         let original = source_input
             .map(|id| {
                 let input = super::conversation_inputs::read_on(&tx, id, human)?;
+                super::goal_controls::unclaimed_on(&tx,human,"conversation",&input.id)?;
                 super::conversation_inputs::eligible_on(&tx, &input)?;
                 let contextual = input.reply.as_ref().is_some_and(|r| r.context_only);
                 let eligible = if let Some((native, closed, explicit)) = interpretation {

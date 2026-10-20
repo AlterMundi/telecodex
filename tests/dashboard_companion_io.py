@@ -166,6 +166,22 @@ class Companion(unittest.TestCase):
         self.assertEqual(self.client.get(path,headers=headers).status_code,401)
         self.assertEqual(len(self.speech.calls),0)
 
+    def test_goal_review_is_readonly_for_device_and_monitor(self):
+        ident='11111111-1111-4111-8111-111111111111'
+        for path in ('/api/interaction/goals','/api/interaction/goals/'+ident):
+            response=self.client.get(path,headers=self.headers)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(self.client.post(path,json={},headers=self.headers).status_code,403)
+            for scope in ('interaction_only','monitor_readonly'):
+                from dashboard.companion import permitted
+                self.assertTrue(permitted('GET',path,scope))
+                for method in ('POST','PUT','DELETE'):
+                    self.assertFalse(permitted(method,path,scope))
+        self.assertEqual(self.client.get('/api/interaction/goals/not-a-uuid',headers=self.headers).status_code,403)
+        self.grants.revoke(self.device['grant_id'])
+        self.assertEqual(self.client.get('/api/interaction/goals',headers=self.headers).status_code,401)
+        self.assertEqual(len(self.speech.calls),0)
+
     def test_origin_csrf_and_browser_chosen_speech_rejected_before_provider(self):
         self.assertEqual(self.client.post('/api/interaction/audio',json=self.body,headers={**self.headers,'origin':'https://other.test'}).status_code,403)
         self.assertEqual(self.client.post('/api/interaction/audio',json=self.body,headers={**self.headers,'x-dashboard-csrf':'wrong'}).status_code,403)

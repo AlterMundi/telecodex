@@ -646,3 +646,12 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
   .companion-caption { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { #conversation-companion pre { animation: none; } }
+
+/* Shared attention row keeps questions and goal proposals above the timeline. */
+#conversation-goals { padding: 10px 2px; border-block: 2px solid var(--accent); }
+#conversation-goals h2 { font-size: 18px; margin-bottom: 6px; }
+#conversation-attention { flex-shrink: 0; max-height: 38dvh; overflow: auto; }
+.standalone-conversation #conversation-attention { grid-row: 2; max-height: 30dvh; }
+.standalone-conversation #conversation-attention #conversation-requests { max-height: none; }
+.monitor-mode #conversation-attention { display: none !important; }
+#conversation-attention:has(> section:not([hidden])) { min-height: min(120px, 30dvh); }

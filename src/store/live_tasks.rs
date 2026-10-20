@@ -14,7 +14,7 @@ pub struct LiveTaskActor<'a> {
     /// Set by the receiver only for its actual integrating entry.
     pub integrator: bool,
 }
-fn actor_on(
+pub(super) fn actor_on(
     conn: &Connection,
     actor: &LiveTaskActor<'_>,
     closed: &CancellationToken,

@@ -14,6 +14,8 @@ pub(super) async fn process_turn(
     prepared_worker_lease: Option<super::attention::WorkerLease>,
 ) -> Result<()> {
     let shared = app.shared.clone();
+    let _goal_execution =
+        super::goal_controls::GoalExecutionGuard::new(shared.clone(), queued.goal.as_ref());
     let initial_binding = if queued.request.review_mode.is_none()
         && shared.config.interaction.as_ref().is_some_and(|p| {
             p.entry() == queued.request.session_key && p.human_id == queued.request.from_user_id
@@ -298,6 +300,25 @@ pub(super) async fn process_turn(
             queued.interaction.as_deref(),
         )?,
     };
+    if let Some(scope) = queued
+        .goal
+        .as_ref()
+        .and_then(|g| g.conditional.as_ref())
+        .and_then(|c| c.scope.as_ref())
+    {
+        let native = session
+            .codex_thread_id
+            .as_deref()
+            .context("Controlled goal native binding unavailable")?;
+        shared.store.goal_control_link_execution(
+            scope.human,
+            scope.entry,
+            &scope.id,
+            &scope.attempt,
+            turn_id,
+            native,
+        )?;
+    }
     if let Some(id) = queued.nexus.as_deref() {
         shared.store.nexus_link(id, turn_id)?;
     }
@@ -607,7 +628,12 @@ pub(super) async fn process_turn(
         c.human_id == runtime_request.from_user_id
             && ((c.entry() == session.key
                 && (queued.conversation_input.is_some() || c.telegram_ingress))
-                || (routed && super::routing::enrolled(&shared, session.key)))
+                || ((routed
+                    || queued
+                        .goal
+                        .as_ref()
+                        .is_some_and(|g| g.conditional.is_some()))
+                    && super::routing::enrolled(&shared, session.key)))
     });
     if controller_selected && let Some(hint) = controller_hint {
         runtime_request
@@ -1979,7 +2005,7 @@ pub(super) fn prepare_runtime_request(
     );
 
     instruction_sections.push(format!(
-        "If a human action must remain recoverable after this turn (for example a phone test), explicitly declare it in {}. This optional regular JSON file is outside out and is not uploaded. Schema: {{\"schema\":\"telecodex.human-requests/v1\",\"requests\":[{{\"id\":\"phone-test\",\"title\":\"Test playback\",\"action\":\"Open the app and report playback.\",\"links\":[]}}]}}. Use at most 10 requests, unique IDs (64 ASCII letters/digits/dash/underscore), titles <=120 characters, actions <=8000 characters and at most 5 public http(s) links {{\"label\":\"App\",\"url\":\"https://example.org\"}}. Never put secrets or private endpoints into previews or links. Telecodex admits the declaration only after successful native completion and scopes it to this turn's human, topic and native thread. /pending (also /questions) reopens it. Do not declare a request already answered; ordinary prose creates no durable request. To retire a task issued in this same human/topic/native thread when its action is no longer needed, add optional withdrawals: [{{\"id\":\"retained-request-id\",\"reason\":\"Explicit reason and observed source\",\"links\":[]}}]. Use the exact retained task ID, at most 10 total requests/withdrawals, and reasons <=2000 characters. Native questions and uncertain receipts cannot be withdrawn this way. Withdrawal records an agent decision with an audit trail, never human approval or completion.",
+        "If a human action must remain recoverable after this turn (for example a phone test), explicitly declare it in {}. This optional regular JSON file is outside out and is not uploaded. Schema: {{\"schema\":\"telecodex.human-requests/v1\",\"requests\":[{{\"id\":\"phone-test\",\"title\":\"Test playback\",\"action\":\"Open the app and report playback.\",\"links\":[]}}]}}. Use at most 10 requests, unique IDs (64 ASCII letters/digits/dash/underscore), titles <=120 characters, actions <=8000 characters and at most 5 public http(s) links {{\"label\":\"App\",\"url\":\"https://example.org\"}}. Never put secrets or private endpoints into previews or links. Telecodex admits the declaration only after successful native completion and scopes it to this turn's human, topic and native thread. /pending (also /questions) reopens it. Do not declare a request already answered; ordinary prose creates no durable request. To retire a task issued in this same human/topic/native thread when its action is no longer needed, add optional withdrawals: [{{\"id\":\"retained-request-id\",\"reason\":\"Explicit reason and observed source\",\"links\":[]}}]. Use the exact retained task ID, at most 10 total requests/withdrawals, and reasons <=2000 characters. Native questions and uncertain receipts cannot be withdrawn this way. Withdrawal records an agent decision with an audit trail, never human approval or completion. If this execution supplies scoped controller access, discover human_tasks/human_task/withdraw_task through capabilities to inspect exact versions and retire obsolete actions during work; keep the manifest as the successful-turn fallback.",
         workspace.root.join(interactions::MANIFEST).display()
     ));
 

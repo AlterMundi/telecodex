@@ -57,7 +57,7 @@ frame_ms=100
         token=json.loads(path.read_text())['token']
         result=subprocess.run([self.binary,'--controller',str(path),json.dumps({'operation':operation,'arguments':arguments or {}})],capture_output=True,text=True,timeout=30)
         assert token not in result.stdout and token not in result.stderr
-        assert (result.returncode==0)==ok,result.stderr
+        assert (result.returncode==0)==ok,(result.stderr,result.stdout)
         if not ok:return result
         outer=json.loads(result.stdout);assert outer['ok'] and outer['result']['success'],outer
         return json.loads(outer['result']['contentItems'][0]['text'])

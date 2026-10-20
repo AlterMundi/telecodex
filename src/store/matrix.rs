@@ -29,6 +29,16 @@ pub(super) fn unclaimed_on(
     event: &str,
     update: Option<i64>,
 ) -> Result<()> {
+    super::goal_controls::unclaimed_on(
+        conn,
+        human,
+        if update.is_some() {
+            "telegram"
+        } else {
+            channel
+        },
+        event,
+    )?;
     let held = selected_on(conn, human, channel, event, update)?.is_some();
     if held {
         bail!("Original input has an immutable Matrix destination");

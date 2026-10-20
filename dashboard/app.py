@@ -474,6 +474,32 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         authorize(request)
         return result
 
+    @app.get('/api/interaction/goals')
+    async def conversation_goals(request: Request, before: int = 0):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.goal_controls, before)
+        except ValueError:
+            raise HTTPException(400, 'Invalid control selection') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(503, 'Goal controls unavailable; nothing was changed') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/goals/{ident}')
+    async def conversation_goal_detail(request: Request, ident: str):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.goal_control_detail, ident)
+        except ValueError:
+            raise HTTPException(400, 'Invalid control selection') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(409, 'Control changed or is unavailable; nothing was changed') from None
+        authorize(request)
+        return result
+
     @app.get('/api/interaction/requests')
     async def conversation_requests(request: Request, after: int = 0):
         session = authorize(request)

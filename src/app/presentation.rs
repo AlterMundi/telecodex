@@ -109,6 +109,14 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
     }
     let fields: Vec<_> = args.split_whitespace().collect();
     let mut result = match fields.as_slice() {
+        ["goals", "list", before] => {
+            app.shared
+                .store
+                .goal_control_views(human, cfg.entry(), before.parse()?)
+        }
+        ["goals", "detail", id] if Uuid::parse_str(id).is_ok() => {
+            app.shared.store.goal_control_view(human, cfg.entry(), id)
+        }
         [operation, delivery, native, matrix] if matches!(*operation, "list" | "before") => {
             app.shared.store.interaction_presentation_page_matrix(
                 human,
@@ -162,6 +170,13 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
             .shared
             .store
             .interaction_activity(human, cfg.entry(), &targets)?;
+        result["goal_controls"] = app.shared.store.goal_control_views(human, cfg.entry(), 0)?;
+    }
+    if result["schema"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("telecodex.goal-control-"))
+    {
+        return Ok(result);
     }
     if let Some(items) = result["items"].as_array_mut() {
         for item in items {

@@ -564,6 +564,7 @@ async fn resume_target(app: &App, human: i64, t: &StopTarget, id: &str) -> Resul
             objective: None,
             replace: false,
             attach_turn: None,
+            conditional: None,
         };
         app.enqueue_stop_resume(TurnRequest {session_key:t.key,from_user_id:human,prompt:format!("Continue the native goal explicitly resumed by the human after coordinated Stop. Inspect retained history and completed effects before continuing. Recover unfinished subagent work through the native agent tools; the verified stopped descendants were {:?}; their prior goal states were {:?}. Use their native recovery surface to restore only formerly active, unchanged child goals. Do not claim a child resumed without its receipt.",t.children,t.child_goals.iter().map(|(id,g)|(id,&g.status)).collect::<Vec<_>>()),runtime_instructions:None,attachments:vec![],review_mode:None,override_search_mode:None},Some(activation),id).await?;
     } else if t.was_busy {

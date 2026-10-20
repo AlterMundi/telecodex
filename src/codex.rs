@@ -33,7 +33,10 @@ use tokio_tungstenite::{
 use tokio_util::sync::CancellationToken;
 
 mod goals;
-pub use goals::{GoalActivation, GoalControl, GoalStopSnapshot, NativeGoal};
+pub use goals::{
+    GoalActivation, GoalControl, GoalControlScope, GoalMetadataControl, GoalStopSnapshot,
+    NativeGoal, NativeGoalSnapshot,
+};
 
 /// The provider observed cancellation before it attempted the initial native
 /// write. This is distinct from a lost acknowledgment after transmission.
@@ -275,7 +278,7 @@ enum RpcMessage {
         params: Value,
     },
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct RpcError {
     #[serde(default)]
     code: Option<i64>,
@@ -283,6 +286,12 @@ struct RpcError {
     #[serde(default)]
     data: Option<Value>,
 }
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&format_rpc_error(self))
+    }
+}
+impl std::error::Error for RpcError {}
 #[derive(Debug, Deserialize)]
 struct ModelListPage {
     #[serde(default)]
@@ -1069,7 +1078,18 @@ where
     let mut goal_active = false;
     let mut staged_goal = false;
     let mut goal_snapshot_request_id = None;
-    if let Some(activation) = goal_activation {
+    if let Some(activation) = goal_activation.filter(|a|a.conditional.is_some()) {
+        if activation.native_thread.as_deref() != Some(thread_id.as_str()) || activation.attach_turn.is_some() {
+            bail!("Conditional goal activation binding changed before submission");
+        }
+        let params = build_turn_start_params(&thread_id, &effective_session, request);
+        let _ = on_event(CodexEvent::NativeTurnSubmitting).await?;
+        initial_write_possible = true;
+        let (active, turn) = goals::conditional_continuation(&mut process, &thread_id, activation.conditional.as_ref().expect("selected conditional activation"), params, None).await?;
+        goal_active = active;
+        adopted_turn = Some(turn);
+        collecting_existing = true;
+    } else if let Some(activation) = goal_activation {
         if activation.native_thread != session.codex_thread_id {
             bail!("goal source binding changed; inspect /goal before continuing");
         }
@@ -1321,6 +1341,45 @@ where
                         let _=steer.response.send(Err(CodexSteerError::Rejected("native interruption pending".to_string())));
                         continue;
                     }
+                    if let Some(GoalControl::Activate(activation))=steer.goal.as_ref()
+                        && let Some(control)=activation.conditional.as_ref() {
+                        let mut params=build_turn_start_params(&thread_id,&effective_session,request);
+                        params["additionalContext"]=control.context.clone().unwrap_or(Value::Null);
+                        match goals::conditional_continuation(&mut process,&thread_id,control,params,active_turn_id.as_deref()).await {
+                            Ok((active,turn))=>{
+                                goal_snapshot_request_id=None;goal_active=active;staged_goal=false;
+                                if active_turn_id.as_ref()!=Some(&turn) {
+                                    active_turn_id=Some(turn.clone());turn_completed=false;assistant_message_completed=false;
+                                    let _=on_event(CodexEvent::NativeTurnStarted(turn.clone())).await?;
+                                }
+                                let _=steer.response.send(Ok(Some(turn)));
+                            },
+                            Err(error)=>{
+                                // A metadata-only CAS can succeed before its
+                                // follow-up fails. Do not retain an old staged
+                                // activation after the acknowledged pause/clear.
+                                let metadata_applied=control.receipt.lock().expect("goal control receipt mutex poisoned").as_ref()
+                                    .is_some_and(|(_,r)|r["native_receipt"]["revision"].is_string());
+                                if metadata_applied && (matches!(control.plan.action,crate::store::GoalAction::Pause|crate::store::GoalAction::Clear)
+                                    || (matches!(control.plan.action,crate::store::GoalAction::Edit) && control.plan.expected.goal.as_ref().is_some_and(|g|g.status!="active"))) {
+                                    staged_goal=false;goal_active=false;goal_snapshot_request_id=None;
+                                }
+                                let _=steer.response.send(Err(CodexSteerError::Undetermined(error.to_string())));
+                            },
+                        }
+                        continue;
+                    }
+                    if let Some(GoalControl::ConditionalMetadata(control))=steer.goal.as_ref() {
+                        let result=goals::conditional_metadata(&mut process,&thread_id,&control.plan,&control.admission).await;
+                        if result.0=="acknowledged" {
+                            if matches!(control.plan.action,crate::store::GoalAction::Pause|crate::store::GoalAction::Clear) {staged_goal=false;}
+                            goal_snapshot_request_id=None;
+                            goal_active=result.1["native_receipt"]["goal"]["status"]=="active";
+                        }
+                        *control.receipt.lock().expect("goal control receipt mutex poisoned")=Some(result);
+                        let _=steer.response.send(Ok(None));
+                        continue;
+                    }
                     if let Some(control)=steer.goal.as_ref() {
                         if let GoalControl::Stop(snapshot)=control {snapshot.lock().expect("goal stop snapshot mutex poisoned").was_staged=staged_goal;}
                         if matches!(control,GoalControl::Pause|GoalControl::Clear|GoalControl::Stop(_)) { staged_goal=false; }
@@ -1528,7 +1587,10 @@ where
     }
 }
 
-fn goal_definitions_match(current: Option<&NativeGoal>, expected: Option<&NativeGoal>) -> bool {
+pub(crate) fn goal_definitions_match(
+    current: Option<&NativeGoal>,
+    expected: Option<&NativeGoal>,
+) -> bool {
     match (current, expected) {
         (None, None) => true,
         (Some(a), Some(b)) => a.same_definition(b),
@@ -2603,7 +2665,7 @@ impl AppServerProcess {
         {
             if let Some(RpcMessage::Response { result, error, .. }) = self.buffered.remove(index) {
                 if let Some(error) = error {
-                    bail!("{}", format_rpc_error(&error));
+                    return Err(error.into());
                 }
                 return Ok(result.unwrap_or(Value::Null));
             }
@@ -2616,7 +2678,7 @@ impl AppServerProcess {
             if let RpcMessage::Response { id, result, error } = &message {
                 if *id == expected_id {
                     if let Some(error) = error {
-                        bail!("{}", format_rpc_error(error));
+                        return Err(error.clone().into());
                     }
                     return Ok(result.clone().unwrap_or(Value::Null));
                 }
