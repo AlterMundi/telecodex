@@ -84,3 +84,9 @@ g.companion.configure(narrow,'c'.repeat(64));assert.equal(g.face.textContent,'A 
 const unsafe=JSON.parse(JSON.stringify(other));unsafe.expressions.ripples.variants.small.frames=['\x1b[2J'];
 g.companion.configure(unsafe,'d'.repeat(64));assert.equal(g.box.dataset.pose,'calm','invalid packs cannot install control characters');
 console.log('Per-being packs: independent vocabularies, exact selection, finite frames, reduced motion, stale pack and narrow fallback passed.');
+
+const h=boot();h.companion.configure(pack,'a'.repeat(64));
+h.companion.reply({...selected,companion_hint:{...selected.companion_hint,gesture:'none'}});
+h.elapse(300);assert.equal(h.face.textContent,pack.expressions.inquiry.variants.field.frames[0],'none stays static');
+h.companion.reply({...selected,id:'changed-bytes',observed_at:'2026-10-25T00:00:00Z',companion_hint:{...selected.companion_hint,catalog:'b'.repeat(64)}});
+assert.equal(h.box.dataset.pose,'weave','reused pack labels with different bytes do not select a new expression');

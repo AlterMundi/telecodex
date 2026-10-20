@@ -11,12 +11,13 @@ from session_requests_io import Sessions
 
 class Warm(Sessions):
     def __init__(self,binary,pack=False):
+        self.expression_pack_text=''
         super().__init__(binary)
         self.socket=self.root/'control.sock'
         self.config.write_text(self.config.read_text().replace('[telegram]',
             f'[session_control]\nsocket_path="{self.socket}"\nhuman_id=100\n[telegram]'))
         if pack:
-            self.config.write_text(self.config.read_text()+'''
+            self.expression_pack_text='''
 [interaction.expression_pack]
 schema="daimon.ascii-expression/v1"
 id="test-fields"
@@ -42,7 +43,11 @@ alt="A field of ripples"
 [interaction.expression_pack.expressions.ripples.variants.field]
 frames=["~ : ~", " :~: "]
 frame_ms=100
-''')
+'''
+    def start(self):
+        if self.routed and self.expression_pack_text and '[interaction.expression_pack]' not in self.config.read_text():
+            self.config.write_text(self.config.read_text()+self.expression_pack_text)
+        return super().start()
     def access(self,topic):
         local=self.row("SELECT t.id FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.thread_id=? AND t.status='running' ORDER BY t.id DESC LIMIT 1",(topic,))[0][0]
         files=list(self.root.glob(f'.telecodex/turns/{local}-*/controller-access.json'))
@@ -81,7 +86,7 @@ def qualify(binary,pack=False):
         assert j.cli(entry,'companion_hint',pose)['new_registration']
         assert not j.cli(entry,'companion_hint',pose)['new_registration']
         j.cli(entry,'companion_hint',{'gesture':'script','rest':'calm'},ok=False)
-        j.cli(entry,'companion_hint',{'gesture':'nod','rest':'calm'},ok=False)
+        j.cli(entry,'companion_hint',{**pose,'gesture':'none'},ok=False)
         original=j.cli(entry,'inputs')['inputs'][-1]['input_ref']
         assert sum(m.get('method')=='turn/start' for m in j.rpc)==before+1
         j.cli(entry,'dispatch',{'input_ref':original,'destinations':[{'selector':'Alpha','relation':'new','requests':[]}]})

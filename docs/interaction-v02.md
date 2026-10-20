@@ -241,3 +241,20 @@ pass with two vocabularies, stale selection, reduced motion and narrow fallback.
 Server validation and legacy/custom warm process journeys still require final
 head CI. Full browser, real-session campaign and receiving adoption remain
 outstanding; this checkpoint does not complete #213 or the stage.
+
+### Sonic expression direction — 2026-10-20
+
+Human steering adds opt-in Beacon-derived humming/purring/rhythm and a chord of
+current session voices, tracked in #221 (milestone 8 / Project 14). Initial
+authored associations are 1:11 for blockage and 1:7 for waiting on a reply; they
+are vocabulary proposals, not universal acoustic or emotional facts. Consult
+maintained Beacon/HIT and the research corpus before selecting synthesis.
+
+Reuse actual state observations and per-being vocabulary/event provenance. Keep
+unknown/stale states distinct, aggregate membership visible and silence/volume
+under human control. The sound layer must cooperate with owned speech playback,
+local browser audio activation and suspension. No new inference loop, capture,
+background attention or unsolicited hardware playback is authorized. Qualify
+mapping, finite transitions, concurrent membership and real mute/stop behavior
+device-free before opt-in browser/listening acceptance. See #221 for scope and
+dependencies; the sound renderer is not implemented yet.

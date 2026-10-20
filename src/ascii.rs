@@ -78,7 +78,7 @@ impl ExpressionPack {
                 }
                 for frame in &variant.frames {
                     if frame.is_empty()
-                        || frame.lines().count() > 100
+                        || frame.split('\n').count() > 100
                         || frame.split('\n').any(|line| line.len() > 240)
                         || !frame.bytes().all(|c| c == b'\n' || (32..=126).contains(&c))
                     {
