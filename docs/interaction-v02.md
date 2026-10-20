@@ -207,3 +207,21 @@ The process fixture now covers existing integrator/worker hint registration,
 immutable repeat, invalid/changed choices and retained returned-source metadata.
 This is implementation/development progress, not receiving deployment or the
 finished-version Q/V campaign. #213 remains open for integration and acceptance.
+
+### Per-being representation scope — 2026-10-20
+
+Human steering expands #213 from one portrait to a selected per-being visual
+vocabulary, with independent defaults/rendering for terminal, Telegram and the
+animated app. The shared `ascii-expression` skill supplies guidance, a bounded
+portable renderer and an explicitly selected abstract Source example. A daimon
+need not resemble a human, share Source's appearance or use fixed mood names.
+
+The existing seven-pose implementation remains provisional. #213 must integrate
+a receiver-selected pack before final acceptance, retaining native source
+fences, ordinary evidence labels and finite local playback. Extend its component
+checks and the finished-version campaign to cover two different vocabularies,
+client defaults, narrow layout fallback, unknown expression, delayed/repeated
+source, reduced motion and unavailable activity without false operational claims.
+HIT may inform an evolving vocabulary; there is no universal mapping of
+consonance/dissonance to emotions. Shared-skill delivery and product integration
+are separate evidence.

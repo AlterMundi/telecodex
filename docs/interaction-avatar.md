@@ -85,3 +85,24 @@ diagnostics remained initially collapsed. This browser used the older developmen
 receiver binary without the new activity response and correctly showed activity
 unconfirmed. It does not qualify new native activity end to end, an actual
 Homemaker-owner update, an Android keyboard or the final real-session campaign.
+
+## Per-being expression direction — 2026-10-20
+
+The fixed portrait and seven names above are a prototype, not the representation
+contract for all daimons. The shared `ascii-expression` skill defines a portable
+visual vocabulary and client rendering guidance. Source is CompAII's identity;
+the portrait is one optional representation. Every being may select abstract,
+figurative, changing or stable forms and its own expression names.
+
+Before #213 acceptance, replace the hardwired portrait selection with a
+receiver-selected, versioned per-being pack adapter. Keep the current native
+thread/turn ownership, immutable choices, source ordering and operational
+evidence separate from artistic meaning. Advertise only the selected pack's
+expression identifiers to an existing response cycle. Validate selected catalog
+bytes through the receiver; model arguments must not introduce asset paths or
+executable renderers. Defaults and fitting variants differ across CLI, Telegram
+and app; Telegram cannot claim to know a client's viewport. The app plays finite
+local frames and provides reduced-motion/static and accessible alternatives.
+
+This adapter is still pending. Creating the shared skill does not imply the
+current web app, CLI or Telegram transport already consumes its packs.
