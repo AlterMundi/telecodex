@@ -209,7 +209,8 @@ def known_unsent_recovery(binary):
         saved=b.status(original);recovery=saved['recoveries'][0];instruction=recovery['instruction']
         assert recovery['label']=='Alpha' and instruction==j.instructions(7)[0][0]
         body={'binding':saved['binding'],'instruction':instruction};url='/api/interaction/inputs/'+original+'/retry'
-        assert b.client.post(url,json=body,headers={}).status_code==401
+        b.client.cookies.clear()  # Keep explicit owner/device headers; truly omit cookie authentication here.
+        unauthenticated=b.client.post(url,json=body,headers={'origin':b.provider.config['origin']});assert unauthenticated.status_code==401,unauthenticated.text
         bad={**b.device_headers,'x-dashboard-csrf':'wrong'}
         assert b.client.post(url,json=body,headers=bad).status_code==403
         grants=Grants(b.provider.config,b.provider);path=j.root/'readonly-recovery.json'
@@ -230,11 +231,22 @@ def known_unsent_recovery(binary):
         wrong={'binding':b.status(foreign).get('binding',saved['binding']),'instruction':j.instructions(8)[0][0]}
         assert b.client.post(url,json=wrong,headers=b.device_headers).status_code==409
         assert len(j.worker_packets['native-topic-8'])==1
+        # Inject retained transport uncertainty at the HTTP read boundary. This
+        # proves control refusal, not a claim that the fake peer lost an ACK.
+        other_instruction=j.instructions(8)[0][0]
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            db.execute("UPDATE interaction_instructions SET phase='uncertain',doc=json_set(doc,'$.phase','uncertain')WHERE id=?",(other_instruction,))
+        uncertain=b.status(foreign);assert not uncertain['recoveries']
+        response=b.client.post('/api/interaction/inputs/'+foreign+'/retry',json={'binding':saved['binding'],'instruction':other_instruction},headers=b.device_headers)
+        assert response.status_code==200 and response.json()['routing']['phase']=='uncertain'
+        assert len(j.worker_packets['native-topic-8'])==1
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            db.execute("UPDATE interaction_instructions SET phase='accepted',doc=json_set(doc,'$.phase','accepted')WHERE id=?",(other_instruction,))
         with sqlite3.connect(j.root/'state.sqlite')as db:
             db.execute('UPDATE conversation_inputs SET retired=1 WHERE id=?',(original,))
         assert b.client.post(url,json=body,headers=b.device_headers).status_code==409
         j.answer_worker(8,'Separate original completed.');j.idle()
-        print('PASS actual held native admission -> known-unsent -> explicit same-original device HTTP recovery, one native send/audit, duplicate/no-auth/CSRF/read-only/wrong-original/retired refusal; zero models, no Telegram input fabrication.')
+        print('PASS actual held native admission -> known-unsent -> explicit same-original device HTTP recovery, one native send/audit, duplicate/uncertain/no-auth/CSRF/read-only/wrong-original/retired refusal; zero models, no Telegram input fabrication.')
     finally:
         j.resume_release.set()
         if b:b.client.close()
