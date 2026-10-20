@@ -20,6 +20,44 @@ pub(super) fn environment_sync_thread_binding<'a>(
 }
 
 impl App {
+    pub(super) fn record_created_topic(&self, chat: i64, topic: &crate::telegram::ForumTopic) {
+        if self.shared.store.observe_topic(SessionKey::new(chat,Some(topic.message_thread_id)),Some(&topic.name),
+            Some(serde_json::json!({"color":topic.icon_color,"custom_emoji_id":topic.icon_custom_emoji_id})),Some("open"),
+            serde_json::json!({"kind":"create_receipt"})).is_err() {
+            // Creation was acknowledged. Metadata retention must not disguise
+            // that known effect as a failed create or invite another topic.
+            tracing::warn!("Created topic receipt could not be retained in the topic catalog");
+        }
+    }
+    pub(super) async fn catalogued_topic_lifecycle(
+        &self,
+        chat: i64,
+        topic: i64,
+        delete: bool,
+    ) -> Result<bool> {
+        let confirmed = if delete {
+            self.shared.telegram.delete_forum_topic(chat, topic).await?
+        } else {
+            self.shared.telegram.close_forum_topic(chat, topic).await?
+        };
+        if !confirmed {
+            bail!("Telegram did not confirm the topic lifecycle change");
+        }
+        if self.shared.store.observe_topic(SessionKey::new(chat,Some(topic)),None,None,Some(if delete {"deleted"}else{"closed"}),
+            serde_json::json!({"kind":"lifecycle_receipt","operation":if delete {"delete"}else{"close"}})).is_err() {
+            tracing::warn!("Acknowledged topic lifecycle receipt could not be retained in catalog");
+        }
+        Ok(true)
+    }
+    pub(super) async fn create_catalogued_topic(
+        &self,
+        chat: i64,
+        name: &str,
+    ) -> Result<crate::telegram::ForumTopic> {
+        let topic = self.shared.telegram.create_forum_topic(chat, name).await?;
+        self.record_created_topic(chat, &topic);
+        Ok(topic)
+    }
     pub(super) async fn ensure_environment_topic(
         &self,
         chat: &crate::telegram::Chat,
@@ -68,9 +106,7 @@ impl App {
         }
 
         let topic = self
-            .shared
-            .telegram
-            .create_forum_topic(chat.id, &environment.name)
+            .create_catalogued_topic(chat.id, &environment.name)
             .await
             .with_context(|| format!("failed to create forum topic for {}", environment.name))?;
         let session_key = SessionKey::new(chat.id, Some(topic.message_thread_id));
@@ -120,12 +156,32 @@ impl App {
         if session.session_title.as_deref().map(str::trim) == Some(environment.name.as_str()) {
             return Ok(true);
         }
-        if let Err(error) = self
+        let renamed = self
             .shared
             .telegram
             .edit_forum_topic(chat_id, session.key.thread_id, &environment.name)
-            .await
+            .await;
+        let acknowledged = matches!(&renamed, Ok(true))
+            || renamed
+                .as_ref()
+                .err()
+                .is_some_and(is_forum_topic_not_modified);
+        if acknowledged
+            && self
+                .shared
+                .store
+                .explicit_session_title(session.key)?
+                .is_none()
         {
+            self.shared.store.observe_topic(
+                session.key,
+                Some(&environment.name),
+                None,
+                None,
+                serde_json::json!({"kind":"rename_receipt"}),
+            )?;
+        }
+        if let Err(error) = renamed {
             if is_forum_topic_not_modified(&error) {
                 return Ok(true);
             }
@@ -251,12 +307,7 @@ impl App {
                 break;
             }
             let topic_name = environment_topic_name(&environment);
-            let topic = match self
-                .shared
-                .telegram
-                .create_forum_topic(chat_id, &topic_name)
-                .await
-            {
+            let topic = match self.create_catalogued_topic(chat_id, &topic_name).await {
                 Ok(topic) => topic,
                 Err(error) => {
                     if self
@@ -418,9 +469,7 @@ impl App {
         session: &crate::models::SessionRecord,
     ) -> Result<bool> {
         let deleted = match self
-            .shared
-            .telegram
-            .delete_forum_topic(chat_id, session.key.thread_id)
+            .catalogued_topic_lifecycle(chat_id, session.key.thread_id, true)
             .await
         {
             Ok(_) => true,
@@ -437,9 +486,7 @@ impl App {
                 false
             }
             Err(error) => match self
-                .shared
-                .telegram
-                .close_forum_topic(chat_id, session.key.thread_id)
+                .catalogued_topic_lifecycle(chat_id, session.key.thread_id, false)
                 .await
             {
                 Ok(_) => true,
@@ -562,15 +609,11 @@ impl App {
             }
             let result = match action {
                 crate::config::StaleTopicAction::Close => {
-                    self.shared
-                        .telegram
-                        .close_forum_topic(chat_id, session.key.thread_id)
+                    self.catalogued_topic_lifecycle(chat_id, session.key.thread_id, false)
                         .await
                 }
                 crate::config::StaleTopicAction::Delete => {
-                    self.shared
-                        .telegram
-                        .delete_forum_topic(chat_id, session.key.thread_id)
+                    self.catalogued_topic_lifecycle(chat_id, session.key.thread_id, true)
                         .await
                 }
                 crate::config::StaleTopicAction::None => Ok(true),

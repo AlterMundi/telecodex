@@ -222,6 +222,7 @@ async fn execute_claimed(
                 shared.store.interaction_creation_start(id, human)
             })
             .await?;
+        app.record_created_topic(key.chat_id, &topic);
         // A confirmed effect is retained even if its source retired meanwhile.
         shared
             .store

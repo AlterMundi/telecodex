@@ -2510,3 +2510,124 @@ async fn retired_approval_does_not_publish_or_keep_pending_state() {
     assert_eq!(decision, CodexApprovalDecision::Cancel);
     assert!(app.shared.pending_approvals.lock().await.is_empty());
 }
+
+#[tokio::test]
+async fn topic_catalog_service_events_do_not_become_native_or_router_input() {
+    let (app, _db) = sample_app();
+    let key = SessionKey::new(100, Some(77));
+    let ordinary:crate::telegram::Update=serde_json::from_value(serde_json::json!({"update_id":999,"message":{"message_id":999,"message_thread_id":77,"chat":{"id":100,"type":"private"},"from":{"id":100,"is_bot":false,"first_name":"Human"},"text":"Ordinary direct text"}})).unwrap();
+    let retained = serde_json::to_value(&ordinary).unwrap();
+    assert!(retained["message"].get("forum_topic_created").is_none());
+    assert!(retained["message"].get("forum_topic_closed").is_none());
+    assert!(retained["message"].get("forum_topic_reopened").is_none());
+    for (id, event) in [
+        (
+            1000,
+            serde_json::json!({"forum_topic_created":{"name":"A human topic","icon_color":123}}),
+        ),
+        (1002, serde_json::json!({"forum_topic_closed":{}})),
+        (1004, serde_json::json!({"forum_topic_reopened":{}})),
+        (1003, serde_json::json!({"forum_topic_closed":{}})),
+    ] {
+        let mut message = serde_json::json!({"message_id":id,"message_thread_id":77,"chat":{"id":100,"type":"private"},"from":{"id":100,"is_bot":false,"first_name":"Human"}});
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(event.as_object().unwrap().clone());
+        let update: crate::telegram::Update =
+            serde_json::from_value(serde_json::json!({"update_id":id,"message":message})).unwrap();
+        app.process_update(update).await.unwrap();
+    }
+    let view = stopping::command(&app, 100, "topics list 7", None)
+        .await
+        .unwrap();
+    assert_eq!(view["schema"], "telecodex.topic-inventory/v1");
+    let topic = view["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["key"]["thread_id"] == 77)
+        .unwrap();
+    assert_eq!(topic["lifecycle"], "open");
+    assert_eq!(topic["telegram"]["name"]["value"], "A human topic");
+    assert_eq!(topic["recent_bridge_conversation"], false);
+    assert!(
+        app.shared
+            .store
+            .get_session(key)
+            .unwrap()
+            .unwrap()
+            .codex_thread_id
+            .is_none()
+    );
+    assert!(app.workers.lock().await.is_empty());
+    assert_eq!(
+        app.shared
+            .store
+            .explicit_session_title(key)
+            .unwrap()
+            .as_deref(),
+        Some("A human topic")
+    );
+    let implicit:crate::telegram::Update=serde_json::from_value(serde_json::json!({"update_id":1010,"message":{
+        "message_id":1010,"message_thread_id":78,"chat":{"id":100,"type":"private"},"from":{"id":100,"is_bot":false,"first_name":"Human"},
+        "forum_topic_created":{"name":"An implicit topic","icon_color":123,"is_name_implicit":true}}})).unwrap();
+    app.process_update(implicit).await.unwrap();
+    assert!(
+        app.shared
+            .store
+            .explicit_session_title(SessionKey::new(100, Some(78)))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn topic_catalog_records_actual_api_receipts_without_accepting_false_ack() {
+    let (api, server) = crate::telegram::tests::serve_api(vec![
+        (
+            200,
+            serde_json::json!({"ok":true,"result":{"message_thread_id":77,"name":"Chosen topic","icon_color":456}}),
+        ),
+        (200, serde_json::json!({"ok":true,"result":false})),
+        (200, serde_json::json!({"ok":true,"result":true})),
+    ]);
+    let (mut app, _db) = sample_app();
+    Arc::get_mut(&mut app.shared).unwrap().telegram = TelegramClient::new("synthetic".into(), api);
+    let topic = app
+        .create_catalogued_topic(100, "Chosen topic")
+        .await
+        .unwrap();
+    let key = SessionKey::new(100, Some(topic.message_thread_id));
+    app.ensure_session(key, 100).unwrap();
+    assert!(
+        app.catalogued_topic_lifecycle(100, 77, false)
+            .await
+            .is_err()
+    );
+    let view = app.shared.store.topic_inventory(100, 7).unwrap();
+    let topic = view["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["key"]["thread_id"] == 77)
+        .unwrap();
+    assert_eq!(topic["lifecycle"], "open");
+    assert_eq!(topic["telegram"]["icon_color"]["value"], 456);
+    assert!(
+        app.catalogued_topic_lifecycle(100, 77, false)
+            .await
+            .unwrap()
+    );
+    let view = app.shared.store.topic_inventory(100, 7).unwrap();
+    assert_eq!(
+        view["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["key"]["thread_id"] == 77)
+            .unwrap()["lifecycle"],
+        "closed"
+    );
+    assert_eq!(server.join().unwrap().len(), 3);
+}
