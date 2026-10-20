@@ -77,6 +77,7 @@ impl Store {
         creation_on(&conn, id, human)
     }
 
+    #[cfg(test)]
     pub fn interaction_creation_for_input(
         &self,
         key: SessionKey,
