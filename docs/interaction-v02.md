@@ -154,3 +154,21 @@ Milestone: [v0.2](https://github.com/AlterMundi/telecodex/milestone/8).
 | pending | [#61](https://github.com/AlterMundi/telecodex/issues/61) |
 | lifecycle | [#108](https://github.com/AlterMundi/telecodex/issues/108) |
 | native_delivery | [#203](https://github.com/AlterMundi/telecodex/issues/203) |
+
+## Implementation checkpoint — 2026-10-19
+
+- Plan/protocol review merged as #217; shared visible-footer correction merged
+  as #212. Receiving adoption remains batched with the qualified product.
+- The installed-native two-client experiment reproduced all three stale goal
+  mutation cases without inference or work-session mutation. #210 requires native
+  generation/definition preconditions on set and clear; see integrator-controls.md.
+- A live scoped terminal fallback for older native tool sets is implemented in
+  the #203 branch. It reuses the same controller handlers and current execution,
+  including a routed steer into an already-running worker. The synthetic process
+  journey passes routing, dependency/return, immutable retry, binding/role/token
+  denial, expiry and ordinary direct ingress independence; Clippy passes.
+  This is development evidence, not receiving or real-model acceptance.
+- UI/companion, speech pacing, native control preconditions/transactions, task
+  withdrawal, projections/lifecycle and artifact delivery remain in progress or
+  pending in their owning issues. The finished-version real-session campaign
+  has not started.

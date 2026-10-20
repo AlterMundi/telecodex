@@ -23,6 +23,12 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--controller") {
+        if args.len() != 4 {
+            anyhow::bail!("Usage: telecodex --controller TURN_ACCESS_FILE OPERATION_JSON");
+        }
+        return control_client::controller(std::path::Path::new(&args[2]), &args[3]).await;
+    }
     if args.get(1).map(String::as_str) == Some("--control") {
         if args.len() < 5
             || !matches!(

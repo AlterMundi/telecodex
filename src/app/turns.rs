@@ -325,6 +325,25 @@ pub(super) async fn process_turn(
         shared.store.link_update_turn(update_id, turn_id)?;
     }
     let turn_workspace = prepare_turn_workspace(&session, turn_id)?;
+    let physical_turn = Arc::new(StdMutex::new(None::<String>));
+    let controller_possible = shared.config.interaction.as_ref().is_some_and(|c| {
+        c.human_id == queued.request.from_user_id
+            && (c.entry() == session.key || super::routing::enrolled(&shared, session.key))
+    });
+    // A dormant local lease changes no direct input, tool registration or admission.
+    // Its hint is disclosed only when actual integrator/routed input arrives.
+    let mut controller_request = queued.request.clone();
+    controller_request.runtime_instructions = None;
+    let _controller_lease = super::controller::Guard::prepare(
+        shared.clone(),
+        &mut controller_request,
+        turn_id,
+        &turn_workspace,
+        physical_turn.clone(),
+        &cancel,
+        controller_possible,
+    )?;
+    let controller_hint = controller_request.runtime_instructions;
 
     let (steer_tx, steer_rx) = mpsc::unbounded_channel();
     let steered_files = Arc::new(SteeredFiles::default());
@@ -333,6 +352,7 @@ pub(super) async fn process_turn(
             turn_id,
             sender: steer_tx,
             attachments: steered_files.clone(),
+            controller_hint: controller_hint.clone(),
         };
         *steer_slot.lock().expect("steer mutex poisoned") = Some(active.clone());
         if let Some(id) = registration.as_deref() {
@@ -583,7 +603,18 @@ pub(super) async fn process_turn(
                 })
             }),
     );
-    let physical_turn = Arc::new(StdMutex::new(None::<String>));
+    let controller_selected = shared.config.interaction.as_ref().is_some_and(|c| {
+        c.human_id == runtime_request.from_user_id
+            && ((c.entry() == session.key
+                && (queued.conversation_input.is_some() || c.telegram_ingress))
+                || (routed && super::routing::enrolled(&shared, session.key)))
+    });
+    if controller_selected && let Some(hint) = controller_hint {
+        runtime_request
+            .runtime_instructions
+            .get_or_insert_with(String::new)
+            .push_str(&hint);
+    }
     let run =
         runner
             .run_turn(&session, &runtime_request, cancel.clone(), steer_rx, {

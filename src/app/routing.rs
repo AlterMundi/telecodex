@@ -1129,6 +1129,10 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
             return Ok(());
         }
     };
+    let text = match &active.controller_hint {
+        Some(hint) => format!("{text}\n\n[Controller access for this execution]{hint}"),
+        None => text,
+    };
     let expected_native = app
         .shared
         .routing_runs
