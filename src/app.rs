@@ -26,6 +26,7 @@ mod conversation_requests;
 mod creation;
 mod dialogue;
 mod forum;
+mod goal_controls;
 mod goals;
 mod icons;
 mod interactions;

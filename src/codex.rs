@@ -33,7 +33,10 @@ use tokio_tungstenite::{
 use tokio_util::sync::CancellationToken;
 
 mod goals;
-pub use goals::{GoalActivation, GoalControl, GoalStopSnapshot, NativeGoal, NativeGoalSnapshot};
+pub use goals::{
+    GoalActivation, GoalControl, GoalMetadataControl, GoalStopSnapshot, NativeGoal,
+    NativeGoalSnapshot,
+};
 
 /// The provider observed cancellation before it attempted the initial native
 /// write. This is distinct from a lost acknowledgment after transmission.
@@ -275,7 +278,7 @@ enum RpcMessage {
         params: Value,
     },
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct RpcError {
     #[serde(default)]
     code: Option<i64>,
@@ -283,6 +286,12 @@ struct RpcError {
     #[serde(default)]
     data: Option<Value>,
 }
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&format_rpc_error(self))
+    }
+}
+impl std::error::Error for RpcError {}
 #[derive(Debug, Deserialize)]
 struct ModelListPage {
     #[serde(default)]
@@ -1321,6 +1330,17 @@ where
                         let _=steer.response.send(Err(CodexSteerError::Rejected("native interruption pending".to_string())));
                         continue;
                     }
+                    if let Some(GoalControl::ConditionalMetadata(control))=steer.goal.as_ref() {
+                        let result=goals::conditional_metadata(&mut process,&thread_id,&control.plan,&control.admission).await;
+                        if result.0=="acknowledged" {
+                            if matches!(control.plan.action,crate::store::GoalAction::Pause|crate::store::GoalAction::Clear) {staged_goal=false;}
+                            goal_snapshot_request_id=None;
+                            goal_active=result.1["native_receipt"]["goal"]["status"]=="active";
+                        }
+                        *control.receipt.lock().expect("goal control receipt mutex poisoned")=Some(result);
+                        let _=steer.response.send(Ok(None));
+                        continue;
+                    }
                     if let Some(control)=steer.goal.as_ref() {
                         if let GoalControl::Stop(snapshot)=control {snapshot.lock().expect("goal stop snapshot mutex poisoned").was_staged=staged_goal;}
                         if matches!(control,GoalControl::Pause|GoalControl::Clear|GoalControl::Stop(_)) { staged_goal=false; }
@@ -1528,7 +1548,10 @@ where
     }
 }
 
-fn goal_definitions_match(current: Option<&NativeGoal>, expected: Option<&NativeGoal>) -> bool {
+pub(crate) fn goal_definitions_match(
+    current: Option<&NativeGoal>,
+    expected: Option<&NativeGoal>,
+) -> bool {
     match (current, expected) {
         (None, None) => true,
         (Some(a), Some(b)) => a.same_definition(b),
@@ -2603,7 +2626,7 @@ impl AppServerProcess {
         {
             if let Some(RpcMessage::Response { result, error, .. }) = self.buffered.remove(index) {
                 if let Some(error) = error {
-                    bail!("{}", format_rpc_error(&error));
+                    return Err(error.into());
                 }
                 return Ok(result.unwrap_or(Value::Null));
             }
@@ -2616,7 +2639,7 @@ impl AppServerProcess {
             if let RpcMessage::Response { id, result, error } = &message {
                 if *id == expected_id {
                     if let Some(error) = error {
-                        bail!("{}", format_rpc_error(error));
+                        return Err(error.clone().into());
                     }
                     return Ok(result.clone().unwrap_or(Value::Null));
                 }

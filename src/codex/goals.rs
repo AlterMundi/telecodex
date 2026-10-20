@@ -183,6 +183,7 @@ pub enum GoalControl {
     Pause,
     Stop(Arc<std::sync::Mutex<GoalStopSnapshot>>),
     Clear,
+    ConditionalMetadata(GoalMetadataControl),
 }
 pub(super) async fn mutate_control(
     process: &mut AppServerProcess,
@@ -190,6 +191,9 @@ pub(super) async fn mutate_control(
     control: &GoalControl,
 ) -> Result<Option<NativeGoal>> {
     match control {
+        GoalControl::ConditionalMetadata(_) => {
+            bail!("Conditional metadata is handled by the subscribed writer")
+        }
         GoalControl::Activate(activation) => Ok(Some(
             mutate_live_goal(process, thread_id, activation).await?,
         )),
@@ -263,5 +267,131 @@ mod snapshot_tests {
         response["goal"]["threadId"] = json!("thread");
         let selected = parse_goal_snapshot(&response, "thread").unwrap();
         assert_eq!(selected.goal.unwrap().tokens_used, 80);
+    }
+}
+
+/// A current worker processes metadata controls on its own subscribed connection.
+#[derive(Clone)]
+pub struct GoalMetadataControl {
+    pub plan: crate::store::GoalPlan,
+    pub admission: SteerAdmissionCheck,
+    pub receipt: Arc<std::sync::Mutex<Option<(String, Value)>>>,
+}
+impl std::fmt::Debug for GoalMetadataControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoalMetadataControl")
+            .field("action", &self.plan.action)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One conditional write, with source/binding validation at the write boundary.
+pub(super) async fn conditional_metadata(
+    process: &mut AppServerProcess,
+    thread: &str,
+    plan: &crate::store::GoalPlan,
+    admission: &SteerAdmissionCheck,
+) -> (String, Value) {
+    use crate::store::GoalAction;
+    let mut sent = false;
+    let outcome = tokio::time::timeout(Duration::from_secs(12), async {
+        plan.validate()?;
+        if matches!(
+            plan.action,
+            GoalAction::Start | GoalAction::Resume | GoalAction::Replace
+        ) || (matches!(plan.action, GoalAction::Edit)
+            && plan
+                .expected
+                .goal
+                .as_ref()
+                .is_some_and(|g| g.status == "active"))
+        {
+            bail!("Active goal changes require the owning continuation collector");
+        }
+        let mut args =
+            json!({"threadId":thread,"expectedRevision":plan.expected.revision,"origin":"user"});
+        let method = if matches!(plan.action, GoalAction::Clear) {
+            "thread/goal/conditionalClear"
+        } else {
+            if matches!(plan.action, GoalAction::Pause) {
+                args["status"] = json!("paused");
+            }
+            if let Some(objective) = &plan.objective {
+                args["objective"] = json!(objective);
+            }
+            if let Some(budget) = plan.token_budget {
+                args["tokenBudget"] = json!(budget);
+            }
+            "thread/goal/conditionalSet"
+        };
+        admission()?;
+        sent = true;
+        let id = process.send_request(method, args).await?;
+        let receipt = process.await_response(id).await?;
+        if matches!(plan.action, GoalAction::Clear) {
+            if receipt["cleared"].as_bool().is_none()
+                || receipt["revision"].as_str().is_none_or(|s| s.is_empty())
+            {
+                bail!("Malformed conditional clear receipt");
+            }
+            Ok::<Value, anyhow::Error>(receipt)
+        } else {
+            Ok(serde_json::to_value(parse_goal_snapshot(
+                &receipt, thread,
+            )?)?)
+        }
+    })
+    .await;
+    match outcome {
+        Ok(Ok(receipt)) => (
+            "acknowledged".into(),
+            json!({"native_receipt":receipt,"meaning":"Native goal metadata acknowledged; this does not interrupt an active turn or prove incorporation of later work."}),
+        ),
+        Ok(Err(error)) => {
+            let code = error.downcast_ref::<RpcError>().and_then(|e| e.code);
+            let phase = if !sent {
+                "known_unsent"
+            } else if matches!(code, Some(-32602..=-32600)) {
+                "rejected"
+            } else {
+                "uncertain"
+            };
+            (
+                phase.into(),
+                json!({"error":error.to_string(),"native_error_code":code,"automatic_retry":false}),
+            )
+        }
+        Err(_) => (
+            if sent { "uncertain" } else { "known_unsent" }.into(),
+            json!({"error":"Conditional goal acknowledgment timed out","automatic_retry":false}),
+        ),
+    }
+}
+impl CodexRunner {
+    pub async fn conditional_goal_metadata(
+        &self,
+        thread: &str,
+        plan: &crate::store::GoalPlan,
+        admission: &SteerAdmissionCheck,
+    ) -> (String, Value) {
+        let connection = tokio::time::timeout(Duration::from_secs(8), async {
+            let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
+            process.initialize().await?;
+            Ok::<_, anyhow::Error>(process)
+        })
+        .await;
+        let mut process = match connection {
+            Ok(Ok(process)) => process,
+            _ => {
+                return (
+                    "known_unsent".into(),
+                    json!({"error":"Native goal connection unavailable before mutation submission","automatic_retry":false}),
+                );
+            }
+        };
+        let result = conditional_metadata(&mut process, thread, plan, admission).await;
+        // Never lose the matched receipt while closing an owned proxy.
+        let _ = tokio::time::timeout(Duration::from_secs(2), process.shutdown()).await;
+        result
     }
 }

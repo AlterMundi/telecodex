@@ -260,3 +260,29 @@ References: [official Goals guide](https://developers.openai.com/cookbook/exampl
 [official App Server lifecycle](https://learn.chatgpt.com/docs/app-server),
 [whole-experience qualification](interaction-qualification.md),
 [current goal control task](https://github.com/AlterMundi/telecodex/issues/210).
+
+## Conditional controls development checkpoint — 2026-10-20
+
+The stable integrator now retains goal interpretations and assistant proposals in
+the existing journal database. Original human speech, interpreted payload, logical
+incarnation/native target, native definition revision, authoring execution, capture
+chronology, expiry, confirmation and outcome remain separate. A later captured
+confirmation can select a proposal once; an earlier capture cannot authorize it.
+A control-selected original cannot also receive an independent routing/creation/
+question-answer plan. Later retained human controls supersede earlier ones for the
+same target even if tools invoke them backwards.
+
+The metadata execution slice supports pause, clear and edits of inactive goals,
+using only the native conditional RPCs. Unknown internal/transport outcomes stay
+uncertain and prevent automatic replay; a native invalid-request refusal stays
+rejected. An existing receiving worker processes the control on its own subscribed
+connection, so acknowledging pause/clear retires a staged legacy activation. Source
+ownership, bindings, holds and chronology are checked again at the write boundary.
+No ordinary topic input is intercepted and pause/clear do not interrupt work.
+
+The initial controller journey passed with synthetic native peers before the owning
+writer correction. That correction and its staged-activation regression are under
+qualification in PR223. Active transitions (start/resume/replace or active edits),
+ordered child admission, durable proposal presentation and receiving rollout still
+need integration. They are refused before mutation in this slice; #210 remains open
+and the full plan and real-session protocol retain those requirements.

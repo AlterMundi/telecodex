@@ -722,6 +722,11 @@ pub(super) async fn control_live(
     let Some(attached) = attached else {
         return Ok(false);
     };
+    let wait = if matches!(control, GoalControl::ConditionalMetadata(_)) {
+        Duration::from_secs(18)
+    } else {
+        Duration::from_secs(12)
+    };
     let (response, ack) = oneshot::channel();
     attached
         .sender
@@ -734,7 +739,7 @@ pub(super) async fn control_live(
             response,
         })
         .map_err(|_| anyhow!("Goal subscriber finished; inspect /goal before retrying"))?;
-    match tokio::time::timeout(Duration::from_secs(12), ack).await {
+    match tokio::time::timeout(wait, ack).await {
         Ok(Ok(Ok(_))) => Ok(true),
         Ok(Ok(Err(error))) => bail!("Goal mutation was not confirmed: {error:?}"),
         _ => bail!("Goal acknowledgment unavailable; inspect /goal before retrying"),
