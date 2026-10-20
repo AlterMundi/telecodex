@@ -41,6 +41,7 @@ mod observer_freshness;
 mod presentation;
 pub use observer_cards::{ObserverCard, ObserverPreparation};
 pub use observer_freshness::ObserverFreshness;
+mod topics;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};
 pub use tribu::TribuAdmission;

@@ -648,8 +648,49 @@ impl App {
             return Ok(());
         };
 
+        let topic_key = SessionKey::new(message.chat.id, message.message_thread_id);
+        let evidence = serde_json::json!({"kind":"telegram_update","update_id":update.update_id,"message_id":message.message_id});
+        if let Some(created) = &message.forum_topic_created {
+            let mut evidence = evidence;
+            evidence["name_implicit"] = serde_json::json!(created.is_name_implicit == Some(true));
+            self.ensure_session(topic_key, user.tg_user_id)?;
+            let named=self.shared.store.observe_topic(topic_key,Some(&created.name),Some(serde_json::json!({"color":created.icon_color,"custom_emoji_id":created.icon_custom_emoji_id})),Some("open"),evidence)?;
+            if named && created.is_name_implicit != Some(true) {
+                self.shared
+                    .store
+                    .set_explicit_session_title(topic_key, &created.name)?;
+            }
+            return Ok(());
+        }
+        if message.forum_topic_closed.is_some() || message.forum_topic_reopened.is_some() {
+            self.ensure_session(topic_key, user.tg_user_id)?;
+            self.shared.store.observe_topic(
+                topic_key,
+                None,
+                None,
+                Some(if message.forum_topic_closed.is_some() {
+                    "closed"
+                } else {
+                    "open"
+                }),
+                evidence,
+            )?;
+            return Ok(());
+        }
         if let Some(edit) = &message.forum_topic_edited {
-            if let Some(title) = &edit.name {
+            self.ensure_session(topic_key, user.tg_user_id)?;
+            let named = self.shared.store.observe_topic(
+                topic_key,
+                edit.name.as_deref(),
+                edit.icon_custom_emoji_id
+                    .as_ref()
+                    .map(|id| serde_json::json!({"custom_emoji_id":id})),
+                None,
+                evidence,
+            )?;
+            if let Some(title) = &edit.name
+                && named
+            {
                 self.rename_session(&user, &message, title, false).await?;
             }
             return Ok(());
@@ -2066,7 +2107,7 @@ impl App {
             serde_json::json!({"operation":operation,"parent":parent,"child":child,"boundary":boundary}),
         )?;
         activity.phase("creating_topic")?;
-        let topic = self.shared.telegram.create_forum_topic(target, &title).await
+        let topic = self.create_catalogued_topic(target, &title).await
             .context("Fork created natively; Telegram topic creation failed or is unconfirmed. Inspect fork audit before retrying")?;
         self.shared.store.audit(Some(user.tg_user_id), "fork_topic_created",
             serde_json::json!({"operation":operation,"child":child,"chat":target,"topic":topic.message_thread_id}))?;
@@ -2212,14 +2253,9 @@ impl App {
             .join("\n\n");
         activity.phase("creating_topic")?;
         // Summarization is complete before any destination mutation.
-        let topic = self
-            .shared
-            .telegram
-            .create_forum_topic(target, &title)
-            .await
-            .context(
-                "Handoff prepared; topic creation failed or is unconfirmed. Inspect fork audit",
-            )?;
+        let topic = self.create_catalogued_topic(target, &title).await.context(
+            "Handoff prepared; topic creation failed or is unconfirmed. Inspect fork audit",
+        )?;
         self.shared.store.audit(Some(user.tg_user_id),"fork_topic_created",serde_json::json!({"operation":operation,"mode":"handoff","chat":target,"topic":topic.message_thread_id}))?;
         activity.phase("binding_conversation")?;
         let notice = format!(
@@ -2320,9 +2356,7 @@ impl App {
             .map(str::to_string)
             .unwrap_or_else(|| format!("Telecodex {}", Utc::now().format("%Y-%m-%d %H:%M:%S")));
         let topic = self
-            .shared
-            .telegram
-            .create_forum_topic(target_chat_id, &topic_name)
+            .create_catalogued_topic(target_chat_id, &topic_name)
             .await
             .context("createForumTopic failed")?;
         let session_key = SessionKey::new(target_chat_id, Some(topic.message_thread_id));

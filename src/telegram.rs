@@ -1044,11 +1044,29 @@ pub struct Message {
     pub video: Option<Video>,
     pub sticker: Option<Sticker>,
     pub forum_topic_edited: Option<ForumTopicEdited>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forum_topic_created: Option<ForumTopicCreated>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forum_topic_closed: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forum_topic_reopened: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForumTopicEdited {
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_custom_emoji_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForumTopicCreated {
+    pub name: String,
+    pub icon_color: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_custom_emoji_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_name_implicit: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1187,6 +1205,8 @@ pub struct File {
 pub struct ForumTopic {
     pub message_thread_id: i64,
     pub name: String,
+    pub icon_color: Option<i64>,
+    pub icon_custom_emoji_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

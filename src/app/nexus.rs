@@ -59,6 +59,9 @@ pub(super) fn prepare_ingress(
         || from.id != message.chat.id
         || text.starts_with('/')
         || message.forum_topic_edited.is_some()
+        || message.forum_topic_created.is_some()
+        || message.forum_topic_closed.is_some()
+        || message.forum_topic_reopened.is_some()
         || !shared.store.get_user(from.id)?.is_some_and(|u| u.allowed)
     {
         return Ok(None);

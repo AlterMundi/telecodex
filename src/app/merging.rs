@@ -306,9 +306,7 @@ async fn prepare(
             .store
             .merge_operation_phase(doc["id"].as_str().unwrap(), "creating_topic")?;
         let topic = app
-            .shared
-            .telegram
-            .create_forum_topic(caller.key.chat_id, title)
+            .create_catalogued_topic(caller.key.chat_id, title)
             .await?;
         app.shared.store.audit(
             Some(human),

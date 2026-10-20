@@ -239,8 +239,14 @@ impl App {
         self.shared.pending_icon_pickers.lock().await.remove(token);
         let text = if let Some(icon_id) = icon_id {
             match self.shared.telegram.edit_forum_topic_icon(picker.key.chat_id, picker.key.thread_id, icon_id).await {
-                Ok(true) => label,
-                Err(error) if is_forum_topic_not_modified(&error) => label,
+                Ok(true) => {
+                    self.shared.store.observe_topic(picker.key,None,Some(serde_json::json!({"custom_emoji_id":icon_id})),None,serde_json::json!({"kind":"icon_receipt","update_id":HUMAN_UPDATE_ID.try_with(|id|*id).ok()}))?;
+                    label
+                },
+                Err(error) if is_forum_topic_not_modified(&error) => {
+                    self.shared.store.observe_topic(picker.key,None,Some(serde_json::json!({"custom_emoji_id":icon_id})),None,serde_json::json!({"kind":"icon_receipt","update_id":HUMAN_UPDATE_ID.try_with(|id|*id).ok()}))?;
+                    label
+                },
                 _ => "Telegram did not confirm the icon change. Check the topic before trying /icon again.".to_string(),
             }
         } else {

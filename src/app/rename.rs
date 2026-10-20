@@ -99,6 +99,14 @@ impl App {
         } else {
             ""
         };
+        if edit_topic
+            && key.thread_id > 0
+            && (topic == "Telegram topic renamed."
+                || topic == "Telegram topic already has this name.")
+            && self.shared.store.explicit_session_title(key)?.as_deref() == Some(title)
+        {
+            self.shared.store.observe_topic(key,Some(title),None,None,serde_json::json!({"kind":"rename_receipt","update_id":HUMAN_UPDATE_ID.try_with(|id|*id).ok()}))?;
+        }
         self.send_status(
             key.chat_id,
             message.message_thread_id,
