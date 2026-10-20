@@ -258,3 +258,20 @@ background attention or unsolicited hardware playback is authorized. Qualify
 mapping, finite transitions, concurrent membership and real mute/stop behavior
 device-free before opt-in browser/listening acceptance. See #221 for scope and
 dependencies; the sound renderer is not implemented yet.
+
+### Live task reassessment checkpoint — 2026-10-20
+
+The #61 branch adds live `human_tasks` / `human_task` / `withdraw_task` operations
+to the existing integrator and worker controller, including warm fallback. It
+reuses the task ledger, manifest mutation, agent-attributed audit and capture
+arming lock. Reads and writes require the actual owned running execution; exact
+task revision and an immediate SQLite transaction fence changes/answers. Native
+questions/approvals and uncertain human receipts cannot be retired by this API.
+
+The coordinator's cross-session scope is tied to the original routed local turn,
+not a sticky native-thread association, so a later direct task remains direct.
+Unit cases and an actual-controller synthetic process journey were added for
+revision/receipt denial, immutable retry, attribution, active issuer, worker
+isolation and direct-topic independence. Their execution/CI and receiving
+adoption remain to be observed; no #61 completion or real-session acceptance is
+claimed by writing the implementation.

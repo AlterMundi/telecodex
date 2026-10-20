@@ -94,6 +94,68 @@ pub(super) fn interaction_page_on(
     })
 }
 
+/// Same ledger mutation for completed-turn manifests and live scoped controllers.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn withdraw_task_on(
+    tx: &Connection,
+    session: i64,
+    user: i64,
+    native: &str,
+    turn: i64,
+    entry: &TaskWithdrawal,
+    actor: &serde_json::Value,
+) -> Result<bool> {
+    if entry.reason.trim().is_empty() || entry.reason.chars().count() > 2000 {
+        return Err(anyhow!("withdrawal needs a bounded explicit reason"));
+    }
+    let links = entry
+        .links
+        .as_array()
+        .context("withdrawal evidence must be links")?;
+    if links.len() > 5 {
+        return Err(anyhow!("too many withdrawal links"));
+    }
+    for link in links {
+        let label = link["label"]
+            .as_str()
+            .context("missing withdrawal link label")?;
+        let address = link["url"]
+            .as_str()
+            .context("missing withdrawal link address")?;
+        let url = reqwest::Url::parse(address)?;
+        if label.trim().is_empty()
+            || label.chars().count() > 80
+            || address.len() > 2048
+            || !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(anyhow!("invalid withdrawal evidence link"));
+        }
+    }
+    let row:Option<(String,String)>=tx.query_row("SELECT state,payload_json FROM human_interactions WHERE id=?1 AND session_id=?2 AND requester=?3 AND native_thread=?4 AND kind='task'",params![entry.id,session,user,native],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+    let (state, raw) =
+        row.context("withdrawal target is not an owned task in this source session")?;
+    let mut doc: serde_json::Value = serde_json::from_str(&raw)?;
+    if state == "cancelled"
+        && doc["source"]["agentWithdrawal"]["reason"] == entry.reason
+        && doc["source"]["agentWithdrawal"]["links"] == entry.links
+        && (actor.is_null() || doc["source"]["agentWithdrawal"]["actor"] == *actor)
+    {
+        return Ok(false);
+    }
+    if state != "pending" {
+        return Err(anyhow!(
+            "withdrawal target is already resolved or has an uncertain receipt"
+        ));
+    }
+    let at = now_string();
+    doc["source"]["agentWithdrawal"] = serde_json::json!({"reason":entry.reason,"links":entry.links,"sourceTurn":turn,"at":at,"actor":actor});
+    tx.execute("UPDATE human_interactions SET state='cancelled',payload_json=?2,updated_at=?3 WHERE id=?1 AND state='pending'",params![entry.id,serde_json::to_string(&doc)?,at])?;
+    tx.execute("INSERT INTO audit_log(actor_user_id,action,details_json,created_at) VALUES(NULL,'human_task_withdrawn_by_agent',?1,?2)",params![serde_json::json!({"interaction_id":entry.id,"requester":user,"source_turn":turn,"reason":entry.reason,"links":entry.links,"actor":actor}).to_string(),at])?;
+    Ok(true)
+}
+
 impl Store {
     pub(super) fn init_interactions(&self) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
@@ -267,28 +329,15 @@ impl Store {
             let session:Option<i64>=tx.query_row("SELECT s.id FROM sessions s JOIN users u ON u.tg_user_id=?3 JOIN turns t ON t.session_id=s.id AND t.id=?5 WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.codex_thread_id=?4 AND u.allowed=1 AND t.from_user_id=?3",params![key.chat_id,key.thread_id,user,native,turn],|r|r.get(0)).optional()?;
             let session = session.context("withdrawal has no authorized current source binding")?;
             for entry in withdrawals {
-                if entry.reason.trim().is_empty() || entry.reason.chars().count() > 2000 {
-                    return Err(anyhow!("withdrawal needs a bounded explicit reason"));
-                }
-                let row:Option<(String,String)>=tx.query_row("SELECT state,payload_json FROM human_interactions WHERE id=?1 AND session_id=?2 AND requester=?3 AND native_thread=?4 AND kind='task'",params![entry.id,session,user,native],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-                let (state, raw) =
-                    row.context("withdrawal target is not an owned task in this source session")?;
-                let mut doc: serde_json::Value = serde_json::from_str(&raw)?;
-                if state == "cancelled"
-                    && doc["source"]["agentWithdrawal"]["reason"] == entry.reason
-                    && doc["source"]["agentWithdrawal"]["links"] == entry.links
-                {
-                    continue;
-                }
-                if state != "pending" {
-                    return Err(anyhow!(
-                        "withdrawal target is already resolved or has an uncertain receipt"
-                    ));
-                }
-                let at = now_string();
-                doc["source"]["agentWithdrawal"] = serde_json::json!({"reason":entry.reason,"links":entry.links,"sourceTurn":turn,"at":at});
-                tx.execute("UPDATE human_interactions SET state='cancelled',payload_json=?2,updated_at=?3 WHERE id=?1 AND state='pending'",params![entry.id,serde_json::to_string(&doc)?,at])?;
-                tx.execute("INSERT INTO audit_log(actor_user_id,action,details_json,created_at) VALUES(NULL,'human_task_withdrawn_by_agent',?1,?2)",params![serde_json::json!({"interaction_id":entry.id,"requester":user,"source_turn":turn,"reason":entry.reason,"links":entry.links}).to_string(),at])?;
+                withdraw_task_on(
+                    &tx,
+                    session,
+                    user,
+                    native,
+                    turn,
+                    entry,
+                    &serde_json::Value::Null,
+                )?;
             }
         }
         tx.commit()?;
@@ -645,6 +694,136 @@ mod lifecycle_tests {
         assert_eq!(
             store.interaction(key, 100, "old").unwrap().unwrap().state,
             "completed"
+        );
+    }
+    #[test]
+    fn live_retirement_requires_current_actor_and_exact_task_and_preserves_human_meaning() {
+        use crate::store::LiveTaskActor;
+        use tokio_util::sync::CancellationToken;
+        let (_root, store, key, turn) = fixture();
+        store.record_turn_native_thread(turn, "source").unwrap();
+        store
+            .save_human_tasks(key, &[("live".into(), task("live", turn))])
+            .unwrap();
+        let closed = CancellationToken::new();
+        let actor = LiveTaskActor {
+            key,
+            human: 100,
+            local: turn,
+            native: "source",
+            physical: "actual-physical",
+            integrator: false,
+        };
+        let page = store.live_human_tasks(&actor, 0, &closed).unwrap();
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        let selected = store.live_human_task(&actor, "live", &closed).unwrap();
+        let revision = selected["revision"].as_str().unwrap();
+        assert!(
+            store
+                .live_withdraw_task(&actor, &"0".repeat(64), &withdrawal("live"), &closed)
+                .is_err()
+        );
+        let result = store
+            .live_withdraw_task(&actor, revision, &withdrawal("live"), &closed)
+            .unwrap();
+        assert_eq!(result["new_withdrawal"], true);
+        assert_eq!(result["human_completion"], false);
+        assert_eq!(
+            store
+                .live_withdraw_task(&actor, revision, &withdrawal("live"), &closed)
+                .unwrap()["new_withdrawal"],
+            false
+        );
+        let item = store.interaction(key, 100, "live").unwrap().unwrap();
+        assert_eq!(item.state, "withdrawn");
+        assert_eq!(item.action, "Do the selected human action");
+        assert_eq!(
+            item.source["agentWithdrawal"]["actor"]["session"],
+            json!(key)
+        );
+        assert_eq!(
+            store.live_human_tasks(&actor, 0, &closed).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        store
+            .save_human_tasks(key, &[("pending".into(), task("pending", turn))])
+            .unwrap();
+        let selected = store.live_human_task(&actor, "pending", &closed).unwrap();
+        store
+            .transition_interaction(key, 100, "pending", "pending", "answered")
+            .unwrap();
+        assert!(
+            store
+                .live_withdraw_task(
+                    &actor,
+                    selected["revision"].as_str().unwrap(),
+                    &withdrawal("pending"),
+                    &closed
+                )
+                .is_err()
+        );
+        let mut channel = task("native-question", turn);
+        channel.kind = "native".into();
+        store.save_interaction(key, &channel, None).unwrap();
+        assert!(
+            store
+                .live_human_task(&actor, "native-question", &closed)
+                .is_err()
+        );
+        assert!(
+            store
+                .live_withdraw_task(
+                    &actor,
+                    &"0".repeat(64),
+                    &withdrawal("native-question"),
+                    &closed
+                )
+                .is_err()
+        );
+        store
+            .save_human_tasks(
+                key,
+                &[("uncertain-task".into(), task("uncertain-task", turn))],
+            )
+            .unwrap();
+        let uncertain = store
+            .live_human_task(&actor, "uncertain-task", &closed)
+            .unwrap();
+        store
+            .transition_interaction(key, 100, "uncertain-task", "pending", "unknown")
+            .unwrap();
+        assert!(
+            store
+                .live_withdraw_task(
+                    &actor,
+                    uncertain["revision"].as_str().unwrap(),
+                    &withdrawal("uncertain-task"),
+                    &closed
+                )
+                .is_err()
+        );
+        let stranger = LiveTaskActor {
+            human: 101,
+            ..actor
+        };
+        assert!(store.live_human_tasks(&stranger, 0, &closed).is_err());
+        closed.cancel();
+        assert!(store.live_human_tasks(&actor, 0, &closed).is_err());
+        assert_eq!(
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_log WHERE action='human_task_withdrawn_by_agent'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
         );
     }
 }

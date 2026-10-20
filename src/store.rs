@@ -21,6 +21,8 @@ mod creation;
 mod dialogue;
 mod interaction;
 mod interactions;
+mod live_tasks;
+pub use live_tasks::LiveTaskActor;
 mod matrix;
 mod merging;
 pub use matrix::{MatrixAuthor, MatrixReturn, MatrixSubmission};

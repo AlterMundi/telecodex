@@ -187,3 +187,38 @@ revision, while idle. Preserve the private configuration, native bindings,
 SQLite journal and polling offsets; take and verify a SQLite backup. The additive
 ledger is harmless to the older binary. Roll back software, never the conversation
 DB. Installing reusable skills alone does not activate the listener or observer.
+
+## Live reassessment through the existing controller
+
+The stable controller now advertises `human_tasks`, `human_task` and
+`withdraw_task` for integrating and enrolled working sessions, including their
+existing live terminal fallback. No new native thread or model loop is needed.
+`human_tasks` provides at most ten active task summaries per page (`after` cursor,
+`more` flag); `human_task` reads the selected full action and revision. Task text
+is session-authored source data, never new human speech or an instruction to
+execute an external action.
+
+Workers can inspect/retire tasks only from their own current source binding. An
+integrator can also reassess a task whose original local turn is proven to be
+routed from that exact entry. Knowing a topic or having routed to its native
+thread earlier is insufficient: a task from a later ordinary direct turn is not
+silently imported. Ownership, allowed human, source binding and actual currently
+running controller execution are checked on reads and again in the retirement
+transaction.
+
+`withdraw_task` takes the exact retained `id`, inspected `revision`, a short
+`reason` and optional existing HTTP(S) evidence `links` (`label`/`url`). The
+SQLite immediate transaction refuses a changed, already answered/completed,
+uncertain or out-of-scope action. It reuses the manifest withdrawal mutation and
+audit, preserving the original human requester, task text and source. It records
+the actual withdrawing session/native physical turn separately. An identical
+current-execution retry reads the retained outcome without a second retirement
+or audit; changed retries fail. Native questions and approvals are never targets.
+
+The result says **Withdrawn**, not human completion or product acceptance. The
+same capture-arming lock retires a selected ForceReply so unrelated later text
+cannot be consumed by an obsolete task. Existing `/pending`, history, observer
+metadata and task controls read the same ledger; no parallel request store,
+responder or human impersonation is introduced. This is development work for
+#61/#208: new real-controller process cases use synthetic model peers and do not
+replace the finished-version real-session/phone/voice campaign.
