@@ -300,7 +300,7 @@ pub(super) async fn process_turn(
             queued.interaction.as_deref(),
         )?,
     };
-    if let Some((human, entry, id)) = queued
+    if let Some(scope) = queued
         .goal
         .as_ref()
         .and_then(|g| g.conditional.as_ref())
@@ -310,9 +310,14 @@ pub(super) async fn process_turn(
             .codex_thread_id
             .as_deref()
             .context("Controlled goal native binding unavailable")?;
-        shared
-            .store
-            .goal_control_link_execution(*human, *entry, id, turn_id, native)?;
+        shared.store.goal_control_link_execution(
+            scope.human,
+            scope.entry,
+            &scope.id,
+            &scope.attempt,
+            turn_id,
+            native,
+        )?;
     }
     if let Some(id) = queued.nexus.as_deref() {
         shared.store.nexus_link(id, turn_id)?;

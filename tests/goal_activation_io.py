@@ -9,6 +9,7 @@ import uuid
 from goal_controls_io import Controls
 
 class Activation(Controls):
+    deny_alpha_resume=False
     def owner(self,*args):
         result=subprocess.run([self.binary,'--control',str(self.config),*args],capture_output=True,text=True,timeout=20)
         assert result.returncode==0,result.stderr
@@ -16,6 +17,10 @@ class Activation(Controls):
 
     def handle_extra_rpc(self,message,send):
         method=message.get('method');p=message.get('params',{})
+        if self.routed and method=='thread/resume' and p.get('threadId')=='native-topic-7' and self.deny_alpha_resume:
+            self.deny_alpha_resume=False
+            send({'id':message['id'],'error':{'code':-32600,'message':'Synthetic transient resume failure before goal submission'}})
+            return True
         if self.routed and method in ('turn/start','turn/steer') and p.get('clientUserMessageId','').startswith('conversation:'):
             thread=p['threadId'];turn=self.runs.setdefault(thread,'web-'+str(len(self.runs)+1))
             self.packets.setdefault(thread,[]).append(p)
@@ -71,8 +76,19 @@ def qualify(binary):
             return j.cli(entry,'goal_prepare',{'selector':selector,'target_binding':observed['target_binding'],'input_ref':reference,'reason':'Explicit synthetic human goal command','plan':{'action':action,'expected':observed['snapshot'],'objective':objective,'token_budget':None,'followup':followup}})['control']['id']
         initial_starts=sum(m.get('method')=='turn/start' and m.get('params',{}).get('threadId')=='native-topic-7' for m in j.rpc)
         selected=prepare('start','Alpha','Start Alpha with the goal: solve the selected complex problem. Then explain the next step.','Solve the selected complex problem.',followup='explain the next step.')
+        j.deny_alpha_resume=True
+        j.cli(entry,'goal_execute',{'id':selected})
+        j.wait(lambda:j.row('SELECT phase FROM interaction_goal_controls WHERE id=?',(selected,))==[('known_unsent',)])
+        failed=j.cli(entry,'goal_status',{'id':selected})
+        original_count=j.row('SELECT count(*) FROM conversation_inputs')
+        assert not any(m.get('method')=='thread/goal/conditionalActivate' for m in j.rpc)
         j.cli(entry,'goal_execute',{'id':selected})
         j.wait(lambda:j.row('SELECT phase FROM interaction_goal_controls WHERE id=?',(selected,))==[('acknowledged',)])
+        retried=j.cli(entry,'goal_status',{'id':selected})
+        assert retried['intent']['attempt']!=failed['intent']['attempt']
+        assert retried['intent']['previous_outcomes'][0]['phase']=='known_unsent'
+        assert j.row('SELECT count(*) FROM conversation_inputs')==original_count,'No second human authorization/input was fabricated'
+
         first=j.cli(entry,'goal_status',{'id':selected})
         assert first['intent']['worker_execution']['native']=='native-topic-7'
         packet=j.packets['native-topic-7'][-1]
@@ -104,7 +120,7 @@ def qualify(binary):
         j.finish_goal('native-topic-8','The corrected Beta goal result.\n<daimon-result>'+footer+'</daimon-result>')
         j.wait(lambda:j.row('SELECT busy FROM sessions WHERE thread_id=8')==[(0,)])
         j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries")==[(1,)])
-        assert j.row("SELECT phase FROM interaction_deliveries")==[('reserved',)],'A canonical web result has no Telegram/hearing receipt' 
+        assert j.row("SELECT phase FROM interaction_deliveries")==[('reserved',)],'A canonical web result has no Telegram/hearing receipt'
         visible=j.cli(entry,'conversation')['presentation']['items']
         matching=[item for item in visible if item.get('preview')=='The corrected Beta goal result.']
         assert len(matching)==1 and matching[0]['id'].startswith('delivery:'),visible

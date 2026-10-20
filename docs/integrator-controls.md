@@ -13,7 +13,10 @@ continuation collector and native goal-state permit to start or steer useful
 work with its current invocation context, preserving goal accounting. A retained
 human command can outlive the model turn that interpreted it; its frozen target,
 owner, incarnation, deadline, holds and newer human directions still constrain
-its one submission attempt. Restart does not replay it.
+each separately identified submission attempt. A proven unsent outcome may retry
+the unchanged intent without a second human confirmation, retaining earlier
+outcomes. Attempt fences prevent late retirement/receipts from changing a newer
+attempt. Restart does not replay uncertain or partially applied work.
 
 This is development source, not receiving adoption. The native dependency is
 [compaii/codex #5](https://github.com/compaii/codex/pull/5); older receivers must

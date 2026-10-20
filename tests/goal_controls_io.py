@@ -96,7 +96,7 @@ def qualify(binary):
         count = sum(m.get('method') == 'thread/goal/conditionalSet' for m in j.rpc)
         j.cli(entry, 'goal_execute', {'id': pause['control']['id']})
         assert sum(m.get('method') == 'thread/goal/conditionalSet' for m in j.rpc) == count
-        cancelled, _ = prepare('pause', reason='Assistant proposal that the human declines')
+        cancelled, _ = prepare('pause', reason='Assistant proposal that the human declines', followup='Ask the selected question afterward.')
         declined = original('No, cancel that proposal.')
         decision = {'id': cancelled['control']['id'], 'input_ref': declined, 'execute': False}
         assert j.cli(entry, 'goal_decide', decision)['control']['phase'] == 'cancelled'

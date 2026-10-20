@@ -35,7 +35,7 @@ pub(super) fn capabilities(value: &mut Value) {
     value["operations"]["goal_prepare"] = json!({"arguments":{"selector":"one enrolled target","target_binding":"exact goal_inspect target_binding","input_ref":"actual retained explicit human command reference, omitted ONLY for an assistant proposal","plan":{"action":"start|edit|pause|resume|clear|replace","expected":"exact native {goal,revision} from goal_inspect","objective":"optional selected objective","token_budget":"optional expressly requested budget","followup":"optional exact follow-up clause of the human instruction"},"reason":"bounded explanation"},"description":"Retain one immutable goal-control interpretation. A supplied original must actually request this control. Omitted original means assistant proposal requiring later human confirmation. Retention never mutates the goal or starts work. Do not dispatch the same original separately; ordered follow-up belongs to this intent."});
     value["operations"]["goal_decide"] = json!({"arguments":{"id":"retained proposal","input_ref":"actual later captured human confirmation/cancellation","execute":"true only when this human input explicitly accepts the exact proposal"},"description":"Single-use proposal decision; actual capture must postdate proposal creation. No native mutation. Stale goal definitions are rejected at execution, never silently refreshed."});
     value["operations"]["goal_status"] = json!({"arguments":{"id":"retained goal-control ID"},"description":"Inspect immutable interpretation and outcome; never replay uncertain work."});
-    value["operations"]["goal_execute"] = json!({"arguments":{"id":"prepared explicit or confirmed goal-control ID"},"description":"Execute one frozen explicit or confirmed control. Pause/clear/inactive edits mutate conditional metadata on the owning writer. Start/resume/replace/active edits use its native continuation collector with fresh invocation context; there is no artificial kickoff. No implicit interrupt. Inspect retained status after queued admission. Native acknowledgment is separate from work incorporation. Lost ACK stays uncertain and is never retried automatically."});
+    value["operations"]["goal_execute"] = json!({"arguments":{"id":"prepared explicit or confirmed goal-control ID"},"description":"Execute one frozen explicit or confirmed control. Pause/clear/inactive edits mutate conditional metadata on the owning writer. Start/resume/replace/active edits use its native continuation collector with fresh invocation context; there is no artificial kickoff. No implicit interrupt. Inspect retained status after queued admission. A known-unsent outcome may retry this same frozen intent after checking readiness, without another human confirmation. Native acknowledgment is separate from work incorporation. Lost ACK and partial effects are never replayed."});
 }
 
 pub(super) async fn tool(
@@ -140,6 +140,12 @@ pub(super) async fn tool(
         "goal_execute" => {
             let args: Selection = serde_json::from_value(args)?;
             let retained = app.shared.store.goal_control_read(human, key, &args.id)?;
+            if !matches!(
+                retained["phase"].as_str(),
+                Some("prepared" | "known_unsent" | "retained_unsent")
+            ) {
+                return Ok(retained);
+            }
             let plan: GoalPlan = serde_json::from_value(retained["intent"]["plan"].clone())?;
             let activating = matches!(
                 plan.action,
@@ -168,6 +174,10 @@ pub(super) async fn tool(
             if !fresh {
                 return Ok(value);
             }
+            let attempt = value["intent"]["attempt"]
+                .as_str()
+                .context("Retained goal attempt missing")?
+                .to_owned();
             if activating {
                 return activate_control(app, human, key, &args.id, &value, &plan, &target_session)
                     .await;
@@ -177,6 +187,7 @@ pub(super) async fn tool(
                 .context("Retained native target missing")?;
             let owned_app = app.clone();
             let control_id = args.id.clone();
+            let admission_attempt = attempt.clone();
             let actor_native = actor.native.to_owned();
             let actor_physical = actor.physical.to_owned();
             let deadline = closed.clone();
@@ -192,6 +203,7 @@ pub(super) async fn tool(
                 owned_app.shared.store.goal_control_validate_submission(
                     &actor,
                     &control_id,
+                    &admission_attempt,
                     &deadline,
                 )
             });
@@ -217,7 +229,7 @@ pub(super) async fn tool(
             };
             app.shared
                 .store
-                .goal_control_finish(human, key, &args.id, &phase, &receipt)?;
+                .goal_control_finish(human, key, &args.id, &attempt, &phase, &receipt)?;
             app.shared.store.goal_control_read(human, key, &args.id)
         }
         _ => bail!("Unsupported goal-control operation"),
@@ -237,19 +249,28 @@ async fn activate_control(
         .as_str()
         .context("Retained native target unavailable")?
         .to_owned();
+    let attempt = value["intent"]["attempt"]
+        .as_str()
+        .context("Retained goal attempt unavailable")?
+        .to_owned();
+    let admission_attempt = attempt.clone();
     let shared = app.shared.clone();
     let selected = id.to_owned();
     let admission: crate::codex::SteerAdmissionCheck = std::sync::Arc::new(move || {
-        shared
-            .store
-            .goal_control_begin_native_submission(human, entry, &selected)
+        shared.store.goal_control_begin_native_submission(
+            human,
+            entry,
+            &selected,
+            &admission_attempt,
+        )
     });
     let shared = app.shared.clone();
     let selected = id.to_owned();
+    let settlement_attempt = attempt.clone();
     let settled = std::sync::Arc::new(move |phase: &str, receipt: &Value| {
         shared
             .store
-            .goal_control_finish(human, entry, &selected, phase, receipt)
+            .goal_control_finish(human, entry, &selected, &settlement_attempt, phase, receipt)
             .map(|_| ())
     });
     let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -258,7 +279,12 @@ async fn activate_control(
         admission,
         receipt: slot.clone(),
         context: None,
-        scope: Some((human, entry, id.to_owned())),
+        scope: Some(crate::codex::GoalControlScope {
+            human,
+            entry,
+            id: id.to_owned(),
+            attempt: attempt.clone(),
+        }),
         settled: Some(settled),
     };
     let attached = app
@@ -278,13 +304,14 @@ async fn activate_control(
     };
     if let Some(attached) = attached {
         let Some(hint) = attached.controller_hint else {
-            app.shared.store.goal_control_finish(human,entry,id,"known_unsent",&json!({"error":"Selected native writer has no current invocation lease","automatic_retry":false}))?;
+            app.shared.store.goal_control_finish(human,entry,id,&attempt,"known_unsent",&json!({"error":"Selected native writer has no current invocation lease","automatic_retry":false}))?;
             return app.shared.store.goal_control_read(human, entry, id);
         };
         app.shared.store.goal_control_link_execution(
             human,
             entry,
             id,
+            &attempt,
             attached.turn_id,
             &native,
         )?;
@@ -303,7 +330,7 @@ async fn activate_control(
             response,
         });
         if sent.is_err() {
-            app.shared.store.goal_control_finish(human,entry,id,"known_unsent",&json!({"error":"Selected collector closed before goal control admission","automatic_retry":false}))?;
+            app.shared.store.goal_control_finish(human,entry,id,&attempt,"known_unsent",&json!({"error":"Selected collector closed before goal control admission","automatic_retry":false}))?;
         } else {
             // The collector owns settlement even after this bounded observation
             // ends. A timeout cannot authorize another goal submission.
@@ -312,7 +339,7 @@ async fn activate_control(
             {
                 app.shared
                     .store
-                    .goal_control_retire_execution(human, entry, id)?;
+                    .goal_control_retire_execution(human, entry, id, &attempt)?;
             }
         }
     } else {
@@ -323,7 +350,7 @@ async fn activate_control(
             .get(&target.key)
             .is_some_and(|w| w.cancel.lock().expect("cancel mutex poisoned").is_some())
         {
-            app.shared.store.goal_control_finish(human,entry,id,"known_unsent",&json!({"error":"Selected writer is still preparing; no goal mutation submitted","automatic_retry":false}))?;
+            app.shared.store.goal_control_finish(human,entry,id,&attempt,"known_unsent",&json!({"error":"Selected writer is still preparing; no goal mutation submitted","automatic_retry":false}))?;
             return app.shared.store.goal_control_read(human, entry, id);
         }
         let epoch = super::stopping::input_epoch(&app.shared, target.key)?;
@@ -333,7 +360,7 @@ async fn activate_control(
             request:TurnRequest{session_key:target.key,from_user_id:human,prompt:"Continue the explicitly authorized native goal. Use its native state and accounting.".into(),runtime_instructions:None,attachments:vec![],review_mode:None,override_search_mode:None},
             chat_kind:if target.key.chat_id<0{"supergroup"}else{"private"}.into(),update_id:None,conversation_input:None,tribu_admission:None,goal:Some(activation(control)),nexus:None,merge:None,stop_resume:None,interaction:None,admission_epoch:epoch,
         }).is_err() {
-            app.shared.store.goal_control_finish(human,entry,id,"known_unsent",&json!({"error":"Selected collector admission closed before queuing","automatic_retry":false}))?;
+            app.shared.store.goal_control_finish(human,entry,id,&attempt,"known_unsent",&json!({"error":"Selected collector admission closed before queuing","automatic_retry":false}))?;
         }
     }
     app.shared.store.goal_control_read(human, entry, id)
@@ -342,7 +369,7 @@ async fn activate_control(
 /// Retirement follows the actual collector lifetime, never an observation timeout.
 pub(super) struct GoalExecutionGuard {
     shared: Arc<AppShared>,
-    scope: Option<(i64, SessionKey, String)>,
+    scope: Option<crate::codex::GoalControlScope>,
 }
 impl GoalExecutionGuard {
     pub(super) fn new(shared: Arc<AppShared>, goal: Option<&crate::codex::GoalActivation>) -> Self {
@@ -356,11 +383,11 @@ impl GoalExecutionGuard {
 }
 impl Drop for GoalExecutionGuard {
     fn drop(&mut self) {
-        if let Some((human, entry, id)) = &self.scope
+        if let Some(scope) = &self.scope
             && self
                 .shared
                 .store
-                .goal_control_retire_execution(*human, *entry, id)
+                .goal_control_retire_execution(scope.human, scope.entry, &scope.id, &scope.attempt)
                 .is_err()
         {
             tracing::warn!("Goal collector retirement outcome could not be retained");

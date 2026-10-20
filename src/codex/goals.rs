@@ -285,6 +285,14 @@ mod snapshot_tests {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct GoalControlScope {
+    pub human: i64,
+    pub entry: crate::models::SessionKey,
+    pub id: String,
+    pub attempt: String,
+}
+
 pub type GoalSettlement = Arc<dyn Fn(&str, &Value) -> Result<()> + Send + Sync>;
 
 /// A current worker processes metadata controls on its own subscribed connection.
@@ -294,7 +302,7 @@ pub struct GoalMetadataControl {
     pub admission: SteerAdmissionCheck,
     pub receipt: Arc<std::sync::Mutex<Option<(String, Value)>>>,
     pub context: Option<Value>,
-    pub scope: Option<(i64, crate::models::SessionKey, String)>,
+    pub scope: Option<GoalControlScope>,
     pub settled: Option<GoalSettlement>,
 }
 impl std::fmt::Debug for GoalMetadataControl {
@@ -438,7 +446,8 @@ pub(super) async fn conditional_activation(
             bail!("Fresh invocation context required before native activation");
         }
         if let Some(followup)=&control.plan.followup {
-            let (human,entry,id)=control.scope.as_ref().context("Attributed follow-up control scope required")?;
+            let scope=control.scope.as_ref().context("Attributed follow-up control scope required")?;
+            let (human,entry,id)=(&scope.human,&scope.entry,&scope.id);
             // The native CAS must succeed before this context is admitted to useful
             // work. Carry the frozen clause in that same admission, never a later
             // priming/steering turn which can lose a race with the first answer.

@@ -34,8 +34,8 @@ use tokio_util::sync::CancellationToken;
 
 mod goals;
 pub use goals::{
-    GoalActivation, GoalControl, GoalMetadataControl, GoalStopSnapshot, NativeGoal,
-    NativeGoalSnapshot,
+    GoalActivation, GoalControl, GoalControlScope, GoalMetadataControl, GoalStopSnapshot,
+    NativeGoal, NativeGoalSnapshot,
 };
 
 /// The provider observed cancellation before it attempted the initial native
