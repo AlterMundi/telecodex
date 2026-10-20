@@ -687,6 +687,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-player:not([hidden]) {
   display: grid; grid-template-columns: minmax(0, 1fr) auto;
   align-items: center; gap: 4px 8px; padding-top: 4px;
+  min-height: max-content; max-height: none; overflow: visible;
 }
 .standalone-conversation #conversation-player > .conversation-tools { display: contents; }
 .standalone-conversation #conversation-playing { grid-column: 1; grid-row: 1; font-size: 14px; }
