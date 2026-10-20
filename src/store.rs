@@ -36,6 +36,7 @@ mod stopping;
 mod voice;
 pub use conversation_inputs::{ConversationInput, ConversationInputEvent, ConversationVoice};
 pub use stopping::{StopOperation, StopTarget};
+mod native_recovery;
 mod nexus;
 mod observer;
 mod observer_cards;
@@ -121,6 +122,7 @@ impl Store {
         store.init_interaction()?;
         store.init_artifacts()?;
         store.init_topic_publications()?;
+        store.init_native_recovery()?;
         store.init_voice()?;
         store.init_interaction_creation()?;
         store.init_routing()?;
@@ -487,6 +489,7 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let mut query = conn.prepare(
             "SELECT update_id FROM incoming_updates WHERE status='undetermined'
+             AND NOT EXISTS(SELECT 1 FROM native_input_receipts n WHERE n.update_id=incoming_updates.update_id)
              AND COALESCE(json_extract(payload_json,'$.message.from.id'),
                           json_extract(payload_json,'$.callback_query.from.id'))=?1
              AND COALESCE(json_extract(payload_json,'$.message.chat.id'),

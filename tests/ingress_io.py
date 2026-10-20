@@ -403,7 +403,8 @@ while True:
                             target_id = payload['message_id']
                         permanent[target_id] = html.unescape(payload['text'])
                         outbound.append((method, target_id, permanent[target_id]))
-                    result = {'message_id': target_id, 'chat': {'id': 100, 'type': 'private'}}
+                    result = {'message_id': target_id, 'chat': {'id': 100, 'type': 'private'},
+                              'message_thread_id': payload.get('message_thread_id')}
                 else:
                     result = True
                 data = json.dumps({'ok': True, 'result': result}).encode()
@@ -474,7 +475,14 @@ import_desktop_history=false
                         if notified and len(rows) == 2 and rows[-1][1] == 'undetermined':
                             break
                     if retain_commentary and rows == [(1, 'settled', 1)]:
-                        break
+                        # Execution completion and durable Telegram delivery are
+                        # separate receipts; wait for both before shutting down.
+                        with lock:
+                            delivered = [text for text in permanent.values()
+                                         if not text.startswith('Current Codex session:')]
+                        expected = 3 if commentary_only else 5 if final_before_completion else 4
+                        if len(delivered) == expected:
+                            break
                     if len(rows) == 2:
                         if missing_binding and rows[1][1] == 'undetermined':
                             break
@@ -498,7 +506,7 @@ import_desktop_history=false
                 print(json.dumps({'scenario':mode,'originating_topic_notified':True,'native_turns':0,'input_journal_preserved':True}),flush=True)
                 return
             if attachment:
-                assert len(starts) == 1, starts
+                assert len(starts) == 1, (starts, rows, err, out[-1800:])
                 assert attachment_receipt['size'] > 20 * 1024 * 1024
                 assert attachment_receipt['path'] in starts[0]
                 print(json.dumps({'scenario':mode,'complete_bytes':attachment_receipt['size'],'checksum_verified':True,'native_input_received_path':True}),flush=True)

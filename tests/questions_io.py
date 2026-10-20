@@ -595,7 +595,7 @@ def scenario(binary, mode):
             starts=[m for m in j.rpc if m.get('method')=='turn/start']
             assert [m['params']['collaborationMode']['mode'] for m in starts] == ['plan','default']
             assert starts[0]['params']['threadId']==starts[1]['params']['threadId']
-            assert any(m[1].get('text') == 'Default mode continued the same native thread.' for m in j.messages)
+            j.wait(lambda: any(m[1].get('text') == 'Default mode continued the same native thread.' for m in j.messages))
         assert any(m.get('method')=='initialize' and m['params']['capabilities']['experimentalApi'] for m in j.rpc)
         print(json.dumps({'scenario':mode,'exact_request_answered_once':True,'new_turns_from_answers':0}),flush=True)
     finally:

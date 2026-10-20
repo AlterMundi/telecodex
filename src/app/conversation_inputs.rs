@@ -454,6 +454,7 @@ async fn submit(app: App, input: ConversationInput) -> Result<()> {
     let id = input.id.clone();
     let human = input.human;
     let packet = CodexSteerRequest {
+        observation: None,
         images: crate::visual::attachments(&app.shared.config.db_path, input.visual.as_ref())?
             .into_iter()
             .map(|a| a.path)

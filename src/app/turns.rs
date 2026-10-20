@@ -352,13 +352,29 @@ pub(super) async fn process_turn(
             && (c.entry() == session.key || super::routing::enrolled(&shared, session.key))
     });
     if queued.request.review_mode.is_none()
-        && super::topic_publications::enabled(&shared, session.key, queued.request.from_user_id)
+        && shared.store.topic_publication_owner(session.key)? == Some(queued.request.from_user_id)
     {
-        shared.store.topic_projection_register(
-            turn_id,
-            queued.request.from_user_id,
+        if shared.config.codex.shared_app_server
+            && queued.interaction.is_none()
+            && !routed_attachment
+            && queued.conversation_input.is_none()
+        {
+            shared.store.topic_direct_register(
+                turn_id,
+                queued.request.from_user_id,
+                session.key,
+            )?;
+        } else if super::topic_publications::enabled(
+            &shared,
             session.key,
-        )?;
+            queued.request.from_user_id,
+        ) {
+            shared.store.topic_projection_register(
+                turn_id,
+                queued.request.from_user_id,
+                session.key,
+            )?;
+        }
     }
     // A dormant local lease changes no direct input, tool registration or admission.
     // Its hint is disclosed only when actual integrator/routed input arrives.
@@ -437,7 +453,10 @@ pub(super) async fn process_turn(
     let draft_id = turn_id;
     let routed =
         execution_root.is_some() || queued.conversation_input.is_some() || canonical_return;
-    let sink = if routed || !shared.config.telegram.show_unfinished_messages {
+    let sink = if routed
+        || shared.store.topic_projection_active(turn_id)?
+        || !shared.config.telegram.show_unfinished_messages
+    {
         Arc::new(Mutex::new(LiveTurnSink::new_preview(
             shared.clone(),
             &session,
@@ -635,21 +654,20 @@ pub(super) async fn process_turn(
     } else {
         runner
     };
-    let runner = runner.with_client_message_id(
-        queued
-            .conversation_input
-            .as_ref()
-            .map(|id| format!("conversation:{id}"))
-            .or_else(|| queued.interaction.clone())
-            .or_else(|| {
-                queued.update_id.map(|id| {
-                    format!(
-                        "telegram:{}:{}:{id}",
-                        session.key.chat_id, queued.request.from_user_id
-                    )
-                })
-            }),
-    );
+    let client_message_id = queued
+        .conversation_input
+        .as_ref()
+        .map(|id| format!("conversation:{id}"))
+        .or_else(|| queued.interaction.clone())
+        .or_else(|| {
+            queued.update_id.map(|id| {
+                format!(
+                    "telegram:{}:{}:{id}",
+                    session.key.chat_id, queued.request.from_user_id
+                )
+            })
+        });
+    let runner = runner.with_client_message_id(client_message_id.clone());
     let controller_selected = shared.config.interaction.as_ref().is_some_and(|c| {
         c.human_id == runtime_request.from_user_id
             && ((c.entry() == session.key
@@ -684,6 +702,7 @@ pub(super) async fn process_turn(
                 let admission_epoch=queued.admission_epoch.clone();
                 let interaction=queued.interaction.clone();
                 let conversation_input=queued.conversation_input.clone();
+                let client_message_id=client_message_id.clone();
                 let conversation_native=conversation_native.clone();
                 let result_root=execution_root.clone();
                 let attach_native=queued.goal.as_ref().filter(|g|g.attach_turn.is_some()).and_then(|g|g.native_thread.clone());
@@ -701,6 +720,7 @@ pub(super) async fn process_turn(
                     let admission_epoch=admission_epoch.clone();
                     let interaction=interaction.clone();
                     let conversation_input=conversation_input.clone();
+                    let client_message_id=client_message_id.clone();
                     let conversation_native=conversation_native.clone();
                     let result_root=result_root.clone();
                     let routing_app=routing_app.clone();
@@ -768,6 +788,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::Approval(receiver))
                             }
                             CodexEvent::NativeInputRejected => {
+                                shared.store.native_collection_rejected(turn_id)?;
                                 if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Rejected{local_turn:turn_id})?;}
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_transport(id,requester_user_id,turn_id,crate::interaction::TransportPhase::Rejected,None)?;}
                                 if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,"resume_rejected",Some(turn_id),None)?;}
@@ -781,6 +802,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeSteerAccepted {client_id,turn_id:native_id} => {
+                                shared.store.native_input_receipt(turn_id,Some(&client_id),&native_id)?;
                                 if let Some(id)=client_id.strip_prefix("conversation:") {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Accepted{local_turn:turn_id})?;}
                                 if shared.store.interaction_instruction(&client_id,requester_user_id)?.is_some() {
                                     shared.store.interaction_transport(&client_id,requester_user_id,turn_id,crate::interaction::TransportPhase::Accepted,Some(&native_id))?;
@@ -789,6 +811,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeInputAccepted(native_id) => {
+                                shared.store.native_input_receipt(turn_id,None,&native_id)?;
                                 if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Accepted{local_turn:turn_id})?;}
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_transport(id,requester_user_id,turn_id,crate::interaction::TransportPhase::Accepted,Some(&native_id))?;}
                                 if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,"resume_accepted",Some(turn_id),Some(&native_id))?;}
@@ -823,12 +846,14 @@ pub(super) async fn process_turn(
                             CodexEvent::NativeTurnStarted(native_id) => {
                                 if let Some(native)=attach_native.as_deref() {shared.store.record_collector_attachment(turn_id,session_key,requester_user_id,native,&native_id)?;}
                                 super::routing::native_started(&routing_app,session_key,turn_id,&native_id)?;
+                                shared.store.native_collection_started(turn_id,&native_id)?;
                                 *physical_turn.lock().expect("native correlation mutex poisoned")=Some(native_id.clone());
                                 if !shared.store.nexus_local_requests(turn_id)?.is_empty() { shared.store.nexus_native_started(turn_id,&native_id)?; }
                                 if let Some(id)=admission.as_deref(){shared.store.tribu_native_turn(id,&native_id,None)?;}
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnSubmitting => {
+                                shared.store.native_collection_submitting(turn_id,client_message_id.as_deref())?;
                                 shared.store.voice_validate(voice_update,session_key,requester_user_id)?;
                                 if let Some(native)=attach_native.as_deref() {shared.store.validate_owned_binding(session_key,requester_user_id,native)?;}
                                 if let Some(id)=interaction.as_deref() {
@@ -1066,6 +1091,7 @@ pub(super) async fn process_turn(
                 result
             }
             Err(error) => {
+                if error.is::<crate::codex::NativeInputNotSubmitted>() {shared.store.native_collection_rejected(turn_id)?;}
                 let status = if error.to_string().contains("cancelled") {
                     "cancelled"
                 } else {
@@ -1127,6 +1153,14 @@ async fn create_preview_sink_or_fail(
     turn_banner: Option<String>,
     placeholder_text: String,
 ) -> Result<Arc<Mutex<LiveTurnSink>>> {
+    if shared.store.topic_projection_active(turn_id)? {
+        return Ok(Arc::new(Mutex::new(LiveTurnSink::new_preview(
+            shared,
+            session,
+            turn_banner,
+            None,
+        ))));
+    }
     let placeholder = match super::presentation::turn_telegram(&shared, Some(turn_id))
         .send_message(SendMessage::html(
             session.key.chat_id,
@@ -1601,6 +1635,14 @@ impl LiveTurnSink {
     }
 
     async fn finish(&mut self, final_error: Option<String>) -> Result<()> {
+        if self.topic_projection {
+            if let (Some(local), Some(error)) = (self.turn_id, final_error) {
+                self.shared.store.topic_publication_notice(local, &error)?;
+                super::topic_publications::wake(self.shared.clone(), self.session_key);
+            }
+            return Ok(());
+        }
+
         if self.message_committed {
             if final_error.is_none() {
                 return Ok(());
@@ -1630,6 +1672,9 @@ impl LiveTurnSink {
     }
 
     async fn flush(&mut self, force: bool) -> Result<()> {
+        if self.topic_projection || self.pending_text.trim().is_empty() {
+            return Ok(());
+        }
         if let Some(local) = self.turn_id
             && self.shared.store.conversation_turn_return(local)?
         {

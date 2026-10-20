@@ -34,6 +34,7 @@ mod interactions;
 mod io;
 mod matrix;
 mod merging;
+mod native_recovery;
 mod nexus;
 mod observer;
 mod presentation;
@@ -540,6 +541,12 @@ impl App {
                 }
             } else if topic_publications::recover(self.shared.clone()).is_err() {
                 tracing::warn!("Retained topic publication recovery unconfirmed");
+            }
+            if !self.shared.shutdown.is_cancelled()
+                && self.shared.config.codex.shared_app_server
+                && native_recovery::tick(self).await.is_err()
+            {
+                tracing::warn!("Native output recovery remains pending; no input replayed");
             }
             if !self.shared.shutdown.is_cancelled()
                 && artifact_outputs::recover(self.shared.clone()).is_err()
@@ -1413,6 +1420,12 @@ impl App {
                             .store
                             .uncertain_update_ids(user.tg_user_id, session_key)?;
                         let mut text = format_session_status(&session, &message.chat);
+                        text.push_str(
+                            &self
+                                .shared
+                                .store
+                                .native_delivery_status(session_key, user.tg_user_id)?,
+                        );
                         let stops = self.shared.store.stop_metadata(user.tg_user_id)?;
                         if stops.as_array().is_some_and(|rows| !rows.is_empty()) {
                             text.push_str(&format!("\n\nCoordinated Stop: {}", stops));
@@ -2668,6 +2681,7 @@ impl App {
         if active
             .sender
             .send(CodexSteerRequest {
+                observation: None,
                 images: attachments
                     .iter()
                     .filter(|a| a.kind == AttachmentKind::Image)
@@ -2731,7 +2745,7 @@ impl App {
                 }
                 self.send_status(session_key.chat_id,
                     Some(session_key.thread_id).filter(|value| *value != 0),
-                    "The active turn may have received your message, but acceptance could not be verified. The input is preserved; use /status before deciding whether to retry.").await?;
+                    "Your message is retained while Codex acceptance is being checked. I will reconcile confirmed receipts and recover completed replies automatically. Do not resend it; /status shows native observation and Telegram delivery separately.").await?;
                 Ok(true)
             }
         }
