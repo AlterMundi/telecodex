@@ -1207,6 +1207,7 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
                     P::Accepted,
                     Some(&native),
                 );
+                super::topic_publications::wake(app.shared.clone(), i.target);
             }
             Some(Err(CodexSteerError::Rejected(_))) => {
                 if app

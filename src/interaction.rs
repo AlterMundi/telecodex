@@ -13,6 +13,9 @@ pub struct InteractionConfig {
     /// Optional legacy entry adapter. Work topics are never routing ingress.
     #[serde(default)]
     pub telegram_ingress: bool,
+    /// Secondary work-topic presentation, never routing ingress.
+    #[serde(default)]
+    pub telegram_projection: bool,
     #[serde(default)]
     pub targets: Vec<Target>,
     /// Include existing bound conversations owned by this human in this chat.
@@ -474,6 +477,7 @@ mod tests {
             chat_id: 100,
             topic_id: 1,
             telegram_ingress: false,
+            telegram_projection: false,
             max_active_workers: 2,
             discover_owned_sessions: false,
             observer_model: None,

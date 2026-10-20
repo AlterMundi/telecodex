@@ -27,6 +27,9 @@ pub(super) async fn command(
     if let Some(days) = args.strip_prefix("topics list ") {
         return app.shared.store.topic_inventory(human, days.parse()?);
     }
+    if args == "topics publications" {
+        return app.shared.store.topic_publication_inventory(human);
+    }
     if let Some(selected) = args.strip_prefix("observer ") {
         return observer::owner_command(app, human, selected);
     }
