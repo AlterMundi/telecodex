@@ -104,5 +104,30 @@ executable renderers. Defaults and fitting variants differ across CLI, Telegram
 and app; Telegram cannot claim to know a client's viewport. The app plays finite
 local frames and provides reduced-motion/static and accessible alternatives.
 
-This adapter is still pending. Creating the shared skill does not imply the
-current web app, CLI or Telegram transport already consumes its packs.
+The draft now implements the web receiver adapter. Configure the optional
+`interaction.expression_pack` table using the portable pack fields (TOML nested
+tables corresponding to JSON). It is read with normal receiving configuration,
+validated before use and held with that receiver generation. No model-selected
+file path or executable renderer is accepted. The explicit Source example is
+retained at `tests/fixtures/source-intervals.json`; its selection is optional,
+not a global identity default. Omission keeps the legacy portrait.
+
+Capabilities advertise the selected expression identifiers, pack/revision and
+SHA-256 of the actual serialized catalog. For a selected pack, `companion_hint`
+requires those exact references and accepts `gesture: play | none` with `rest`
+chosen from that vocabulary. The existing native-turn-bound immutable ledger
+retains them with the returned source. Reusing a version label with changed
+bytes cannot make an old hint select a new catalog. No operational state or
+message content is taken from a hint.
+
+The authenticated presentation response supplies the same inert pack and digest.
+The app uses its own default/variant and measured monospace width, fitting whole
+sequences or showing their description. Local finite playback settles on the
+first frame, cancels on hiding/reset/reduced motion, and never uses inference.
+Descriptions and authorship remain available separately from operational
+indicators. Client tests cover independent vocabularies, stale catalog selection,
+finite playback and narrow fallback. The warm existing-thread process fixture
+now runs with both the legacy portrait and an unrelated abstract vocabulary.
+Its new cases require final-head CI; no receiving deployment or real-session
+qualification is claimed. CLI/Telegram can use the shared skill renderer, but
+automatic client projection of selected art is not implemented by this adapter.

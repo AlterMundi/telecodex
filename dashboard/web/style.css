@@ -630,11 +630,12 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-player { grid-row: 6; }
 .standalone-conversation #conversation-diagnostics { grid-row: 7; }
 #conversation-companion {
-  display: flex; align-items: center; gap: 18px; min-width: 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 18px; min-width: 0;
   padding: 8px 14px; border-radius: var(--dm-radius, 16px);
   background: radial-gradient(ellipse at 40px 50%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 70%);
 }
 #conversation-companion pre { flex: none; margin: 0; font: 13px/1.05 ui-monospace, monospace; color: var(--accent); transform-origin: 50% 90%; }
+#conversation-companion pre[data-fallback="true"] { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
 #conversation-companion > div { min-width: 0; }
 .companion-caption { font-size: 18px; font-weight: 500; margin: 0 0 6px; }
 .companion-phases { display: flex; flex-wrap: wrap; gap: 4px 12px; }

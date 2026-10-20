@@ -617,6 +617,7 @@ window.Conversation = (() => {
           presentationProfile=profile;
         }
       }
+      companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
       binding = value.binding;
       microphone?.configure(value.can_speak);

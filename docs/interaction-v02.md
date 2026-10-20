@@ -225,3 +225,19 @@ source, reduced motion and unavailable activity without false operational claims
 HIT may inform an evolving vocabulary; there is no universal mapping of
 consonance/dissonance to emotions. Shared-skill delivery and product integration
 are separate evidence.
+
+### Expression pack implementation checkpoint — 2026-10-20
+
+The optional receiver-selected `interaction.expression_pack` is now implemented
+in draft #220: bounded inert vocabulary, per-client defaults, advertised exact
+pack/revision/content fingerprint, immutable native-turn choices and matched web
+rendering. This replaces hardwired expression names when a pack is selected while
+preserving existing turn/source fences. The app fits complete compositions and
+plays finite local sequences; no universal face/mood ontology is imposed.
+
+Shared skill publication merged as AlterMundi/Skills#102; selective local
+installation and the Hermes/Codex surface check passed. New web component checks
+pass with two vocabularies, stale selection, reduced motion and narrow fallback.
+Server validation and legacy/custom warm process journeys still require final
+head CI. Full browser, real-session campaign and receiving adoption remain
+outstanding; this checkpoint does not complete #213 or the stage.

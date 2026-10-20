@@ -60,10 +60,18 @@ impl Store {
         physical: &str,
         gesture: &str,
         rest: &str,
+        pack: Option<&crate::ascii::ExpressionPack>,
         closed: &CancellationToken,
     ) -> Result<bool> {
-        if !matches!(gesture, "wave" | "nod" | "none")
-            || !matches!(
+        if !(if pack.is_some() {
+            matches!(gesture, "play" | "none")
+        } else {
+            matches!(gesture, "wave" | "nod" | "none")
+        }) || !(if let Some(pack) = pack {
+            pack.validate()?;
+            pack.expressions.contains_key(rest)
+        } else {
+            matches!(
                 rest,
                 "calm"
                     | "curious"
@@ -73,7 +81,7 @@ impl Store {
                     | "delighted"
                     | "uncertain"
             )
-            || physical.is_empty()
+        }) || physical.is_empty()
             || physical.len() > 128
             || closed.is_cancelled()
         {
@@ -101,7 +109,13 @@ impl Store {
             bail!("Companion hint execution changed or final source already exists");
         }
         let id = companion_hint_key(native, physical);
-        let doc = json!({"gesture":gesture,"rest":rest}).to_string();
+        let mut doc = json!({"gesture":gesture,"rest":rest});
+        if let Some(pack) = pack {
+            doc["catalog"] = json!(pack.fingerprint()?);
+            doc["pack"] = json!(pack.id);
+            doc["revision"] = json!(pack.revision);
+        }
+        let doc = doc.to_string();
         let previous: Option<String> = conn
             .query_row("SELECT value FROM bot_state WHERE key=?", [&id], |r| {
                 r.get(0)
@@ -501,6 +515,7 @@ mod tests {
                 "entry-physical",
                 gesture,
                 rest,
+                None,
                 &closed,
             )
         };

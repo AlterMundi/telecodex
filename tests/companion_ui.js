@@ -57,3 +57,30 @@ assert(f.labels().includes("Session activity unconfirmed"),"returning to a hidde
 f.companion.observe(undefined);assert(f.labels().includes("Session activity unconfirmed"),"old backends without activity are unknown, not idle");
 f.companion.reset();assert.equal(f.timers.size,0);assert.equal(f.box.dataset.pose,"uncertain");
 console.log("Companion UI: concurrent evidence, stale/absent backend state, local capture, bounded reply poses, duplicate/old hints, hidden view and reduced motion passed; zero models.");
+// Two unrelated per-being vocabularies share rendering, not identity or moods.
+const pack=JSON.parse(fs.readFileSync('tests/fixtures/source-intervals.json','utf8'));
+const g=boot();g.companion.configure(pack,'a'.repeat(64));
+g.companion.observe({schema:'telecodex.interaction-activity/v1',sources:[]});
+assert.equal(g.box.dataset.pose,'weave');
+assert.equal(g.face.textContent,pack.expressions.weave.variants.field.frames[0]);
+const selected={...answer,id:'pack:1',companion_hint:{gesture:'play',catalog:'a'.repeat(64),pack:pack.id,revision:pack.revision,rest:'inquiry'}};
+g.companion.reply(selected);
+assert.equal(g.box.dataset.pose,'inquiry');
+g.elapse(300);
+assert.equal(g.face.textContent,pack.expressions.inquiry.variants.field.frames[1]);
+g.companion.reply(selected);g.elapse(300);
+assert.equal(g.face.textContent,pack.expressions.inquiry.variants.field.frames[0], 'one finite cycle settles; duplicate does not restart');
+g.motion.matches=true;g.motion.change();
+g.companion.reply({...selected,id:'pack:2',observed_at:'2026-10-23T00:00:00Z'});
+g.elapse(300);assert.equal(g.face.textContent,pack.expressions.inquiry.variants.field.frames[0]);
+const other=JSON.parse(JSON.stringify(pack));other.id='other-being';other.revision='2';
+other.expressions={ripples:{alt:'A field of ripples',variants:{small:{frames:['~ : ~',' :~: '],frame_ms:100}}}};
+for(const d of Object.values(other.defaults)){d.expression='ripples';d.variant='small';}
+g.companion.configure(other,'b'.repeat(64));assert.equal(g.box.dataset.pose,'ripples');
+g.companion.reply({...selected,id:'old-pack',observed_at:'2026-10-24T00:00:00Z'});
+assert.equal(g.box.dataset.pose,'ripples','a hint from another catalog cannot select this being’s expression');
+const narrow=JSON.parse(JSON.stringify(other));narrow.revision='3';narrow.defaults.app.columns=2;
+g.companion.configure(narrow,'c'.repeat(64));assert.equal(g.face.textContent,'A field of ripples','whole composition falls back instead of clipping');
+const unsafe=JSON.parse(JSON.stringify(other));unsafe.expressions.ripples.variants.small.frames=['\x1b[2J'];
+g.companion.configure(unsafe,'d'.repeat(64));assert.equal(g.box.dataset.pose,'calm','invalid packs cannot install control characters');
+console.log('Per-being packs: independent vocabularies, exact selection, finite frames, reduced motion, stale pack and narrow fallback passed.');
