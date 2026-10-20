@@ -174,3 +174,67 @@ a restart discards command activity while retaining pending handoff context.
 The companion does not infer progress from elapsed time or from a preparing
 message. This reusable tracking currently covers native forks and focused reply
 handoffs.
+
+## Topic lifecycle and compact activity
+
+The same observation sweep retains `topics.json` with each selected native
+binding, allowed creator, observation time, execution and literal goal state.
+An unsupported goal read is **unknown**, distinct from a successful null goal.
+The read-only catalog joins those facts with the bridge's retained topic metadata:
+
+```text
+python3 -B scripts/activity_indicator.py --config CONFIG --state-dir STATE --inventory --activity-days 7
+```
+
+This finite command opens neither a native connection nor Telegram and needs no
+bot token. It revalidates the current allowed creator, physical native binding,
+fresh-thread flag and source database identity, and recalculates every count.
+Observations older than twenty seconds, disconnected observations and future
+timestamps cannot certify current state. Metadata-less and unbound sessions stay
+visible as unknown. The 512-row bound reports truncation.
+
+Categories distinguish `🎯` active goals (which may be idle/waiting), `⚙` work
+without an active goal, passive sessions and unknown state. Paused, blocked,
+complete and limited goals retain their literal state in detail. The inventory
+also counts passive sessions with actual conversation observed within X days.
+Recency uses attributed bridge turns and native UserMessage/AgentMessage records;
+tools, polls, renames, reasoning and goal changes do not advance it. A bounded
+native tail can prove recency, but cannot prove that an unobserved conversation
+never happened. Missing/older evidence therefore remains unknown, not an
+assertion of inactivity. No native history is copied into the catalog.
+
+With explicit `--topic-markers` opt-in on the existing observer, those first two
+symbols are projected into known canonical Telegram names. Passive/unknown
+sessions receive no new decoration. Only a name with retained provenance and an
+open lifecycle is eligible for a new marker. Unknown legacy names remain
+untouched. Names too long for the prefix retain their full human name. No icon,
+canonical catalog name, native title, input or model turn is changed. Bot-authored
+edit service messages continue to be ignored by the bridge, preventing rename
+loops. Human renames supersede the previous projection; explicit `/rename`
+continues through its existing reconciliation path.
+
+`topic-markers.json` retains the selected canonical-name revision and each
+attempt **before** transmission. A known rejection permits a delayed retry;
+lost acknowledgments and interrupted attempts remain uncertain and are never
+automatically replayed or blindly restored. `--inventory` exposes the matched
+projection phase, attempted name and acknowledged name. A new genuine canonical
+name can supersede an old uncertain projection. Successful title changes are
+spaced by at least thirty seconds. The native-status API and Telegram title API
+do not form an atomic transaction: markers are dated observations, not a lock
+on human renames or a guarantee of instant status.
+
+A graceful observer exit restores its own acknowledged names, checking the
+current allowed creator and canonical revision again. For a finite retirement
+after stopping this observer, use:
+
+```text
+python3 -B scripts/activity_indicator.py --config CONFIG --state-dir STATE --restore-topic-markers
+```
+
+This uses the same exclusive observer lock and starts no native work. It cannot
+resolve an uncertain send, and never restores a superseded human name. Keep the
+private receipts when disabling the feature. Catalog/activity/marker fixtures in
+`tests/activity_io.py` cover real SQLite reads and loopback HTTP, fresh/stale and
+revoked bindings, unknown goals, native-only recency, human renames, retry limits,
+long names, retirement and lost ACK/restart. These tests do not certify receiving
+adoption or a real Telegram visual observation.
