@@ -172,3 +172,20 @@ Milestone: [v0.2](https://github.com/AlterMundi/telecodex/milestone/8).
   withdrawal, projections/lifecycle and artifact delivery remain in progress or
   pending in their owning issues. The finished-version real-session campaign
   has not started.
+
+### Conversation shell development checkpoint — 2026-10-20
+
+The standalone client now groups observation controls and routing/history panes
+under one initially collapsed **Under the hood** panel. Live requests remain in
+the main interaction area. The shell uses explicit grid rows for history, text,
+voice, playback and diagnostics, preserving the existing DOM/API contracts and
+Homemaker roles. The existing foreground refresh timer uses two seconds in
+conversation mode and ten seconds for the session dashboard; this adds no poller.
+
+Development evidence: existing conversation/request/microphone/dashboard UI
+checks pass. Actual Chromium with synthetic native messages was visually checked
+at 1100×850 and 390×844; the diagnostic panel opens, retains refresh/monitor
+controls, and a 390×460 viewport remains scrollable without horizontal overflow.
+These checks are not a real-session campaign, actual Android keyboard test or
+receiving adoption. Companion gestures, truthful phase indicators and the rest of
+#213 remain unfinished; the issue stays in progress.

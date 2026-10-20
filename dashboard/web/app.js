@@ -501,7 +501,7 @@ async function refresh(force = false) {
 }
 function schedule() {
   clearInterval(timer);
-  if (!document.hidden) timer = setInterval(refresh, 10000);
+  if (!document.hidden) timer = setInterval(refresh, conversationMode ? 2000 : 10000);
 }
 $("#refresh").addEventListener("click", () => refresh(true));
 for (const button of document.querySelectorAll("[data-filter]"))
@@ -579,7 +579,7 @@ const conversationView = window.Conversation?.mount({
   api,
   headers: () => ({"Content-Type":"application/json", "X-Dashboard-CSRF":csrf || "",...authorizationHeaders()}),
   setCsrf: (value) => { csrf = value; },
-  modeChanged: (enabled, initial) => { conversationMode = enabled; if (!initial) refresh(true); },
+  modeChanged: (enabled, initial) => { conversationMode = enabled; if (!initial) { schedule(); refresh(true); } },
   telegram: tg,
   readOnly: monitorOnly,
   standalone: standaloneConversation,

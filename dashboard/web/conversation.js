@@ -26,6 +26,9 @@ window.Conversation = (() => {
     const timeline = standalone ? $("#conversation-timeline") : undefined;
     const historyTools=timeline?node("div",undefined,"conversation-tools timeline-history"):undefined;
     if(timeline){
+      const diagnostics=$("#conversation-diagnostics");
+      diagnostics.open=false;
+      diagnostics.querySelector?.(".conversation-diagnostics-content")?.prepend($("#conversation-observation"));
       $("#conversation-message").rows=2;
       $("#conversation-visual summary").textContent="Add an image";
       timeline.hidden=false;$("#conversation-replies").hidden=true;$("#conversation-sent").hidden=true;

@@ -38,7 +38,7 @@
         </button></div>
       </div>
       <section id="conversation" hidden aria-label="Integrating conversation">
-        <div class="conversation-tools"><button id="conversation-back" type="button">← Sessions</button><button id="conversation-refresh" type="button">Refresh replies</button>
+        <div class="conversation-tools" id="conversation-observation"><button id="conversation-back" type="button">← Sessions</button><button id="conversation-refresh" type="button">Refresh replies</button>
         <p id="conversation-state" role="status" aria-live="polite">Connecting to your conversation…</p></div>
         <section id="conversation-requests" hidden aria-labelledby="conversation-requests-title">
           <h2 id="conversation-requests-title">Requests from your sessions</h2>
@@ -67,6 +67,9 @@
           <div class="conversation-tools"><button id="conversation-voice-replies" type="button" aria-pressed="false">Read new replies aloud</button><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
           <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
         </section>
+        <details id="conversation-diagnostics" open>
+        <summary>Under the hood <span aria-hidden="true">↗</span></summary>
+        <div class="conversation-diagnostics-content">
         <details id="conversation-flow" hidden><summary>Routing monitor</summary>
         <section id="routing-graph" hidden aria-label="Live conversation routing graph">
           <div class="conversation-tools"><h2>Conversation flow</h2><button id="routing-graph-live" type="button" hidden>Return to live →</button></div>
@@ -81,6 +84,8 @@
           <section aria-labelledby="conversation-results-title"><h2 id="conversation-results-title">From your sessions</h2><div id="conversation-results"></div></section>
           <button id="conversation-older" type="button" hidden>Earlier replies</button>
         </div>
+        </div>
+        </details>
         <section id="conversation-player" hidden aria-label="Reply audio">
           <div class="conversation-tools"><strong id="conversation-playing"></strong><button id="conversation-stop" type="button">Stop audio</button></div>
           <audio id="conversation-audio" controls preload="none"></audio>
