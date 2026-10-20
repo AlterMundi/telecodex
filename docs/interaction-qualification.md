@@ -71,6 +71,14 @@ class and unresolved defect. A small campaign report links existing journals and
 receipts instead of duplicating state. `Not run`, `failed`, and `uncertain` remain
 distinct. Resume missing observations; never replay uncertain work to improve a report.
 
+For Q10/Q11, retain a definitely-unsent worker instruction, recover it from the
+same client with its original identity, and lose that recovery response. A saved
+status check must prevent another native submission. Verify refusal for an
+uncertain/accepted instruction, unrelated original, retired entry and read-only
+grant; historical evidence remains intact.
+
+For Q17, inspect each key control’s bounds with populated voice status and the player visible; document-level overflow alone can miss clipping inside a scroll container. Growing transcripts and replies must preserve live following, while updates must not move a reader browsing earlier history. Explicit text/voice submission returns to the live conversation.
+
 Use isolated test credentials/workers where needed. Do not replace the human's
 active access file. Use synthetic destructive scenarios. A global Stop requires
 a fresh explicit human request for that operation, including during testing.

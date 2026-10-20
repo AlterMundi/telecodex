@@ -189,5 +189,70 @@ def sonic_registry(binary):
         if b:b.client.close()
         j.close()
 
+def known_unsent_recovery(binary):
+    """Real native admission gate, current original scope and one HTTP retry."""
+    from dashboard.companion import Grants
+    j=ColdEntry(binary);b=None
+    try:
+        j.prepare();b=Browser(j,companion=True);j.hold_resume=True;j.resume_seen.clear();j.resume_release.clear()
+        before=j.row('SELECT count(*) FROM incoming_updates')
+        original,_=b.text('#Alpha Recover this exact original after the temporary writer hold.')
+        assert j.resume_seen.wait(timeout=8)
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("INSERT INTO bot_state(key,value) VALUES('native_writer_hold:100:7','owned-recovery-fixture')")
+        j.resume_release.set()
+        j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='retained_unsent')
+        assert not b.status(original)['recoveries'] and not j.worker_packets
+        j.hold_resume=False
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("DELETE FROM bot_state WHERE key='native_writer_hold:100:7'")
+        saved=b.status(original);recovery=saved['recoveries'][0];instruction=recovery['instruction']
+        listed=next(v for v in b.get('/api/interaction/inputs')['items']if v['id']==original)
+        assert listed['recoveries']==saved['recoveries'] and listed['binding']==saved['binding'],'Ordinary list refresh must expose the same recovery action as explicit status'
+        assert recovery['label']=='Alpha' and instruction==j.instructions(7)[0][0]
+        body={'binding':saved['binding'],'instruction':instruction};url='/api/interaction/inputs/'+original+'/retry'
+        b.client.cookies.clear()  # Keep explicit owner/device headers; truly omit cookie authentication here.
+        unauthenticated=b.client.post(url,json=body,headers={'origin':b.provider.config['origin']});assert unauthenticated.status_code==401,unauthenticated.text
+        bad={**b.device_headers,'x-dashboard-csrf':'wrong'}
+        assert b.client.post(url,json=body,headers=bad).status_code==403
+        grants=Grants(b.provider.config,b.provider);path=j.root/'readonly-recovery.json'
+        grants.enroll('Readonly recovery view',path,3600,scope='monitor_readonly')
+        monitor=json.loads(path.read_text());headers={'authorization':monitor['authorization'],'x-dashboard-csrf':monitor['csrf'],'origin':b.provider.config['origin']}
+        assert b.client.post(url,json=body,headers=headers).status_code==403
+        response=b.client.post(url,json=body,headers=b.device_headers);assert response.status_code==200,response.text
+        j.wait(lambda:j.instructions(7)[0][1]=='accepted')
+        assert len(j.worker_packets['native-topic-7'])==1
+        assert b.client.post(url,json=body,headers=b.device_headers).status_code==200
+        assert len(j.worker_packets['native-topic-7'])==1 and len(j.instructions(7))==1
+        assert not b.status(original)['recoveries']
+        assert j.row("SELECT count(*)FROM audit_log WHERE action='conversation_route_recovery'")==[(1,)]
+        assert j.row('SELECT count(*)FROM conversation_inputs')==[(1,)] and j.row('SELECT count(*)FROM incoming_updates')==before
+        j.answer_worker(7,'Recovered original once.');j.idle()
+        foreign,_=b.text('#Beta Separate original for scope validation.')
+        j.wait(lambda:j.instructions(8)and j.instructions(8)[0][1]=='accepted')
+        wrong={'binding':b.status(foreign).get('binding',saved['binding']),'instruction':j.instructions(8)[0][0]}
+        assert b.client.post(url,json=wrong,headers=b.device_headers).status_code==409
+        assert len(j.worker_packets['native-topic-8'])==1
+        # Inject retained transport uncertainty at the HTTP read boundary. This
+        # proves control refusal, not a claim that the fake peer lost an ACK.
+        other_instruction=j.instructions(8)[0][0]
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            db.execute("UPDATE interaction_instructions SET phase='uncertain',doc=json_set(doc,'$.phase','uncertain')WHERE id=?",(other_instruction,))
+        uncertain=b.status(foreign);assert not uncertain['recoveries']
+        response=b.client.post('/api/interaction/inputs/'+foreign+'/retry',json={'binding':saved['binding'],'instruction':other_instruction},headers=b.device_headers)
+        assert response.status_code==200 and response.json()['routing']['phase']=='uncertain'
+        assert len(j.worker_packets['native-topic-8'])==1
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            db.execute("UPDATE interaction_instructions SET phase='accepted',doc=json_set(doc,'$.phase','accepted')WHERE id=?",(other_instruction,))
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            db.execute('UPDATE conversation_inputs SET retired=1 WHERE id=?',(original,))
+        assert b.client.post(url,json=body,headers=b.device_headers).status_code==409
+        j.answer_worker(8,'Separate original completed.');j.idle()
+        print('PASS actual held native admission -> known-unsent -> explicit same-original device HTTP recovery, one native send/audit, duplicate/uncertain/no-auth/CSRF/read-only/wrong-original/retired refusal; zero models, no Telegram input fabrication.')
+    finally:
+        j.resume_release.set()
+        if b:b.client.close()
+        j.close()
+
 if __name__=='__main__':
-    binary=str(Path(sys.argv[1]).resolve());first_text(binary);first_voice(binary);temporary_review(binary);sonic_registry(binary)
+    binary=str(Path(sys.argv[1]).resolve());first_text(binary);first_voice(binary);temporary_review(binary);sonic_registry(binary);known_unsent_recovery(binary)

@@ -61,7 +61,7 @@ window.Conversation = (() => {
       clearFocus();voiceContext=undefined;draft.value=message;draft.focus?.();compose.scrollIntoView?.({block:"nearest"});return true;
     }});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -82,9 +82,9 @@ window.Conversation = (() => {
       $("#conversation-inputs-older").textContent="Earlier messages";
       historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));timeline.append(historyTools);
     }
-    function placeInTimeline(box, key, timestamp) {
+    function atTimelineEnd() {return !!timeline && timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;}
+    function placeInTimeline(box, key, timestamp, nearEnd=atTimelineEnd()) {
       if(!timeline)return;
-      const nearEnd=timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;
       box.dataset.timelineKey=key;
       box.dataset.timelineTime=String(Date.parse(timestamp)||Number(box.dataset.timelineTime)||Date.now());
       const following=[...timeline.children].find(item=>item!==box &&
@@ -146,6 +146,18 @@ window.Conversation = (() => {
       card.routeButton.textContent=card.routePending?"Retry this selection":"Send to session";
       card.routeButton.disabled=card.routeBusy || card.value.retired || (!card.routePending && !card.select.value);
       card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
+    }
+    function savedRecovery(card) {
+      if(card.value.retired)return null;
+      return (card.value.recoveries||[]).find(r=>r.instruction &&
+        !(card.value.routing?.instruction===r.instruction && card.value.routing.phase==="accepted"));
+    }
+    function renderRetry(card) {
+      const recovery=savedRecovery(card);
+      card.retry.hidden=readOnly || card.value.read_only===true || !card.value.binding || (!recovery && !!card.value.phase);
+      card.retry.textContent=recovery?`Try again with #${recovery.label}`:"Retry this same message";
+      card.retry.disabled=!!card.retryBusy || !!card.retryNeedsCheck;
+      if(card.retryNeedsCheck)card.check.hidden=false;
     }
     function inputActivity() {
       presentState({transcribing:[...inputs.values()].some(c=>c.value.voice && c.value.phase==="preparing"),
@@ -224,6 +236,7 @@ window.Conversation = (() => {
       });
     }
     function inputCard(value, observed = ++inputObservation) {
+      const followingLive=atTimelineEnd();
       let card = inputs.get(value.id);
       if (!card) {
         const box = node("article", undefined, "reply");
@@ -273,17 +286,19 @@ window.Conversation = (() => {
           } finally { check.disabled = false; }
         });
         retry.addEventListener("click", async () => {
-          if (readOnly || card.value.phase || retry.disabled) return;
+          const recovery=savedRecovery(card);
+          if (readOnly || (card.value.phase && !recovery) || retry.disabled) return;
           const owned = inputGeneration, observation = ++inputObservation;
-          retry.disabled = true;
+          card.retryBusy=true;retry.disabled = true;
           try {
-            const result = await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{})});
+            const result = recovery ? await api(`interaction/inputs/${card.value.id}/retry`,{binding:card.value.binding,instruction:recovery.instruction}) : await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{})});
             if (owned === inputGeneration) inputCard(result, observation);
           } catch(e) {
             if (owned !== inputGeneration) return;
-            if (observation >= card.observed) status.textContent = phaseText(card.value) + " The same message identity was used.";
+            if (recovery)card.retryNeedsCheck=true;
+            if (observation >= card.observed) status.textContent = phaseText(card.value) + (recovery?" Recovery unconfirmed. Check saved status before trying again.":" The same message identity was used.");
             if (e.status === 401 || e.status === 403) failed(e);
-          } finally {retry.disabled=false;}
+          } finally {card.retryBusy=false;renderRetry(card);}
         });
       }
       if (observed < card.observed) {
@@ -301,7 +316,7 @@ window.Conversation = (() => {
         if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
         card.status.textContent = phaseText(card.value);
         microphone?.observe(card.value,phaseText(card.value));
-        card.retry.hidden = readOnly || !!card.value.phase || !card.value.binding;
+        renderRetry(card);
         if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
         renderRoute(card);graph?.input(card.value);inputActivity();return card;
       }
@@ -317,6 +332,7 @@ window.Conversation = (() => {
       }
       value = {...value,retired:!!value.retired || !!card.value.retired};
       card.observed = observed;
+      card.retryNeedsCheck=false;
       if (!card.value.phase && value.phase && draft.value === card.value.text) draft.value = "";
       // Preserve full original text after reading it, and an unknown POST's text.
       card.value = {...card.value, ...value};
@@ -327,13 +343,13 @@ window.Conversation = (() => {
       microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
       if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
-      card.retry.hidden = readOnly || !!card.value.phase || !card.value.binding;
+      renderRetry(card);
       renderRoute(card);
       card.box.dataset.sequence = String(card.value.capture_order ?? (card.value.ordering_unknown?Number.MIN_SAFE_INTEGER:card.value.sequence ?? Number.MAX_SAFE_INTEGER));
       const container = $("#conversation-inputs");
       const following = [...container.children].find(item => item !== card.box
         && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
-      if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at);
+      if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at,followingLive);
       else container.insertBefore(card.box, following || null);
       graph?.input(card.value);
       inputActivity();
@@ -406,7 +422,7 @@ window.Conversation = (() => {
       const context=replyFocus?.reference||voiceContext;
       const reply=context&&JSON.parse(JSON.stringify(context));
       posting = true; send.disabled = true; latestComposerId = id;
-      inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); $("#conversation-sent").open = true;
+      inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); if(timeline)timeline.scrollTop=timeline.scrollHeight; $("#conversation-sent").open = true;
       sendState.textContent = "Sending…";
       try {
         const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{}),...(selectedVisual?{visual:selectedVisual}:{})});
@@ -449,7 +465,8 @@ window.Conversation = (() => {
     function voiceStatus() {
       const button=$("#conversation-voice-replies");
       button.setAttribute("aria-pressed",String(voiceEnabled));
-      button.textContent=voiceEnabled?voiceSuspended?"Voice replies paused · tap to resume":`Voice replies on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read new replies aloud";
+      button.textContent=voiceEnabled?voiceSuspended?"Voice paused · resume":`Voice on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read aloud";
+      button.title=voiceSuspended?"Voice replies paused · tap to resume":"Read new replies aloud";
     }
     function enableVoice() {
       if(readOnly || !canListen)return;
@@ -590,6 +607,7 @@ window.Conversation = (() => {
       return api(`interaction/part?${query}`);
     }
     function upsert(source) {
+      const followingLive=atTimelineEnd();
       let card = cards.get(source.id);
       if (!card) {
         const container = $(source.kind === "integrator_answer" ? "#conversation-answers" : "#conversation-results");
@@ -649,7 +667,7 @@ window.Conversation = (() => {
       card.box.dataset.pending = String(!!source.correction_pending || source.native_binding_current === false);
       card.listen.hidden = !canListen;
       if(!progress)graph?.result(source);
-      placeInTimeline(card.box,source.id,source.observed_at);
+      placeInTimeline(card.box,source.id,source.observed_at,followingLive);
     }
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);

@@ -64,10 +64,10 @@
         <form id="conversation-compose" aria-label="Message your conversation">
           <div id="conversation-focus" class="conversation-tools" hidden><span id="conversation-focus-label"></span><button id="conversation-focus-clear" type="button">Back to conversation</button></div>
           <label for="conversation-message">Your message</label>
-          <textarea id="conversation-message" rows="3" placeholder="Continue a topic, add a correction, or start something new…" disabled></textarea>
+          <textarea id="conversation-message" rows="2" placeholder="Continue a topic, add a correction, or start something new…" disabled></textarea>
           <div class="conversation-tools">
           <details id="conversation-visual">
-            <summary>Point to something in an image</summary>
+            <summary>Add an image</summary>
             <p class="note">Choose an image, then point to what you mean. Only this captured image is sent; this does not share a live view.</p>
             <label for="conversation-image">Image</label><input id="conversation-image" type="file" accept="image/*">
             <div class="visual-preview"><canvas id="conversation-image-view" tabindex="0" role="img" aria-label="Selected image. Click a point, use arrow keys, or enter X and Y below." hidden></canvas></div>
@@ -79,10 +79,10 @@
         </form>
         <div id="conversation-audio-tools">
         <section id="conversation-voice" hidden aria-label="Speak to your conversation">
-          <div class="conversation-tools"><button id="conversation-voice-replies" type="button" aria-pressed="false">Read new replies aloud</button><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
-          <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
+          <div class="conversation-tools"><button id="conversation-voice-replies" type="button" aria-pressed="false">Read aloud</button><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
         </section>
         <div class="conversation-tools"><button id="conversation-sound-toggle" type="button" aria-pressed="false">≈ State sound</button></div>
+        <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
         </div>
         <details id="conversation-diagnostics" open>
         <summary>Under the hood <span aria-hidden="true">↗</span></summary>

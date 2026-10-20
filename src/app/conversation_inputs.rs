@@ -49,6 +49,7 @@ fn response(app: &App, input: &ConversationInput, fresh: bool) -> Result<Value> 
             value["decision"] = json!({"id":doc["id"],"revision":doc["revision"],"recorded":true,"source_input":input.id,"recorded_at":doc["recorded_at"],"native_incorporation":"Not established by recording an answer"});
         }
     }
+    decorate_recovery(app, input.human, input.entry, &input.id, &mut value)?;
     value["continuation"] = json!(app.shared.store.conversation_continuation(
         input.human,
         input.entry,
@@ -62,6 +63,26 @@ fn response(app: &App, input: &ConversationInput, fresh: bool) -> Result<Value> 
         value["native_acceptance"] = json!("observed");
     }
     Ok(value)
+}
+fn decorate_recovery(
+    app: &App,
+    human: i64,
+    entry: SessionKey,
+    id: &str,
+    value: &mut Value,
+) -> Result<()> {
+    let recoveries=app.shared.store.conversation_recoverable_routes(human,entry,id)?.into_iter()
+        .filter(|i|super::routing::enrolled(&app.shared,i.target))
+        .map(|i|json!({"instruction":i.id,"label":super::routing::label(&app.shared,i.target),"target":i.target})).collect::<Vec<_>>();
+    if !recoveries.is_empty() {
+        value["binding"] = app
+            .shared
+            .store
+            .conversation_request_binding(human, entry)?["binding"]
+            .clone();
+    }
+    value["recoveries"] = json!(recoveries);
+    Ok(())
 }
 fn choices(app: &App) -> Result<Value> {
     let profile = super::routing::profile(&app.shared)?;
@@ -79,6 +100,14 @@ struct Resolve {
     binding: String,
     id: String,
     selector: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Recover {
+    binding: String,
+    id: String,
+    instruction: String,
 }
 
 pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> {
@@ -103,6 +132,52 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     }
     if let Some(body) = args.strip_prefix("voice submit ") {
         return voice_submit(app, human, cfg.entry(), body).await;
+    }
+    if let Some(body) = args.strip_prefix("retry ") {
+        let selected: Recover = serde_json::from_str(body)?;
+        let _ingress = app.shared.conversation_ingress.lock().await;
+        let binding = app
+            .shared
+            .store
+            .conversation_request_binding(human, cfg.entry())?;
+        if binding["binding"] != selected.binding {
+            bail!("Entry changed before recovery");
+        }
+        let current = app
+            .shared
+            .store
+            .interaction_instruction(&selected.instruction, human)?
+            .context("Selected recovery unavailable")?;
+        if !super::routing::enrolled(&app.shared, current.target) {
+            bail!("Recovery target no longer enrolled");
+        }
+        let (changed, _) = app.shared.store.conversation_recover_route(
+            human,
+            cfg.entry(),
+            &selected.id,
+            &selected.instruction,
+        )?;
+        if changed
+            && super::dialogue::dispatch_original(
+                app,
+                &selected.instruction,
+                human,
+                &crate::interaction::InputReference::Conversation(selected.id.clone()),
+            )
+            .await
+            .is_err()
+        {
+            app.shared
+                .store
+                .interaction_unfinished(&selected.instruction, human)?;
+        }
+        return response(
+            app,
+            &app.shared
+                .store
+                .conversation_input_read(human, cfg.entry(), &selected.id)?,
+            false,
+        );
     }
     if let Some(body) = args.strip_prefix("route ") {
         let selected: Resolve = serde_json::from_str(body)?;
@@ -143,6 +218,13 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
             parts[0].parse()?,
             parts.get(1) != Some(&"after"),
         )?;
+        if let Some(items) = page["items"].as_array_mut() {
+            for item in items {
+                if let Some(id) = item["id"].as_str().map(str::to_owned) {
+                    decorate_recovery(app, human, cfg.entry(), &id, item)?;
+                }
+            }
+        }
         page["routing_choices"] = choices(app)?;
         return Ok(page);
     }

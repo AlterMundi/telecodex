@@ -273,6 +273,24 @@ pub(super) fn admit_on(
     Ok((instruction, true))
 }
 
+pub(super) fn recover_on(conn: &Connection, id: &str, human: i64, instance: &str) -> Result<bool> {
+    use crate::interaction::{Instruction, TransportPhase};
+    let doc:Option<String>=conn.query_row("SELECT i.doc FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id JOIN sessions t ON t.id=i.session_id JOIN users u ON u.tg_user_id=t.creator_user_id WHERE i.id=?1 AND s.human_id=?2 AND u.tg_user_id=?2 AND u.allowed=1 AND i.phase='retained_unsent'",params![id,human],|r|r.get(0)).optional()?;
+    let Some(doc) = doc else {
+        return Ok(false);
+    };
+    let mut instruction: Instruction = serde_json::from_str(&doc)?;
+    instruction.phase = TransportPhase::Queued;
+    instruction.local_turn = None;
+    instruction.native_turn = None;
+    instruction.admission_epoch = None;
+    conn.execute(
+        "UPDATE interaction_instructions SET phase='queued',doc=?2,instance_id=?3 WHERE id=?1",
+        params![id, serde_json::to_string(&instruction)?, instance],
+    )?;
+    Ok(true)
+}
+
 impl Store {
     pub(super) fn init_interaction(&self) -> Result<()> {
         self.conn
@@ -616,24 +634,11 @@ impl Store {
     }
 
     pub fn interaction_recover(&self, id: &str, human: i64) -> Result<bool> {
-        use crate::interaction::{Instruction, TransportPhase};
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let doc:Option<String>=tx.query_row("SELECT i.doc FROM interaction_instructions i JOIN interaction_sources s ON s.id=i.input_id JOIN sessions t ON t.id=i.session_id JOIN users u ON u.tg_user_id=t.creator_user_id WHERE i.id=?1 AND s.human_id=?2 AND u.tg_user_id=?2 AND u.allowed=1 AND i.phase='retained_unsent'",params![id,human],|r|r.get(0)).optional()?;
-        let Some(doc) = doc else {
-            return Ok(false);
-        };
-        let mut instruction: Instruction = serde_json::from_str(&doc)?;
-        instruction.phase = TransportPhase::Queued;
-        instruction.local_turn = None;
-        instruction.native_turn = None;
-        instruction.admission_epoch = None;
-        tx.execute(
-            "UPDATE interaction_instructions SET phase='queued',doc=?2,instance_id=?3 WHERE id=?1",
-            params![id, serde_json::to_string(&instruction)?, self.instance_id],
-        )?;
+        let changed = recover_on(&tx, id, human, &self.instance_id)?;
         tx.commit()?;
-        Ok(true)
+        Ok(changed)
     }
 
     /// Bind a queued dispatch to its captured ingress generation. Automatic

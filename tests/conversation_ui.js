@@ -6,6 +6,7 @@ const vm = require("node:vm");
 
 function boot(readOnly=false,standalone=false,options={}) {
   const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
+  const recoveryPosts=[];
   const gaps=new Map(),documentEvents=new Map(),windowEvents=new Map();
   const subscribe=(events,name,fn)=>events.set(name,[...(events.get(name)||[]),fn]);
   const clock={pending:()=>[...gaps.values()].map(t=>t.ms),fire(ms){
@@ -81,6 +82,13 @@ function boot(readOnly=false,standalone=false,options={}) {
       if (losePost) { losePost=false; throw new TypeError("Lost POST acknowledgement"); }
       return value;
     }
+    if (url.pathname.endsWith("/retry") && body) {
+      recoveryPosts.push(body);const id=url.pathname.split("/").at(-2);
+      const old=originals.get(id),value={...old,recoveries:[],routing:{...old.routing,phase:"accepted"}};
+      originals.set(id,value);
+      if(options.loseRecovery){options.loseRecovery=false;throw new TypeError("Lost recovery acknowledgment");}
+      return value;
+    }
     if (url.pathname.endsWith("/route") && body) {
       const id=url.pathname.split("/").at(-2);
       const value={...originals.get(id),phase:"routed",routing:{target:{thread_id:7},label:"Alpha",instruction:"instruction-1",phase:routePhase},continuation:{source:`input:${id}`,revision:"a".repeat(64)}};
@@ -133,17 +141,18 @@ function boot(readOnly=false,standalone=false,options={}) {
   });
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
-  if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){}};}};
+  if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){}};}};
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,clock,
+  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,clock,recoveryPosts,
     profile(value){presentationProfile=value;},
     event(name){for(const fn of windowEvents.get(name)||[])fn();},
     hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
     show(){document.hidden=false;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
     capture(){capture.pauseAudio();capture.onActivity(true);},
     finishCapture(){capture.onActivity(false);},
+    capturedInput(value){capture.onInput(value);},
     failAudio(n=1){audioFailures=n;},
     closeNativeRequest(){Object.assign(nativeRequests.get('native-request'),{state:'answered',actionable:false});},
     overrideSource(n,value){sourceOverrides.set(n,value);},addReplies(n){count+=n;},audio(parts=false){renderAudio=true;multipart=parts;},
@@ -209,6 +218,25 @@ function boot(readOnly=false,standalone=false,options={}) {
   await single.ui.refresh();
   assert.equal(stream.children.filter(c=>c.dataset.timelineKey).length,9,'Refreshing keeps one card per saved input or native item');
   assert.equal(single.nodes.get('#conversation-replies').hidden,true);
+  // Real browser review exposed lost follow mode when an existing voice card
+  // grows from a placeholder into its transcript. Measure before DOM mutation.
+  const follow=boot(false,true,{capture:true});await follow.ui.refresh();
+  const live=follow.nodes.get('#conversation-timeline');
+  const contentSize=node=>String(node.textContent||'').length+node.children.reduce((n,c)=>n+contentSize(c),0);
+  Object.defineProperty(live,'scrollHeight',{get:()=>1000+contentSize(live)});
+  live.clientHeight=200;live.scrollTop=live.scrollHeight-live.clientHeight;
+  follow.overrideSource(8,{revision:'expanded',preview:'A newly expanded response '.repeat(30)});
+  await follow.ui.refresh();
+  assert.equal(live.scrollTop,live.scrollHeight,'A growing current reply retains live following');
+  live.scrollTop=0;
+  follow.overrideSource(8,{revision:'expanded-again',preview:'A further update '.repeat(60)});
+  await follow.ui.refresh();
+  assert.equal(live.scrollTop,0,'Updates never pull a reader away from earlier history');
+  follow.capturedInput({id:'own-voice',phase:'preparing',voice:{audio_sha256:'owned'},sequence:1});
+  assert.equal(live.scrollTop,live.scrollHeight,'An explicitly submitted voice input returns to the live conversation');
+  follow.originals.set('own-voice',{id:'own-voice',phase:'accepted',voice:{audio_sha256:'owned'},text:'The committed automatic transcript '.repeat(20),sequence:1});
+  await follow.ui.refresh();
+  assert.equal(live.scrollTop,live.scrollHeight,'The committed transcript cannot silently leave following mode');
   const until=async check=>{for(let n=0;n<100;n++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error("Voice transition did not finish");};
   const voice=boot();voice.audio();await voice.ui.refresh();
   voice.nodes.get('#conversation-voice-replies').handlers.click();
@@ -396,6 +424,21 @@ function boot(readOnly=false,standalone=false,options={}) {
   await retained.children[2].children[0].handlers.click();
   assert.match(retained.children[1].textContent,/Sent to your conversation/);
   assert.equal(draft.value,"","Status recovery must prevent accidental same-text resubmission");
+  const seedRecovery=fixture=>fixture.originals.set('saved-route',{id:'saved-route',text:'The original is still saved.',phase:'routed',binding:'fixture',sequence:1,
+    routing:{instruction:'retained-route',phase:'retained_unsent',label:'Alpha'},recoveries:[{instruction:'retained-route',label:'Alpha'}]});
+  const recovered=boot();seedRecovery(recovered);await recovered.ui.refresh();
+  const retrySaved=findButton(recovered.nodes.get('#conversation-inputs'),'Try again with #Alpha');assert(retrySaved && !retrySaved.hidden);
+  recovered.nodes.get('#conversation-message').value='Keep my new draft';
+  await retrySaved.handlers.click();assert.equal(recovered.nodes.get('#conversation-message').value,'Keep my new draft');assert.equal(recovered.recoveryPosts.length,1);assert.equal(recovered.originals.size,1);assert(retrySaved.hidden);
+  assert.equal(recovered.recoveryPosts[0].instruction,'retained-route');recovered.ui.stop();
+  const lostRecovery=boot(false,false,{loseRecovery:true});seedRecovery(lostRecovery);await lostRecovery.ui.refresh();
+  const lostRetry=findButton(lostRecovery.nodes.get('#conversation-inputs'),'Try again with #Alpha');await lostRetry.handlers.click();
+  assert(lostRetry.disabled,'Unknown recovery response must require status before another action');
+  await lostRetry.handlers.click();assert.equal(lostRecovery.recoveryPosts.length,1);
+  await findButton(lostRecovery.nodes.get('#conversation-inputs'),'Check status / read message').handlers.click();assert(lostRetry.hidden);assert.equal(lostRecovery.originals.size,1);lostRecovery.ui.stop();
+  const readonlyRecovery=boot(true);seedRecovery(readonlyRecovery);await readonlyRecovery.ui.refresh();
+  const deniedRetry=findButton(readonlyRecovery.nodes.get('#conversation-inputs'),'Try again with #Alpha');assert(deniedRetry.hidden);await deniedRetry.handlers.click();assert.equal(readonlyRecovery.recoveryPosts.length,0);readonlyRecovery.ui.stop();
+
   const release=sending.holdPost(); draft.value="Next message";
   const pending=form.handlers.submit({preventDefault(){}});
   await Promise.resolve(); assert(sending.posting());

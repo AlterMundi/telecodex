@@ -208,6 +208,69 @@ fn save_on(conn: &Connection, input: &ConversationInput) -> Result<()> {
     Ok(())
 }
 impl Store {
+    /// Only current originals expose their exact retained, definitely-unsent routes.
+    pub fn conversation_recoverable_routes(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<Vec<crate::interaction::Instruction>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let input = super::conversation_inputs::read_on(&conn, id, human)?;
+        if input.entry != entry || super::conversation_inputs::eligible_on(&conn, &input).is_err() {
+            return Ok(vec![]);
+        }
+        let mut stmt = conn.prepare("SELECT i.doc FROM interaction_instructions i JOIN interaction_sources source ON source.id=i.input_id JOIN sessions target ON target.id=i.session_id JOIN users u ON u.tg_user_id=target.creator_user_id WHERE source.channel='conversation' AND source.event_id=?1 AND source.human_id=?2 AND target.creator_user_id=?2 AND u.allowed=1 AND i.phase='retained_unsent' ORDER BY i.rowid")?;
+        let rows = stmt
+            .query_map(params![id, human], |r| r.get::<_, String>(0))?
+            .map(|r| {
+                Ok(serde_json::from_str::<crate::interaction::Instruction>(
+                    &r?,
+                )?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut available = vec![];
+        for route in rows {
+            if !super::stopping::fenced_on(&conn, route.target)?
+                && !super::maintenance_writer_held_on(&conn, route.target)?
+            {
+                available.push(route);
+            }
+        }
+        Ok(available)
+    }
+
+    /// Explicit authenticated recovery uses the same original/instruction identity.
+    /// The current entry and selected source are checked in the transition transaction.
+    pub fn conversation_recover_route(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        instruction: &str,
+    ) -> Result<(bool, SessionKey)> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let input = super::conversation_inputs::read_on(&tx, id, human)?;
+        if input.entry != entry {
+            bail!("Recovery belongs to another entry");
+        }
+        super::conversation_inputs::eligible_on(&tx, &input)?;
+        let raw:String=tx.query_row("SELECT i.doc FROM interaction_instructions i JOIN interaction_sources source ON source.id=i.input_id WHERE i.id=?1 AND source.channel='conversation' AND source.event_id=?2 AND source.human_id=?3",params![instruction,id,human],|r|r.get(0)).context("Recovery does not match this original route")?;
+        let selected: crate::interaction::Instruction = serde_json::from_str(&raw)?;
+        if super::stopping::fenced_on(&tx, selected.target)?
+            || super::maintenance_writer_held_on(&tx, selected.target)?
+        {
+            bail!("Selected work session is held");
+        }
+        let changed = super::interaction::recover_on(&tx, instruction, human, &self.instance_id)?;
+        if changed {
+            tx.execute("INSERT INTO audit_log(actor_user_id,action,details_json,created_at) VALUES(?1,'conversation_route_recovery',?2,?3)",params![human,json!({"original":id,"instruction":instruction,"entry":entry,"target":selected.target,"kind":"explicit_known_unsent_recovery"}).to_string(),now_string()])?;
+        }
+        tx.commit()?;
+        Ok((changed, selected.target))
+    }
+
     pub fn conversation_continuation(
         &self,
         human: i64,
