@@ -2,7 +2,57 @@ use super::support::is_message_thread_not_found;
 use super::*;
 use crate::{codex::CodexApprovalRequest, codex_history::read_thread_runtime};
 use html_escape::encode_safe;
+use serde_json::json;
 use uuid::Uuid;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompanionHint {
+    gesture: String,
+    rest: String,
+}
+
+pub(super) fn companion_capability() -> serde_json::Value {
+    json!({"arguments":{"gesture":"wave, nod or none","rest":"calm, curious, focused, listening, speaking, delighted or uncertain"},
+        "description":"Optional cosmetic choice for this actual native turn, at most one immutable registration before its final reply. Finite local gesture and resting portrait only; never controls operational state, message text or authority. Missing hints use local defaults. No extra model call or animation loop."})
+}
+
+pub(super) async fn companion_hint(
+    app: &App,
+    key: SessionKey,
+    human: i64,
+    request: &crate::codex::DynamicToolRequest,
+    args: serde_json::Value,
+    closed: &CancellationToken,
+) -> Result<serde_json::Value> {
+    let hint: CompanionHint = serde_json::from_value(args)?;
+    let local = app
+        .workers
+        .lock()
+        .await
+        .get(&key)
+        .and_then(|w| {
+            w.steer
+                .lock()
+                .expect("steer mutex poisoned")
+                .as_ref()
+                .map(|s| s.turn_id)
+        })
+        .context("Companion hint has no current receiving execution")?;
+    let fresh = app.shared.store.interaction_companion_hint(
+        key,
+        human,
+        local,
+        &request.thread_id,
+        &request.turn_id,
+        &hint.gesture,
+        &hint.rest,
+        closed,
+    )?;
+    Ok(
+        json!({"kind":"companion_hint","scope":"native_turn","registered":true,"new_registration":fresh}),
+    )
+}
 
 /// Scope all automatic native presentation, including cooldown/fallback paths.
 pub(super) fn turn_telegram(shared: &Arc<AppShared>, local: Option<i64>) -> TelegramClient {

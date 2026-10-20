@@ -81,9 +81,13 @@ window.ConversationCompanion = (() => {
       const hint=source.companion_hint;
       rest=Object.hasOwn(faces,hint?.rest)?hint.rest:"calm";
       draw();
-      if(!document.hidden && !motion?.matches){
-        animation?.cancel();
-        animation=face.animate?.([{transform:"rotate(0deg)"},{transform:"rotate(-5deg)"},{transform:"rotate(4deg)"},{transform:"rotate(0deg)"}],{duration:550,iterations:1});
+      animation?.cancel();
+      const gesture=["wave","nod","none"].includes(hint?.gesture)?hint.gesture:"wave";
+      if(!document.hidden && !motion?.matches && gesture!=="none"){
+        const frames=gesture==="nod"
+          ?[{transform:"translateY(0)"},{transform:"translateY(4px)"},{transform:"translateY(0)"}]
+          :[{transform:"rotate(0deg)"},{transform:"rotate(-5deg)"},{transform:"rotate(4deg)"},{transform:"rotate(0deg)"}];
+        animation=face.animate?.(frames,{duration:550,iterations:1});
       }
     }
     function reset(){clearTimeout(expiry);animation?.cancel();state={};observed=0;lastReply=undefined;rest="calm";draw();}

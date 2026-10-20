@@ -43,6 +43,12 @@ def qualify(binary):
         j.wait(lambda:'native-topic-9' in j.runs)
         entry=j.access(1)
         caps=j.cli(entry,'capabilities');assert 'dispatch' in caps['operations']
+        pose={'gesture':'wave','rest':'calm'}
+        assert 'companion_hint' in caps['operations']
+        assert j.cli(entry,'companion_hint',pose)['new_registration']
+        assert not j.cli(entry,'companion_hint',pose)['new_registration']
+        j.cli(entry,'companion_hint',{'gesture':'script','rest':'calm'},ok=False)
+        j.cli(entry,'companion_hint',{'gesture':'nod','rest':'calm'},ok=False)
         original=j.cli(entry,'inputs')['inputs'][-1]['input_ref']
         assert sum(m.get('method')=='turn/start' for m in j.rpc)==before+1
         j.cli(entry,'dispatch',{'input_ref':original,'destinations':[{'selector':'Alpha','relation':'new','requests':[]}]})
@@ -54,6 +60,8 @@ def qualify(binary):
         assert denied.returncode!=0
         worker.chmod(0o644);j.cli(worker,'capabilities',ok=False);worker.chmod(0o600)
         caps=j.cli(worker,'capabilities');assert 'session_request' in caps['operations'] and 'dispatch' not in caps['operations']
+        assert 'companion_hint' in caps['operations']
+        assert j.cli(worker,'companion_hint',{'gesture':'nod','rest':'delighted'})['new_registration']
         # An existing busy worker invokes the same nonblocking dependency handler.
         parent=j.instructions(7)[0][0]
         args={'parent_instruction':parent,'request_id':'warm-dependency','selector':'Beta','text':'Provide the selected evidence for this task.'}
@@ -79,6 +87,8 @@ def qualify(binary):
         j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered'")==[(0,)])
         j.wait(lambda:not worker.exists())
         j.cli(stale,'capabilities',ok=False)
+        sources=j.cli(entry,'conversation')['presentation']['items']
+        assert any(s.get('companion_hint')=={'gesture':'nod','rest':'delighted'} for s in sources),sources
         thread='native-topic-9';turn=j.runs[thread]
         j.broadcast(thread,'item/completed',{'turnId':turn,'item':{'id':'warm-entry-final','type':'agentMessage','phase':'final_answer','text':'The work returned.'}})
         j.broadcast(thread,'turn/completed',{'turn':{'id':turn,'status':'completed'}})

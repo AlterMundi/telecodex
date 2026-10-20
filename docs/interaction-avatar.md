@@ -37,12 +37,26 @@ older responses and progress items do not restart it. Reduced-motion preference
 and a hidden page cancel animation. Unchanged activity does not rebuild its live
 region on each poll. No image/font/animation service is needed.
 
-The client reserves a bounded optional `companion_hint.rest` enum on an actual
-returned source. Invalid values are ignored, and an older reply cannot override
-a newer pose. This is presentation only. **Controller authoring/registration of
-those hints is not implemented yet**; current receivers use deterministic local
-defaults. It must not be advertised as an available model operation until the
-native-turn-bound registration and its denial/replay cases are implemented.
+The stable controller advertises optional `companion_hint` for the integrator
+and enrolled workers, including their live terminal fallback. Its arguments are
+only `gesture` (`wave`, `nod`, `none`) and `rest` (one finite portrait name from
+capabilities). No text, paths, commands, state labels or model-provided timing is
+accepted. Use it within the existing response cycle only; do not create a model
+call or another session to animate the portrait.
+
+Registration is bound by receiver-supplied native thread/physical turn and the
+current owned local execution, never caller-selected identity. One immutable
+choice is retained per physical turn using the existing state store; an identical
+retry before finalization observes it without another write. A changed choice,
+expired callback, wrong owner/binding or already recorded final output is refused.
+The short write transaction also fences independent database writers. Only that
+turn's returned final source carries the hint and its revision. Progress items
+cannot repaint the portrait; an older returned source cannot override a newer
+one. Missing or invalid hints use deterministic defaults. All operational HTML,
+permissions and message text remain independent of the cosmetic selection.
+
+The implementation and tests are in the current draft. End-to-end process and
+real-session qualification must pass before receiving adoption is claimed.
 
 ## Development qualification
 
