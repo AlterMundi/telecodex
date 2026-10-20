@@ -257,7 +257,27 @@ local browser audio activation and suspension. No new inference loop, capture,
 background attention or unsolicited hardware playback is authorized. Qualify
 mapping, finite transitions, concurrent membership and real mute/stop behavior
 device-free before opt-in browser/listening acceptance. See #221 for scope and
-dependencies; the sound renderer is not implemented yet.
+dependencies. The implementation checkpoint below records development evidence;
+receiving adoption and the full S01–S05 campaign remain separate requirements.
+
+### Sonic expression implementation checkpoint — 2026-10-20
+
+The web client now has an explicit opt-in Web Audio renderer, owner-selected
+bounded vocabulary and an inspectable per-session score under collapsed
+diagnostics. It reuses the existing database-bound activity observer, including
+native waiting flags; the sound endpoint starts neither inference nor a new
+native observer. Missing configuration, stale observations, changed native
+bindings and unauthorized targets remain unknown. Logical topic identity is
+stable across native renewal. See `docs/sonic-expression.md` for configuration,
+authored interval meanings, limits and speech priority.
+
+Four actual SQLite/cache/HTTP tests and shipped JavaScript mapping/audio-graph
+tests pass. Muted headless Chromium also verified deliberate audio activation,
+owned context closure, responsive layouts and actual OfflineAudioContext signal
+samples: the selected blocked interval was present, with zero samples after
+quiet/stop. Its native peer and state stimuli were synthetic, with no models or
+physical playback. This does not establish live-session state transitions,
+receiving acceptance or human perception; those remain in S01–S05.
 
 ### Live task reassessment checkpoint — 2026-10-20
 

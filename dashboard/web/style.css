@@ -659,3 +659,10 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .artifact-files h4{margin:.15rem 0 .6rem;font-size:.9rem}
 .artifact-file{display:flex;align-items:center;flex-wrap:wrap;gap:.55rem;margin:.4rem 0;min-width:0}
 .artifact-file button{max-width:100%;overflow-wrap:anywhere;text-align:left}
+
+#conversation-audio-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; flex-shrink:0; }
+.standalone-conversation #conversation-audio-tools { grid-row:5; min-width:0; }
+#conversation-sound summary { display:flex; flex-wrap:wrap; gap:8px; }
+#conversation-sound-status { color:var(--muted); font-size:0.85em; }
+#conversation-sound label { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
+#conversation-sound-score { padding-inline-start:1.4em; overflow-wrap:anywhere; }

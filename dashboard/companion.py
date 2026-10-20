@@ -23,11 +23,11 @@ def permitted(method, path, scope='interaction_only', artifact_access=False):
     if path == '/api/interaction/artifacts' or path.startswith('/api/interaction/artifacts/'):
         return scope == 'interaction_only' and artifact_access is True and method == 'GET' and re.fullmatch(r'/api/interaction/artifacts(?:/[a-f0-9-]{36})?', path) is not None
     if scope == 'monitor_readonly':
-        return method == 'GET' and re.fullmatch(r'/api/interaction(?:/(?:part|goals(?:/[a-f0-9-]{36})?|telegram-inputs|inputs(?:/(?:[a-f0-9-]{36}|telegram:[0-9]+)(?:/trace(?:/(?:original|[a-f0-9-]{36}))?|/image)?)?))?', path) is not None
+        return method == 'GET' and re.fullmatch(r'/api/interaction(?:/(?:part|sonic|goals(?:/[a-f0-9-]{36})?|telegram-inputs|inputs(?:/(?:[a-f0-9-]{36}|telegram:[0-9]+)(?:/trace(?:/(?:original|[a-f0-9-]{36}))?|/image)?)?))?', path) is not None
     if scope != 'interaction_only':
         return False
     if method == 'GET':
-        return re.fullmatch(r'/api/interaction(?:/(?:part|goals(?:/[a-f0-9-]{36})?|inputs(?:/[a-f0-9-]{36}(?:/image|/trace(?:/(?:original|[a-f0-9-]{36}))?)?)?|requests(?:/[a-f0-9]{32}(?:/receipt)?)?))?', path) is not None
+        return re.fullmatch(r'/api/interaction(?:/(?:part|sonic|goals(?:/[a-f0-9-]{36})?|inputs(?:/[a-f0-9-]{36}(?:/image|/trace(?:/(?:original|[a-f0-9-]{36}))?)?)?|requests(?:/[a-f0-9]{32}(?:/receipt)?)?))?', path) is not None
     if method == 'POST':
         return path in ('/api/interaction/inputs', '/api/interaction/voice', '/api/interaction/visual', '/api/interaction/audio') or re.fullmatch(r'/api/interaction/inputs/[a-f0-9-]{36}/route', path) is not None
     return False

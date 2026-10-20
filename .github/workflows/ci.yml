@@ -281,16 +281,19 @@ jobs:
           ALERTS_CORE_SOURCE: .alerts-core
       - run: python -B tests/dashboard_io.py
       - run: python -B tests/dashboard_companion_io.py
+      - run: python -B tests/dashboard_sonic.py
       - run: python -B tests/presentation_io.py
       - run: node --check dashboard/web/app.js
       - run: node --check dashboard/web/requests.js
       - run: node --check dashboard/web/microphone.js
       - run: node --check dashboard/web/routing_graph.js
       - run: node --check dashboard/web/companion.js
+      - run: node --check dashboard/web/sonic.js
       - run: node --check dashboard/web/conversation.js
       - run: node tests/dashboard_ui.js
       - run: node tests/routing_graph_ui.js
       - run: node tests/companion_ui.js
+      - run: node tests/dashboard_sonic_ui.js
       - run: node tests/conversation_ui.js
       - run: node tests/conversation_requests_ui.js
       - run: node tests/microphone_ui.js
