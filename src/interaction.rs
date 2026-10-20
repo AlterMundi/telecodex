@@ -20,6 +20,8 @@ pub struct InteractionConfig {
     pub discover_owned_sessions: bool,
     /// Independent synthesis settings; omitted values preserve existing behavior.
     pub observer_model: Option<String>,
+    /// Explicit inert per-being vocabulary; omitted keeps the legacy portrait.
+    pub expression_pack: Option<crate::ascii::ExpressionPack>,
     pub observer_reasoning_effort: Option<String>,
     #[serde(default)]
     pub matrix_targets: Vec<MatrixTarget>,
@@ -99,6 +101,9 @@ impl InteractionConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(pack) = &self.expression_pack {
+            pack.validate()?;
+        }
         if self.human_id <= 0
             || self.chat_id == 0
             || self.topic_id <= 0
@@ -472,6 +477,7 @@ mod tests {
             max_active_workers: 2,
             discover_owned_sessions: false,
             observer_model: None,
+            expression_pack: None,
             observer_reasoning_effort: None,
             matrix_targets: vec![],
             matrix_transport: None,

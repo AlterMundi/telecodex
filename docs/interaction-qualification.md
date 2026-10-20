@@ -100,7 +100,7 @@ Combine rows in a few reusable journeys wherever practical.
 | Q14 | Reach the configured execution budget with many retained contexts | Inputs remain visible and recoverable; direct work is responsive; bounded actual execution and waiting are truthful. Record context count separately from running workers | A, selected N |
 | Q15 | Speak mixed Spanish/English; queue several speech chunks/results; start speaking during output | Understandable transcription, natural spacing, no overlapping playback, clear capture state and cancelable queued speech. Judge actual sound, not just the `ended` event | A, N, H |
 | Q16 | Complete transcription, fail transcription, render speech, then exercise expiry/size limits | Durable text is retained; successful source audio is removed; failed/uncertain audio is bounded and identifiable. TTS pruning matches its documented cache policy, without pretending immediate playback deletion | A |
-| Q17 | Use a narrow screen, large text and keyboard; open read-only diagnostics during parallel work | Main text/voice interaction remains readable and reachable. Diagnostics start collapsed; truthful compact activity is understandable. No overlap or inaccessible clarification | A browser, H |
+| Q17 | Use a narrow screen, large text and keyboard; open read-only diagnostics during parallel work | Main text/voice interaction remains readable and reachable, including a short viewport with the software keyboard. The single bottom diagnostics panel starts collapsed, opens without covering the composer and keeps read-only routing evidence accessible. Live questions remain outside that panel. Truthful compact activity is understandable. No overlap or inaccessible clarification | A browser, H |
 | Q18 | Use a simple/advanced presentation and an independently read-only monitor credential | Read-only inspection stays accessible; presentation does not grant destructive authority. Exercise the selected simple/advanced configuration and allowed/denied goal, question, approval and artifact operations. Existing credentials retain their audience and grants; profiles cannot be deferred as planned for this milestone | A, H |
 | Q19 | Select an immutable image/reference; later change the live scene | Work uses the selected capture/revision and coordinates; uncertainty prompts clarification; no claim to see a changed scene | A, selected N/H |
 | Q20 | Interview completed and busy source sessions through an explicitly selected observer finding | Exact fork only where supported; derived/pinned context otherwise labeled. Interview does not mutate source work; publication is a separate selected act | A, N, H |
@@ -121,7 +121,7 @@ Persisted tool registration must not restrict acceptance to fresh test threads.
 | V04 | Withdraw an obsolete task while its issuer runs; change binding; answer a stale question; attempt an approval with a read-only credential | Scoped attributable withdrawal distinct from human completion, no fabricated live responder or approval; relevant ordinary answers accepted without repeated entry. Q07/Q18 |
 | V05 | Switch return surfaces and lose Telegram acknowledgment after an accepted send | Shared canonical event/destination identity prevents ordinary/projected duplication; ambiguous delivery remains uncertain without resend or task replay; primary return independent. Q12/Q13 |
 | V06 | Cancel during interreply/interchunk silence, start capture, hide/disable/change source, fail one TTS, then reconnect | Generation-owned waiting cancels even with no active audio element; next reply remains usable, question priority visible, late progress does not displace final, no historical autoplay. Q09/Q10/Q11/Q15 |
-| V07 | Inspect companion with parallel activity, missing/invalid/stale hint, reduced motion, hidden screen, narrow keyboard layout | Finite local animation and deterministic default; cosmetic hints bound to actual response/turn; readable operational states independent of portrait and no animation inference loop. Q17/Q18 |
+| V07 | Inspect companion with parallel activity; select two unrelated per-being vocabularies and client defaults; reuse pack labels with changed bytes; inject missing/invalid/stale hint; test reduced motion, hidden screen and narrow keyboard layout | Exact receiver-selected catalog digest and actual response/turn bind cosmetic hints; whole composition fits or uses its description. One finite local sequence, no duplicate/old-source replay; readable operational states independent of artistic meaning and no animation inference loop. Q17/Q18 |
 | V08 | Download artifact; fail one of several files; expire/revoke grant; renew logical session; lose Telegram delivery acknowledgment | Actual retained bytes/hash/audience and original output provenance, useful partial/unavailable state, no old-current-binding requirement after supported renewal and no duplicate execution. Q21 |
 
 The final campaign report must distinguish synthetic fault injection, real native
@@ -302,3 +302,24 @@ acceptance. The following primary references explain specific design lessons:
 Use the configured collective corpus for the complete evidence ledger and
 provider-access findings. New model releases warrant targeted research when a
 decision depends on them; they are not a reason to postpone qualifying this MVP.
+
+## Beacon-derived sonic language supplement — #221
+
+These are additional acceptance cases for the human-requested opt-in sonic layer,
+not evidence that it exists. Keep automated event/signal verification separate
+from perceptual and subjective listening. Do not start the real-session campaign
+until the integrated product is ready; offline deterministic development checks
+remain appropriate. Playback requires deliberate client audio activation.
+
+| ID | Journey | Required evidence |
+| --- | --- | --- |
+| S01 | Select a per-being vocabulary, fundamental, register/timbre and initial authored 1:11 blocked / 1:7 awaiting-reply motifs | Actual configured ratios, synthesis parameters and provenance; chosen artistic meaning is distinct from operational facts and universal perceptual claims |
+| S02 | Advance, block, await a live answer, lose freshness, disconnect and reconnect | The mapping follows the actual selected state and current membership. Unknown/stale is not silently rendered as idle, waiting or blockage; no invented emotional state or historical-event replay |
+| S03 | Overlap session voices, including repeated intervals and changing membership | Deterministic bounded aggregate signal with inspectable contributing sessions; omissions/unknowns explicit, transitions finite and levels controlled. The chord and monitor refer to the same selected set |
+| S04 | Start a speech reply, answer a question, adjust volume/mute, stop during a transition and reconnect | Declared ducking/priority policy matches owned playback; mute/stop silence actual owned audio nodes, cancel scheduled transitions and do not cancel tasks. No new inference or microphone capture |
+| S05 | Activate the opt-in browser renderer; hide/suspend/resume; separately listen to the compositions | Actual browser activation/suspension and audio-output evidence; no unsolicited autoplay or false active-audio claim. Human observations address comfort, distinguishability and learned chord interpretation only after the full journey is prepared |
+
+No S case passes merely because a sound name, score, mock event, planned renderer
+or favorable code review exists. Unimplemented synthesis and subjective claims
+remain explicitly unproven. Default silence and read-only visual inspection stay
+available. Existing Q/V requirements and direct-topic independence still apply.

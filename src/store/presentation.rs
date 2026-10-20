@@ -3,6 +3,7 @@ use super::*;
 use anyhow::bail;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tokio_util::sync::CancellationToken;
 
 // Worker progress is visible only through the return selection retained when
 // this native item was first observed. Later direct input never widens its scope.
@@ -10,6 +11,13 @@ const NATIVE_VISIBILITY: &str = "t.from_user_id=?3 AND s.creator_user_id=?3 AND
     ((t.session_id=?2 AND m.native_thread=?4 AND m.phase IN ('commentary','final_answer'))
       OR (m.phase='commentary' AND EXISTS(SELECT 1 FROM conversation_inputs c
           WHERE c.id=m.presentation_input AND c.human_id=?3 AND c.session_id=?2)))";
+
+fn companion_hint_key(native: &str, physical: &str) -> String {
+    format!(
+        "interaction-companion:{}",
+        digest(&json!([native, physical]))
+    )
+}
 
 fn digest(value: &Value) -> String {
     format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
@@ -40,6 +48,137 @@ pub(super) fn entry_binding(
 }
 
 impl Store {
+    /// Register at most one cosmetic choice for an actual current execution.
+    /// A recorded final source cannot acquire a hint later and change revision.
+    #[allow(clippy::too_many_arguments)]
+    pub fn interaction_companion_hint(
+        &self,
+        key: SessionKey,
+        human: i64,
+        local: i64,
+        native: &str,
+        physical: &str,
+        gesture: &str,
+        rest: &str,
+        pack: Option<&crate::ascii::ExpressionPack>,
+        closed: &CancellationToken,
+    ) -> Result<bool> {
+        if !(if pack.is_some() {
+            matches!(gesture, "play" | "none")
+        } else {
+            matches!(gesture, "wave" | "nod" | "none")
+        }) || !(if let Some(pack) = pack {
+            pack.validate()?;
+            pack.expressions.contains_key(rest)
+        } else {
+            matches!(
+                rest,
+                "calm"
+                    | "curious"
+                    | "focused"
+                    | "listening"
+                    | "speaking"
+                    | "delighted"
+                    | "uncertain"
+            )
+        }) || physical.is_empty()
+            || physical.len() > 128
+            || closed.is_cancelled()
+        {
+            bail!("Invalid or expired companion hint");
+        }
+        let mut connection = self.conn.lock().expect("store mutex poisoned");
+        let conn =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let valid: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM turns t JOIN sessions s ON s.id=t.session_id
+             JOIN users u ON u.tg_user_id=s.creator_user_id
+             WHERE t.id=?1 AND t.from_user_id=?2 AND t.status='running' AND t.completed_at IS NULL
+             AND t.native_thread_id=?3 AND s.codex_thread_id=?3 AND s.creator_user_id=?2
+             AND s.chat_id=?4 AND s.thread_id=?5 AND u.allowed=1 AND s.force_fresh_thread=0)",
+            params![local, human, native, key.chat_id, key.thread_id],
+            |r| r.get(0),
+        )?;
+        let final_seen: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM interaction_native_messages
+             WHERE native_thread=?1 AND native_turn=?2 AND (phase='final_answer' OR phase IS NULL))
+             OR EXISTS(SELECT 1 FROM interaction_results WHERE native_thread=?1 AND native_turn=?2)",
+            params![native,physical], |r|r.get(0),
+        )?;
+        if !valid || final_seen || closed.is_cancelled() {
+            bail!("Companion hint execution changed or final source already exists");
+        }
+        let id = companion_hint_key(native, physical);
+        let mut doc = json!({"gesture":gesture,"rest":rest});
+        if let Some(pack) = pack {
+            doc["catalog"] = json!(pack.fingerprint()?);
+            doc["pack"] = json!(pack.id);
+            doc["revision"] = json!(pack.revision);
+        }
+        let doc = doc.to_string();
+        let previous: Option<String> = conn
+            .query_row("SELECT value FROM bot_state WHERE key=?", [&id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if let Some(previous) = previous {
+            if previous != doc {
+                bail!("A cosmetic choice is already registered for this native turn");
+            }
+            return Ok(false);
+        }
+        conn.execute(
+            "INSERT INTO bot_state(key,value) VALUES(?1,?2)",
+            params![id, doc],
+        )?;
+        conn.commit()?;
+        Ok(true)
+    }
+
+    /// Current receiver bookkeeping, not a claim of native/model completion.
+    /// Only configured, still-owned sources are included; no native I/O occurs.
+    pub fn interaction_activity(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        targets: &[(SessionKey, String)],
+    ) -> Result<Value> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (entry_id, _) = entry_on(&conn, human, entry)?;
+        let entry_busy: bool =
+            conn.query_row("SELECT busy FROM sessions WHERE id=?", [entry_id], |r| {
+                r.get(0)
+            })?;
+        let mut sources = Vec::new();
+        for (key, label) in targets.iter().take(64) {
+            let selected: Option<(i64, bool, Option<String>)> = conn
+                .query_row(
+                    "SELECT s.id,s.busy,s.codex_thread_id FROM sessions s
+                 JOIN users u ON u.tg_user_id=s.creator_user_id
+                 WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3
+                 AND u.allowed=1 AND s.force_fresh_thread=0",
+                    params![key.chat_id, key.thread_id, human],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            let Some((id, busy, native)) = selected else {
+                sources.push(json!({"label":label,"known":false}));
+                continue;
+            };
+            let synthesizing: i64 = conn.query_row(
+                "SELECT count(*) FROM interaction_observer_attempts
+                 WHERE session_id=?1 AND human_id=?2 AND native_thread=?3
+                 AND instance_id=?4 AND phase='summarizing'",
+                params![id, human, native, self.instance_id],
+                |r| r.get(0),
+            )?;
+            sources.push(json!({"label":label,"known":native.is_some(),
+                "busy":busy,"observer_synthesizing":synthesizing}));
+        }
+        Ok(json!({"schema":"telecodex.interaction-activity/v1",
+            "observed_at":Utc::now().to_rfc3339(),"integrator_busy":entry_busy,
+            "scope":"enrolled_sessions","sources":sources,"truncated":targets.len()>64}))
+    }
     /// Bounded incremental metadata. This never marks a result delivered/heard.
     pub fn interaction_presentation_list(
         &self,
@@ -290,6 +429,34 @@ pub(super) fn source_on(
             [delivery], |r| r.get(0)).optional()?;
         source["observed_at"] = json!(observed);
     }
+    // Only a returned final source carries its immutable per-turn cosmetic choice.
+    let hint_source: Option<(String, String)> = if source["kind"] == "worker_result" {
+        conn.query_row(
+            "SELECT native_thread,native_turn FROM interaction_results WHERE id=?",
+            [source["result_id"].as_str().unwrap_or("")],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?
+    } else if source["kind"] == "integrator_answer" {
+        Some((
+            entry_native.clone(),
+            source["native_turn"].as_str().unwrap_or("").to_owned(),
+        ))
+    } else {
+        None
+    };
+    if let Some((native, physical)) = hint_source {
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM bot_state WHERE key=?",
+                [companion_hint_key(&native, &physical)],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(raw) = raw {
+            source["companion_hint"] = serde_json::from_str(&raw)?;
+        }
+    }
     // Canonical native items keep controller metadata. All reader/player views
     // use the visible answer, including its hash, length and revision fences.
     if let Some(text) = source["text"].as_str() {
@@ -316,6 +483,138 @@ pub(super) fn source_on(
 mod tests {
     use super::*;
     use crate::interaction::{RequestRelation, ReturnRoute, SourceInput, TransportPhase};
+
+    #[test]
+    fn companion_choice_is_bounded_owned_and_immutable_before_final_source() {
+        let (_file, store, entry, _, _, _) = setup();
+        let session = store.get_session(entry).unwrap().unwrap();
+        let local = store
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: entry,
+                    from_user_id: 100,
+                    prompt: "Discuss".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(local, "entry-native")
+            .unwrap();
+        let closed = CancellationToken::new();
+        let register = |human, native, gesture, rest| {
+            store.interaction_companion_hint(
+                entry,
+                human,
+                local,
+                native,
+                "entry-physical",
+                gesture,
+                rest,
+                None,
+                &closed,
+            )
+        };
+        assert!(register(200, "entry-native", "wave", "calm").is_err());
+        assert!(register(100, "other-native", "wave", "calm").is_err());
+        assert!(register(100, "entry-native", "run-command", "calm").is_err());
+        assert!(register(100, "entry-native", "wave", "<script>").is_err());
+        assert!(register(100, "entry-native", "nod", "delighted").unwrap());
+        assert!(!register(100, "entry-native", "nod", "delighted").unwrap());
+        assert!(register(100, "entry-native", "wave", "calm").is_err());
+        store
+            .record_native_message(
+                local,
+                "entry-native",
+                "entry-physical",
+                "reply",
+                Some("final_answer"),
+                "Visible reply",
+            )
+            .unwrap();
+        let page = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap();
+        let source = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["kind"] == "integrator_answer")
+            .unwrap();
+        assert_eq!(
+            source["companion_hint"],
+            json!({"gesture":"nod","rest":"delighted"})
+        );
+        assert_eq!(source["preview"], "Visible reply");
+        let revision = source["revision"].clone();
+        assert!(
+            register(100, "entry-native", "nod", "delighted").is_err(),
+            "a final source cannot acquire/rewrite metadata"
+        );
+        let again = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap();
+        assert_eq!(
+            again["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["kind"] == "integrator_answer")
+                .unwrap()["revision"],
+            revision
+        );
+        closed.cancel();
+        assert!(register(100, "entry-native", "nod", "delighted").is_err());
+    }
+
+    #[test]
+    fn live_activity_respects_current_ownership_binding_and_attempt_instance() {
+        let (_file, store, entry, target, _, _) = setup();
+        let key = SessionKey::new(100, Some(7));
+        let targets = vec![
+            (key, "Alpha".into()),
+            (SessionKey::new(100, Some(88)), "Missing".into()),
+        ];
+        store.set_session_busy(key, true).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            for (id, native, instance) in [
+                ("current", "worker-native", store.instance_id.as_str()),
+                ("old-native", "previous-native", store.instance_id.as_str()),
+                ("old-process", "worker-native", "previous-process"),
+            ] {
+                conn.execute("INSERT INTO interaction_observer_attempts VALUES(?1,?2,100,?3,?1,'policy',0,'{}','now','summarizing',?4)",
+                    params![id,target.id,native,instance]).unwrap();
+            }
+        }
+        let activity = store.interaction_activity(100, entry, &targets).unwrap();
+        assert_eq!(activity["sources"][0]["busy"], true);
+        assert_eq!(activity["sources"][0]["observer_synthesizing"], 1);
+        assert_eq!(activity["sources"][1]["known"], false);
+        store
+            .set_session_codex_thread(key, "replacement-native")
+            .unwrap();
+        assert_eq!(
+            store.interaction_activity(100, entry, &targets).unwrap()["sources"][0]["observer_synthesizing"],
+            0
+        );
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET creator_user_id=200 WHERE id=?",
+                [target.id],
+            )
+            .unwrap();
+        let denied = store.interaction_activity(100, entry, &targets).unwrap();
+        assert_eq!(denied["sources"][0], json!({"label":"Alpha","known":false}));
+        assert!(store.interaction_activity(200, entry, &targets).is_err());
+    }
 
     fn setup() -> (
         tempfile::NamedTempFile,

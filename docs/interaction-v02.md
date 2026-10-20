@@ -172,3 +172,89 @@ Milestone: [v0.2](https://github.com/AlterMundi/telecodex/milestone/8).
   withdrawal, projections/lifecycle and artifact delivery remain in progress or
   pending in their owning issues. The finished-version real-session campaign
   has not started.
+
+### Conversation shell development checkpoint — 2026-10-20
+
+The standalone client now groups observation controls and routing/history panes
+under one initially collapsed **Under the hood** panel. Live requests remain in
+the main interaction area. The shell uses explicit grid rows for history, text,
+voice, playback and diagnostics, preserving the existing DOM/API contracts and
+Homemaker roles. The existing foreground refresh timer uses two seconds in
+conversation mode and ten seconds for the session dashboard; this adds no poller.
+
+Development evidence: existing conversation/request/microphone/dashboard UI
+checks pass. Actual Chromium with synthetic native messages was visually checked
+at 1100×850 and 390×844; the diagnostic panel opens, retains refresh/monitor
+controls, and a 390×460 viewport remains scrollable without horizontal overflow.
+These checks are not a real-session campaign, actual Android keyboard test or
+receiving adoption. Companion gestures, truthful phase indicators and the rest of
+#213 remain unfinished; the issue stays in progress.
+
+### UI controls and profiles checkpoint — 2026-10-20
+
+Draft #220 now implements the original portrait, finite local gestures, concurrent
+receiver/local indicators, and optional immutable native-turn-bound cosmetic
+choices through the existing stable controller (including warm fallback). Simple
+and explorer presentation profiles are selected by receiving configuration or
+operator enrollment; they only choose the initial read-only diagnostic-panel
+state and do not grant owner controls or approvals. Existing credentials retain
+their identity/audience, and manual inspection survives ordinary refresh.
+
+Companion/conversation tests and 27 HTTP grant/capture/profile tests pass locally.
+CI at `8fed690` passed formatting, Clippy, unit tests and release build; its process
+journeys and the subsequent profile change require final-head qualification.
+The process fixture now covers existing integrator/worker hint registration,
+immutable repeat, invalid/changed choices and retained returned-source metadata.
+This is implementation/development progress, not receiving deployment or the
+finished-version Q/V campaign. #213 remains open for integration and acceptance.
+
+### Per-being representation scope — 2026-10-20
+
+Human steering expands #213 from one portrait to a selected per-being visual
+vocabulary, with independent defaults/rendering for terminal, Telegram and the
+animated app. The shared `ascii-expression` skill supplies guidance, a bounded
+portable renderer and an explicitly selected abstract Source example. A daimon
+need not resemble a human, share Source's appearance or use fixed mood names.
+
+The existing seven-pose implementation remains provisional. #213 must integrate
+a receiver-selected pack before final acceptance, retaining native source
+fences, ordinary evidence labels and finite local playback. Extend its component
+checks and the finished-version campaign to cover two different vocabularies,
+client defaults, narrow layout fallback, unknown expression, delayed/repeated
+source, reduced motion and unavailable activity without false operational claims.
+HIT may inform an evolving vocabulary; there is no universal mapping of
+consonance/dissonance to emotions. Shared-skill delivery and product integration
+are separate evidence.
+
+### Expression pack implementation checkpoint — 2026-10-20
+
+The optional receiver-selected `interaction.expression_pack` is now implemented
+in draft #220: bounded inert vocabulary, per-client defaults, advertised exact
+pack/revision/content fingerprint, immutable native-turn choices and matched web
+rendering. This replaces hardwired expression names when a pack is selected while
+preserving existing turn/source fences. The app fits complete compositions and
+plays finite local sequences; no universal face/mood ontology is imposed.
+
+Shared skill publication merged as AlterMundi/Skills#102; selective local
+installation and the Hermes/Codex surface check passed. New web component checks
+pass with two vocabularies, stale selection, reduced motion and narrow fallback.
+Server validation and legacy/custom warm process journeys still require final
+head CI. Full browser, real-session campaign and receiving adoption remain
+outstanding; this checkpoint does not complete #213 or the stage.
+
+### Sonic expression direction — 2026-10-20
+
+Human steering adds opt-in Beacon-derived humming/purring/rhythm and a chord of
+current session voices, tracked in #221 (milestone 8 / Project 14). Initial
+authored associations are 1:11 for blockage and 1:7 for waiting on a reply; they
+are vocabulary proposals, not universal acoustic or emotional facts. Consult
+maintained Beacon/HIT and the research corpus before selecting synthesis.
+
+Reuse actual state observations and per-being vocabulary/event provenance. Keep
+unknown/stale states distinct, aggregate membership visible and silence/volume
+under human control. The sound layer must cooperate with owned speech playback,
+local browser audio activation and suspension. No new inference loop, capture,
+background attention or unsolicited hardware playback is authorized. Qualify
+mapping, finite transitions, concurrent membership and real mute/stop behavior
+device-free before opt-in browser/listening acceptance. See #221 for scope and
+dependencies; the sound renderer is not implemented yet.
