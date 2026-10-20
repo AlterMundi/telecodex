@@ -11,6 +11,7 @@
     <script src="assets/microphone.js" defer></script>
     <script src="assets/visual.js" defer></script>
     <script src="assets/routing_graph.js" defer></script>
+    <script src="assets/companion.js" defer></script>
     <script src="assets/conversation.js" defer></script>
     <script src="assets/app.js" defer></script>
   </head>
@@ -38,6 +39,10 @@
         </button></div>
       </div>
       <section id="conversation" hidden aria-label="Integrating conversation">
+        <section id="conversation-companion" hidden aria-label="Conversation companion">
+          <pre aria-hidden="true"></pre>
+          <div><p class="companion-caption"></p><div class="companion-phases" role="status" aria-live="polite" aria-label="Observed activity"></div></div>
+        </section>
         <div class="conversation-tools" id="conversation-observation"><button id="conversation-back" type="button">← Sessions</button><button id="conversation-refresh" type="button">Refresh replies</button>
         <p id="conversation-state" role="status" aria-live="polite">Connecting to your conversation…</p></div>
         <section id="conversation-requests" hidden aria-labelledby="conversation-requests-title">

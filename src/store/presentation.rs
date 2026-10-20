@@ -40,6 +40,50 @@ pub(super) fn entry_binding(
 }
 
 impl Store {
+    /// Current receiver bookkeeping, not a claim of native/model completion.
+    /// Only configured, still-owned sources are included; no native I/O occurs.
+    pub fn interaction_activity(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        targets: &[(SessionKey, String)],
+    ) -> Result<Value> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (entry_id, _) = entry_on(&conn, human, entry)?;
+        let entry_busy: bool =
+            conn.query_row("SELECT busy FROM sessions WHERE id=?", [entry_id], |r| {
+                r.get(0)
+            })?;
+        let mut sources = Vec::new();
+        for (key, label) in targets.iter().take(64) {
+            let selected: Option<(i64, bool, Option<String>)> = conn
+                .query_row(
+                    "SELECT s.id,s.busy,s.codex_thread_id FROM sessions s
+                 JOIN users u ON u.tg_user_id=s.creator_user_id
+                 WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3
+                 AND u.allowed=1 AND s.force_fresh_thread=0",
+                    params![key.chat_id, key.thread_id, human],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            let Some((id, busy, native)) = selected else {
+                sources.push(json!({"label":label,"known":false}));
+                continue;
+            };
+            let synthesizing: i64 = conn.query_row(
+                "SELECT count(*) FROM interaction_observer_attempts
+                 WHERE session_id=?1 AND human_id=?2 AND native_thread=?3
+                 AND instance_id=?4 AND phase='summarizing'",
+                params![id, human, native, self.instance_id],
+                |r| r.get(0),
+            )?;
+            sources.push(json!({"label":label,"known":native.is_some(),
+                "busy":busy,"observer_synthesizing":synthesizing}));
+        }
+        Ok(json!({"schema":"telecodex.interaction-activity/v1",
+            "observed_at":Utc::now().to_rfc3339(),"integrator_busy":entry_busy,
+            "scope":"enrolled_sessions","sources":sources,"truncated":targets.len()>64}))
+    }
     /// Bounded incremental metadata. This never marks a result delivered/heard.
     pub fn interaction_presentation_list(
         &self,
@@ -316,6 +360,51 @@ pub(super) fn source_on(
 mod tests {
     use super::*;
     use crate::interaction::{RequestRelation, ReturnRoute, SourceInput, TransportPhase};
+
+    #[test]
+    fn live_activity_respects_current_ownership_binding_and_attempt_instance() {
+        let (_file, store, entry, target, _, _) = setup();
+        let key = SessionKey::new(100, Some(7));
+        let targets = vec![
+            (key, "Alpha".into()),
+            (SessionKey::new(100, Some(88)), "Missing".into()),
+        ];
+        store.set_session_busy(key, true).unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            for (id, native, instance) in [
+                ("current", "worker-native", store.instance_id.as_str()),
+                ("old-native", "previous-native", store.instance_id.as_str()),
+                ("old-process", "worker-native", "previous-process"),
+            ] {
+                conn.execute("INSERT INTO interaction_observer_attempts VALUES(?1,?2,100,?3,?1,'policy',0,'{}','now','summarizing',?4)",
+                    params![id,target.id,native,instance]).unwrap();
+            }
+        }
+        let activity = store.interaction_activity(100, entry, &targets).unwrap();
+        assert_eq!(activity["sources"][0]["busy"], true);
+        assert_eq!(activity["sources"][0]["observer_synthesizing"], 1);
+        assert_eq!(activity["sources"][1]["known"], false);
+        store
+            .set_session_codex_thread(key, "replacement-native")
+            .unwrap();
+        assert_eq!(
+            store.interaction_activity(100, entry, &targets).unwrap()["sources"][0]["observer_synthesizing"],
+            0
+        );
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET creator_user_id=200 WHERE id=?",
+                [target.id],
+            )
+            .unwrap();
+        let denied = store.interaction_activity(100, entry, &targets).unwrap();
+        assert_eq!(denied["sources"][0], json!({"label":"Alpha","known":false}));
+        assert!(store.interaction_activity(200, entry, &targets).is_err());
+    }
 
     fn setup() -> (
         tempfile::NamedTempFile,

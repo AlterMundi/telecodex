@@ -60,6 +60,22 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
             "Expected presentation list|before DELIVERY_CURSOR NATIVE_CURSOR or part SOURCE REVISION OFFSET"
         ),
     }?;
+    if result["schema"] == "telecodex.presentation-list/v1" {
+        let targets = cfg
+            .targets
+            .iter()
+            .map(|target| {
+                (
+                    SessionKey::new(cfg.chat_id, Some(target.topic_id)),
+                    target.name.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        result["activity"] = app
+            .shared
+            .store
+            .interaction_activity(human, cfg.entry(), &targets)?;
+    }
     if let Some(items) = result["items"].as_array_mut() {
         for item in items {
             source_label(&app.shared, item)?;

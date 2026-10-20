@@ -14,7 +14,7 @@ window.VoiceInput = (() => {
       button.setAttribute('aria-pressed',String(phase==='recording'));
       discard.hidden=!['permission','recording','ready','finalizing'].includes(phase);
       check.hidden=!pending; check.disabled=uploading;
-      onActivity(uploading || ['permission','recording','ready','finalizing'].includes(phase) || latestSaved?.phase==='preparing');
+      onActivity(uploading || ['permission','recording','ready','finalizing'].includes(phase) || latestSaved?.phase==='preparing', {phase,uploading,transcribing:latestSaved?.phase==='preparing'});
     }
     function stopTracks() {if(stream)for(const track of stream.getTracks())track.stop();stream=undefined;clearTimeout(timer);}
     function cancelRecording(message='Recording discarded. Nothing was sent.') {
