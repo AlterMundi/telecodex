@@ -223,8 +223,12 @@ pub(super) fn tool_call(
                 if request.tool=="interaction_creation_resume" {
                     return super::creation::resume(&app,key,human,&request.thread_id,reference,&closed).await;
                 }
-                let operation=shared.store.interaction_creation_for_input(key,human,reference)?;
-                return Ok(operation);
+                // A missing intent is useful evidence, but only for an original
+                // owned by this current entry binding. Store/read failures stay errors.
+                let operation=shared.store.interaction_find_creation_for_input(key,human,reference.clone())?;
+                if let Some(operation)=operation {return Ok(operation);}
+                shared.store.interaction_entry_original(key,human,&request.thread_id,&reference,&format!("telegram:{}",shared.bot_id))?;
+                return Ok(json!({"kind":"creation_status","phase":"not_found","input_ref":reference,"meaning":"No retained creation intent exists for this original in the current entry. This is a read-only observation, not permission to create or proof against a concurrent creation; the normal creation operation still enforces original identity and uniqueness."}));
             }
             if request.tool!="interaction_dispatch" {bail!("Unknown integrating tool");}
             let args:DispatchArgs=serde_json::from_value(request.arguments)?;

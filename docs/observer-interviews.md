@@ -40,7 +40,12 @@ receives an interview role and attributed evidence, not an assertion that it
 performed the source work. Source changes after the cut do not silently update
 the package. Ask for a newly selected context when those changes matter.
 
-`creation_status` inspects the retained interview intent. `creation_resume`
+`creation_status` inspects the retained interview intent. For an owned original
+in the current entry binding with no retained intent, it returns `phase: not_found`.
+Unknown/foreign originals and storage failures remain errors, not absence. This
+read-only observation is not permission to create and cannot rule out a concurrent
+creation; the existing creation transaction still owns uniqueness and authorization.
+`creation_resume`
 continues only an existing known-unsent intent or confirmed topic through the
 same non-replaying recovery rules. An uncertain external outcome is not a reason
 to create another topic. Returned interview answers preserve their own request
