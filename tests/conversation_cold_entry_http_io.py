@@ -207,6 +207,8 @@ def known_unsent_recovery(binary):
         with sqlite3.connect(j.root/'state.sqlite') as db:
             db.execute("DELETE FROM bot_state WHERE key='native_writer_hold:100:7'")
         saved=b.status(original);recovery=saved['recoveries'][0];instruction=recovery['instruction']
+        listed=next(v for v in b.get('/api/interaction/inputs')['items']if v['id']==original)
+        assert listed['recoveries']==saved['recoveries'] and listed['binding']==saved['binding'],'Ordinary list refresh must expose the same recovery action as explicit status'
         assert recovery['label']=='Alpha' and instruction==j.instructions(7)[0][0]
         body={'binding':saved['binding'],'instruction':instruction};url='/api/interaction/inputs/'+original+'/retry'
         b.client.cookies.clear()  # Keep explicit owner/device headers; truly omit cookie authentication here.
