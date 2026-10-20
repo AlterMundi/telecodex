@@ -307,7 +307,9 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         except (ProviderUnavailable, OSError, ValueError):
             raise HTTPException(503, 'Integrating conversation unavailable; refresh before continuing') from None
         authorize(request)
-        return {**result, 'csrf':session['csrf'], 'can_listen':speech is not None,
+        return {**result, 'csrf':session['csrf'],
+                'presentation_profile':dict(session).get('presentation_profile', companions.default_profile),
+                'can_listen':speech is not None,
                 'can_speak':bool(getattr(provider, 'receiver', {}).get('voice'))}
 
     @app.get('/api/interaction/inputs')

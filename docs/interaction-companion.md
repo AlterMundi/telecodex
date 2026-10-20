@@ -193,3 +193,25 @@ The standalone client adds a decorative ASCII portrait and evidence-based activi
 indicators. See [the avatar contract](interaction-avatar.md) for source attribution,
 freshness, finite motion, optional hint limits and qualification. This presentation
 adds no enrollment, device grant, native owner or capture authority.
+
+## Presentation profiles
+
+Set `companion.presentation_profile = "simple"` (default) or `"explorer"` in the
+receiving dashboard configuration. Enrollment may select the device's initial
+presentation with `enroll ... --profile explorer`; credentials themselves do not
+supply authority for this setting. Existing grants without the field use the
+configured default without rewriting credentials or changing their audience.
+
+The receiver returns this setting as `presentation_profile` on the conversation
+response. Simple starts its bottom diagnostic panel collapsed; explorer starts
+it open. Both may open/close the same read-only evidence. Refresh preserves the
+person's panel choice until the selected profile or credential/binding changes.
+The portrait, readable text/voice interaction and live questions stay in the main
+area in both modes. Forged query parameters or client-file preferences cannot
+change the receiving profile or expand its grant.
+
+A profile is presentation, not a child account or a permission tier. Device
+credentials continue to deny Sessions administration, direct native-request
+decisions and approvals; read-only monitors still reject all writes. Owner
+control remains separately authorized. Actual child enrollment/sandbox policy
+and native mobile/badge clients remain later work.

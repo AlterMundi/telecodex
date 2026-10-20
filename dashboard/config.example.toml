@@ -52,3 +52,5 @@ Development = "/your-development-mount"
 # [companion]
 # enabled = true
 # grants_dir = "/private/receiving/companion-grants"
+
+# presentation_profile = "simple" # simple or explorer; appearance only, never permissions

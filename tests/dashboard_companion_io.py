@@ -87,6 +87,23 @@ class Companion(unittest.TestCase):
         self.assertEqual(self.client.get('/api/interaction',headers=duplicate).status_code,401)
         self.assertEqual(len(self.speech.calls),0)
 
+    def test_profile_is_receiver_selected_presentation_without_permission_expansion(self):
+        response=self.client.get('/api/interaction?presentation_profile=explorer',headers={**self.headers,'x-presentation-profile':'explorer'})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()['presentation_profile'],'simple')
+        selected=self.root/'explorer.json'
+        self.grants.enroll('Explorer',selected,3600,profile='explorer')
+        device=read_json(selected)
+        headers={**self.headers,'authorization':device['authorization'],'x-dashboard-csrf':device['csrf']}
+        self.assertEqual(self.client.get('/api/interaction',headers=headers).json()['presentation_profile'],'explorer')
+        self.assertEqual(self.client.get('/api/state',headers=headers).status_code,403)
+        self.assertEqual(self.client.post('/api/stop',json={},headers=headers).status_code,403)
+        self.assertEqual(self.client.post('/api/interaction/requests/'+('a'*32),json={},headers=headers).status_code,403)
+        before=read_json(self.record)
+        before.pop('presentation_profile',None);write_json(self.record,before)
+        self.assertEqual(self.client.get('/api/interaction',headers=self.headers).json()['presentation_profile'],'simple','old grants retain the configured simple default')
+        with self.assertRaises(ValueError):self.grants.enroll('Invalid',self.root/'invalid-profile.json',3600,profile='owner')
+
     def test_standalone_shell_has_no_telegram_runtime_dependency(self):
         standalone=self.client.get('/?view=conversation&client=standalone')
         self.assertEqual(standalone.status_code,200)

@@ -52,7 +52,7 @@ window.Conversation = (() => {
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
     const sendState = $("#conversation-send-state");
-    let replyFocus, focusVersion = 0, routingChoices = [];
+    let replyFocus, focusVersion = 0, routingChoices = [], presentationProfile;
     let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0, latestComposerId;
     let telegramCursor=0,telegramNewest=0,telegramLoaded=false,telegramReading=false;
     const phaseText = value => value.origin_kind==="telegram" ? `Telegram input retained (${value.phase}). Inspect its routing path for delivery evidence.${value.ordering_unknown?" Historical capture order unavailable.":""}` : value.retired ? "Saved from an earlier conversation binding."
@@ -106,7 +106,7 @@ window.Conversation = (() => {
         routing:[...inputs.values()].some(c=>["requested","queued","submitting","steering"].includes(c.value.routing?.phase))});
     }
     function resetInputs() {
-      companion?.reset();
+      companion?.reset();presentationProfile=undefined;
       disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren(historyTools);
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
@@ -608,6 +608,14 @@ window.Conversation = (() => {
         stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
+      }
+      if(standalone){
+        const profile=value.presentation_profile==="explorer"?"explorer":"simple";
+        if(profile!==presentationProfile){
+          $("#conversation-diagnostics").open=profile==="explorer";
+          document.body.dataset.presentationProfile=profile;
+          presentationProfile=profile;
+        }
       }
       companion?.observe(value.activity);
       binding = value.binding;

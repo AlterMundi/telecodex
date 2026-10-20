@@ -189,3 +189,21 @@ controls, and a 390×460 viewport remains scrollable without horizontal overflow
 These checks are not a real-session campaign, actual Android keyboard test or
 receiving adoption. Companion gestures, truthful phase indicators and the rest of
 #213 remain unfinished; the issue stays in progress.
+
+### UI controls and profiles checkpoint — 2026-10-20
+
+Draft #220 now implements the original portrait, finite local gestures, concurrent
+receiver/local indicators, and optional immutable native-turn-bound cosmetic
+choices through the existing stable controller (including warm fallback). Simple
+and explorer presentation profiles are selected by receiving configuration or
+operator enrollment; they only choose the initial read-only diagnostic-panel
+state and do not grant owner controls or approvals. Existing credentials retain
+their identity/audience, and manual inspection survives ordinary refresh.
+
+Companion/conversation tests and 27 HTTP grant/capture/profile tests pass locally.
+CI at `8fed690` passed formatting, Clippy, unit tests and release build; its process
+journeys and the subsequent profile change require final-head qualification.
+The process fixture now covers existing integrator/worker hint registration,
+immutable repeat, invalid/changed choices and retained returned-source metadata.
+This is implementation/development progress, not receiving deployment or the
+finished-version Q/V campaign. #213 remains open for integration and acceptance.
