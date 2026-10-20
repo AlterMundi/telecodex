@@ -195,6 +195,8 @@ jobs:
       - run: python3 -B tests/request_turn_lifetime_io.py target/release/telecodex
       - run: python3 -B tests/conversation_voice_http_io.py target/release/telecodex
       - run: python3 -B tests/artifacts_io.py target/release/telecodex
+      - run: python3 -B tests/artifact_access_http.py
+      - run: python3 -B tests/artifact_return_io.py target/release/telecodex
       - name: Qualify isolated interaction journeys
         run: |
           python3 - <<'PYTHON'

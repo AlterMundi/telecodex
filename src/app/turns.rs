@@ -948,6 +948,22 @@ pub(super) async fn process_turn(
         let _ = chat_action_task.await;
     }
     drop(presentation_tx);
+    let files_retained = match super::artifact_outputs::retain(
+        shared.clone(),
+        turn_id,
+        queued.request.from_user_id,
+        &turn_workspace,
+    ) {
+        Ok(staged) => staged,
+        Err(_) => {
+            tracing::warn!("Generated file preparation unconfirmed; outputs preserved");
+            shared
+                .config
+                .interaction
+                .as_ref()
+                .is_some_and(|c| c.artifact_store.is_some())
+        }
+    };
     let attached = shared
         .store
         .interaction_turn_inputs(turn_id, queued.request.from_user_id)?;
@@ -997,7 +1013,7 @@ pub(super) async fn process_turn(
             if let Some(id) = return_instruction {
                 super::routing::retained_artifacts(shared.clone(), id, queued.request.from_user_id);
             }
-        } else if !declaration_retained {
+        } else if !declaration_retained && !files_retained {
             let _ = finish_turn_cleanup::<()>(&[], &turn_workspace.root, Ok(()));
         }
         return run_result.map(|_| ());
@@ -1061,7 +1077,8 @@ pub(super) async fn process_turn(
         // Preserve inputs and partial artifacts needed by the explicit continuation.
         return final_result;
     }
-    if shared.store.conversation_turn_return(turn_id)? {
+    if files_retained || shared.store.conversation_turn_return(turn_id)? {
+        cleanup_paths(&queued.request.attachments, &turn_workspace.root, false);
         return final_result;
     }
     finish_turn_cleanup(
@@ -1958,7 +1975,12 @@ fn prepare_turn_workspace(
         .join(format!("{turn_id}-{}", Uuid::now_v7()));
     let out_dir = root.join("out");
     fs::create_dir_all(&out_dir)?;
-    Ok(TurnWorkspace { root, out_dir })
+    let out_anchor = super::artifact_outputs::anchor(&out_dir)?;
+    Ok(TurnWorkspace {
+        root,
+        out_dir,
+        out_anchor,
+    })
 }
 
 pub(super) fn attachment_lines(attachments: &[LocalAttachment]) -> Vec<String> {

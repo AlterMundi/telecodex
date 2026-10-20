@@ -15,7 +15,7 @@ import tomllib
 from urllib.parse import parse_qsl, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response, StreamingResponse
 from init_data_py import errors, validate_by_signature
 
 from .provider import Provider, ProviderUnavailable
@@ -195,7 +195,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 grant = companions.authenticate(device.group(1))
                 if grant is None:
                     raise HTTPException(401, 'Companion access is unavailable; operator enrollment required')
-                if not companion_permitted(request.method, request.url.path, grant['scope']):
+                if not companion_permitted(request.method, request.url.path, grant['scope'], grant.get('artifact_access', False)):
                     raise HTTPException(403, 'Companion access is limited to the integrating conversation')
                 return grant
             # A restricted WebView may omit cookies. Never downgrade an invalid
@@ -306,10 +306,18 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             result = await run_in_threadpool(provider.presentation_list, delivery, native, direction) if matrix is None else await run_in_threadpool(provider.presentation_list, delivery, native, direction, matrix)
         except (ProviderUnavailable, OSError, ValueError):
             raise HTTPException(503, 'Integrating conversation unavailable; refresh before continuing') from None
+        can_files=bool(getattr(provider,'receiver',{}).get('interaction',{}).get('artifact_store')) and (dict(session).get('scope') is None or dict(session).get('scope')=='interaction_only' and dict(session).get('artifact_access') is True)
+        files={}
+        if can_files:
+            try:
+                files=await run_in_threadpool(provider.artifacts)
+            except (ProviderUnavailable,OSError,ValueError):
+                files={'state':'unavailable'}
         authorize(request)
         return {**result, 'csrf':session['csrf'],
                 'presentation_profile':dict(session).get('presentation_profile', companions.default_profile),
                 'can_listen':speech is not None,
+                'can_download_files':can_files,'artifacts':files,
                 'can_speak':bool(getattr(provider, 'receiver', {}).get('voice'))}
 
     @app.get('/api/interaction/inputs')
@@ -473,6 +481,53 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(503, 'Voice capture unconfirmed; check its status before retrying this recording') from None
         authorize(request)
         return result
+
+    @app.get('/api/interaction/artifacts')
+    async def conversation_artifacts(request: Request):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.artifacts)
+        except (ValueError,ProviderUnavailable,OSError):
+            raise HTTPException(409,'Files unavailable; conversation work was not repeated') from None
+        authorize(request)
+        return result
+
+    @app.get('/api/interaction/artifacts/{ident}')
+    async def conversation_artifact_download(request: Request,ident: str):
+        authorize(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            from datetime import datetime
+            from urllib.parse import quote
+            ref,stream=await run_in_threadpool(provider.artifact_open,ident)
+        except (ValueError,ProviderUnavailable,OSError):
+            raise HTTPException(409,'File unavailable, expired or changed; the text reply remains available') from None
+        try:
+            authorize(request)
+            deadline=datetime.fromisoformat(ref['expires_at']).timestamp()
+            if time.time()>=deadline:
+                raise HTTPException(409,'File expired')
+        except BaseException:
+            stream.close()
+            raise
+        def chunks():
+            checked=0
+            try:
+                while True:
+                    if time.time()>=deadline:
+                        raise RuntimeError('Artifact expired during download')
+                    if time.monotonic()-checked>=1:
+                        authorize(request);checked=time.monotonic()
+                    data=stream.read(65536)
+                    if not data:break
+                    yield data
+            finally:
+                stream.close()
+        return StreamingResponse(chunks(),media_type='application/octet-stream',headers={
+            'Content-Disposition':"attachment; filename*=UTF-8''"+quote(ref['name'],safe=''),
+            'Content-Length':str(ref['bytes']),'X-Artifact-Sha256':ref['sha256'],
+            'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'})
 
     @app.get('/api/interaction/goals')
     async def conversation_goals(request: Request, before: int = 0):

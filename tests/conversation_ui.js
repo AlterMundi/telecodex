@@ -33,6 +33,7 @@ function boot(readOnly=false,standalone=false,options={}) {
         const at = this.children.indexOf(before);
         this.children.splice(at < 0 ? this.children.length : at, 0, child);
       },
+      click() {this.clicked=true;},remove() {this.removed=true;},
       before() {}, pause() { this.paused = true; }, play() {this.paused=false;this.ended=false;return Promise.resolve();}, load() {},
     };
   }
@@ -111,7 +112,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", can_listen:true,presentation_profile:presentationProfile,
+    return {binding:"fixture", csrf:"synthetic", can_listen:true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
@@ -119,6 +120,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
     URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
     fetch:(_route, options) => {
+      if(_route.startsWith('api/interaction/artifacts/'))return Promise.resolve(new Response('Actual fixture file',{headers:{'X-Artifact-Sha256':require('node:crypto').createHash('sha256').update('Actual fixture file').digest('hex')}}));
       audioCalls.push(JSON.parse(options.body));
       if(audioFailures){audioFailures--;return Promise.resolve(new Response(JSON.stringify({detail:'Synthetic TTS outage'}),{status:503}));}
       if(renderAudio){
@@ -548,6 +550,24 @@ function boot(readOnly=false,standalone=false,options={}) {
   mixed.telegramOriginals.set('telegram:11',{id:'telegram:11',text:'New Telegram ingress',phase:'completed',sequence:11,capture_order:12,origin_kind:'telegram',read_only:true});
   await mixed.ui.refresh();assert.equal(mixed.nodes.get('#conversation-inputs').children[0].children[0].textContent,'New Telegram ingress');
   assert(mixed.requests.filter(r=>r.telegram||r.trace).every(r=>r.body===undefined),'All observation requests remain GET only');
+  const fileOptions={fileAccess:true},fileClient=boot(false,false,fileOptions);
+  fileClient.overrideSource(8,{artifact_status:'running',artifacts:[]});
+  await fileClient.ui.refresh();
+  const fileCard=fileClient.nodes.get('#conversation-answers').children.find(card=>card.dataset.sequence==='8');
+  assert.match(fileCard.children[5].children[1].textContent,/Preparing files/);
+  const file={id:'12345678-1234-5678-9876-123456789abc',name:'native-output.txt',sha256:require('node:crypto').createHash('sha256').update('Actual fixture file').digest('hex'),bytes:19,available:true};
+  fileClient.overrideSource(8,{artifact_status:'done',artifacts:[file]});await fileClient.ui.refresh();
+  await fileCard.children[5].children[1].children[0].handlers.click();
+  assert.equal(fileCard.children[5].children[1].children[1].textContent,'Download ready');
+  fileClient.overrideSource(8,{artifact_status:'partial',artifacts:[{...file,available:false}]});await fileClient.ui.refresh();
+  assert.match(fileCard.children[5].children[1].textContent,/could not be prepared/);
+  assert.equal(fileCard.children[5].children[2].children[0].disabled,true);
+  fileOptions.fileAccess=false;await fileClient.ui.refresh();assert.equal(fileCard.children[5].hidden,true);
+  fileOptions.fileAccess=true;fileClient.overrideSource(8,{artifact_status:'running',artifacts:[]});
+  fileOptions.artifacts={items:[{...file,native_source:'native:8'}],jobs:[{native_source:'native:8',phase:'done'}]};
+  await fileClient.ui.refresh();
+  assert.equal(fileCard.children[5].children[1].children[0].disabled,false,'Late global file metadata must update an already-seen reply');
+  assert.equal(fileCard.children[5].children[1].children[0].textContent,'↓ native-output.txt');
   const viewer=boot(true);
   viewer.originals.set('view-only',{id:'view-only',text:'#Missing Inspect only',sequence:1,phase:'awaiting_target',binding:'fixture'});
   await viewer.ui.refresh();

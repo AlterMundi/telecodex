@@ -831,3 +831,9 @@ uncertain-outcome behavior with dynamic tools. Inspect retained outcomes rather
 than automatically repeating an unavailable/uncertain operation. An old active
 execution without a receiving collector/access lease still requires supported
 collector attachment; its missing tool is not repaired by replacing history.
+
+## Generated file return
+
+See [retained generated files](retained-artifacts.md) for the explicitly configured
+immutable artifact store, logical audiences, device file entitlement and recovery.
+File preparation runs independently of native conversation progress.

@@ -655,3 +655,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-attention #conversation-requests { max-height: none; }
 .monitor-mode #conversation-attention { display: none !important; }
 #conversation-attention:has(> section:not([hidden])) { min-height: min(120px, 30dvh); }
+.artifact-files{margin-top:.8rem;padding-top:.7rem;border-top:1px solid var(--line,#d4dae1)}
+.artifact-files h4{margin:.15rem 0 .6rem;font-size:.9rem}
+.artifact-file{display:flex;align-items:center;flex-wrap:wrap;gap:.55rem;margin:.4rem 0;min-width:0}
+.artifact-file button{max-width:100%;overflow-wrap:anywhere;text-align:left}

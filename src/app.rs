@@ -18,6 +18,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+mod artifact_outputs;
 mod attention;
 mod auth;
 pub(crate) mod controller;
@@ -323,6 +324,7 @@ struct PendingApproval {
 struct TurnWorkspace {
     root: PathBuf,
     out_dir: PathBuf,
+    out_anchor: Option<Arc<fs::File>>,
 }
 
 impl App {
@@ -389,6 +391,7 @@ impl App {
 
     pub async fn run(self) -> Result<()> {
         topic_publications::recover(self.shared.clone())?;
+        artifact_outputs::recover(self.shared.clone())?;
         tribu::start(self.clone()).await?;
         nexus::start(self.clone()).await?;
         let mut menu = default_bot_commands();
@@ -537,6 +540,11 @@ impl App {
                 }
             } else if topic_publications::recover(self.shared.clone()).is_err() {
                 tracing::warn!("Retained topic publication recovery unconfirmed");
+            }
+            if !self.shared.shutdown.is_cancelled()
+                && artifact_outputs::recover(self.shared.clone()).is_err()
+            {
+                tracing::warn!("Retained file recovery unconfirmed");
             }
         }
     }

@@ -8,6 +8,45 @@ window.Conversation = (() => {
     return value;
   };
   function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false, standalone=false}) {
+    let canFiles=false,filesConnected=true;
+    const files=new Map(),fileDownloads=new Map(),fileStatus=new Map();let fileJobs=[];
+    const fileCredential=()=>JSON.stringify(Object.entries(headers()).filter(([key])=>key.toLowerCase()==="authorization"));
+    function clearFiles(){for(const work of fileDownloads.values())work.abort();fileDownloads.clear();files.clear();fileStatus.clear();fileJobs=[];canFiles=false;}
+    function renderFiles(card){
+      const sameSource=file=>file.native_source===card.source.id || file.result_id && file.result_id===card.source.result_id;
+      const selected=[...new Map((canFiles?[...(card.source.artifacts||[]),...[...files.values()].filter(sameSource)]:[]).map(file=>[file.id,file])).values()].map(file=>({...file,available:!!file.available && (!file.expires_at || Date.parse(file.expires_at)>Date.now())}));
+      const stage=canFiles?(fileJobs.find(sameSource)?.phase || card.source.artifact_status):null,preparing=stage==="pending" || stage==="running";
+      if(!selected.length && !preparing && stage!=="partial"){if(card.files)card.files.hidden=true;return;}
+      if(!card.files){card.files=node("div",undefined,"artifact-files");card.files.setAttribute("role","group");card.files.setAttribute("aria-label","Generated files");card.box.append(card.files);}
+      const version=JSON.stringify([filesConnected,stage,selected,[...fileDownloads.keys()],[...fileStatus]]);
+      if(card.files.dataset.version===version){card.files.hidden=false;return;}
+      card.files.dataset.version=version;card.files.hidden=false;card.files.replaceChildren(node("h4","Files"));
+      if(preparing || stage==="partial"){const status=node("p",preparing?"Preparing files… You can keep chatting.":"Some files could not be prepared.","reply-status");status.setAttribute("role","status");card.files.append(status);}
+      for(const file of selected){
+        const row=node("div",undefined,"artifact-file"),button=node("button",`↓ ${file.name||"File"}`),status=node("span",fileStatus.get(file.id)||(!filesConnected?"Files connection unavailable":file.available?`${Math.ceil((file.bytes||0)/1024)} KB`:"Unavailable or expired"),"reply-status");
+        button.type="button";button.disabled=!filesConnected || !file.available || fileDownloads.has(file.id) || fileDownloads.size>=2;status.setAttribute("role","status");
+        button.addEventListener("click",()=>downloadFile(file));row.append(button,status);card.files.append(row);
+      }
+    }
+    function refreshFiles(){for(const card of cards.values())renderFiles(card);}
+    async function downloadFile(file){
+      if(!canFiles || fileDownloads.has(file.id) || fileDownloads.size>=2 || !file.available)return;
+      if(!/^[a-f0-9-]{36}$/.test(file.id) || !/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isSafeInteger(file.bytes) || file.bytes<0 || file.bytes>256*1024*1024)return;
+      const controller=new AbortController(),credential=fileCredential(),deadline=setTimeout(()=>controller.abort(),120000);
+      fileDownloads.set(file.id,controller);fileStatus.set(file.id,"Downloading…");refreshFiles();
+      try{
+        const response=await fetch(`api/interaction/artifacts/${encodeURIComponent(file.id)}`,{headers:headers(),credentials:"same-origin",signal:controller.signal});
+        if(!response.ok)throw Object.assign(Error("File unavailable or access changed."),{status:response.status});
+        if(response.headers.get("X-Artifact-Sha256")!==file.sha256)throw Error("File changed. Refresh before downloading.");
+        const blob=await response.blob();if(blob.size!==file.bytes)throw Error("Download interrupted. Try the same file again.");
+        const hash=[...new Uint8Array(await crypto.subtle.digest("SHA-256",await blob.arrayBuffer()))].map(value=>value.toString(16).padStart(2,"0")).join("");
+        if(hash!==file.sha256)throw Error("File verification failed. Nothing was saved.");
+        if(controller.signal.aborted || fileDownloads.get(file.id)!==controller || !canFiles || fileCredential()!==credential || files.has(file.id) && files.get(file.id).sha256!==file.sha256)return;
+        const url=URL.createObjectURL(blob),link=node("a");link.href=url;link.download=file.name;link.hidden=true;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
+        fileStatus.set(file.id,"Download ready");
+      }catch(error){if(fileDownloads.get(file.id)===controller && fileCredential()===credential){fileStatus.set(file.id,error.name==="AbortError"?"Download stopped. You can try again.":error.message||"File unavailable.");if(error.status===401)failed(error);}}
+      finally{clearTimeout(deadline);if(fileDownloads.get(file.id)===controller)fileDownloads.delete(file.id);refreshFiles();}
+    }
     let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext;
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
     const speechGaps={chunk:180,reply:450,question:1200};
@@ -535,6 +574,7 @@ window.Conversation = (() => {
     function failed(error) {
       companion?.update({connected:false});
       if (error.status === 401 || error.status === 403) {
+        clearFiles();
         pause();stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
@@ -592,6 +632,8 @@ window.Conversation = (() => {
       if (active?.source.id === source.id && active.source.revision !== source.revision)
         stop("This reply changed. Refresh before listening.");
       card.source = source;
+      for(const file of source.artifacts||[])files.set(file.id,file);
+      renderFiles(card);
       const integrator=source.kind.startsWith("integrator_");
       const progress=source.kind.endsWith("_progress");
       card.title.textContent = integrator ? "Conversation" : source.label;
@@ -624,6 +666,11 @@ window.Conversation = (() => {
       companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
       binding = value.binding;
+      canFiles=!readOnly && value.can_download_files===true;
+      if(!canFiles)clearFiles();
+      else if(value.artifacts?.state==="unavailable")filesConnected=false;
+      else {filesConnected=true;fileJobs=value.artifacts?.jobs||[];files.clear();for(const card of cards.values())for(const file of card.source.artifacts||[])files.set(file.id,file);for(const file of value.artifacts?.items||[])files.set(file.id,file);}
+      refreshFiles();
       await goalControls?.observe(value.goal_controls);
       microphone?.configure(value.can_speak);
       setCsrf(value.csrf);
@@ -844,7 +891,7 @@ window.Conversation = (() => {
       finally { reading = false; $("#conversation-older").disabled = false; }
     });
     document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
-    window.addEventListener("pagehide", () => {pause();stop();});
+    window.addEventListener("pagehide", () => {pause();stop();clearFiles();});
     window.addEventListener("offline", () => {
       companion?.update({connected:false});
       pause(); $("#conversation-state").textContent = "Offline. Replies already loaded remain readable.";
