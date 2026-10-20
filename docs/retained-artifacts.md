@@ -37,7 +37,11 @@ policy.
 
 The source session can access its files. An integrating conversation gains access
 only through instructions actually accepted by that execution and covered by the
-recorded native result. Logical session ownership continues across supported
+recorded native result. A goal collector instead uses its acknowledged native
+execution and the exact original conversation input frozen with its canonical
+final item. A later direct-surface selection does not grant another conversation
+access. Already retained goal files are recovered from that existing proof when
+read; no goal, model work, copying or publication is repeated. Logical session ownership continues across supported
 native renewal; the old physical thread need not remain current. Owner or
 audience changes deny access. Downloads return attachments, never inline active
 content or public links, and verify the immutable size/hash again. The browser
