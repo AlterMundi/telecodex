@@ -531,6 +531,20 @@ class Provider:
             raise ValueError('Invalid native request cursor')
         return self.presentation(f'requests list {after}')
 
+    def goal_controls(self, before=0):
+        if type(before) is not int or not 0 <= before <= 2**63 - 1:
+            raise ValueError('Invalid goal-control cursor')
+        return self.presentation(f'presentation goals list {before}')
+
+    def goal_control_detail(self, ident):
+        import uuid
+        try:
+            if str(uuid.UUID(ident)) != ident:
+                raise ValueError('Invalid goal-control identity')
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError('Invalid goal-control identity') from None
+        return self.presentation(f'presentation goals detail {ident}')
+
     def conversation_request_detail(self, ident, offset=0, revision=None):
         import re
         self.request_id(ident)

@@ -47,7 +47,14 @@ class Receiver:
     input_id = staticmethod(Provider.input_id)
     clarification_source = staticmethod(Provider.clarification_source)
 
+    goal_controls = Provider.goal_controls
+    goal_control_detail = Provider.goal_control_detail
+
     def presentation(self, command):
+        if command=='presentation goals list 0':
+            return {'schema':'telecodex.goal-control-list/v1','items':[],'cursor':0,'more':False}
+        if command=='presentation goals detail 11111111-1111-4111-8111-111111111111':
+            return {'id':'11111111-1111-4111-8111-111111111111','phase':'awaiting_confirmation','can_confirm':True}
         assert command=='input status '+self.pending['id']
         return copy.deepcopy(self.pending)
 

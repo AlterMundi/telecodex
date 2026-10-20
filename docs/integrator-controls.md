@@ -35,6 +35,15 @@ retained before follow-up submission; failure retains a partial outcome and neve
 repeats the mutation. Actual native qualification of this path, receiving adoption
 and the finished real-session campaign remain required by #210.
 
+The conversation surface lists retained controls and shows each proposal’s target,
+action, reason, selected goal, replacement and ordered clause for review. Confirm
+and decline draft an explicit message in the existing composer; only the human’s
+Send creates a new original. An existing draft is preserved. Read-only device and
+monitor grants may inspect these views but gain no goal mutation endpoint. Control
+outcomes distinguish queued, acknowledged, rejected, partial and uncertain; an
+expired selection never hides an already retained partial effect. These are
+receiver observations; the native CAS still checks the definition at execution.
+
 Human-selected initial policy: explicit human instructions to start, pause,
 resume or clear a selected goal execute without asking for the same permission
 again. An assistant-proposed lifecycle change states target/action/reason and

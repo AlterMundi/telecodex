@@ -295,3 +295,85 @@ window.RequestControls = (() => {
   }
   return {mount};
 })();
+
+// Goal decisions remain ordinary human conversation inputs. Reviewing a card
+// only drafts a precisely attributed decision; Send creates the actual original.
+window.GoalControls = (() => {
+  const closed = phase => ["acknowledged","cancelled","superseded","rejected"].includes(phase);
+  const text = (tag,value) => {const el=document.createElement(tag);el.textContent=value;return el;};
+  const status = view => !view.current && !closed(view.phase) && !["uncertain","partial","submitted"].includes(view.phase) ? "This selection changed or expired. Ask for a fresh proposal."
+    : ({awaiting_confirmation:"Your choice is needed.",prepared:"Authorized; not submitted yet.",claimed:"Waiting for the selected session.",submitted:"Applying your instruction; confirmation pending.",
+      acknowledged:"Instruction acknowledged. Work and reply may continue.",cancelled:"Proposal cancelled.",superseded:"Replaced by a later instruction.",rejected:"Not applied; review the current goal.",
+      known_unsent:"Saved; not sent.",retained_unsent:"Saved; not sent after restart.",uncertain:"Outcome unconfirmed. Nothing will be repeated.",partial:"Part of this instruction applied. Check the retained outcome before continuing."})[view.phase] || "Control outcome unavailable.";
+  function mount({api,getBinding,onChoose,readOnly=false}) {
+    const section=document.querySelector("#conversation-goals"),list=document.querySelector("#conversation-goal-cards"),more=document.querySelector("#conversation-goals-more");
+    const message=document.querySelector("#conversation-goal-state");
+    const cards=new Map();let generation=0,cursor=0,reading=false,probe=0;
+    const owns=(card,owned)=>generation===owned && cards.get(card.id)===card;
+    function reset(){generation++;cards.clear();list.replaceChildren();section.hidden=true;cursor=0;reading=false;more.hidden=true;message.textContent="";}
+    function render(card,view){
+      card.view=view;card.title.textContent=`${({start:"Start",resume:"Resume",pause:"Pause",clear:"Clear",edit:"Edit",replace:"Replace"})[view.action]||"Review"} · ${view.label}`;
+      card.state.textContent=status(view);card.dismiss.hidden=!closed(view.phase);
+      card.confirm.disabled=card.cancel.disabled=readOnly || !view.can_confirm || !card.reviewed;
+      if(readOnly || !view.can_confirm){card.confirm.hidden=card.cancel.hidden=true;}
+      else {card.confirm.hidden=card.cancel.hidden=false;}
+    }
+    function choose(card,accept){
+      const v=card.view;if(readOnly || !v.can_confirm || !card.reviewed)return;
+      let message=accept?`Confirm goal proposal ${v.id}: ${v.action} ${v.label}.`:`Cancel goal proposal ${v.id} for ${v.label}.`;
+      if(accept && v.plan.objective)message+=` Objective: ${v.plan.objective}`;
+      if(accept && v.plan.token_budget)message+=` Token budget: ${v.plan.token_budget}.`;
+      if(accept && v.plan.followup)message+=` Then ${v.plan.followup}`;
+      card.note.textContent=onChoose(message)?"Review your message, then Send. Nothing changed yet.":"Keep or clear your current draft before choosing here.";
+    }
+    function create(view){
+      const box=text("article","");box.className="reply request-card";
+      const title=text("h3",""),state=text("p",""),read=text("button","Review proposal and outcome");read.type="button";
+      state.setAttribute("role","status");
+      const body=text("div","");body.className="reply-text";body.hidden=true;
+      const confirm=text("button","Confirm in conversation"),cancel=text("button","Decline in conversation"),dismiss=text("button","Dismiss");
+      const note=text("p","");note.setAttribute("role","status");const actions=text("div","");actions.className="reply-actions";
+      for(const b of [confirm,cancel,dismiss])b.type="button";
+      actions.append(confirm,cancel,dismiss);box.append(title,state,read,body,actions,note);list.append(box);
+      const card={id:view.id,box,title,state,read,body,confirm,cancel,dismiss,note,reviewed:false,version:0};cards.set(view.id,card);
+      read.addEventListener("click",()=>detail(card,true));confirm.addEventListener("click",()=>choose(card,true));cancel.addEventListener("click",()=>choose(card,false));
+      dismiss.addEventListener("click",()=>{if(!closed(card.view.phase))return;cards.delete(card.id);box.remove();section.hidden=!cards.size && more.hidden;});
+      render(card,view);return card;
+    }
+    async function detail(card,review=false){
+      const owned=generation,version=++card.version;card.read.disabled=true;
+      try {
+        const v=await api(`interaction/goals/${encodeURIComponent(card.id)}`);
+        if(!owns(card,owned)||version!==card.version)return;
+        if(v.binding!==getBinding() || v.id!==card.id)throw new Error("Conversation changed; refresh this proposal.");
+        if(review){
+          card.body.replaceChildren(text("p",v.reason||""),text("p",`Action: ${v.action} · ${v.label}`));
+          if(v.plan.expected.goal)card.body.append(text("p",`Selected goal: ${v.plan.expected.goal.objective}`));
+          if(v.plan.objective)card.body.append(text("p",`New objective: ${v.plan.objective}`));
+          if(v.plan.token_budget)card.body.append(text("p",`Token budget: ${v.plan.token_budget}`));
+          if(v.plan.followup)card.body.append(text("p",`Then: ${v.plan.followup}`));
+          if(v.result)card.body.append(text("p",v.result.followup_outcome?`Follow-up: ${v.result.followup_outcome}. ${v.result.error||""}`:v.result.error||v.result.meaning||"Outcome retained."));
+          card.body.hidden=false;card.reviewed=true;
+        }
+        render(card,{...card.view,...v});
+      }catch(e){if(owns(card,owned)){card.reviewed=false;card.confirm.disabled=card.cancel.disabled=true;card.note.textContent="Current proposal unavailable. Nothing changed; refresh before choosing.";}}
+      finally{if(owns(card,owned))card.read.disabled=false;}
+    }
+    async function observe(page){
+      if(!page || page.binding!==getBinding())return;
+      message.textContent="";
+      const seen=new Set();
+      for(const v of page.items){seen.add(v.id);const card=cards.get(v.id)||create(v);render(card,{...card.view,...v});}
+      cursor=cursor?Math.min(cursor,page.cursor||cursor):page.cursor;more.hidden=!page.more;section.hidden=!cards.size && more.hidden;
+      const absent=[...cards.values()].filter(c=>!seen.has(c.id)&&!closed(c.view.phase));
+      const selected=absent.length?Array.from({length:Math.min(8,absent.length)},(_,n)=>absent[(probe+n)%absent.length]):[];probe+=selected.length;
+      await Promise.all(selected.map(c=>detail(c)));
+    }
+    more.addEventListener("click",async()=>{if(reading)return;reading=true;more.disabled=true;const owned=generation;
+      try{const page=await api(`interaction/goals?before=${cursor}`);if(owned===generation)await observe(page);}
+      catch(_){if(owned===generation)message.textContent="Older controls unavailable. Nothing changed; refresh to reconnect.";}
+      finally{if(owned===generation){reading=false;more.disabled=false;}}});
+    return {observe,reset};
+  }
+  return {mount};
+})();

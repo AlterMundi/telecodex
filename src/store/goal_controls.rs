@@ -108,6 +108,20 @@ fn read_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Result
         "result":result.map(|s|serde_json::from_str::<Value>(&s)).transpose()?}),
     )
 }
+fn control_view_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Result<Value> {
+    let value = read_on(conn, human, entry, id)?;
+    let doc = &value["intent"];
+    let (session, native) = super::presentation::entry_on(conn, human, entry)?;
+    let current = eligible_on(conn, human, entry, &value).is_ok();
+    let target: SessionKey = serde_json::from_value(doc["target"].clone())?;
+    let label:Option<String>=conn.query_row("SELECT session_title FROM sessions WHERE chat_id=?1 AND thread_id=?2 AND creator_user_id=?3",params![target.chat_id,target.thread_id,human],|r|r.get(0)).optional()?.flatten();
+    Ok(json!({"schema":"telecodex.goal-control-view/v1","id":id,
+        "binding":super::presentation::entry_binding(conn,human,entry,session)?,"entry_binding":[human,entry,session,native],
+        "phase":value["phase"],"current":current,"can_confirm":current && value["phase"]=="awaiting_confirmation",
+        "label":label.unwrap_or_else(||format!("Topic {}",target.thread_id)),"action":doc["plan"]["action"],
+        "proposal":doc["proposal"],"plan":doc["plan"],"reason":doc["reason"],"result":value["result"]}))
+}
+
 fn command_generation_on(conn: &Connection, target: SessionKey) -> Result<Option<String>> {
     conn.query_row(
         "SELECT value FROM bot_state WHERE key=?",
@@ -224,6 +238,42 @@ impl Store {
             human,
             entry,
             id,
+        )
+    }
+    /// Human-readable views of this entry's retained controls, without native I/O
+    /// or new decision authority. Actual execution still checks native revision.
+    pub fn goal_control_view(&self, human: i64, entry: SessionKey, id: &str) -> Result<Value> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        control_view_on(&conn, human, entry, id)
+    }
+    pub fn goal_control_views(&self, human: i64, entry: SessionKey, before: i64) -> Result<Value> {
+        if before < 0 {
+            bail!("Invalid goal-control cursor");
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
+        let mut query=conn.prepare("SELECT rowid,id FROM interaction_goal_controls WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND phase NOT IN ('acknowledged','cancelled','superseded','rejected') AND (?4=0 OR rowid<?4) ORDER BY rowid DESC LIMIT 33")?;
+        let rows = query
+            .query_map(
+                params![human, entry.chat_id, entry.thread_id, before],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let items = rows
+            .iter()
+            .take(32)
+            .map(|(_, id)| {
+                let mut view = control_view_on(&conn, human, entry, id)?;
+                // Full objective/reason/follow-up are fetched only when reviewed.
+                view.as_object_mut().expect("control view").remove("plan");
+                view.as_object_mut().expect("control view").remove("reason");
+                view.as_object_mut().expect("control view").remove("result");
+                Ok(view)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(
+            json!({"schema":"telecodex.goal-control-list/v1","binding":super::presentation::entry_binding(&conn,human,entry,session)?,
+            "entry_binding":[human,entry,session,native],"items":items,"more":rows.len()>32,"cursor":rows.iter().take(32).next_back().map(|r|r.0).unwrap_or(before)}),
         )
     }
     /// A missing original is an assistant proposal, never an implicit human command.

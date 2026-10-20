@@ -124,6 +124,12 @@ Persisted tool registration must not restrict acceptance to fresh test threads.
 | V07 | Inspect companion with parallel activity; select two unrelated per-being vocabularies and client defaults; reuse pack labels with changed bytes; inject missing/invalid/stale hint; test reduced motion, hidden screen and narrow keyboard layout | Exact receiver-selected catalog digest and actual response/turn bind cosmetic hints; whole composition fits or uses its description. One finite local sequence, no duplicate/old-source replay; readable operational states independent of artistic meaning and no animation inference loop. Q17/Q18 |
 | V08 | Download artifact; fail one of several files; expire/revoke grant; renew logical session; lose Telegram delivery acknowledgment | Actual retained bytes/hash/audience and original output provenance, useful partial/unavailable state, no old-current-binding requirement after supported renewal and no duplicate execution. Q21 |
 
+For V02, review a proposal in the main conversation surface, preserve an existing
+composer draft, then confirm or decline through an actual submitted human message.
+Review alone must not execute or create an original. Inspect retained partial and
+unknown outcomes after expiry; read-only clients may inspect but cannot mutate.
+Check narrow/keyboard-height layouts with a live decision and the composer.
+
 For V02/V03, include an idle worker and a busy existing collector. Verify the
 current invocation context and selected human follow-up on the first useful
 model step after control admission, not only in the client payload. Distinguish queued/claimed control

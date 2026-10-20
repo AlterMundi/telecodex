@@ -58,7 +58,7 @@ function boot(count=1, mayDecide=true) {
   let ui;ui=context.window.RequestControls.mount({api,getBinding:()=>binding,setCsrf(){},unauthorized(){ui.reset();},onReply:(reference,label)=>replies.push({reference:clone(reference),label}),onListen:source=>listens.push(clone(source)),getCanListen:()=>canListen,getCanDecide:()=>mayDecide});
   const all=(el,predicate)=>[...(predicate(el)?[el]:[]),...el.children.flatMap(child=>all(child,predicate))];
   const button=(card,text)=>all(card,el=>el.tag==='button'&&el.textContent===text)[0];
-  return {ui,nodes,sources,receipts,calls,replies,listens,button,all,speech(value){canListen=value;},
+  return {ui,nodes,sources,receipts,calls,replies,listens,button,all,goals:args=>context.window.GoalControls.mount({getBinding:()=>binding,...args}),speech(value){canListen=value;},
     cards:()=>nodes.get('#conversation-request-cards').children,
     mode:value=>{mode=value;},bind(value){binding=value;for(const source of sources.values())source.binding=value;},
     holdList(){return heldList=deferred();},holdDetail(){return heldDetail=deferred();},holdPost(){return heldPost=deferred();},
@@ -153,5 +153,35 @@ function boot(count=1, mayDecide=true) {
   held.release();await stale;assert.equal(race.cards().length,1,'Late old-scope reads cannot repopulate reset controls');
   const rc=race.cards()[0];const late=race.holdDetail();const reading=race.button(rc,'Read request').handlers.click();await late.entered;
   race.ui.reset();late.release();await reading;assert.equal(race.cards().length,0);
+  {
+  const goals=boot(0), decisions=[], goalCalls=[];
+  const proposal={schema:"telecodex.goal-control-view/v1",id:"11111111-1111-4111-8111-111111111111",binding:"bound",phase:"awaiting_confirmation",current:true,can_confirm:true,
+    action:"pause",label:"#Field",reason:"Wait for the new material.",plan:{expected:{goal:{objective:"Retained work"}},followup:"Ask about the new material."}};
+  const views=new Map([[proposal.id,clone(proposal)]]);let delayed,offline=false;
+  const gu=goals.goals({api:async(route,body)=>{goalCalls.push({route,body});assert.equal(body,undefined,"Review cannot mutate or author human speech");
+    const v=clone(views.get(route.split('/').at(-1)));if(delayed){const d=delayed;delayed=undefined;d.enter();await d.promise;}if(offline)throw Error("Offline");return v;},
+    onChoose:message=>{decisions.push(message);return true;}});
+  await gu.observe({binding:"bound",items:[proposal],cursor:1,more:false});
+  let gc=goals.nodes.get('#conversation-goal-cards').children[0];
+  assert(goals.button(gc,'Confirm in conversation').disabled);
+  await goals.button(gc,'Review proposal and outcome').handlers.click();
+  goals.button(gc,'Confirm in conversation').handlers.click();
+  assert(decisions[0].includes(proposal.id)&&decisions[0].includes(proposal.plan.followup));
+  goals.button(gc,'Decline in conversation').handlers.click();assert(!decisions[1].includes(proposal.plan.followup));
+  assert.equal(goalCalls.length,1,'Choosing only prepares the composer; no POST, goal mutation or synthetic input');
+  views.get(proposal.id).phase='cancelled';views.get(proposal.id).can_confirm=false;
+  await gu.observe({binding:"bound",items:[],cursor:0,more:false});
+  assert(!goals.button(gc,'Dismiss').hidden && goals.button(gc,'Confirm in conversation').disabled);
+  gu.reset();await gu.observe({binding:"bound",items:[proposal],cursor:1,more:false});gc=goals.nodes.get('#conversation-goal-cards').children[0];
+  const goalHold=deferred();delayed=goalHold;const pendingDetail=goals.button(gc,'Review proposal and outcome').handlers.click();await goalHold.entered;
+  gu.reset();goalHold.release();await pendingDetail;assert.equal(goals.nodes.get('#conversation-goal-cards').children.length,0);
+  await gu.observe({binding:"bound",items:[proposal],cursor:1,more:false});gc=goals.nodes.get('#conversation-goal-cards').children[0];
+  offline=true;await goals.button(gc,'Review proposal and outcome').handlers.click();assert(goals.button(gc,'Confirm in conversation').disabled);
+  await gu.observe({binding:"bound",items:[{...proposal,current:false,can_confirm:false,phase:"partial"}],cursor:1,more:false});
+  assert(goals.all(gc,v=>v.textContent.startsWith('Part of this instruction applied.')).length,'Expired selection cannot hide an acknowledged partial effect');
+  const readonly=boot(0), ro=readonly.goals({readOnly:true,api:async()=>clone(proposal),onChoose:()=>{throw Error('Read-only client chose');}});
+  await ro.observe({binding:"bound",items:[proposal],cursor:1,more:false});const readonlyCard=readonly.nodes.get('#conversation-goal-cards').children[0];
+  await readonly.button(readonlyCard,'Review proposal and outcome').handlers.click();assert(readonly.button(readonlyCard,'Confirm in conversation').hidden);
+  }
   console.log('Request UI: full-source gating, source-fenced choices, receipt-only recovery, exact retry, saved drafts, pagination/closure and async scope reset passed; zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

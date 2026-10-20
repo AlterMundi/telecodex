@@ -3,6 +3,7 @@
 Native responses and human accounts are synthetic; no real goal/model is touched.
 """
 import copy
+import json
 from pathlib import Path
 import sys
 import threading
@@ -77,6 +78,12 @@ def qualify(binary):
             result = j.cli(entry, 'goal_prepare', args)
             return result, args
 
+        def view(command):
+            import subprocess
+            result=subprocess.run([j.binary,'--control',str(j.config),'presentation',*command],capture_output=True,text=True,timeout=20)
+            assert result.returncode==0,result.stderr
+            return json.loads(result.stdout)['result']
+
         first_ref = original()
         first, args = prepare('pause', first_ref)
         control = first['control']['id']
@@ -97,12 +104,23 @@ def qualify(binary):
         j.cli(entry, 'goal_execute', {'id': pause['control']['id']})
         assert sum(m.get('method') == 'thread/goal/conditionalSet' for m in j.rpc) == count
         cancelled, _ = prepare('pause', reason='Assistant proposal that the human declines', followup='Ask the selected question afterward.')
+        goal_views=view(['goals','list','0'])
+        proposed_view=next(v for v in goal_views['items'] if v['id']==cancelled['control']['id'])
+        assert proposed_view['can_confirm'] and proposed_view['proposal'] and 'plan' not in proposed_view
+        before=len(j.rpc)
+        detail=view(['goals','detail',cancelled['control']['id']])
+        assert detail['reason']=='Assistant proposal that the human declines'
+        assert detail['plan']['followup']=='Ask the selected question afterward.'
+        assert detail['entry_binding'][0]==100 and detail['label']!='Integrator'
+        assert len(j.rpc)==before,'Human review does not read/mutate native state or run inference'
         declined = original('No, cancel that proposal.')
         decision = {'id': cancelled['control']['id'], 'input_ref': declined, 'execute': False}
         assert j.cli(entry, 'goal_decide', decision)['control']['phase'] == 'cancelled'
         assert not j.cli(entry, 'goal_decide', decision)['new_decision']
         j.cli(entry, 'goal_decide', {**decision, 'execute': True}, ok=False)
         assert j.cli(entry, 'goal_execute', {'id': cancelled['control']['id']})['phase'] == 'cancelled'
+        assert not view(['goals','detail',cancelled['control']['id']])['can_confirm']
+        assert not any(v['id']==cancelled['control']['id'] for v in view(['goals','list','0'])['items'])
         earlier = original('Could clearing this goal be useful?')
         proposal, _ = prepare('clear', reason='Assistant suggests clearing the now obsolete goal')
         proposed = proposal['control']['id']
