@@ -225,8 +225,46 @@ def shared_participant(binary):
     finally:j.close()
 
 
+def successor_control_boundary(binary):
+    j = Recovery(str(Path(binary).resolve()))
+    try:
+        j.start()
+        j.admit('Original direct lifetime.')
+        j.wait(lambda: bool(j.holding))
+        j.complete('Original direct answer.')
+        j.wait(lambda: j.exact('Original direct answer.') == 1)
+        j.idle()
+        j.admit('Successor whose live completion will be delayed.')
+        j.wait(lambda: j.native_turns == 2 and bool(j.holding))
+        j.wait(lambda: j.row('SELECT count(*) FROM native_collections') == [(2,)])
+        # Exercise the persisted boundary used by a non-observing successor.
+        # The old observer must not control that successor's live collector.
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            old, new = [r[0] for r in db.execute('SELECT local_turn FROM native_collections ORDER BY local_turn')]
+            db.execute("UPDATE native_collections SET phase='boundary' WHERE local_turn=?", (new,))
+        j.freeze_live = True
+        j.complete('Successor canonical answer.')
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("UPDATE native_collections SET phase='open',checked_at='' WHERE local_turn=?", (old,))
+        j.wait(lambda: j.row('SELECT phase FROM native_collections WHERE local_turn=?', (old,)) == [('complete',)], seconds=30)
+        time.sleep(.5)
+        assert j.row('SELECT status FROM turns WHERE id=?', (new,)) == [('running',)]
+        assert j.exact('Successor canonical answer.') == 0
+        # Its own real item event remains authoritative and must still deliver.
+        j.freeze_live = False
+        turn = j.history['native-topic-7'][-1]
+        j.broadcast('native-topic-7', 'item/completed', {'turnId': turn['id'], 'item': turn['items'][-1]})
+        j.broadcast('native-topic-7', 'turn/completed', {'turn': {'id': turn['id'], 'status': 'completed'}})
+        j.wait(lambda: j.exact('Successor canonical answer.') == 1)
+        j.idle()
+        assert j.native_turns == 2
+        print('PASS old direct observer cannot finalize a successor outside its accepted range; successor canonical event delivers once')
+    finally:
+        j.close()
+
+
 if __name__ == '__main__':
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        checks=[pool.submit(check,sys.argv[1]) for check in (qualify,lost_initial,lost_socket,projection_modes,shared_participant)]
+        checks=[pool.submit(check,sys.argv[1]) for check in (qualify,lost_initial,lost_socket,projection_modes,shared_participant,successor_control_boundary)]
         for check in checks:check.result()

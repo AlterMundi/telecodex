@@ -162,7 +162,7 @@ impl Store {
         selected: &NativeCollection,
         turns: &[Value],
         goal_active: bool,
-    ) -> Result<()> {
+    ) -> Result<Option<Value>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
         let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM native_collections n JOIN turns t ON t.id=n.local_turn JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=t.from_user_id WHERE n.local_turn=?1 AND n.phase='open' AND n.anchor=?2 AND t.native_thread_id=?3 AND t.from_user_id=?4 AND s.creator_user_id=?4 AND u.allowed=1 AND s.codex_thread_id=?3 AND s.force_fresh_thread=0 AND s.chat_id=?5 AND s.thread_id=?6 AND (SELECT later.local_turn FROM native_collections later JOIN turns lt ON lt.id=later.local_turn WHERE lt.session_id=t.session_id AND later.local_turn>n.local_turn AND later.phase!='rejected' ORDER BY later.local_turn LIMIT 1) IS ?7)",params![selected.local,selected.anchor,selected.native,selected.human,selected.key.chat_id,selected.key.thread_id,selected.next_local],|r|r.get(0))?;
@@ -174,7 +174,7 @@ impl Store {
             // Its checkpoint owns future observation; existing queued receipts stay intact.
             tx.execute("UPDATE native_collections SET phase='transferred',detail='Observation transferred to replacement collector' WHERE local_turn=?",[selected.local])?;
             tx.commit()?;
-            return Ok(());
+            return Ok(None);
         }
         let end = turns.iter().position(|t| {
             selected
@@ -203,7 +203,7 @@ impl Store {
                 turns.len()
             }
         });
-        let turns = &turns[..limit];
+        let turns = &turns[..limit.min(turns.len())];
         if selected.anchor.is_empty() {
             let first = turns.first().context("Native input receipt missing")?;
             let matched = first["items"].as_array().is_some_and(|items| {
@@ -278,7 +278,7 @@ impl Store {
             ],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(Some(last.clone()))
     }
 }
 
@@ -389,27 +389,33 @@ mod tests {
         assert_eq!(selected.stop_client.as_deref(), Some("conversation:next"));
         // An unconfirmed successor still permits this last proven checkpoint,
         // but cannot authorize unrelated later output to enter its direct queue.
-        s.native_collection_observed(
-            &selected,
-            &[
-                snapshot("first", "completed", "Old reply"),
-                snapshot("second", "completed", "Other surface reply"),
-            ],
-            true,
-        )
-        .unwrap();
+        let observed = s
+            .native_collection_observed(
+                &selected,
+                &[
+                    snapshot("first", "completed", "Old reply"),
+                    snapshot("second", "inProgress", "Other surface reply"),
+                ],
+                true,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed["id"], "first");
         s.native_collection_started(next, "second").unwrap();
         let selected = s.native_collection_next().unwrap().unwrap();
         assert_eq!(selected.stop_before.as_deref(), Some("second"));
-        s.native_collection_observed(
-            &selected,
-            &[
-                snapshot("first", "completed", "Old reply"),
-                snapshot("second", "completed", "Other surface reply"),
-            ],
-            false,
-        )
-        .unwrap();
+        let observed = s
+            .native_collection_observed(
+                &selected,
+                &[
+                    snapshot("first", "completed", "Old reply"),
+                    snapshot("second", "completed", "Other surface reply"),
+                ],
+                false,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed["id"], "first");
         assert!(s.native_collection_next().unwrap().is_none());
         assert!(!s.topic_projection_active(next).unwrap());
         let conn = s.conn.lock().unwrap();

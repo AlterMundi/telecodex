@@ -29,11 +29,13 @@ pub(super) async fn tick(app: &App) -> Result<()> {
                 .await
             {
                 Ok((turns, goal_active)) => {
-                    app.shared
-                        .store
-                        .native_collection_observed(&selected, &turns, goal_active)?;
+                    let observed = app.shared.store.native_collection_observed(
+                        &selected,
+                        &turns,
+                        goal_active,
+                    )?;
                     super::topic_publications::wake(app.shared.clone(), selected.key);
-                    if let Some(turn) = turns.last().filter(|t| {
+                    if let Some(turn) = observed.as_ref().filter(|t| {
                         matches!(
                             t["status"].as_str(),
                             Some("completed" | "failed" | "interrupted")
@@ -42,7 +44,7 @@ pub(super) async fn tick(app: &App) -> Result<()> {
                         let handle = app.workers.lock().await.get(&selected.key).cloned();
                         let active = handle
                             .and_then(|w| w.steer.lock().expect("steer mutex poisoned").clone());
-                        if let Some(active) = active {
+                        if let Some(active) = active.filter(|a| a.turn_id == selected.local) {
                             let text = turn["items"]
                                 .as_array()
                                 .and_then(|items| {
@@ -75,7 +77,7 @@ pub(super) async fn tick(app: &App) -> Result<()> {
                             });
                         }
                     }
-                    if let Some(turn) = turns.last().filter(|t| t["status"] == "inProgress") {
+                    if let Some(turn) = observed.as_ref().filter(|t| t["status"] == "inProgress") {
                         let physical = turn["id"]
                             .as_str()
                             .context("Native active identity missing")?;
