@@ -81,6 +81,14 @@ impl GoalPlan {
     }
 }
 
+pub(super) fn unclaimed_on(conn: &Connection, human: i64, kind: &str, event: &str) -> Result<()> {
+    let held:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_inputs WHERE human_id=?1 AND source_kind=?2 AND source_event=?3)",params![human,kind,event],|r|r.get(0))?;
+    if held {
+        bail!("Original input has a retained goal-control selection");
+    }
+    Ok(())
+}
+
 fn binding_on(conn: &Connection, human: i64, key: SessionKey) -> Result<Value> {
     let (session, native) = super::presentation::entry_on(conn, human, key)?;
     Ok(json!([

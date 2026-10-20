@@ -197,12 +197,13 @@ pub(super) async fn tool(
                 )
             });
             let receipt_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
-            let control =
-                crate::codex::GoalControl::ConditionalMetadata(crate::codex::GoalMetadataControl {
+            let control = crate::codex::GoalControl::ConditionalMetadata(Box::new(
+                crate::codex::GoalMetadataControl {
                     plan: plan.clone(),
                     admission: admission.clone(),
                     receipt: receipt_slot.clone(),
-                });
+                },
+            ));
             let (phase,receipt)=match super::goals::control_live(app,&target_session,control).await {
                 Ok(true)=>receipt_slot.lock().expect("goal control receipt mutex poisoned").clone().unwrap_or_else(||("uncertain".into(),json!({"error":"Subscriber returned without a matched goal receipt","automatic_retry":false}))),
                 Ok(false)=>{

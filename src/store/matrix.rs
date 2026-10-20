@@ -29,10 +29,16 @@ pub(super) fn unclaimed_on(
     event: &str,
     update: Option<i64>,
 ) -> Result<()> {
-    let goal_held:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_inputs WHERE human_id=?1 AND source_kind=?2 AND source_event=?3)",params![human,if update.is_some(){"telegram"}else{channel},event],|r|r.get(0))?;
-    if goal_held {
-        bail!("Original input has a retained goal-control selection");
-    }
+    super::goal_controls::unclaimed_on(
+        conn,
+        human,
+        if update.is_some() {
+            "telegram"
+        } else {
+            channel
+        },
+        event,
+    )?;
     let held = selected_on(conn, human, channel, event, update)?.is_some();
     if held {
         bail!("Original input has an immutable Matrix destination");

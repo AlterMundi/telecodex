@@ -183,7 +183,7 @@ pub enum GoalControl {
     Pause,
     Stop(Arc<std::sync::Mutex<GoalStopSnapshot>>),
     Clear,
-    ConditionalMetadata(GoalMetadataControl),
+    ConditionalMetadata(Box<GoalMetadataControl>),
 }
 pub(super) async fn mutate_control(
     process: &mut AppServerProcess,
