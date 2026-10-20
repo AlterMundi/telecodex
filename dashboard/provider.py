@@ -526,6 +526,15 @@ class Provider:
             raise ValueError('Select one destination for this original message')
         return self.decorate_input(self.presentation('input route '+json.dumps({**body, 'id':ident})))
 
+    def conversation_input_retry(self, ident, body):
+        import re
+        self.input_id(ident)
+        if (not isinstance(body, dict) or set(body) != {'binding', 'instruction'}
+                or not isinstance(body['binding'], str) or not re.fullmatch('[a-f0-9]{64}', body['binding'])):
+            raise ValueError('Select one saved, definitely-unsent route')
+        self.input_id(body['instruction'])
+        return self.decorate_input(self.presentation('input retry '+json.dumps({**body, 'id':ident})))
+
     def conversation_voice_submit(self, metadata, data):
         import re
         if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual'}:

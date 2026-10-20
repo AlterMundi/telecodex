@@ -215,3 +215,21 @@ credentials continue to deny Sessions administration, direct native-request
 decisions and approvals; read-only monitors still reject all writes. Owner
 control remains separately authorized. Actual child enrollment/sandbox policy
 and native mobile/badge clients remain later work.
+
+## Recover a message that was not sent
+
+A current saved original can expose **Try again with #Topic** when the receiver
+knows that its selected instruction never reached native admission. This action
+uses the same original and instruction IDs, the existing recovery transition and
+current owner/entry/admission checks. It creates no replacement human utterance,
+source transcript or task. Duplicate clicks cannot submit an accepted, queued
+or uncertain instruction again. A lost recovery acknowledgment requires a saved
+status check before another action. Read-only clients can inspect saved status
+but cannot recover. Retired originals, unrelated instructions and held targets
+remain unavailable. The action is explicit; loading a page does not resend work.
+
+`POST /api/interaction/inputs/UUID/retry` accepts the current `binding` and exact
+`instruction` offered in that original's `recoveries`. It uses the same scoped
+conversation credential and CSRF check as destination selection. Existing
+`/interaction retry` semantics remain unchanged; this is their first-client
+adapter, not permission to replay an uncertain result.

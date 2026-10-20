@@ -71,6 +71,12 @@ class and unresolved defect. A small campaign report links existing journals and
 receipts instead of duplicating state. `Not run`, `failed`, and `uncertain` remain
 distinct. Resume missing observations; never replay uncertain work to improve a report.
 
+For Q08, retain a definitely-unsent worker instruction, recover it from the
+same client with its original identity, and lose that recovery response. A saved
+status check must prevent another native submission. Verify refusal for an
+uncertain/accepted instruction, unrelated original, retired entry and read-only
+grant; historical evidence remains intact.
+
 Use isolated test credentials/workers where needed. Do not replace the human's
 active access file. Use synthetic destructive scenarios. A global Stop requires
 a fresh explicit human request for that operation, including during testing.

@@ -425,6 +425,22 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         authorize(request)
         return result
 
+    @app.post('/api/interaction/inputs/{ident}/retry')
+    async def conversation_input_retry(request: Request, ident: str):
+        session = authorize(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        try:
+            body = await request.json()
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_input_retry, ident, body)
+        except (ValueError, UnicodeError):
+            raise HTTPException(400, 'Select one saved route that was not sent') from None
+        except (ProviderUnavailable, OSError):
+            raise HTTPException(409, 'Recovery unconfirmed or no longer current. Check saved status without creating another message') from None
+        authorize(request)
+        return result
+
     @app.post('/api/interaction/visual')
     async def conversation_visual(request: Request):
         session=authorize(request)

@@ -147,6 +147,18 @@ window.Conversation = (() => {
       card.routeButton.disabled=card.routeBusy || card.value.retired || (!card.routePending && !card.select.value);
       card.continueButton.hidden=readOnly || card.value.read_only || !card.value.continuation;
     }
+    function savedRecovery(card) {
+      if(card.value.retired)return null;
+      return (card.value.recoveries||[]).find(r=>r.instruction &&
+        !(card.value.routing?.instruction===r.instruction && card.value.routing.phase==="accepted"));
+    }
+    function renderRetry(card) {
+      const recovery=savedRecovery(card);
+      card.retry.hidden=readOnly || card.value.read_only===true || !card.value.binding || (!recovery && !!card.value.phase);
+      card.retry.textContent=recovery?`Try again with #${recovery.label}`:"Retry this same message";
+      card.retry.disabled=!!card.retryBusy || !!card.retryNeedsCheck;
+      if(card.retryNeedsCheck)card.check.hidden=false;
+    }
     function inputActivity() {
       presentState({transcribing:[...inputs.values()].some(c=>c.value.voice && c.value.phase==="preparing"),
         routing:[...inputs.values()].some(c=>["requested","queued","submitting","steering"].includes(c.value.routing?.phase))});
@@ -273,17 +285,19 @@ window.Conversation = (() => {
           } finally { check.disabled = false; }
         });
         retry.addEventListener("click", async () => {
-          if (readOnly || card.value.phase || retry.disabled) return;
+          const recovery=savedRecovery(card);
+          if (readOnly || (card.value.phase && !recovery) || retry.disabled) return;
           const owned = inputGeneration, observation = ++inputObservation;
-          retry.disabled = true;
+          card.retryBusy=true;retry.disabled = true;
           try {
-            const result = await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{})});
+            const result = recovery ? await api(`interaction/inputs/${card.value.id}/retry`,{binding:card.value.binding,instruction:recovery.instruction}) : await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{})});
             if (owned === inputGeneration) inputCard(result, observation);
           } catch(e) {
             if (owned !== inputGeneration) return;
-            if (observation >= card.observed) status.textContent = phaseText(card.value) + " The same message identity was used.";
+            if (recovery)card.retryNeedsCheck=true;
+            if (observation >= card.observed) status.textContent = phaseText(card.value) + (recovery?" Recovery unconfirmed. Check saved status before trying again.":" The same message identity was used.");
             if (e.status === 401 || e.status === 403) failed(e);
-          } finally {retry.disabled=false;}
+          } finally {card.retryBusy=false;renderRetry(card);}
         });
       }
       if (observed < card.observed) {
@@ -301,7 +315,7 @@ window.Conversation = (() => {
         if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
         card.status.textContent = phaseText(card.value);
         microphone?.observe(card.value,phaseText(card.value));
-        card.retry.hidden = readOnly || !!card.value.phase || !card.value.binding;
+        renderRetry(card);
         if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
         renderRoute(card);graph?.input(card.value);inputActivity();return card;
       }
@@ -317,6 +331,7 @@ window.Conversation = (() => {
       }
       value = {...value,retired:!!value.retired || !!card.value.retired};
       card.observed = observed;
+      card.retryNeedsCheck=false;
       if (!card.value.phase && value.phase && draft.value === card.value.text) draft.value = "";
       // Preserve full original text after reading it, and an unknown POST's text.
       card.value = {...card.value, ...value};
@@ -327,7 +342,7 @@ window.Conversation = (() => {
       microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
       if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
-      card.retry.hidden = readOnly || !!card.value.phase || !card.value.binding;
+      renderRetry(card);
       renderRoute(card);
       card.box.dataset.sequence = String(card.value.capture_order ?? (card.value.ordering_unknown?Number.MIN_SAFE_INTEGER:card.value.sequence ?? Number.MAX_SAFE_INTEGER));
       const container = $("#conversation-inputs");

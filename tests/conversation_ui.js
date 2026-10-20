@@ -6,6 +6,7 @@ const vm = require("node:vm");
 
 function boot(readOnly=false,standalone=false,options={}) {
   const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
+  const recoveryPosts=[];
   const gaps=new Map(),documentEvents=new Map(),windowEvents=new Map();
   const subscribe=(events,name,fn)=>events.set(name,[...(events.get(name)||[]),fn]);
   const clock={pending:()=>[...gaps.values()].map(t=>t.ms),fire(ms){
@@ -81,6 +82,13 @@ function boot(readOnly=false,standalone=false,options={}) {
       if (losePost) { losePost=false; throw new TypeError("Lost POST acknowledgement"); }
       return value;
     }
+    if (url.pathname.endsWith("/retry") && body) {
+      recoveryPosts.push(body);const id=url.pathname.split("/").at(-2);
+      const old=originals.get(id),value={...old,recoveries:[],routing:{...old.routing,phase:"accepted"}};
+      originals.set(id,value);
+      if(options.loseRecovery){options.loseRecovery=false;throw new TypeError("Lost recovery acknowledgment");}
+      return value;
+    }
     if (url.pathname.endsWith("/route") && body) {
       const id=url.pathname.split("/").at(-2);
       const value={...originals.get(id),phase:"routed",routing:{target:{thread_id:7},label:"Alpha",instruction:"instruction-1",phase:routePhase},continuation:{source:`input:${id}`,revision:"a".repeat(64)}};
@@ -137,7 +145,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,clock,
+  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,clock,recoveryPosts,
     profile(value){presentationProfile=value;},
     event(name){for(const fn of windowEvents.get(name)||[])fn();},
     hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
@@ -396,6 +404,21 @@ function boot(readOnly=false,standalone=false,options={}) {
   await retained.children[2].children[0].handlers.click();
   assert.match(retained.children[1].textContent,/Sent to your conversation/);
   assert.equal(draft.value,"","Status recovery must prevent accidental same-text resubmission");
+  const seedRecovery=fixture=>fixture.originals.set('saved-route',{id:'saved-route',text:'The original is still saved.',phase:'routed',binding:'fixture',sequence:1,
+    routing:{instruction:'retained-route',phase:'retained_unsent',label:'Alpha'},recoveries:[{instruction:'retained-route',label:'Alpha'}]});
+  const recovered=boot();seedRecovery(recovered);await recovered.ui.refresh();
+  const retrySaved=findButton(recovered.nodes.get('#conversation-inputs'),'Try again with #Alpha');assert(retrySaved && !retrySaved.hidden);
+  recovered.nodes.get('#conversation-message').value='Keep my new draft';
+  await retrySaved.handlers.click();assert.equal(recovered.nodes.get('#conversation-message').value,'Keep my new draft');assert.equal(recovered.recoveryPosts.length,1);assert.equal(recovered.originals.size,1);assert(retrySaved.hidden);
+  assert.equal(recovered.recoveryPosts[0].instruction,'retained-route');recovered.ui.stop();
+  const lostRecovery=boot(false,false,{loseRecovery:true});seedRecovery(lostRecovery);await lostRecovery.ui.refresh();
+  const lostRetry=findButton(lostRecovery.nodes.get('#conversation-inputs'),'Try again with #Alpha');await lostRetry.handlers.click();
+  assert(lostRetry.disabled,'Unknown recovery response must require status before another action');
+  await lostRetry.handlers.click();assert.equal(lostRecovery.recoveryPosts.length,1);
+  await findButton(lostRecovery.nodes.get('#conversation-inputs'),'Check status / read message').handlers.click();assert(lostRetry.hidden);assert.equal(lostRecovery.originals.size,1);lostRecovery.ui.stop();
+  const readonlyRecovery=boot(true);seedRecovery(readonlyRecovery);await readonlyRecovery.ui.refresh();
+  const deniedRetry=findButton(readonlyRecovery.nodes.get('#conversation-inputs'),'Try again with #Alpha');assert(deniedRetry.hidden);await deniedRetry.handlers.click();assert.equal(readonlyRecovery.recoveryPosts.length,0);readonlyRecovery.ui.stop();
+
   const release=sending.holdPost(); draft.value="Next message";
   const pending=form.handlers.submit({preventDefault(){}});
   await Promise.resolve(); assert(sending.posting());
