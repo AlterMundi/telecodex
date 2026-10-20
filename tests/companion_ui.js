@@ -19,7 +19,7 @@ function boot(){
     elapse(ms){clock+=ms;for(const [id,t]of timers)if(t.at<=clock){timers.delete(id);t.fn();}}};
 }
 const f=boot();
-assert.deepEqual(f.labels(),["Reconnecting"]);
+assert.deepEqual(f.labels(),["Connect to begin"]);
 f.companion.observe({schema:"telecodex.interaction-activity/v1",integrator_busy:true,sources:[
   {known:true,busy:true,observer_synthesizing:1},{known:true,busy:true,observer_synthesizing:0},{known:false,busy:true,observer_synthesizing:99}]});
 const firstChips=f.phaseNodes();

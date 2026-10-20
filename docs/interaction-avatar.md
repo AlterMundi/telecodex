@@ -55,3 +55,19 @@ actual execution result separate from tests merely added to the tree.
 The required final campaign remains Q17/Q18/V07 after the integrated version is
 complete. Browser rendering, real native activity, receiving adoption and human
 appearance/hearing observations are separate evidence.
+
+### Development checkpoint — 2026-10-20
+
+The companion/client suites and 26 HTTP grant/capture tests pass locally. On
+revision `c66494a`, CI run `39350034029` completed the Rust formatting, Clippy,
+unit-test and release-build steps successfully; the larger process journeys were
+still running at this checkpoint. The local Rust qualification had previously
+been canceled deliberately to serialize large builds under host memory pressure.
+
+Chromium rendering was inspected at 390×844 and 1100×850 with synthetic retained
+text/progress, dark fallback and simulated light `--dm-*` roles, plus emulated
+reduced motion. No horizontal overflow or history/composer overlap was observed;
+diagnostics remained initially collapsed. This browser used the older development
+receiver binary without the new activity response and correctly showed activity
+unconfirmed. It does not qualify new native activity end to end, an actual
+Homemaker-owner update, an Android keyboard or the final real-session campaign.

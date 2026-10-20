@@ -41,13 +41,13 @@ window.ConversationCompanion = (() => {
       if(state.question)add("?","A question for you");
       if(state.playback==="preparing")add("♫","Preparing voice");
       if(state.playback==="playing")add("♫","Speaking");
-      if(!fresh)add("◇",state.connected?"Session activity unconfirmed":"Reconnecting");
+      if(!fresh)add("◇",state.connected?"Session activity unconfirmed":state.connected===false?"Reconnecting":"Connect to begin");
       const pose=state.capture==="recording"?"listening":state.playback==="playing"?"speaking":
         state.question?"curious":!fresh?"uncertain":rows.length?"focused":rest;
       const art=portrait(pose);
       if(face.textContent!==art)face.textContent=art;
       box.dataset.pose=pose;
-      const caption=state.question?"Your turn, whenever you’re ready.":
+      const caption=!state.connected?(state.connected===false?"Let’s reconnect.":"Ready when you are."):state.question?"Your turn, whenever you’re ready.":
         state.capture==="recording"?"I’m listening.":rows.length?"You can keep talking or writing.":"Where shall we go next?";
       if(title.textContent!==caption)title.textContent=caption;
       const signature=JSON.stringify(rows);
