@@ -17,8 +17,11 @@ unavailable. The read-only authenticated `GET /api/interaction/sonic` endpoint
 performs a finite cache/SQLite read; it never starts native work. Both restricted
 conversation devices and read-only monitor devices may inspect it.
 
-Sources are the configured integrating topic and at most 64 configured targets,
-filtered against current ownership and native binding. Each source uses stable
+Sources are the integrating topic and the actual canonical routing registry,
+including configured, enrolled and optionally discovered targets (at most 64),
+filtered against current ownership and native binding. The existing owner-control
+input-list read supplies membership; a failed registry read is unavailable rather
+than a fallback to static targets. Each source uses stable
 `chat:topic` identity, its current logical session, observation time, execution,
 goal and native human-wait flag. A missing/legacy wait flag, disconnected cache,
 changed database/native binding or observation older than 20 seconds means

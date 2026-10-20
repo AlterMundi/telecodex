@@ -7,6 +7,7 @@ from contextlib import closing
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import stat
 import struct
@@ -191,15 +192,26 @@ class Provider:
         """Finite read of the existing database-bound observer, never native work.
 
         Missing, stale or replaced observation is unknown. Limit the audience to
-        this configured integrating entry and targets owned by its actual human.
+        the canonical routing registry and targets owned by its actual human.
         """
         self.assert_binding()
         profile=self.receiver.get('interaction',{})
         if profile.get('human_id')!=self.human or not self.authorized(self.human):
             raise ProviderUnavailable('Interaction state audience unavailable')
         selected={f"{profile['chat_id']}:{profile['topic_id']}":'Conversation'}
-        for target in profile.get('targets',[])[:64]:
-            selected.setdefault(f"{profile['chat_id']}:{target['topic_id']}",str(target['name'])[:128])
+        # This supported read resolves configured, enrolled and discovered targets
+        # through Store.interaction_profile, exactly as dispatch does. Never
+        # reconstruct a competing registry from static dashboard configuration.
+        # An after-maximum cursor returns metadata/choices without transporting
+        # original messages. This is the existing input-list cursor contract.
+        choices=self.presentation(f'input list {2**63-1} after')['routing_choices']
+        if not isinstance(choices,list) or len(choices)>64:
+            raise ProviderUnavailable('Routing membership unavailable')
+        for target in choices:
+            selector=target.get('selector')
+            if not isinstance(selector,str) or not re.fullmatch(r't[1-9][0-9]{0,18}',selector):
+                raise ValueError('Invalid routing membership')
+            selected.setdefault(f"{profile['chat_id']}:{int(selector[1:])}",str(target['label'])[:128])
         directory=self.config.get('activity_state_dir')
         with closing(readonly(self.receiver['db_path'])) as db:
             inventory=read_topic_inventory(db,Path(directory)/'topics.json') if directory else topic_activity_inventory(db,{})
@@ -217,8 +229,8 @@ class Provider:
         from dashboard.sonic import descriptor
         return {**descriptor(self.config),'schema':'telecodex.sonic-state/v1','observed_at':time.time(),
             'configured':bool(directory),'connected':inventory['connected'],
-            'scope':'configured entry and targets; current owned bindings only',
-            'sources':items,'truncated':inventory['truncated'] or len(profile.get('targets',[]))>64}
+            'scope':'canonical routing registry and entry; current owned bindings only',
+            'sources':items,'truncated':inventory['truncated']}
 
     def presentation_part(self, source, revision, offset):
         import re
