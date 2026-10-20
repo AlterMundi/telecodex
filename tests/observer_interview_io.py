@@ -83,6 +83,9 @@ def qualify(binary,busy,large=False):
         assert result['kind']=='created_destination' and result['selector']=='t77'
         retained=j.tool('retained-status','creation_status',{'input_ref':original})
         assert retained['phase']=='ready'
+        # Preparation reads the retained context too. Do not inject a corrupt
+        # status record until the independent worker has accepted its context.
+        j.wait(lambda:j.instructions(77) and j.instructions(77)[0][1]=='accepted')
         # A corrupt retained intent must never be mistaken for permission to
         # start again. This fixture alone owns its synthetic SQLite database.
         with sqlite3.connect(j.root/'state.sqlite') as db:
@@ -92,7 +95,6 @@ def qualify(binary,busy,large=False):
         with sqlite3.connect(j.root/'state.sqlite') as db:
             db.execute('UPDATE interaction_creations SET doc=? WHERE id=?',(saved[1],saved[0]))
         assert j.topic_calls==1
-        j.wait(lambda:j.instructions(77) and j.instructions(77)[0][1]=='accepted')
         operation=result['operation'];context=operation['intent']['context'];source=context['sources'][0]
         assert context['purpose']=='interview' and context['derivation']=='pinned_observer_sources'
         assert context['exact_native_fork'] is False
