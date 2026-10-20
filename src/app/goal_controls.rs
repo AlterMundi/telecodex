@@ -35,7 +35,7 @@ pub(super) fn capabilities(value: &mut Value) {
     value["operations"]["goal_prepare"] = json!({"arguments":{"selector":"one enrolled target","target_binding":"exact goal_inspect target_binding","input_ref":"actual retained explicit human command reference, omitted ONLY for an assistant proposal","plan":{"action":"start|edit|pause|resume|clear|replace","expected":"exact native {goal,revision} from goal_inspect","objective":"optional selected objective","token_budget":"optional expressly requested budget","followup":"optional exact follow-up clause of the human instruction"},"reason":"bounded explanation"},"description":"Retain one immutable goal-control interpretation. A supplied original must actually request this control. Omitted original means assistant proposal requiring later human confirmation. Retention never mutates the goal or starts work. Do not dispatch the same original separately; ordered follow-up belongs to this intent."});
     value["operations"]["goal_decide"] = json!({"arguments":{"id":"retained proposal","input_ref":"actual later captured human confirmation/cancellation","execute":"true only when this human input explicitly accepts the exact proposal"},"description":"Single-use proposal decision; actual capture must postdate proposal creation. No native mutation. Stale goal definitions are rejected at execution, never silently refreshed."});
     value["operations"]["goal_status"] = json!({"arguments":{"id":"retained goal-control ID"},"description":"Inspect immutable interpretation and outcome; never replay uncertain work."});
-    value["operations"]["goal_execute"] = json!({"arguments":{"id":"prepared explicit or confirmed goal-control ID"},"description":"Execute one frozen explicit or confirmed control. Pause/clear/inactive edits mutate conditional metadata on the owning writer. Start/resume/replace/active edits use its native continuation collector with fresh invocation context; there is no artificial kickoff. No implicit interrupt. Inspect retained status after queued admission. A known-unsent outcome may retry this same frozen intent after checking readiness, without another human confirmation. Native acknowledgment is separate from work incorporation. Lost ACK and partial effects are never replayed."});
+    value["operations"]["goal_execute"] = json!({"arguments":{"id":"prepared explicit or confirmed goal-control ID"},"description":"Execute one frozen explicit or confirmed control. Pause/clear/inactive edits mutate conditional metadata on the owning writer; an exact human follow-up then uses ordinary start/steer on its collector without reactivating the goal. Start/resume/replace/active edits use its native continuation collector with fresh invocation context; there is no artificial kickoff. No implicit interrupt. Inspect retained status after queued admission. A known-unsent outcome may retry this same frozen intent after checking readiness, without another human confirmation. Native acknowledgment is separate from work incorporation. Lost ACK and partial effects are never replayed."});
 }
 
 pub(super) async fn tool(
@@ -156,11 +156,6 @@ pub(super) async fn tool(
                     .goal
                     .as_ref()
                     .is_some_and(|g| g.status == "active"));
-            if plan.followup.is_some() && !activating {
-                bail!(
-                    "Ordered follow-up admission must be connected before this intent executes; no mutation submitted"
-                );
-            }
             let target: SessionKey = serde_json::from_value(retained["intent"]["target"].clone())?;
             let target_session = app
                 .shared
@@ -178,7 +173,7 @@ pub(super) async fn tool(
                 .as_str()
                 .context("Retained goal attempt missing")?
                 .to_owned();
-            if activating {
+            if activating || plan.followup.is_some() {
                 return activate_control(app, human, key, &args.id, &value, &plan, &target_session)
                     .await;
             }

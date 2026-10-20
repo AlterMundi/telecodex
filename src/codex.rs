@@ -1085,8 +1085,8 @@ where
         let params = build_turn_start_params(&thread_id, &effective_session, request);
         let _ = on_event(CodexEvent::NativeTurnSubmitting).await?;
         initial_write_possible = true;
-        let (goal, turn) = goals::conditional_activation(&mut process, &thread_id, activation.conditional.as_ref().expect("selected conditional activation"), params.get("additionalContext").cloned().unwrap_or(Value::Null)).await?;
-        goal_active = goal.status == "active";
+        let (active, turn) = goals::conditional_continuation(&mut process, &thread_id, activation.conditional.as_ref().expect("selected conditional activation"), params, None).await?;
+        goal_active = active;
         adopted_turn = Some(turn);
         collecting_existing = true;
     } else if let Some(activation) = goal_activation {
@@ -1343,17 +1343,29 @@ where
                     }
                     if let Some(GoalControl::Activate(activation))=steer.goal.as_ref()
                         && let Some(control)=activation.conditional.as_ref() {
-                        let context=control.context.clone().unwrap_or(Value::Null);
-                        match goals::conditional_activation(&mut process,&thread_id,control,context).await {
-                            Ok((goal,turn))=>{
-                                goal_snapshot_request_id=None;goal_active=goal.status=="active";staged_goal=false;
+                        let mut params=build_turn_start_params(&thread_id,&effective_session,request);
+                        params["additionalContext"]=control.context.clone().unwrap_or(Value::Null);
+                        match goals::conditional_continuation(&mut process,&thread_id,control,params,active_turn_id.as_deref()).await {
+                            Ok((active,turn))=>{
+                                goal_snapshot_request_id=None;goal_active=active;staged_goal=false;
                                 if active_turn_id.as_ref()!=Some(&turn) {
                                     active_turn_id=Some(turn.clone());turn_completed=false;assistant_message_completed=false;
                                     let _=on_event(CodexEvent::NativeTurnStarted(turn.clone())).await?;
                                 }
                                 let _=steer.response.send(Ok(Some(turn)));
                             },
-                            Err(error)=>{let _=steer.response.send(Err(CodexSteerError::Undetermined(error.to_string())));},
+                            Err(error)=>{
+                                // A metadata-only CAS can succeed before its
+                                // follow-up fails. Do not retain an old staged
+                                // activation after the acknowledged pause/clear.
+                                let metadata_applied=control.receipt.lock().expect("goal control receipt mutex poisoned").as_ref()
+                                    .is_some_and(|(_,r)|r["native_receipt"]["revision"].is_string());
+                                if metadata_applied && (matches!(control.plan.action,crate::store::GoalAction::Pause|crate::store::GoalAction::Clear)
+                                    || (matches!(control.plan.action,crate::store::GoalAction::Edit) && control.plan.expected.goal.as_ref().is_some_and(|g|g.status!="active"))) {
+                                    staged_goal=false;goal_active=false;goal_snapshot_request_id=None;
+                                }
+                                let _=steer.response.send(Err(CodexSteerError::Undetermined(error.to_string())));
+                            },
                         }
                         continue;
                     }

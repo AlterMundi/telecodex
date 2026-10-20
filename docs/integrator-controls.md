@@ -1,6 +1,6 @@
 # Integrator controls and recovery: harness study and delivery plan
 
-Status: studied and planned, 2026-10-19. Owner: [Telecodex #210](https://github.com/AlterMundi/telecodex/issues/210),
+Status: implementation and qualification in progress, 2026-10-20. Owner: [Telecodex #210](https://github.com/AlterMundi/telecodex/issues/210),
 under [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
 This document does not enable controls, delegation, recovery services or model wakeups.
 
@@ -28,8 +28,12 @@ conditional context admission: the native goal CAS succeeds first, then the
 clause reaches the first useful or steered model step. The matched response
 acknowledges both admissions without a separate priming turn or an extra
 application race. Incorporation remains distinct. The process fixture uses synthetic
-native peers; native qualification, metadata-only control follow-ups, receiving
-adoption and the finished real-session campaign remain required by #210.
+native peers. Metadata-only controls with a human follow-up use the same collector:
+its matched CAS precedes the exact attributed clause through ordinary native
+start/steer, preserving paused/absent goal state. A committed metadata receipt is
+retained before follow-up submission; failure retains a partial outcome and never
+repeats the mutation. Actual native qualification of this path, receiving adoption
+and the finished real-session campaign remain required by #210.
 
 Human-selected initial policy: explicit human instructions to start, pause,
 resume or clear a selected goal execute without asking for the same permission

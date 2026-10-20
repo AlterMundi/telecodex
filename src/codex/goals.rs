@@ -424,6 +424,156 @@ impl CodexRunner {
     }
 }
 
+/// Admit the useful continuation on the selected collector. Metadata-only
+/// controls do not activate a goal: their actual human clause is ordinary input
+/// after the matched mutation, with its own retained admission outcome.
+pub(super) async fn conditional_continuation(
+    process: &mut AppServerProcess,
+    thread: &str,
+    control: &GoalMetadataControl,
+    mut params: Value,
+    running: Option<&str>,
+) -> Result<(bool, String)> {
+    use crate::store::GoalAction;
+    let activating = matches!(
+        control.plan.action,
+        GoalAction::Start | GoalAction::Resume | GoalAction::Replace
+    ) || (matches!(control.plan.action, GoalAction::Edit)
+        && control
+            .plan
+            .expected
+            .goal
+            .as_ref()
+            .is_some_and(|g| g.status == "active"));
+    if activating {
+        let (goal, turn) = conditional_activation(
+            process,
+            thread,
+            control,
+            params
+                .get("additionalContext")
+                .cloned()
+                .unwrap_or(Value::Null),
+        )
+        .await?;
+        return Ok((goal.status == "active", turn));
+    }
+    let followup = control
+        .plan
+        .followup
+        .as_deref()
+        .context("Metadata continuation has no human clause")?;
+    let scope = control
+        .scope
+        .as_ref()
+        .context("Attributed continuation scope missing")?;
+    if params["additionalContext"]
+        .as_object()
+        .is_none_or(|v| v.is_empty())
+    {
+        bail!("Current invocation context required before metadata continuation");
+    }
+    let (metadata_phase, metadata) =
+        conditional_metadata(process, thread, &control.plan, &control.admission).await;
+    if metadata_phase != "acknowledged" {
+        *control
+            .receipt
+            .lock()
+            .expect("goal control receipt mutex poisoned") =
+            Some((metadata_phase.clone(), metadata.clone()));
+        if let Some(settled) = &control.settled {
+            settled(&metadata_phase, &metadata)?;
+        }
+        bail!("Goal metadata was not acknowledged; continuation was not submitted");
+    }
+    // Preserve the committed first effect before attempting the second. Restart
+    // may not know whether the following write happened, but never loses the CAS.
+    let checkpoint = json!({"native_receipt":metadata["native_receipt"],
+        "followup_admitted":null,"followup_outcome":"unconfirmed","automatic_retry":false});
+    *control
+        .receipt
+        .lock()
+        .expect("goal control receipt mutex poisoned") =
+        Some(("submitted".into(), checkpoint.clone()));
+    if let Some(settled) = &control.settled {
+        settled("submitted", &checkpoint)?;
+    }
+    let text = format!(
+        "[Integrator continuation of retained human control {} after its acknowledged {:?} operation. Human: {}; source conversation: {}:{}. This is the exact selected human clause, not another proposal.]\n{followup}",
+        scope.id, control.plan.action, scope.human, scope.entry.chat_id, scope.entry.thread_id
+    );
+    params["input"] = json!([{"type":"text","text":text,"text_elements":[]}]);
+    params["clientUserMessageId"] = json!(format!("goal-followup:{}:{}", scope.id, scope.attempt));
+    let mut submitted = false;
+    let result = tokio::time::timeout(Duration::from_secs(12), async {
+        (control.admission)()?;
+        let method = if let Some(turn) = running {
+            params = json!({"threadId":thread,"expectedTurnId":turn,
+                "input":params["input"],"additionalContext":params["additionalContext"],
+                "clientUserMessageId":params["clientUserMessageId"]});
+            "turn/steer"
+        } else {
+            "turn/start"
+        };
+        submitted = true;
+        let id = process.send_request(method, params).await?;
+        let response = process.await_response(id).await?;
+        let turn = if let Some(expected) = running {
+            let observed = response["turnId"]
+                .as_str()
+                .context("Follow-up steering acknowledgment has no turn")?;
+            if observed != expected {
+                bail!("Follow-up acknowledgment changed native turn");
+            }
+            observed
+        } else {
+            response
+                .pointer("/turn/id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .context("Follow-up start acknowledgment has no turn")?
+        };
+        Ok::<_, anyhow::Error>(turn.to_owned())
+    })
+    .await;
+    let (phase, receipt) = match &result {
+        Ok(Ok(turn)) => (
+            "acknowledged",
+            json!({"native_receipt":metadata["native_receipt"],"followup_admitted":true,"followup_turn":turn,
+            "meaning":"Metadata acknowledged before actual human follow-up admission; goal remains inactive/absent. Incorporation is separate."}),
+        ),
+        _ => {
+            let error = match &result {
+                Ok(Err(e)) => e.to_string(),
+                _ => "Ordered follow-up acknowledgment timed out".into(),
+            };
+            let rejected = match &result {
+                Ok(Err(e)) => matches!(
+                    e.downcast_ref::<RpcError>().and_then(|e| e.code),
+                    Some(-32602..=-32600)
+                ),
+                _ => false,
+            };
+            (
+                "partial",
+                json!({"native_receipt":metadata["native_receipt"],"followup_admitted":if !submitted || rejected {json!(false)} else {Value::Null},
+                "followup_outcome":if !submitted || rejected {"known_unsent"} else {"uncertain"},"error":error,"automatic_retry":false}),
+            )
+        }
+    };
+    *control
+        .receipt
+        .lock()
+        .expect("goal control receipt mutex poisoned") = Some((phase.into(), receipt.clone()));
+    if let Some(settled) = &control.settled {
+        settled(phase, &receipt)?;
+    }
+    let turn = result.context(
+        "Ordered follow-up timed out after acknowledged metadata; never replay the control",
+    )??;
+    Ok((false, turn))
+}
+
 /// Use the existing subscribed collector for a context-aware native activation.
 /// The receipt is retained before returning an error or collecting model work.
 pub(super) async fn conditional_activation(

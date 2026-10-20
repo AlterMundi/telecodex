@@ -553,7 +553,7 @@ impl Store {
         attempt: &str,
     ) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='claimed' THEN 'known_unsent' ELSE 'uncertain' END,result=?5 WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase IN ('claimed','submitted') AND instance_id=?6 AND json_extract(doc,'$.attempt')=?7",params![id,human,entry.chat_id,entry.thread_id,json!({"error":"Selected collector ended before retaining a goal-control receipt","automatic_retry":false}).to_string(),self.instance_id,attempt])?;
+        conn.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='claimed' THEN 'known_unsent' ELSE 'uncertain' END,result=json_patch(COALESCE(result,'{}'),?5) WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase IN ('claimed','submitted') AND instance_id=?6 AND json_extract(doc,'$.attempt')=?7",params![id,human,entry.chat_id,entry.thread_id,json!({"error":"Selected collector ended before retaining a goal-control receipt","automatic_retry":false}).to_string(),self.instance_id,attempt])?;
         Ok(())
     }
     pub fn goal_control_finish(
@@ -567,7 +567,7 @@ impl Store {
     ) -> Result<bool> {
         if !matches!(
             phase,
-            "acknowledged" | "rejected" | "uncertain" | "known_unsent" | "partial"
+            "submitted" | "acknowledged" | "rejected" | "uncertain" | "known_unsent" | "partial"
         ) || result.to_string().len() > 32000
         {
             bail!("Invalid goal-control receipt");
