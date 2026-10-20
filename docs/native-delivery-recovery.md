@@ -52,6 +52,10 @@ persisted with sufficient identity to make every historical resend safe. Preserv
 those records for explicit inspection. Roll back software only, never the input
 journal, publication receipts or polling offsets. New additive tables preserve old opt-in registrations as mirrors; the old
 two-column registration table remains unchanged for software rollback.
+Explicit local session removal retires its publication parts and observation
+checkpoints atomically with the existing turn cascade. Original ingress, native
+acceptance receipts and independent archived request decisions remain retained;
+the removal never recreates a destination or retries an uncertain send.
 
 Qualification: SQLite tests cover late acceptance, failure/restart, owner/binding
 changes, partial snapshots and observation boundaries. The native/HTTP journey

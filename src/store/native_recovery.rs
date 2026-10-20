@@ -30,6 +30,16 @@ impl Store {
             // Freeze their IDs atomically; a later collector must not resend them.
             tx.execute("INSERT INTO native_recovery_baseline SELECT native_thread,native_turn,item_id FROM interaction_native_messages",[])?;
         }
+        // Existing explicit local session removal cascades its turns. Retire
+        // their outbound work in the same transaction; keep original ingress
+        // and native acceptance receipts, which belong to the retained journal.
+        tx.execute_batch("CREATE TRIGGER IF NOT EXISTS native_collection_turn_deleted BEFORE DELETE ON turns BEGIN
+            DELETE FROM topic_publication_parts WHERE publication IN (SELECT id FROM topic_publications WHERE local_turn=OLD.id);
+            DELETE FROM topic_publications WHERE local_turn=OLD.id;
+            DELETE FROM direct_topic_turns WHERE local_turn=OLD.id;
+            DELETE FROM topic_projection_turns WHERE local_turn=OLD.id;
+            DELETE FROM native_collections WHERE local_turn=OLD.id;
+            END;")?;
         tx.commit()?;
         Ok(())
     }
@@ -330,6 +340,67 @@ mod tests {
     }
     fn snapshot(id: &str, status: &str, text: &str) -> Value {
         json!({"id":id,"status":status,"items":[{"id":format!("{id}-answer"),"type":"agentMessage","phase":"final_answer","text":text}]})
+    }
+    #[test]
+    fn explicit_session_removal_retires_delivery_without_erasing_original_receipts() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let (local, key) = start(&s);
+        let update: crate::telegram::Update = serde_json::from_value(json!({"update_id":42,"message":{"message_id":42,"message_thread_id":7,"from":{"id":100,"is_bot":false,"first_name":"Synthetic"},"chat":{"id":100,"type":"private"},"text":"Original"}})).unwrap();
+        s.admit_update(&update).unwrap();
+        s.begin_update(42).unwrap();
+        s.begin_update_steer(42, local).unwrap();
+        s.native_input_receipt(local, Some("telegram:100:100:42"), "first")
+            .unwrap();
+        s.record_native_message(
+            local,
+            "native",
+            "first",
+            "final",
+            Some("final_answer"),
+            "Retained answer",
+        )
+        .unwrap();
+        let p = s.topic_publication_claim(key, 100).unwrap().unwrap();
+        s.topic_publication_parts(p.id, &[p.body]).unwrap();
+        assert!(s.topic_publication_reserve(p.id, 0).unwrap());
+        // Explicit removal also retires a potentially accepted send; it never
+        // recreates the destination or retries that unknown network operation.
+        s.delete_session(key).unwrap();
+        assert!(s.native_collection_next().unwrap().is_none());
+        assert!(s.topic_publication_claim(key, 100).unwrap().is_none());
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM incoming_updates WHERE update_id=42",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM native_input_receipts WHERE update_id=42",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM topic_publication_parts", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(
+            !conn
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap()
+        );
     }
     #[test]
     fn missed_completion_is_recovered_once_and_pending_delivery_survives_restart() {
