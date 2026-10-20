@@ -4,8 +4,20 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-function boot(readOnly=false,standalone=false) {
+function boot(readOnly=false,standalone=false,options={}) {
   const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
+  const gaps=new Map(),documentEvents=new Map(),windowEvents=new Map();
+  const subscribe=(events,name,fn)=>events.set(name,[...(events.get(name)||[]),fn]);
+  const clock={pending:()=>[...gaps.values()].map(t=>t.ms),fire(ms){
+    const selected=[...gaps].filter(([,timer])=>timer.ms===ms);
+    for(const [id,timer] of selected){gaps.delete(id);timer.fn();}
+  }};
+  const timeout=(fn,ms)=>{
+    if(options.clock && [180,450,1200].includes(ms)){const id={};gaps.set(id,{fn,ms});return id;}
+    return setTimeout(fn,ms);
+  };
+  const cancelTimeout=id=>{if(gaps.has(id))gaps.delete(id);else clearTimeout(id);};
+  let capture;
   function element() {
     return {
       children: [], dataset: {}, handlers: {}, classList: {toggle() {}},
@@ -25,13 +37,13 @@ function boot(readOnly=false,standalone=false) {
     };
   }
   const document = {
-    hidden: false, body: element(), addEventListener() {}, createElement: element,
+    hidden: false, body: element(), addEventListener(name,fn) {subscribe(documentEvents,name,fn);}, createElement: element,
     querySelector(selector) {
       if (!nodes.has(selector)) nodes.set(selector, element());
       return nodes.get(selector);
     },
   };
-  let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false;
+  let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false,audioFailures=0;
   const source = n => ({id:`native:${n}`, kind:standalone&&n===1?"integrator_progress":"integrator_answer", sequence:n, observed_at:new Date(1704067200000+n*1000).toISOString(),
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`,...sourceOverrides.get(n)});
   const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), nativePosts = [];
@@ -103,11 +115,12 @@ function boot(readOnly=false,standalone=false) {
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
-  const context = vm.createContext({window:{addEventListener() {}}, document,
+  const context = vm.createContext({window:{addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
-    URL, URLSearchParams, AbortController, setTimeout, clearTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
+    URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
     fetch:(_route, options) => {
       audioCalls.push(JSON.parse(options.body));
+      if(audioFailures){audioFailures--;return Promise.resolve(new Response(JSON.stringify({detail:'Synthetic TTS outage'}),{status:503}));}
       if(renderAudio){
         const selected=JSON.parse(options.body),data=Buffer.from('synthetic audio'),hash=require('node:crypto').createHash('sha256').update(data).digest('hex');
         return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':multipart&&selected.offset===0?'1500':'','x-audio-sha256':hash}}));
@@ -118,10 +131,19 @@ function boot(readOnly=false,standalone=false) {
   });
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
+  if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){}};}};
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,overrideSource(n,value){sourceOverrides.set(n,value);},addReplies(n){count+=n;},audio(parts=false){renderAudio=true;multipart=parts;},
+  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,clock,
+    event(name){for(const fn of windowEvents.get(name)||[])fn();},
+    hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
+    show(){document.hidden=false;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
+    capture(){capture.pauseAudio();capture.onActivity(true);},
+    finishCapture(){capture.onActivity(false);},
+    failAudio(n=1){audioFailures=n;},
+    closeNativeRequest(){Object.assign(nativeRequests.get('native-request'),{state:'answered',actionable:false});},
+    overrideSource(n,value){sourceOverrides.set(n,value);},addReplies(n){count+=n;},audio(parts=false){renderAudio=true;multipart=parts;},
     nativeRequest() {
       nativeRequests.set("native-request",{id:"native-request",binding:"fixture",revision:"native-revision",state:"pending",actionable:true,kind:"question",title:"Scope",label:"Conversation",body:"Choose scope",choices:[{label:"Selected scope",action:{kind:"option",index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:1,recorded_revisions:[]});
     },
@@ -189,6 +211,80 @@ function boot(readOnly=false,standalone=false) {
   assert.equal(voice.audioCalls.length,2,'Refresh does not repeat played replies');
   voice.nodes.get('#conversation-voice-replies').handlers.click();
   voice.addReplies(1);await voice.ui.refresh();assert.equal(voice.audioCalls.length,2,'Turning voice off retains text without preparing more audio');
+  // Hold only player gaps with a deterministic clock; network/media remain async.
+  const paced=boot(false,false,{clock:true});paced.audio();await paced.ui.refresh();
+  paced.nodes.get('#conversation-voice-replies').handlers.click();paced.addReplies(3);await paced.ui.refresh();
+  const pacedPlayer=paced.nodes.get('#conversation-audio');
+  await until(()=>paced.audioCalls.length===1&&!pacedPlayer.paused);
+  paced.nativeRequest();await paced.ui.refresh();
+  pacedPlayer.ended=true;await pacedPlayer.handlers.ended();
+  assert.deepEqual(paced.clock.pending(),[450]);assert.equal(paced.audioCalls.length,1,'The next reply waits for a real silence interval');
+  paced.clock.fire(450);await until(()=>paced.audioCalls.length===2&&!pacedPlayer.paused);
+  assert.equal(paced.audioCalls[1].source,'request:native-request','A live question takes priority over queued worker output');
+  pacedPlayer.ended=true;await pacedPlayer.handlers.ended();
+  assert.deepEqual(paced.clock.pending(),[1200],'A question leaves a longer answer opportunity');
+  assert.match(paced.nodes.get('#conversation-audio-state').textContent,/Talk to answer or change topic/);
+  assert.equal(paced.nodes.get('#conversation-requests').hidden,false,'The actionable question remains visible');
+  paced.clock.fire(1200);await until(()=>paced.audioCalls.length===3&&!pacedPlayer.paused);
+  assert.equal(paced.audioCalls[2].source,'native:10');paced.ui.stop();
+
+  for(const action of ['pause','stop','hide','disable','capture','offline','pagehide']){
+    const gap=boot(false,false,{clock:true,capture:true});gap.audio(true);await gap.ui.refresh();
+    gap.nodes.get('#conversation-voice-replies').handlers.click();gap.addReplies(1);await gap.ui.refresh();
+    const player=gap.nodes.get('#conversation-audio');await until(()=>gap.audioCalls.length===1&&!player.paused);
+    player.ended=true;const ending=player.handlers.ended();
+    assert.deepEqual(gap.clock.pending(),[180],'A chunk boundary does not immediately start the next segment');
+    if(action==='pause')gap.ui.pause();
+    if(action==='stop')gap.ui.stop();
+    if(action==='hide')gap.hide();
+    if(action==='disable')gap.nodes.get('#conversation-voice-replies').handlers.click();
+    if(action==='capture')gap.capture();
+    if(['offline','pagehide'].includes(action))gap.event(action);
+    await ending;gap.clock.fire(180);
+    assert.equal(gap.audioCalls.length,1,`${action} cancels the chunk wait`);
+    assert.deepEqual(gap.clock.pending(),[]);
+    gap.ui.stop();
+  }
+  const outage=boot(false,false,{clock:true});outage.audio();await outage.ui.refresh();
+  outage.nodes.get('#conversation-voice-replies').handlers.click();outage.failAudio();outage.addReplies(2);await outage.ui.refresh();
+  await until(()=>outage.clock.pending().includes(450));
+  assert.match(outage.nodes.get('#conversation-state').textContent,/Synthetic TTS outage|replies available/);
+  outage.clock.fire(450);await until(()=>outage.audioCalls.length===2&&!outage.nodes.get('#conversation-audio').paused);
+  assert.equal(outage.audioCalls[1].source,'native:10','A failed TTS segment cannot strand the next independent reply');outage.ui.stop();
+
+  const noPlayer=boot(false,false,{clock:true});noPlayer.audio();await noPlayer.ui.refresh();
+  noPlayer.nodes.get('#conversation-voice-replies').handlers.click();noPlayer.failAudio();noPlayer.addReplies(2);await noPlayer.ui.refresh();
+  await until(()=>noPlayer.clock.pending().includes(450));
+  assert.equal(noPlayer.nodes.get('#conversation-player').hidden,true);
+  noPlayer.ui.pause();noPlayer.clock.fire(450);await noPlayer.ui.refresh();
+  assert.equal(noPlayer.audioCalls.length,1,'Pause cancels an interreply gap even without an active audio element');noPlayer.ui.stop();
+
+  const reconnectVoice=boot(false,false,{clock:true});reconnectVoice.audio();await reconnectVoice.ui.refresh();
+  reconnectVoice.nodes.get('#conversation-voice-replies').handlers.click();reconnectVoice.addReplies(2);await reconnectVoice.ui.refresh();
+  const rp=reconnectVoice.nodes.get('#conversation-audio');await until(()=>reconnectVoice.audioCalls.length===1&&!rp.paused);
+  rp.ended=true;await rp.handlers.ended();reconnectVoice.event('offline');reconnectVoice.clock.fire(450);
+  reconnectVoice.addReplies(2);reconnectVoice.event('online');
+  await until(()=>!reconnectVoice.nodes.get('#conversation-refresh').disabled);await reconnectVoice.ui.refresh();
+  assert.equal(reconnectVoice.audioCalls.length,1,'Reconnect must not resume old queued audio or arrivals during suspension');
+  assert.match(reconnectVoice.nodes.get('#conversation-voice-replies').textContent,/paused/);
+  reconnectVoice.nodes.get('#conversation-voice-replies').handlers.click();
+  await reconnectVoice.ui.refresh();assert.equal(reconnectVoice.audioCalls.length,1,'Explicit resume starts from the loaded current conversation, not old audio');
+  reconnectVoice.addReplies(1);await reconnectVoice.ui.refresh();await until(()=>reconnectVoice.audioCalls.length===2&&!rp.paused);
+  assert.equal(reconnectVoice.audioCalls[1].source,'native:13');reconnectVoice.ui.stop();
+
+  const changedGap=boot(false,false,{clock:true});changedGap.audio(true);await changedGap.ui.refresh();
+  changedGap.nodes.get('#conversation-voice-replies').handlers.click();changedGap.addReplies(1);await changedGap.ui.refresh();
+  const cp=changedGap.nodes.get('#conversation-audio');await until(()=>changedGap.audioCalls.length===1&&!cp.paused);
+  cp.ended=true;const changing=cp.handlers.ended();changedGap.overrideSource(9,{revision:'replaced-source'});await changedGap.ui.refresh();
+  await changing;changedGap.clock.fire(180);assert.equal(changedGap.audioCalls.length,1,'A changed source cancels its owned continuation gap');changedGap.ui.stop();
+
+  const expiredQuestion=boot(false,false,{clock:true});expiredQuestion.audio();await expiredQuestion.ui.refresh();
+  expiredQuestion.nodes.get('#conversation-voice-replies').handlers.click();expiredQuestion.addReplies(1);await expiredQuestion.ui.refresh();
+  const eqp=expiredQuestion.nodes.get('#conversation-audio');await until(()=>expiredQuestion.audioCalls.length===1&&!eqp.paused);
+  expiredQuestion.nativeRequest();await expiredQuestion.ui.refresh();expiredQuestion.closeNativeRequest();await expiredQuestion.ui.refresh();
+  eqp.ended=true;await eqp.handlers.ended();expiredQuestion.clock.fire(450);
+  await Promise.resolve();assert.equal(expiredQuestion.audioCalls.length,1,'A question closed before its queue slot must not be synthesized');expiredQuestion.ui.stop();
+
   const compactVoice=boot();compactVoice.audio();await compactVoice.ui.refresh();
   compactVoice.nodes.get('#conversation-voice-replies').handlers.click();
   compactVoice.overrideSource(9,{kind:'worker_progress',label:'#Alpha',target:{thread_id:7}});
@@ -452,5 +548,5 @@ function boot(readOnly=false,standalone=false) {
   viewer.nodes.get('#conversation-message').value='Do not send';
   await viewer.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
   assert.equal(viewer.originals.size,1);
-  console.log("Conversation history, routing trace, terminal evidence ordering, stale playback, lost/offline POST recovery, concurrent draft and integrated native request retention regressions passed (zero model calls).");
+  console.log("Conversation UI: paced/cancelable speech, question priority/expiry, TTS recovery, reconnect silence, history/routing, stale evidence, original-input recovery and native requests passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });

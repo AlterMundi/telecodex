@@ -245,3 +245,29 @@ or retry transcription. Pending/unconfirmed ASR, mismatched bytes, links and
 nonprivate files are retained. This applies to dashboard uploads only; companion
 recordings, Telegram downloads and transcription preparation copies have separate
 owners and are not recursively removed by this mechanism.
+
+## Browser pacing and attention
+
+The existing source/revision-fenced browser player owns one cancelable waiting
+state, including silence when no audio element is active. Initial timing is
+180 ms between chunks, 450 ms between replies and 1200 ms after a live question.
+These are pacing defaults to qualify with actual hearing, not a latency SLO.
+Question speech takes FIFO priority over queued ordinary replies without
+interrupting a segment already playing. The question remains available in the
+visible request area; its contextual reply reference is advisory. Ordinary
+discussion does not become an answer merely because a question was spoken.
+
+Capture, stop, pause, hide, page leave, voice disable and source/generation change
+cancel the owned wait. Suspending for disconnection or hiding discards the queued
+audio and requires an explicit voice action to resume; reconnect does not replay
+history. Text and actual work continue independently. A failed TTS preparation
+can advance to the next independent queued reply after a gap, without repeating
+the failed source; authorization failure suspends playback. Old progress remains
+coalesced behind a current final result. No new audio retention or provider is
+introduced by this player behavior.
+
+`tests/conversation_ui.js` drives the shipped player with deterministic gap
+timers and synthetic media/network: chunk/reply/question spacing, priority,
+interruption during silence (including no active audio), stale source, TTS
+failure/next reply and offline/reconnect behavior. Real browser playback and
+subjective hearing remain distinct evidence classes in the v0.2 campaign.
