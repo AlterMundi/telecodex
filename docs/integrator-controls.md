@@ -4,6 +4,14 @@ Status: studied and planned, 2026-10-19. Owner: [Telecodex #210](https://github.
 under [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
 This document does not enable controls, delegation, recovery services or model wakeups.
 
+Development checkpoint: scoped `goal_inspect` reads a native definition revision,
+execution state and receiver bookkeeping separately. Missing snapshot capability
+returns unknown; it never falls back to an invented revision. Ownership and
+logical/native bindings are checked around asynchronous reads. This read-only
+slice neither changes a goal nor loads, resumes or attaches to its thread.
+Mutating transactions, receiving adoption and the finished real-session campaign
+remain required by #210.
+
 Human-selected initial policy: explicit human instructions to start, pause,
 resume or clear a selected goal execute without asking for the same permission
 again. An assistant-proposed lifecycle change states target/action/reason and

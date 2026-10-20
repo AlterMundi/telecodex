@@ -42,6 +42,22 @@ impl NativeGoal {
     }
 }
 
+/// Native definition/incarnation precondition; usage increments do not change it.
+#[derive(Debug, Clone, serde::Serialize, Deserialize, PartialEq, Eq)]
+pub struct NativeGoalSnapshot {
+    pub goal: Option<NativeGoal>,
+    pub revision: String,
+}
+pub(super) fn parse_goal_snapshot(response: &Value, thread_id: &str) -> Result<NativeGoalSnapshot> {
+    let revision=response.get("revision").and_then(Value::as_str)
+        .filter(|value|!value.is_empty() && value.len()<=512 && value.bytes().all(|c|(33..=126).contains(&c)))
+        .context("Native goal snapshot has no bounded opaque revision; legacy get is not an atomic precondition")?;
+    Ok(NativeGoalSnapshot {
+        goal: parse_goal(response, thread_id)?,
+        revision: revision.into(),
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct GoalActivation {
     pub intent: String,
@@ -79,6 +95,14 @@ impl CodexRunner {
         })
         .await
         .context("native goal acknowledgment timed out; inspect /goal before retrying")?
+    }
+    pub async fn get_goal_snapshot(&self, thread_id: &str) -> Result<NativeGoalSnapshot> {
+        parse_goal_snapshot(
+            &self
+                .goal_rpc("thread/goal/snapshot", json!({"threadId":thread_id}))
+                .await?,
+            thread_id,
+        )
     }
     pub async fn get_goal(&self, thread_id: &str) -> Result<Option<NativeGoal>> {
         parse_goal(
@@ -213,5 +237,31 @@ pub(super) async fn mutate_control(
                 .context("clear response unconfirmed")?;
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn snapshot_requires_real_revision_and_matching_native_goal() {
+        let empty = parse_goal_snapshot(
+            &json!({"goal":null,"revision":"goal-v1:database:thread:0"}),
+            "thread",
+        )
+        .unwrap();
+        assert!(empty.goal.is_none());
+        for bad in [
+            json!({"goal":null}),
+            json!({"goal":null,"revision":""}),
+            json!({"goal":null,"revision":"forged\nline"}),
+        ] {
+            assert!(parse_goal_snapshot(&bad, "thread").is_err());
+        }
+        let mut response = json!({"goal":{"threadId":"other","objective":"selected goal","status":"paused","tokenBudget":1000,"tokensUsed":80,"timeUsedSeconds":4,"createdAt":1,"updatedAt":2},"revision":"opaque-definition"});
+        assert!(parse_goal_snapshot(&response, "thread").is_err());
+        response["goal"]["threadId"] = json!("thread");
+        let selected = parse_goal_snapshot(&response, "thread").unwrap();
+        assert_eq!(selected.goal.unwrap().tokens_used, 80);
     }
 }

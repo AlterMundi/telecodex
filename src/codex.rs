@@ -33,7 +33,7 @@ use tokio_tungstenite::{
 use tokio_util::sync::CancellationToken;
 
 mod goals;
-pub use goals::{GoalActivation, GoalControl, GoalStopSnapshot, NativeGoal};
+pub use goals::{GoalActivation, GoalControl, GoalStopSnapshot, NativeGoal, NativeGoalSnapshot};
 
 /// The provider observed cancellation before it attempted the initial native
 /// write. This is distinct from a lost acknowledgment after transmission.

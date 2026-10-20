@@ -146,6 +146,7 @@ jobs:
       # Exercise this new slice before the longer unchanged compatibility group.
       - name: Qualify live controller retirement and expression choices
         run: |
+          python3 -B tests/goal_inspection_io.py target/release/telecodex
           python3 -B tests/live_tasks_io.py target/release/telecodex
           python3 -B tests/warm_controller_io.py target/release/telecodex
       - name: Qualify independent foreground ingress and native-question journeys

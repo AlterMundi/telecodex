@@ -272,6 +272,8 @@ The coordinator's cross-session scope is tied to the original routed local turn,
 not a sticky native-thread association, so a later direct task remains direct.
 Unit cases and an actual-controller synthetic process journey were added for
 revision/receipt denial, immutable retry, attribution, active issuer, worker
-isolation and direct-topic independence. Their execution/CI and receiving
-adoption remain to be observed; no #61 completion or real-session acceptance is
-claimed by writing the implementation.
+isolation and direct-topic independence. All combined CI39357678404 jobs passed and PR222 merged as427d666,
+including the actual-controller synthetic process journey. Receiving adoption
+and the finished real-session campaign remain outstanding; #61 stays open.
+The runtime guidance now points scoped callers to these live operations while
+retaining the successful-turn manifest fallback.
