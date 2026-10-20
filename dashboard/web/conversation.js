@@ -61,7 +61,7 @@ window.Conversation = (() => {
       clearFocus();voiceContext=undefined;draft.value=message;draft.focus?.();compose.scrollIntoView?.({block:"nearest"});return true;
     }});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -82,9 +82,9 @@ window.Conversation = (() => {
       $("#conversation-inputs-older").textContent="Earlier messages";
       historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));timeline.append(historyTools);
     }
-    function placeInTimeline(box, key, timestamp) {
+    function atTimelineEnd() {return !!timeline && timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;}
+    function placeInTimeline(box, key, timestamp, nearEnd=atTimelineEnd()) {
       if(!timeline)return;
-      const nearEnd=timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;
       box.dataset.timelineKey=key;
       box.dataset.timelineTime=String(Date.parse(timestamp)||Number(box.dataset.timelineTime)||Date.now());
       const following=[...timeline.children].find(item=>item!==box &&
@@ -236,6 +236,7 @@ window.Conversation = (() => {
       });
     }
     function inputCard(value, observed = ++inputObservation) {
+      const followingLive=atTimelineEnd();
       let card = inputs.get(value.id);
       if (!card) {
         const box = node("article", undefined, "reply");
@@ -348,7 +349,7 @@ window.Conversation = (() => {
       const container = $("#conversation-inputs");
       const following = [...container.children].find(item => item !== card.box
         && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
-      if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at);
+      if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at,followingLive);
       else container.insertBefore(card.box, following || null);
       graph?.input(card.value);
       inputActivity();
@@ -421,7 +422,7 @@ window.Conversation = (() => {
       const context=replyFocus?.reference||voiceContext;
       const reply=context&&JSON.parse(JSON.stringify(context));
       posting = true; send.disabled = true; latestComposerId = id;
-      inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); $("#conversation-sent").open = true;
+      inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); if(timeline)timeline.scrollTop=timeline.scrollHeight; $("#conversation-sent").open = true;
       sendState.textContent = "Sending…";
       try {
         const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{}),...(selectedVisual?{visual:selectedVisual}:{})});
@@ -606,6 +607,7 @@ window.Conversation = (() => {
       return api(`interaction/part?${query}`);
     }
     function upsert(source) {
+      const followingLive=atTimelineEnd();
       let card = cards.get(source.id);
       if (!card) {
         const container = $(source.kind === "integrator_answer" ? "#conversation-answers" : "#conversation-results");
@@ -665,7 +667,7 @@ window.Conversation = (() => {
       card.box.dataset.pending = String(!!source.correction_pending || source.native_binding_current === false);
       card.listen.hidden = !canListen;
       if(!progress)graph?.result(source);
-      placeInTimeline(card.box,source.id,source.observed_at);
+      placeInTimeline(card.box,source.id,source.observed_at,followingLive);
     }
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
