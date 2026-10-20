@@ -3,6 +3,7 @@ use super::*;
 use crate::interaction::InputReference;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 pub(super) fn schema() -> Value {
     json!({"type":"object","properties":{"input_ref":{"oneOf":[{"type":"integer","minimum":0},{"type":"string","format":"uuid"}]},"name":{"type":"string","description":"Short single-token topic selector; stable tID names are reserved"},"reason":{"type":"string","description":"Why this original input is a distinct task; uncertainty or a busy worker is not a reason"},"context_selectors":{"type":"array","items":{"type":"string"},"maxItems":5}},"required":["input_ref","name","reason","context_selectors"],"additionalProperties":false})
@@ -15,6 +16,66 @@ struct Create {
     name: String,
     reason: String,
     context_selectors: Vec<String>,
+}
+
+/// Keep the selected captured revisions, not an unbounded copy of their text.
+/// Entry positions remain intact so the card's support indices stay meaningful.
+fn bound_interview_context(context: Value) -> Result<Value> {
+    let limit = crate::store::Store::CREATION_CONTEXT_MAX_BYTES;
+    if context.to_string().len() <= limit {
+        return Ok(context);
+    }
+    for supported_cap in [2048, 1024, 512, 256, 128] {
+        let mut bounded = context.clone();
+        for source in bounded["sources"]
+            .as_array_mut()
+            .context("Interview sources unavailable")?
+        {
+            let supports = source["interpretation"]["supports"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_u64)
+                .filter_map(|index| usize::try_from(index).ok())
+                .collect::<std::collections::HashSet<_>>();
+            let pinned = &mut source["pinned_originals"];
+            let original = pinned.to_string();
+            let mut index = 0;
+            let mut truncated = Vec::new();
+            for field in ["entries", "in_progress_entries"] {
+                for entry in pinned[field].as_array_mut().into_iter().flatten() {
+                    let cap = if supports.contains(&index) {
+                        supported_cap
+                    } else {
+                        supported_cap.min(256)
+                    };
+                    if let Some(text) = entry.as_str()
+                        && text.chars().count() > cap
+                    {
+                        *entry = Value::String(text.chars().take(cap).collect());
+                        truncated.push(index);
+                    }
+                    index += 1;
+                }
+            }
+            if !truncated.is_empty() {
+                pinned["bounded"] = json!(true);
+                pinned["text_truncated"] = json!(true);
+                pinned["interview_excerpt"] = json!({
+                    "captured_source_sha256":format!("{:x}",Sha256::digest(original.as_bytes())),
+                    "captured_source_json_bytes":original.len(),
+                    "supported_entry_character_cap":supported_cap,
+                    "other_entry_character_cap":supported_cap.min(256),
+                    "truncated_entry_indices":truncated,
+                    "meaning":"Additional bounded interview excerpts. Entry positions and captured source identity are preserved; the full selected source snapshot remains retained. These excerpts are not the full observer input or live source state."
+                });
+            }
+        }
+        if bounded.to_string().len() <= limit {
+            return Ok(bounded);
+        }
+    }
+    bail!("Selected interview metadata exceed the context budget; select fewer sources")
 }
 
 pub(super) async fn create(
@@ -142,6 +203,7 @@ async fn create_selected(
         context["limits"] = json!(
             "An independent interview from explicitly selected bounded historical evidence, not an exact native fork or the source's live state. Busy sources continue independently. Later corrections are not silently imported; select a new context explicitly. This does not publish content, transfer pending tasks/tools/goals or authorize source execution."
         );
+        context = bound_interview_context(context)?;
     }
     let (operation, fresh) = shared.store.interaction_prepare_creation(
         key,
@@ -247,7 +309,7 @@ async fn execute_claimed(
     template.session_title = Some(name.into());
     if intent["context"]["purpose"] == "interview" {
         template.session_prompt = Some(format!(
-            "{}\n\nThis is an independent interview about the explicitly selected observer finding. The pinned original source window and derived observer card are attributed context, not your firsthand experience or live source state. Explain what the supplied evidence supports, preserve uncertainty and ask for missing context. Source work, tools and goals are not transferred. Do not continue or modify the source task, publish its content or claim an exact native fork. Later source changes remain separate unless explicitly selected.",
+            "{}\n\nThis is an independent interview about the explicitly selected observer finding. The pinned original source window (or explicitly marked excerpts) and derived observer card are attributed context, not your firsthand experience or live source state. Respect any additional interview excerpt bounds; the full captured source remains retained separately. Explain what the supplied evidence supports, preserve uncertainty and ask for missing context. Source work, tools and goals are not transferred. Do not continue or modify the source task, publish its content or claim an exact native fork. Later source changes remain separate unless explicitly selected.",
             template.session_prompt.as_deref().unwrap_or_default()
         ));
     }
@@ -265,4 +327,70 @@ async fn execute_claimed(
     Ok(
         json!({"kind":"created_destination","operation":shared.store.interaction_creation(id,human)?,"selector":format!("t{topic}"),"instruction":instruction.id,"dispatch_error":error,"incorporation":"Creation and transport acceptance do not establish worker incorporation or completion"}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_interview_keeps_source_identity_indices_and_small_originals() {
+        let sources = (0..5)
+            .map(|index| {
+                json!({
+                    "source_session":index,
+                    "interpretation":{"revision":3,"supports":[2,3]},
+                    "pinned_originals":{
+                        "revision":format!("captured-{index}"),"boundary":"completed-cut",
+                        "turn_ids":["a","b","c"],
+                        "entries":["Other original evidence. ".repeat(4000),"Short original.","支持 evidence \"quoted\"\n".repeat(4000)],
+                        "in_progress_entries":["Provisional 知見. ".repeat(4000)],
+                        "bounded":false,"text_truncated":false
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let original = json!({"purpose":"interview","exact_native_fork":false,"sources":sources});
+        let bounded = bound_interview_context(original.clone()).unwrap();
+        assert!(bounded.to_string().len() <= crate::store::Store::CREATION_CONTEXT_MAX_BYTES);
+        for (before, after) in original["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(bounded["sources"].as_array().unwrap())
+        {
+            assert_eq!(before["interpretation"], after["interpretation"]);
+            let source = &after["pinned_originals"];
+            assert_eq!(source["revision"], before["pinned_originals"]["revision"]);
+            assert_eq!(source["turn_ids"], before["pinned_originals"]["turn_ids"]);
+            assert_eq!(source["entries"].as_array().unwrap().len(), 3);
+            assert_eq!(source["entries"][1], "Short original.");
+            assert!(
+                source["entries"][2]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("支持 evidence")
+            );
+            assert_eq!(source["in_progress_entries"].as_array().unwrap().len(), 1);
+            assert_eq!(source["bounded"], true);
+            assert_eq!(source["text_truncated"], true);
+            assert_eq!(
+                source["interview_excerpt"]["truncated_entry_indices"],
+                json!([0, 2, 3])
+            );
+            assert_eq!(
+                source["interview_excerpt"]["captured_source_sha256"],
+                format!(
+                    "{:x}",
+                    Sha256::digest(before["pinned_originals"].to_string().as_bytes())
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn small_interview_context_is_unchanged() {
+        let context = json!({"sources":[{"pinned_originals":{"entries":["Exact source"]}}]});
+        assert_eq!(bound_interview_context(context.clone()).unwrap(), context);
+    }
 }

@@ -7,6 +7,8 @@ use anyhow::bail;
 use serde_json::{Value, json};
 
 impl Store {
+    pub const CREATION_CONTEXT_MAX_BYTES: usize = 48_000;
+
     pub(super) fn init_interaction_creation(&self) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch("CREATE TABLE IF NOT EXISTS interaction_creations(id TEXT PRIMARY KEY,human_id INTEGER NOT NULL,entry_chat INTEGER NOT NULL,entry_topic INTEGER NOT NULL,input_update INTEGER NOT NULL,phase TEXT NOT NULL,doc TEXT NOT NULL,topic INTEGER,instance_id TEXT NOT NULL,UNIQUE(human_id,entry_chat,entry_topic,input_update));
@@ -112,7 +114,7 @@ impl Store {
         let transcription = source.transcription;
         if text.trim().is_empty()
             || text.trim_start().starts_with('/')
-            || context.to_string().len() > 48000
+            || context.to_string().len() > Self::CREATION_CONTEXT_MAX_BYTES
         {
             return Err(anyhow!("Unsupported original input or context"));
         }
