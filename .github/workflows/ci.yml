@@ -198,7 +198,7 @@ jobs:
           # Each suite owns its temporary database, native/HTTP peers and ports.
           # Bound fixture concurrency; retain every log and nonzero exit result.
           with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-              jobs = [pool.submit(qualify, suite) for suite in ('routing_io.py', 'observer_io.py', 'observer_tool_io.py', 'observer_interview_io.py', 'semantic_routing_io.py', 'creation_io.py', 'creation_recovery_io.py', 'attention_io.py', 'session_requests_io.py', 'warm_controller_io.py', 'presentation_control_io.py', 'conversation_input_control_io.py', 'conversation_routing_io.py', 'conversation_clarification_io.py')]
+              jobs = [pool.submit(qualify, suite) for suite in ('routing_io.py', 'observer_io.py', 'observer_tool_io.py', 'observer_interview_io.py', 'semantic_routing_io.py', 'creation_io.py', 'creation_recovery_io.py', 'attention_io.py', 'session_requests_io.py', 'warm_controller_io.py', 'live_tasks_io.py', 'presentation_control_io.py', 'conversation_input_control_io.py', 'conversation_routing_io.py', 'conversation_clarification_io.py')]
               for job in concurrent.futures.as_completed(jobs):
                   suite, result = job.result()
                   print(f'{suite}: exit {result.returncode}', flush=True)
