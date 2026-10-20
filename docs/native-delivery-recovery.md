@@ -32,6 +32,9 @@ not imported as completed. A newer execution bounds the older observation; a
 replacement collector on the same physical turn transfers the checkpoint. Owner,
 native binding, source lifetime and publication selection are checked again before
 effects. Missing boundaries and unobservable native state remain visible in status.
+An internally generated preparation-failure notice can return to the same
+authorized topic before any native binding is observed. It claims no native
+acceptance or output; the owner and allowlist are checked before publication.
 
 A proved terminal history observation releases a collector still waiting for a
 lost event, without turn interruption. An orphaned existing active writer can be

@@ -358,17 +358,21 @@ mod tests {
         assert!(s.topic_publication_claim(key, 101).unwrap().is_none());
         let p = s.topic_publication_claim(key, 100).unwrap().unwrap();
         s.topic_publication_parts(p.id, &[p.body]).unwrap();
-        assert!(s.topic_publication_reserve(p.id, 0).unwrap());
-        s.topic_publication_receipt(p.id, 0, Some(900), false)
-            .unwrap();
-        s.topic_publication_finish(p.id).unwrap();
         s.conn
             .lock()
             .unwrap()
             .execute("UPDATE users SET allowed=0 WHERE tg_user_id=100", [])
             .unwrap();
         assert!(!s.topic_publication_reserve(p.id, 0).unwrap());
-        assert!(s.topic_publication_claim(key, 100).unwrap().is_none());
+        s.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE users SET allowed=1 WHERE tg_user_id=100", [])
+            .unwrap();
+        assert!(s.topic_publication_reserve(p.id, 0).unwrap());
+        s.topic_publication_receipt(p.id, 0, Some(900), false)
+            .unwrap();
+        s.topic_publication_finish(p.id).unwrap();
     }
     #[test]
     fn topic_publication_identity_order_parts_and_unknown_ack_survive_restart() {
