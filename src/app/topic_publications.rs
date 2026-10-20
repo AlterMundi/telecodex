@@ -18,14 +18,6 @@ pub(super) fn enabled(shared: &AppShared, key: SessionKey, human: i64) -> bool {
 }
 
 pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
-    if !shared
-        .config
-        .interaction
-        .as_ref()
-        .is_some_and(|c| c.telegram_projection)
-    {
-        return Ok(());
-    }
     for key in shared.store.topic_publication_targets()? {
         wake(shared.clone(), key);
     }
@@ -33,12 +25,9 @@ pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
 }
 
 pub(super) fn wake(shared: Arc<AppShared>, key: SessionKey) {
-    let Some(human) = shared.config.interaction.as_ref().map(|c| c.human_id) else {
+    let Ok(Some(human)) = shared.store.topic_publication_owner(key) else {
         return;
     };
-    if !enabled(&shared, key, human) {
-        return;
-    }
     for files in [false, true] {
         let shared = shared.clone();
         tokio::spawn(async move {
@@ -74,7 +63,11 @@ async fn drain(shared: &Arc<AppShared>, key: SessionKey, human: i64, files: bool
                 shared
                     .telegram
                     .send_message_checked(key.chat_id, || {
-                        if !enabled(shared, key, human)
+                        if (!publication.direct && !enabled(shared, key, human)
+                            || publication.direct
+                                && shared
+                                    .store
+                                    .conversation_turn_return(publication.local_turn)?)
                             || !shared
                                 .store
                                 .topic_publication_reserve(publication.id, part)?
@@ -193,6 +186,8 @@ async fn send_file(
             mime.as_deref(),
             Some(&caption),
             || {
+                // Immutable file audiences and the explicit source projection
+                // are independent of a later text return-surface selection.
                 if !enabled(shared, key, human)
                     || shared
                         .store

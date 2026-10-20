@@ -97,4 +97,45 @@ def qualify(binary):
         j.release_upload.set();j.close()
 
 
-if __name__=='__main__':qualify(sys.argv[1])
+def unenrolled_direct_files(binary):
+    class Direct(ProjectedFiles):
+        def handle_extra_rpc(self,message,send):
+            p=message.get('params',{})
+            if message.get('method')=='turn/start' and p['input'][0].get('text')=='Unenrolled direct file request.':
+                out=Path(re.search(r'\n([^\n]+/out)\n',p['additionalContext']['telecodex.runtime']['value']).group(1))
+                (out/'direct.txt').write_bytes(b'Exact unenrolled direct bytes.\n')
+                native=p['threadId'];turn='unenrolled-direct'
+                self.native_turns+=1
+                send({'id':message['id'],'result':{'turn':{'id':turn}}})
+                self.broadcast(native,'turn/started',{'turn':{'id':turn,'status':'inProgress'}})
+                self.broadcast(native,'item/completed',{'turnId':turn,'item':{'id':'direct-file-answer','type':'agentMessage','phase':'final_answer','text':'Direct file ready.'}})
+                self.broadcast(native,'turn/completed',{'turn':{'id':turn,'status':'completed'}})
+                return True
+            return super().handle_extra_rpc(message,send)
+
+        def multipart_reply(self,method,headers,raw):
+            message=BytesParser(policy=policy.default).parsebytes(('Content-Type: '+headers['Content-Type']+'\r\nMIME-Version: 1.0\r\n\r\n').encode()+raw)
+            fields={};files=[]
+            for part in message.iter_parts():
+                if part.get_filename():files.append((part.get_filename(),part.get_payload(decode=True)))
+                else:fields[part.get_param('name',header='content-disposition')]=part.get_payload(decode=True).decode()
+            assert fields['chat_id']=='100' and fields['message_thread_id']=='17'
+            assert files==[('direct.txt',b'Exact unenrolled direct bytes.\n')]
+            assert not fields.get('caption','').startswith('File ·'), 'Ordinary file delivery entered opt-in projection'
+            self.uploads.append(files[0])
+            return {'ok':True,'result':{'message_id':990,'chat':{'id':100,'type':'private'},'message_thread_id':17}}
+
+    j=Direct(str(Path(binary).resolve()))
+    try:
+        prepare(j,projection=True)
+        j.admit('Unenrolled direct file request.',topic=17)
+        j.wait(lambda:len(j.uploads)==1);j.idle()
+        assert j.instructions(17)==[]
+        assert j.row("SELECT json_extract(j.doc,'$.publish_files') FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id WHERE s.thread_id=17")==[(0,)]
+        print('PASS ordinary direct file bytes outside enrollment retain legacy delivery and do not enable opt-in source projection; zero models')
+    finally:j.close()
+
+
+if __name__=='__main__':
+    qualify(sys.argv[1])
+    unenrolled_direct_files(sys.argv[1])

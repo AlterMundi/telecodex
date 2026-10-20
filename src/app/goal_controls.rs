@@ -315,6 +315,7 @@ async fn activate_control(
         // Re-resolving the worker here could change its local turn in flight.
         let (response, ack) = oneshot::channel();
         let sent = attached.sender.send(crate::codex::CodexSteerRequest {
+            observation: None,
             images: vec![],
             admission_check: None,
             client_message_id: None,

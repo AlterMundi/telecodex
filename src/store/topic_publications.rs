@@ -5,6 +5,8 @@ use serde_json::json;
 #[derive(Debug)]
 pub struct TopicPublication {
     pub id: i64,
+    pub local_turn: i64,
+    pub direct: bool,
     pub target: SessionKey,
     pub body: String,
     pub kind: String,
@@ -36,6 +38,10 @@ pub(super) fn native_on(
     item: &str,
     text: &str,
 ) -> Result<()> {
+    let legacy:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM native_recovery_baseline WHERE native_thread=?1 AND native_turn=?2 AND item_id=?3)",params![thread,turn,item],|r|r.get(0))?;
+    if legacy {
+        return Ok(());
+    }
     enqueue_on(
         conn,
         local,
@@ -85,6 +91,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS topic_publications(id INTEGER PRIMARY KEY AUTOINCREMENT,local_turn INTEGER NOT NULL REFERENCES turns(id),session_id INTEGER NOT NULL REFERENCES sessions(id),human_id INTEGER NOT NULL,kind TEXT NOT NULL,source TEXT NOT NULL,body TEXT NOT NULL,phase TEXT NOT NULL,instance_id TEXT NOT NULL,UNIQUE(kind,source,session_id));
             CREATE INDEX IF NOT EXISTS topic_publications_pending ON topic_publications(session_id,phase,id);
             CREATE TABLE IF NOT EXISTS topic_publication_parts(publication INTEGER NOT NULL REFERENCES topic_publications(id),part INTEGER NOT NULL,body TEXT NOT NULL,phase TEXT NOT NULL,message_id INTEGER,PRIMARY KEY(publication,part));")?;
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS direct_topic_turns(local_turn INTEGER PRIMARY KEY REFERENCES topic_projection_turns(local_turn));")?;
         conn.execute("UPDATE topic_publications SET phase=CASE WHEN EXISTS(SELECT 1 FROM topic_publication_parts p WHERE p.publication=topic_publications.id AND p.phase IN ('sending','uncertain')) THEN 'uncertain' ELSE 'ready' END WHERE phase='publishing' AND instance_id!=?",[&self.instance_id])?;
         conn.execute("UPDATE topic_publication_parts SET phase='uncertain' WHERE phase='sending' AND publication IN (SELECT id FROM topic_publications WHERE phase='uncertain')",[])?;
         Ok(())
@@ -97,10 +104,29 @@ impl Store {
             return Err(anyhow!("Topic projection ownership changed"));
         }
         conn.execute(
-            "INSERT OR IGNORE INTO topic_projection_turns VALUES(?1,?2)",
+            "INSERT OR IGNORE INTO topic_projection_turns(local_turn,human_id) VALUES(?1,?2)",
             params![local, human],
         )?;
         Ok(())
+    }
+
+    pub fn topic_direct_register(&self, local: i64, human: i64, key: SessionKey) -> Result<()> {
+        self.topic_projection_register(local, human, key)?;
+        self.conn.lock().expect("store mutex poisoned").execute(
+            "INSERT OR IGNORE INTO direct_topic_turns(local_turn) VALUES(?)",
+            [local],
+        )?;
+        Ok(())
+    }
+
+    pub fn topic_publication_owner(&self, key: SessionKey) -> Result<Option<i64>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Ok(conn.query_row("SELECT s.creator_user_id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND u.allowed=1",params![key.chat_id,key.thread_id],|r|r.get(0)).optional()?)
+    }
+
+    pub fn topic_publication_notice(&self, local: i64, text: &str) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        enqueue_on(&conn, local, "notice", &format!("collector:{local}"), text)
     }
 
     pub fn topic_projection_active(&self, local: i64) -> Result<bool> {
@@ -148,8 +174,8 @@ impl Store {
             return Ok(None);
         }
         loop {
-            let row:Option<(i64,String,bool,String,String)>=tx.query_row("SELECT p.id,p.body,COALESCE((u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND ((p.kind!='artifact' AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now'))))),0),p.kind,p.source FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN turns t ON t.id=p.local_turn JOIN users u ON u.tg_user_id=p.human_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3 AND p.phase='ready' AND (p.kind='artifact')=?4 ORDER BY p.id LIMIT 1",params![key.chat_id,key.thread_id,human,files],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
-            let Some((id, body, valid, kind, source)) = row else {
+            let row:Option<(i64,String,bool,String,String,i64,bool)>=tx.query_row("SELECT p.id,p.body,COALESCE((u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind!='artifact' AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now'))))),0),p.kind,p.source,p.local_turn,EXISTS(SELECT 1 FROM direct_topic_turns pt WHERE pt.local_turn=p.local_turn) FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN turns t ON t.id=p.local_turn JOIN users u ON u.tg_user_id=p.human_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3 AND p.phase='ready' AND (p.kind='artifact')=?4 ORDER BY p.id LIMIT 1",params![key.chat_id,key.thread_id,human,files],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+            let Some((id, body, valid, kind, source, local_turn, direct)) = row else {
                 tx.commit()?;
                 return Ok(None);
             };
@@ -165,6 +191,8 @@ impl Store {
                 tx.commit()?;
                 return Ok(Some(TopicPublication {
                     id,
+                    local_turn,
+                    direct,
                     target: key,
                     body,
                     kind,
@@ -226,7 +254,7 @@ impl Store {
     /// Called after Telegram cooldown, immediately before one network attempt.
     pub fn topic_publication_reserve(&self, id: i64, part: i64) -> Result<bool> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        Ok(conn.execute("UPDATE topic_publication_parts SET phase='sending' WHERE publication=?1 AND part=?2 AND phase='ready' AND EXISTS(SELECT 1 FROM topic_publications p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=p.session_id JOIN users u ON u.tg_user_id=p.human_id WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?3 AND u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND ((p.kind!='artifact' AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now')))))",params![id,part,&self.instance_id])?==1)
+        Ok(conn.execute("UPDATE topic_publication_parts SET phase='sending' WHERE publication=?1 AND part=?2 AND phase='ready' AND EXISTS(SELECT 1 FROM topic_publications p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=p.session_id JOIN users u ON u.tg_user_id=p.human_id WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?3 AND u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind!='artifact' AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now')))))",params![id,part,&self.instance_id])?==1)
     }
 
     pub fn topic_publication_receipt(
@@ -240,6 +268,9 @@ impl Store {
         let changed=conn.execute("UPDATE topic_publication_parts SET phase=?3,message_id=?4 WHERE publication=?1 AND part=?2 AND phase='sending' AND EXISTS(SELECT 1 FROM topic_publications p WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?5)",params![id,part,if message.is_some(){"sent"}else if rejected{"rejected"}else{"uncertain"},message,&self.instance_id])?;
         if changed != 1 {
             return Err(anyhow!("Topic publication receipt ownership changed"));
+        }
+        if let Some(message) = message {
+            conn.execute("INSERT OR IGNORE INTO handoff_messages(chat_id,thread_id,message_id,turn_id,text) SELECT s.chat_id,s.thread_id,?3,p.local_turn,x.body FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN topic_publication_parts x ON x.publication=p.id WHERE p.id=?1 AND x.part=?2",params![id,part,message])?;
         }
         Ok(())
     }
@@ -308,6 +339,40 @@ mod tests {
     }
     fn store(path: &Path) -> Store {
         Store::open(path, &[100, 101], &super::super::tests::defaults()).unwrap()
+    }
+    #[test]
+    fn pre_native_failure_notice_needs_owner_scope_but_no_native_receipt() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = store(file.path());
+        let (local, key) = execution(&s);
+        // Preparation can fail before ThreadStarted even for an already-bound
+        // session. A notice does not claim native output or input acceptance.
+        s.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE turns SET native_thread_id=NULL WHERE id=?", [local])
+            .unwrap();
+        s.topic_direct_register(local, 100, key).unwrap();
+        s.topic_publication_notice(local, "Native preparation unavailable")
+            .unwrap();
+        assert!(s.topic_publication_claim(key, 101).unwrap().is_none());
+        let p = s.topic_publication_claim(key, 100).unwrap().unwrap();
+        s.topic_publication_parts(p.id, &[p.body]).unwrap();
+        s.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE users SET allowed=0 WHERE tg_user_id=100", [])
+            .unwrap();
+        assert!(!s.topic_publication_reserve(p.id, 0).unwrap());
+        s.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE users SET allowed=1 WHERE tg_user_id=100", [])
+            .unwrap();
+        assert!(s.topic_publication_reserve(p.id, 0).unwrap());
+        s.topic_publication_receipt(p.id, 0, Some(900), false)
+            .unwrap();
+        s.topic_publication_finish(p.id).unwrap();
     }
     #[test]
     fn topic_publication_identity_order_parts_and_unknown_ack_survive_restart() {

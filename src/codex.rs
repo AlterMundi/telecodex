@@ -188,7 +188,15 @@ pub type CodexSteerResponse = std::result::Result<Option<String>, CodexSteerErro
 /// Plain-text input waiting to be appended to an active Codex turn.
 pub type SteerAdmissionCheck = Arc<dyn Fn() -> Result<()> + Send + Sync>;
 
+pub struct NativeTerminalObservation {
+    pub turn_id: String,
+    pub status: String,
+    pub goal_active: bool,
+    pub assistant_text: Option<String>,
+}
+
 pub struct CodexSteerRequest {
+    pub observation: Option<NativeTerminalObservation>,
     pub images: Vec<std::path::PathBuf>,
     /// Revalidate captured admission at the native write boundary, after any
     /// preparation or metadata wait. This callback is local, never wire input.
@@ -467,6 +475,52 @@ impl CodexRunner {
             Ok(None)
         }).await.context("selected native reconciliation unavailable")?
     }
+    /// Read only through an exact prior native boundary. Absence never authorizes replay.
+    pub async fn recovery_history(
+        &self,
+        native: &str,
+        anchor: &str,
+        client: Option<&str>,
+    ) -> Result<(Vec<Value>, bool)> {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
+            let result=async {
+                process.initialize().await?;
+                let mut cursor=None::<String>;
+                let mut seen=HashSet::new();
+                let mut selected=Vec::new();
+                let mut found=false;
+                let mut bytes=0;
+                for _ in 0..6 {
+                    let id=process.send_request("thread/turns/list",json!({"threadId":native,"limit":20,"sortDirection":"desc","itemsView":"full","cursor":cursor})).await?;
+                    let page=process.await_response(id).await?;
+                    bytes+=serde_json::to_vec(&page)?.len();
+                    if bytes>8*1024*1024 {bail!("Native recovery snapshot exceeds bounded read");}
+                    for turn in page["data"].as_array().context("Native recovery page missing")? {
+                        if turn["id"].as_str().is_none() || turn["items"].as_array().is_none() || !matches!(turn["status"].as_str(),Some("inProgress"|"completed"|"failed"|"interrupted")) {bail!("Native recovery turn malformed");}
+                        selected.push(turn.clone());
+                        if (!anchor.is_empty() && turn["id"]==anchor) || (anchor.is_empty() && client.is_some_and(|c|turn["items"].as_array().is_some_and(|items|items.iter().any(|i|i["type"]=="userMessage" && i["clientId"]==c)))) {found=true;break;}
+                    }
+                    if found {break;}
+                    cursor=page["nextCursor"].as_str().map(str::to_owned);
+                    if cursor.is_none() || !seen.insert(cursor.clone()) {break;}
+                }
+                if !found {bail!("Native recovery boundary unavailable; no history imported");}
+                let id=process.send_request("thread/goal/get",json!({"threadId":native})).await?;
+                // An unsupported goal read is unknown: keep observing rather than
+                // retiring an active goal's collection on a guessed absence.
+                let active=match process.await_response(id).await {
+                    Ok(v)=>goals::parse_goal(&v,native)?.is_some_and(|g|g.status=="active"),
+                    Err(_)=>true,
+                };
+                selected.reverse();
+                Ok((selected,active))
+            }.await;
+            process.shutdown().await?;
+            result
+        }).await.context("Native recovery observation timed out")?
+    }
+
     pub fn new(binary: PathBuf) -> Self {
         Self {
             binary,
@@ -1198,6 +1252,11 @@ where
     let mut queued_steers = VecDeque::new();
     if adopted_turn.is_none() {
         while let Ok(steer) = steer_rx.try_recv() {
+            if steer.observation.is_some() {
+                let _=steer.response.send(Err(CodexSteerError::Rejected("No native writer is attached yet".into())));
+                continue;
+            }
+
             if let Some(check) = &steer.admission_check
                 && let Err(error) = check()
             {
@@ -1337,6 +1396,22 @@ where
           steer=steer_rx.recv(), if steering_open => {
             match steer {
                 Some(steer) => {
+                    if let Some(observed)=steer.observation {
+                        if active_turn_id.as_deref()!=Some(observed.turn_id.as_str()) || !matches!(observed.status.as_str(),"completed"|"failed"|"interrupted") {
+                            let _=steer.response.send(Err(CodexSteerError::Rejected("Native observation is not for this active writer".into())));
+                            continue;
+                        }
+                        let _=on_event(CodexEvent::NativeTurnTerminal{id:observed.turn_id,status:observed.status.clone()}).await?;
+                        active_turn_id=None;
+                        turn_completed=true;
+                        goal_snapshot_request_id=None;
+                        goal_active=observed.goal_active;
+                        if let Some(text)=observed.assistant_text {summary.assistant_text=text;}
+                        if observed.status!="completed" {turn_error=Some(format!("Native turn {} (history observation)",observed.status));}
+                        if goal_active {goal_gap=Some(Instant::now()+Duration::from_secs(30));}
+                        let _=steer.response.send(Ok(None));
+                        continue;
+                    }
                     if cancel.is_cancelled() {
                         let _=steer.response.send(Err(CodexSteerError::Rejected("native interruption pending".to_string())));
                         continue;
@@ -3172,6 +3247,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                observation: None,
                 images: vec![],
                 admission_check: None,
                 text: "Change the work while approval is pending".into(),
@@ -3260,6 +3336,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                observation: None,
                 images: vec![],
                 admission_check: None,
                 text: "Correct the request before starting".into(),

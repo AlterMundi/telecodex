@@ -1147,6 +1147,7 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
     let sent = active
         .sender
         .send(CodexSteerRequest {
+            observation: None,
             images: crate::visual::attachments(
                 &app.shared.config.db_path,
                 app.shared

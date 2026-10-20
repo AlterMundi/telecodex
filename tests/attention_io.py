@@ -17,6 +17,7 @@ from routing_io import Routing
 class Load(Routing):
     def __init__(self,binary):
         self.live=set();self.peak=0
+        self.front_sequence=0
         super().__init__(binary)
         self.socket=self.root/'control.sock'
         self.config.write_text(self.config.read_text().replace('[telegram]',
@@ -48,10 +49,15 @@ class Load(Routing):
         if self.routed and m.get('method')=='turn/start':
             thread=p['threadId']
             if thread not in {f'native-topic-{n}' for n in range(7,27)}:
-                send({'id':m['id'],'result':{'turn':{'id':'front-turn'}}})
-                send({'method':'turn/started','params':{'threadId':thread,'turn':{'id':'front-turn','status':'inProgress'}}})
-                send({'method':'item/completed','params':{'threadId':thread,'turnId':'front-turn','item':{'id':'front','type':'agentMessage','phase':'final_answer','text':'Front remains responsive.'}}})
-                send({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':'front-turn','status':'completed'}}})
+                # Native identities are unique across executions. Reusing a
+                # previous completed item correctly deduplicates its delivery.
+                with self.lock:
+                    self.front_sequence+=1
+                    turn='front-turn-'+str(self.front_sequence)
+                send({'id':m['id'],'result':{'turn':{'id':turn}}})
+                send({'method':'turn/started','params':{'threadId':thread,'turn':{'id':turn,'status':'inProgress'}}})
+                send({'method':'item/completed','params':{'threadId':thread,'turnId':turn,'item':{'id':turn+'-answer','type':'agentMessage','phase':'final_answer','text':'Front remains responsive.'}}})
+                send({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':turn,'status':'completed'}}})
                 return True
             with self.lock:
                 self.live.add(thread);self.peak=max(self.peak,len(self.live))

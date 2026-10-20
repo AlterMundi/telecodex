@@ -43,6 +43,7 @@ pub(super) async fn attach_active(app: &App, human: i64, args: &str) -> Result<s
     {
         bail!("This receiving process already has a worker for the selected session");
     }
+    let observed_intent = app.shared.store.bot_state_value(&intent_key(key))?;
     let expected = app.shared.codex.get_goal(native).await?;
     if app.shared.codex.live_native_turn(native).await?.as_deref() != Some(physical) {
         bail!("Selected native writer changed or completed; no turn started");
@@ -51,7 +52,21 @@ pub(super) async fn attach_active(app: &App, human: i64, args: &str) -> Result<s
         .store
         .validate_owned_binding(key, human, native)?;
     let intent = Uuid::now_v7().to_string();
-    app.shared.store.save_bot_state(&intent_key(key), &intent)?;
+    {
+        // Metadata awaits cannot let observation supersede a newly queued human
+        // goal command. Hold local admission while comparing the retained intent.
+        let workers = app.workers.lock().await;
+        if workers
+            .get(&key)
+            .is_some_and(|w| w.cancel.lock().expect("cancel mutex poisoned").is_some())
+            || !app
+                .shared
+                .store
+                .claim_collector_intent(key, observed_intent.as_deref(), &intent)?
+        {
+            bail!("Newer session work or goal control superseded collector attachment");
+        }
+    }
     let activation = GoalActivation {
         intent,
         native_thread: Some(native.to_string()),
@@ -466,7 +481,7 @@ async fn activate(
             conditional: None,
         };
         let (response, ack) = oneshot::channel();
-        attached.sender.send(CodexSteerRequest{ images:vec![], admission_check: None,client_message_id:None,text:String::new(),goal:Some(GoalControl::Activate(Box::new(activation))),response})
+        attached.sender.send(CodexSteerRequest{observation:None, images:vec![], admission_check: None,client_message_id:None,text:String::new(),goal:Some(GoalControl::Activate(Box::new(activation))),response})
             .map_err(|_|anyhow!("The goal subscriber just finished. Inspect /goal and request the change again; it was not queued."))?;
         match tokio::time::timeout(Duration::from_secs(12), ack).await {
             Ok(Ok(Ok(_))) => {}
@@ -734,6 +749,7 @@ pub(super) async fn control_live(
     attached
         .sender
         .send(CodexSteerRequest {
+            observation: None,
             images: vec![],
             admission_check: None,
             client_message_id: None,

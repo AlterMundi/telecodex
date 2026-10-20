@@ -388,6 +388,7 @@ async fn deliver(app: &App, id: &str, chat_kind: &str) -> Result<()> {
         if active
             .sender
             .send(CodexSteerRequest {
+                observation: None,
                 images: vec![],
                 admission_check: None,
                 client_message_id: None,
