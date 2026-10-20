@@ -60,16 +60,35 @@ through `presentation artifacts list` and `presentation artifacts detail UUID`
 on the existing owner control socket. HTTP GET endpoints are
 `/api/interaction/artifacts` and `/api/interaction/artifacts/UUID`.
 
-Direct-topic delivery retains its existing file handling; it is not converted
-into integrator ingress. Canonical text projections and file copying are separate
-from admission and never consume another model turn. Native compaction, real
+With both retained storage and selected topic projections enabled, generated
+files use the same canonical publication queue as text. Frozen bytes are uploaded
+to their source topic using the existing photo/audio/video/document policy. A
+canonical artifact/destination identity owns one publication, including after
+restart; a lost acknowledgment remains uncertain and is not retried automatically.
+The primary web return and later native inputs remain independent of this upload.
+Text and files retain separate per-topic leases in that same queue, so slow
+uploads do not hold later text. A short plain caption identifies the file and
+its original canonical answer. Two upload buffers are allowed at once,
+independently of native worker slots.
+
+A direct turn using these explicit features defers its source-file upload to that
+same queue rather than also uploading its mutable workspace copy. Without the
+selected features, ordinary file handling stays on its existing path. Registry
+eligibility never intercepts direct input or consumes the router worker quota.
+Canonical text projections and file copying are separate from admission and never
+consume another model turn. Native compaction, real
 receiving adoption and subjective phone experience require the integrated
 qualification campaign; fixture passes alone do not certify them.
 
 Focused automated evidence is in `tests/artifact_access_http.py`,
-`tests/artifact_return_io.py`, the artifact Rust tests and the generated-file
+`tests/artifact_return_io.py`, `tests/artifact_projection_io.py`, the artifact Rust tests and the generated-file
 cases in `tests/conversation_ui.js`. The process fixture checks actual private
 file bytes through the bridge and authorized HTTP route, blocked storage with
 same-session successor admission, restart without native replay, partial refusal,
 stable spoken revision, scoped grants and source renewal. Its native peer is
 synthetic and uses no model.
+
+The source-projection fixture holds an actual multipart upload while admitting
+the next input to that same session, checks original text/image bytes and media
+fields, loses one ACK and restarts the bridge. It waits for retained publication
+outcomes, then verifies no native work or file upload is replayed.

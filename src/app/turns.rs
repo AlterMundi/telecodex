@@ -548,7 +548,20 @@ pub(super) async fn process_turn(
     let mut runtime_request =
         enrich_runtime_request_with_context_pressure(&session, runtime_request).await;
     if routed {
-        runtime_request.runtime_instructions.get_or_insert_with(String::new).push_str("\n\nThis routed adapter currently publishes text only. Generated files remain retained in this turn's output directory; automatic upload from the general output contract is disabled for routed turns. Never claim that a file was delivered.");
+        let files = if shared
+            .config
+            .interaction
+            .as_ref()
+            .is_some_and(|c| c.artifact_store.is_some())
+        {
+            "\n\nGenerated files in this turn's output directory are captured separately as immutable, scoped artifacts. The requesting conversation can offer authorized downloads; selected source-topic projection may upload them asynchronously. Write actual output files, not arbitrary host paths or upload claims. Text completion is not a file delivery receipt; never claim that a file was delivered without observed evidence."
+        } else {
+            "\n\nThis routed adapter currently publishes text only. Generated files remain retained in this turn's output directory; automatic upload from the general output contract is disabled for routed turns. Never claim that a file was delivered."
+        };
+        runtime_request
+            .runtime_instructions
+            .get_or_insert_with(String::new)
+            .push_str(files);
     }
 
     let mut runner = shared.codex.clone();
@@ -2312,6 +2325,12 @@ async fn send_generated_artifacts(
     if shared.store.conversation_turn_return(turn_id)? {
         return Err(anyhow::Error::new(crate::telegram::PublicationRetired));
     }
+    if shared.store.artifact_job_projects(turn_id)? {
+        // The explicit immutable-file/projection features own this source
+        // delivery. Do not also upload mutable workspace files from this sink.
+        super::topic_publications::recover(shared.clone())?;
+        return Ok(());
+    }
     let telegram = super::presentation::turn_telegram(shared, Some(turn_id));
     validate_artifact_references(out_dir, assistant_text)?;
     let directory = fs::symlink_metadata(out_dir)?;
@@ -2519,7 +2538,7 @@ pub(super) fn sanitize_file_name(file_name: &str, fallback_extension: &str) -> S
     cleaned
 }
 
-fn mime_type_for_path(path: &Path) -> Option<String> {
+pub(super) fn mime_type_for_path(path: &Path) -> Option<String> {
     match path
         .extension()
         .and_then(|value| value.to_str())

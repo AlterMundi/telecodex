@@ -49,11 +49,17 @@ pub(super) fn retain(
             .as_ref()
             .context("Missing output directory anchor")?
             .metadata()?;
+        let publish_files = shared
+            .config
+            .interaction
+            .as_ref()
+            .is_some_and(|c| c.telegram_projection)
+            && shared.store.topic_projection_active(local)?;
         shared.store.artifact_job_stage(
             local,
             human,
             &serde_json::json!({
-                "out":workspace.out_dir,"device":source.dev(),"inode":source.ino(),"output":output
+                "out":workspace.out_dir,"device":source.dev(),"inode":source.ino(),"output":output,"publish_files":publish_files
             }),
         )?;
         recover(shared)?;
@@ -136,6 +142,9 @@ pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
             }
             // Pending contention retries at the existing heartbeat, without a
             // tight loop or any native/model/input replay.
+            if super::topic_publications::recover(shared.clone()).is_err() {
+                tracing::warn!("Retained file publication recovery unconfirmed");
+            }
             if phase != "pending" && recover(shared).is_err() {
                 tracing::warn!("Retained file recovery unconfirmed");
             }
@@ -470,4 +479,38 @@ pub(super) fn snapshot(
         bail!("Some output files could not be retained; successful references remain available")
     }
     Ok(())
+}
+
+/// Read the existing immutable store through the descriptor-relative storage
+/// helper, never through a worker-supplied path. Bytes remain frozen in memory
+/// through the final audience check and network reservation.
+pub(super) fn verified_bytes(
+    cfg: &crate::interaction::ArtifactConfig,
+    file: &crate::store::ArtifactRecord,
+) -> Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let root = crate::telegram::open_local_file(&cfg.directory, &cfg.directory, true)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let m = root.metadata()?;
+        if m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
+            bail!("Retained storage ownership changed");
+        }
+    }
+    let mut bytes = Vec::new();
+    let input =
+        crate::telegram::open_local_file(&cfg.directory, &cfg.directory.join(&file.sha256), false)?;
+    if input.metadata()?.len() != file.bytes as u64
+        || file.bytes < 0
+        || file.bytes as u64 > cfg.max_file_bytes
+    {
+        bail!("Retained file size changed");
+    }
+    input.take(cfg.max_file_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as i64 != file.bytes || format!("{:x}", Sha256::digest(&bytes)) != file.sha256 {
+        bail!("Retained file integrity changed");
+    }
+    Ok(bytes)
 }

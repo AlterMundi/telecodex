@@ -39,6 +39,11 @@ impl Store {
         Ok(())
     }
 
+    pub fn artifact_job_projects(&self, local: i64) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_artifact_jobs WHERE local=?1 AND json_extract(doc,'$.publish_files')=1)",[local],|r|r.get(0))?)
+    }
+
     /// Byte copying is retryable; native inputs and publication effects are not.
     pub fn artifact_job_claim(&self, human: i64) -> Result<Option<(i64, Value)>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
@@ -201,6 +206,12 @@ impl Store {
                 }
                 let input: crate::interaction::Instruction = serde_json::from_str(&doc)?;
                 tx.execute("INSERT OR IGNORE INTO interaction_artifact_audiences SELECT ?1,s.id,?2 FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?3 AND s.thread_id=?4 AND s.creator_user_id=?2 AND u.allowed=1",params![id,human,input.origin.chat_id,input.origin.thread_id])?;
+            }
+        }
+        if sha.is_some() {
+            let publish:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_artifact_jobs WHERE local=?1 AND json_extract(doc,'$.publish_files')=1)",[local],|r|r.get(0))?;
+            if publish {
+                super::topic_publications::enqueue_on(&tx, local, "artifact", &id, name)?;
             }
         }
         tx.commit()?;
@@ -385,6 +396,84 @@ mod tests {
                 &(Utc::now() + Duration::hours(24)).to_rfc3339(),
             )
             .unwrap()
+    }
+    #[test]
+    fn file_publications_keep_logical_ownership_and_never_retry_unknown_receipts() {
+        let (_file, s, local, _, worker) = setup();
+        s.topic_projection_register(local, 100, worker).unwrap();
+        s.artifact_job_stage(local, 100, &json!({"publish_files":true}))
+            .unwrap();
+        let id = register(&s, local, "output.txt");
+        let publication = s
+            .topic_publication_claim_files(worker, 100)
+            .unwrap()
+            .unwrap();
+        assert_eq!(publication.kind, "artifact");
+        assert_eq!(publication.source, id);
+        s.record_native_message(
+            local,
+            "old-native",
+            "physical",
+            "progress",
+            Some("commentary"),
+            "Independent text",
+        )
+        .unwrap();
+        let text = s.topic_publication_claim(worker, 100).unwrap().unwrap();
+        assert_eq!(text.kind, "native");
+        s.topic_publication_parts(text.id, &["Independent text".into()])
+            .unwrap();
+        assert!(s.topic_publication_reserve(text.id, 0).unwrap());
+        s.topic_publication_receipt(text.id, 0, Some(800), false)
+            .unwrap();
+        s.topic_publication_finish(text.id).unwrap();
+        s.set_session_codex_thread(worker, "renewed").unwrap();
+        assert_eq!(
+            s.topic_file_caption(publication.id).unwrap(),
+            "File · output.txt\nOutput"
+        );
+        s.topic_publication_parts(publication.id, &["output.txt".into()])
+            .unwrap();
+        assert!(s.topic_publication_reserve(publication.id, 0).unwrap());
+        s.topic_publication_receipt(publication.id, 0, None, false)
+            .unwrap();
+        s.topic_publication_finish(publication.id).unwrap();
+        assert_eq!(id, register(&s, local, "output.txt"));
+        assert!(
+            s.topic_publication_claim_files(worker, 100)
+                .unwrap()
+                .is_none()
+        );
+        register(&s, local, "denied.txt");
+        s.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE users SET allowed=0 WHERE tg_user_id=100", [])
+            .unwrap();
+        assert!(
+            s.topic_publication_claim_files(worker, 100)
+                .unwrap()
+                .is_none()
+        );
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM topic_publications WHERE kind='artifact'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT phase FROM topic_publications WHERE id=?1",
+                [publication.id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "uncertain"
+        );
     }
     #[test]
     fn artifact_jobs_resume_only_file_work_after_restart() {

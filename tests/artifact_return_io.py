@@ -32,12 +32,13 @@ class ArtifactRouting(CanonicalRouting):
         return super().handle_extra_rpc(message,send)
 
 
-def prepare(j):
+def prepare(j,projection=False):
     j.start()
     for topic in (7,8,1):
         j.admit('Seed owned native context',topic=topic)
         j.wait(lambda:j.has('Initial goal turn delivered.',topic));j.idle()
     j.stop()
+    if projection:j.config.write_text(j.config.read_text().replace('[interaction]\n','[interaction]\ntelegram_projection=true\n'))
     retained=j.root/'retained';retained.mkdir(mode=0o700)
     j.config.write_text(j.config.read_text()+f'\n[interaction.artifact_store]\ndirectory={json.dumps(str(retained))}\nmax_file_bytes=2048\nmax_total_bytes=8192\n'+j.target_config)
     j.start();j.wait_control_socket(j.socket);j.routing=True

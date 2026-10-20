@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
 mod artifacts;
+pub(crate) use artifacts::ArtifactRecord;
 mod conversation_entry;
 mod conversation_inputs;
 mod conversation_routing;
@@ -42,7 +43,7 @@ mod observer_freshness;
 mod presentation;
 pub use observer_cards::{ObserverCard, ObserverPreparation};
 pub use observer_freshness::ObserverFreshness;
-mod topic_publications;
+pub(crate) mod topic_publications;
 mod topics;
 mod tribu;
 pub use interactions::{HumanInteraction, TaskWithdrawal};

@@ -34,7 +34,7 @@ impl fmt::Display for PublicationRetired {
 impl Error for PublicationRetired {}
 
 #[cfg(unix)]
-fn open_local_file(
+pub(crate) fn open_local_file(
     root: &std::path::Path,
     path: &std::path::Path,
     directory: bool,
@@ -92,7 +92,11 @@ fn open_local_file(
 }
 
 #[cfg(not(unix))]
-fn open_local_file(_: &std::path::Path, _: &std::path::Path, _: bool) -> Result<std::fs::File> {
+pub(crate) fn open_local_file(
+    _: &std::path::Path,
+    _: &std::path::Path,
+    _: bool,
+) -> Result<std::fs::File> {
     bail!("trusted local Telegram storage requires a Unix host")
 }
 
@@ -801,6 +805,64 @@ impl TelegramClient {
             .await
             .with_context(|| format!("failed to read upload file {}", path.display()))?;
         self.outbound.wait(chat_id).await;
+        self.post_multipart_bytes(
+            method,
+            chat_id,
+            message_thread_id,
+            file_field,
+            bytes,
+            file_name,
+            mime_type,
+            None,
+        )
+        .await
+    }
+
+    /// Frozen bytes use the same multipart transport and cooldown as ordinary
+    /// files. The caller reserves its canonical publication after cooldown.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_file_bytes_checked<F>(
+        &self,
+        chat: i64,
+        topic: Option<i64>,
+        field: &str,
+        bytes: Vec<u8>,
+        name: &str,
+        mime: Option<&str>,
+        caption: Option<&str>,
+        prepare: F,
+    ) -> Result<Option<Message>>
+    where
+        F: FnOnce() -> Result<bool>,
+    {
+        let method = match field {
+            "photo" => "sendPhoto",
+            "audio" => "sendAudio",
+            "video" => "sendVideo",
+            "document" => "sendDocument",
+            _ => bail!("Unsupported retained file transport"),
+        };
+        self.outbound.wait(chat).await;
+        if !prepare()? {
+            return Ok(None);
+        }
+        self.post_multipart_bytes(method, chat, topic, field, bytes, name, mime, caption)
+            .await
+            .map(Some)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn post_multipart_bytes(
+        &self,
+        method: &str,
+        chat_id: i64,
+        message_thread_id: Option<i64>,
+        file_field: &str,
+        bytes: Vec<u8>,
+        file_name: &str,
+        mime_type: Option<&str>,
+        caption: Option<&str>,
+    ) -> Result<Message> {
         let url = format!("{}/bot{}/{}", self.api_base, self.token, method);
         let part = if let Some(mime_type) = mime_type {
             match Part::bytes(bytes.clone())
@@ -821,6 +883,9 @@ impl TelegramClient {
             form = form.text("message_thread_id", thread_id.to_string());
         }
 
+        if let Some(caption) = caption {
+            form = form.text("caption", caption.to_owned());
+        }
         self.check_publication()?;
         let response = self
             .http

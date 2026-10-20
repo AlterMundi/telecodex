@@ -7,6 +7,8 @@ pub struct TopicPublication {
     pub id: i64,
     pub target: SessionKey,
     pub body: String,
+    pub kind: String,
+    pub source: String,
 }
 
 pub(super) fn enqueue_on(
@@ -124,15 +126,30 @@ impl Store {
         key: SessionKey,
         human: i64,
     ) -> Result<Option<TopicPublication>> {
+        self.topic_publication_claim_lane(key, human, false)
+    }
+    pub fn topic_publication_claim_files(
+        &self,
+        key: SessionKey,
+        human: i64,
+    ) -> Result<Option<TopicPublication>> {
+        self.topic_publication_claim_lane(key, human, true)
+    }
+    fn topic_publication_claim_lane(
+        &self,
+        key: SessionKey,
+        human: i64,
+        files: bool,
+    ) -> Result<Option<TopicPublication>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let busy: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM topic_publications p JOIN sessions s ON s.id=p.session_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.phase='publishing')",params![key.chat_id,key.thread_id],|r|r.get(0))?;
+        let busy: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM topic_publications p JOIN sessions s ON s.id=p.session_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.phase='publishing' AND (p.kind='artifact')=?3)",params![key.chat_id,key.thread_id,files],|r|r.get(0))?;
         if busy {
             return Ok(None);
         }
         loop {
-            let row:Option<(i64,String,bool)>=tx.query_row("SELECT p.id,p.body,COALESCE((u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0),0) FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN turns t ON t.id=p.local_turn JOIN users u ON u.tg_user_id=p.human_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3 AND p.phase='ready' ORDER BY p.id LIMIT 1",params![key.chat_id,key.thread_id,human],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-            let Some((id, body, valid)) = row else {
+            let row:Option<(i64,String,bool,String,String)>=tx.query_row("SELECT p.id,p.body,COALESCE((u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND ((p.kind!='artifact' AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now'))))),0),p.kind,p.source FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN turns t ON t.id=p.local_turn JOIN users u ON u.tg_user_id=p.human_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3 AND p.phase='ready' AND (p.kind='artifact')=?4 ORDER BY p.id LIMIT 1",params![key.chat_id,key.thread_id,human,files],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+            let Some((id, body, valid, kind, source)) = row else {
                 tx.commit()?;
                 return Ok(None);
             };
@@ -150,9 +167,24 @@ impl Store {
                     id,
                     target: key,
                     body,
+                    kind,
+                    source,
                 }));
             }
         }
+    }
+
+    pub fn topic_file_caption(&self, id: i64) -> Result<String> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (name,text):(String,String)=conn.query_row("SELECT a.name,m.text FROM topic_publications p JOIN interaction_artifacts a ON a.id=p.source JOIN interaction_native_messages m ON m.local_turn=a.source_local AND m.native_thread=a.native_thread AND m.native_turn=a.native_turn AND m.item_id=a.native_item WHERE p.id=?1 AND p.kind='artifact'",[id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        Ok(format!(
+            "File · {}\n{}",
+            name,
+            crate::interaction::visible_answer(&text)
+                .chars()
+                .take(240)
+                .collect::<String>()
+        ))
     }
 
     pub fn topic_publication_parts(
@@ -194,7 +226,7 @@ impl Store {
     /// Called after Telegram cooldown, immediately before one network attempt.
     pub fn topic_publication_reserve(&self, id: i64, part: i64) -> Result<bool> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        Ok(conn.execute("UPDATE topic_publication_parts SET phase='sending' WHERE publication=?1 AND part=?2 AND phase='ready' AND EXISTS(SELECT 1 FROM topic_publications p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=p.session_id JOIN users u ON u.tg_user_id=p.human_id WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?3 AND u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0)",params![id,part,&self.instance_id])?==1)
+        Ok(conn.execute("UPDATE topic_publication_parts SET phase='sending' WHERE publication=?1 AND part=?2 AND phase='ready' AND EXISTS(SELECT 1 FROM topic_publications p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=p.session_id JOIN users u ON u.tg_user_id=p.human_id WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?3 AND u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND ((p.kind!='artifact' AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now')))))",params![id,part,&self.instance_id])?==1)
     }
 
     pub fn topic_publication_receipt(
