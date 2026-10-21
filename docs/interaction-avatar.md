@@ -34,7 +34,10 @@ separate animation model or inference/frame loop. Inspect current capabilities
 instead of assuming a fixed vocabulary.
 
 Without a selected pack the fallback accepts `wave`, `nod` or `none` and its
-finite resting names. Its gesture lasts 850 ms. Repeated metadata, historical
+finite resting names. Its reply gesture lasts 850 ms; the interval field also
+plays a three-frame 720 ms authored glyph transition on a meaningful local pose
+change, then settles to its selected frame. Stable repeated evidence does not
+restart that sequence. Repeated metadata, historical
 loading, older answers and progress do not restart a reply gesture. Hidden pages
 and reduced motion cancel animation; unchanged evidence does not rebuild the
 screen-reader activity region.

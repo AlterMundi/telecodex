@@ -555,7 +555,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-companion { display:flex; flex-wrap:wrap; align-items:center; gap:20px; min-width:0; }
 #conversation-companion pre { flex:none; margin:0; font:12px/1.05 ui-monospace,monospace; color:var(--accent); transform-origin:50% 50%; }
 #conversation-companion pre[data-fallback="true"] { white-space:normal; overflow-wrap:anywhere; max-width:100%; }
-#conversation-companion > div { min-width:0; }
+#conversation-companion > div { min-width:0; flex:1 1 140px; }
 .companion-name { display:block; color:var(--muted); font-size:11px; letter-spacing:.18em; font-weight:600; }
 .companion-name > span { color:var(--accent); padding-inline:4px; }
 .companion-caption { font-size:20px; font-weight:500; line-height:1.25; margin:8px 0; }

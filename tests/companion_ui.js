@@ -101,3 +101,15 @@ busyExpression.companion.update({capture:"recording"});
 assert.notEqual(busyExpression.face.textContent,expressionArt,"local capture must produce a perceptibly different field");
 busyExpression.companion.update({capture:undefined});
 assert.equal(busyExpression.box.dataset.pose,"delighted","capture settles back into the authored response expression");
+
+const transition=boot();transition.companion.observe({schema:'telecodex.interaction-activity/v1',sources:[]});
+transition.companion.update({capture:'recording'});const listeningFrame=transition.face.textContent;
+transition.elapse(240);assert.notEqual(transition.face.textContent,listeningFrame,'listening must have a visible authored glyph transition');
+transition.elapse(240);transition.elapse(240);
+assert.equal(transition.face.textContent,listeningFrame,'finite transition settles back to its selected frame');
+const remaining=transition.timers.size;transition.companion.update({capture:'recording'});
+assert.equal(transition.timers.size,remaining,'unchanged state cannot restart a cosmetic sequence');
+transition.motion.matches=true;transition.motion.change();transition.companion.update({capture:undefined,playback:'playing'});
+const staticSpeaking=transition.face.textContent;transition.elapse(720);
+assert.equal(transition.face.textContent,staticSpeaking,'reduced motion retains a static speaking expression');
+transition.document.hidden=true;transition.handlers.visibilitychange();assert.equal(transition.timers.size,0);
