@@ -174,8 +174,11 @@ pub(super) async fn tool(
                 .context("Retained goal attempt missing")?
                 .to_owned();
             if activating || plan.followup.is_some() {
-                return activate_control(app, human, key, &args.id, &value, &plan, &target_session)
-                    .await;
+                let result =
+                    activate_control(app, human, key, &args.id, &value, &plan, &target_session)
+                        .await;
+                super::topic_publications::wake(app.shared.clone(), target);
+                return result;
             }
             let native = value["intent"]["target_binding"][2]
                 .as_str()
@@ -225,6 +228,7 @@ pub(super) async fn tool(
             app.shared
                 .store
                 .goal_control_finish(human, key, &args.id, &attempt, &phase, &receipt)?;
+            super::topic_publications::wake(app.shared.clone(), target);
             app.shared.store.goal_control_read(human, key, &args.id)
         }
         _ => bail!("Unsupported goal-control operation"),
@@ -262,11 +266,18 @@ async fn activate_control(
     let shared = app.shared.clone();
     let selected = id.to_owned();
     let settlement_attempt = attempt.clone();
+    let settled_target = target.key;
     let settled = std::sync::Arc::new(move |phase: &str, receipt: &Value| {
-        shared
-            .store
-            .goal_control_finish(human, entry, &selected, &settlement_attempt, phase, receipt)
-            .map(|_| ())
+        shared.store.goal_control_finish(
+            human,
+            entry,
+            &selected,
+            &settlement_attempt,
+            phase,
+            receipt,
+        )?;
+        super::topic_publications::wake(shared.clone(), settled_target);
+        Ok(())
     });
     let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
     let mut control = crate::codex::GoalMetadataControl {

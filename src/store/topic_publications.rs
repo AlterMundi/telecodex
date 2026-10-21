@@ -13,6 +13,41 @@ pub struct TopicPublication {
     pub source: String,
 }
 
+/// A control receipt belongs to its retained target, not the integrator turn
+/// that authored it. It never registers that turn as target conversation input.
+pub(super) fn goal_control_on(conn: &Connection, id: &str, phase: &str) -> Result<()> {
+    let (doc, human): (String, i64) = conn.query_row(
+        "SELECT doc,human_id FROM interaction_goal_controls WHERE id=?",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    let doc: serde_json::Value = serde_json::from_str(&doc)?;
+    let action = match doc["plan"]["action"].as_str() {
+        Some("start") => "start",
+        Some("edit") => "edit",
+        Some("pause") => "pause",
+        Some("resume") => "resume",
+        Some("clear") => "clear",
+        Some("replace") => "replace",
+        _ => return Err(anyhow!("Invalid retained goal action")),
+    };
+    let outcome = match phase {
+        "submitted" => "Submitted; execution is not yet confirmed.",
+        "acknowledged" => "Native session acknowledged the goal change.",
+        "rejected" => "Rejected; the requested change was not accepted.",
+        "known_unsent" => "Not submitted; the goal change was not sent.",
+        "partial" => "Partly applied; inspect the result before continuing.",
+        "uncertain" => "Outcome unknown; the action will not be replayed automatically.",
+        _ => return Err(anyhow!("Invalid goal publication outcome")),
+    };
+    let body = format!("↪ Integrator action · goal {action}\n{outcome}");
+    let source = json!([id, doc["attempt"], phase]).to_string();
+    conn.execute("INSERT OR IGNORE INTO topic_publications(local_turn,session_id,human_id,kind,source,body,phase,instance_id)
+        VALUES(?1,?2,?3,'control',?4,?5,'ready','')",
+        params![doc["actor"]["local"].as_i64(),doc["target_binding"][1].as_i64(),human,source,body])?;
+    Ok(())
+}
+
 pub(super) fn enqueue_on(
     conn: &Connection,
     local: i64,
@@ -174,7 +209,7 @@ impl Store {
             return Ok(None);
         }
         loop {
-            let row:Option<(i64,String,bool,String,String,i64,bool)>=tx.query_row("SELECT p.id,p.body,COALESCE((u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind!='artifact' AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now'))))),0),p.kind,p.source,p.local_turn,EXISTS(SELECT 1 FROM direct_topic_turns pt WHERE pt.local_turn=p.local_turn) FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN turns t ON t.id=p.local_turn JOIN users u ON u.tg_user_id=p.human_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3 AND p.phase='ready' AND (p.kind='artifact')=?4 ORDER BY p.id LIMIT 1",params![key.chat_id,key.thread_id,human,files],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+            let row:Option<(i64,String,bool,String,String,i64,bool)>=tx.query_row("SELECT p.id,p.body,COALESCE((u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind NOT IN ('artifact','control') AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='control' AND s.force_fresh_thread=0 AND EXISTS(SELECT 1 FROM interaction_goal_controls g WHERE g.id=json_extract(p.source,'$[0]') AND g.human_id=p.human_id AND g.target_chat=s.chat_id AND g.target_topic=s.thread_id AND json_extract(g.doc,'$.actor.local')=p.local_turn AND json_extract(g.doc,'$.target_binding[1]')=s.id AND json_extract(g.doc,'$.target_binding[2]')=s.codex_thread_id)) OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now'))))),0),p.kind,p.source,p.local_turn,EXISTS(SELECT 1 FROM direct_topic_turns pt WHERE pt.local_turn=p.local_turn) FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN turns t ON t.id=p.local_turn JOIN users u ON u.tg_user_id=p.human_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3 AND p.phase='ready' AND (p.kind='artifact')=?4 ORDER BY p.id LIMIT 1",params![key.chat_id,key.thread_id,human,files],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
             let Some((id, body, valid, kind, source, local_turn, direct)) = row else {
                 tx.commit()?;
                 return Ok(None);
@@ -254,7 +289,7 @@ impl Store {
     /// Called after Telegram cooldown, immediately before one network attempt.
     pub fn topic_publication_reserve(&self, id: i64, part: i64) -> Result<bool> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        Ok(conn.execute("UPDATE topic_publication_parts SET phase='sending' WHERE publication=?1 AND part=?2 AND phase='ready' AND EXISTS(SELECT 1 FROM topic_publications p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=p.session_id JOIN users u ON u.tg_user_id=p.human_id WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?3 AND u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind!='artifact' AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now')))))",params![id,part,&self.instance_id])?==1)
+        Ok(conn.execute("UPDATE topic_publication_parts SET phase='sending' WHERE publication=?1 AND part=?2 AND phase='ready' AND EXISTS(SELECT 1 FROM topic_publications p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=p.session_id JOIN users u ON u.tg_user_id=p.human_id WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?3 AND u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind NOT IN ('artifact','control') AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR (p.kind='control' AND s.force_fresh_thread=0 AND EXISTS(SELECT 1 FROM interaction_goal_controls g WHERE g.id=json_extract(p.source,'$[0]') AND g.human_id=p.human_id AND g.target_chat=s.chat_id AND g.target_topic=s.thread_id AND json_extract(g.doc,'$.actor.local')=p.local_turn AND json_extract(g.doc,'$.target_binding[1]')=s.id AND json_extract(g.doc,'$.target_binding[2]')=s.codex_thread_id)) OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now')))))",params![id,part,&self.instance_id])?==1)
     }
 
     pub fn topic_publication_receipt(
@@ -339,6 +374,159 @@ mod tests {
     }
     fn store(path: &Path) -> Store {
         Store::open(path, &[100, 101], &super::super::tests::defaults()).unwrap()
+    }
+    fn control(store: &Store, target: SessionKey) -> i64 {
+        let entry = SessionKey::new(100, Some(9));
+        let session = store
+            .ensure_session(entry, 100, &super::super::tests::defaults())
+            .unwrap();
+        store
+            .set_session_codex_thread(entry, "integrator-native")
+            .unwrap();
+        let local = store
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: entry,
+                    from_user_id: 100,
+                    prompt: "Pause that goal".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(local, "integrator-native")
+            .unwrap();
+        let selected = store.get_session(target).unwrap().unwrap();
+        let doc = json!({"actor":{"local":local},"target_binding":["binding",selected.id,"native"],
+            "plan":{"action":"pause"},"attempt":"attempt-1"});
+        store.conn.lock().unwrap().execute("INSERT INTO interaction_goal_controls(id,human_id,entry_chat,entry_topic,target_chat,target_topic,phase,doc,instance_id) VALUES('control-1',100,100,9,?1,?2,'claimed',?3,?4)",
+            params![target.chat_id,target.thread_id,doc.to_string(),store.instance_id]).unwrap();
+        local
+    }
+    #[test]
+    fn control_receipt_projects_once_without_target_turn_or_input() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = store(file.path());
+        let (_, key) = execution(&s);
+        let local = control(&s, key);
+        let receipt = json!({"goal":{"status":"paused"}});
+        assert!(
+            s.goal_control_finish(
+                100,
+                SessionKey::new(100, Some(9)),
+                "control-1",
+                "attempt-1",
+                "acknowledged",
+                &receipt
+            )
+            .unwrap()
+        );
+        assert!(
+            !s.goal_control_finish(
+                100,
+                SessionKey::new(100, Some(9)),
+                "control-1",
+                "attempt-1",
+                "acknowledged",
+                &receipt
+            )
+            .unwrap()
+        );
+        assert!(s.topic_publication_claim(key, 101).unwrap().is_none());
+        let p = s.topic_publication_claim(key, 100).unwrap().unwrap();
+        assert_eq!(p.local_turn, local);
+        assert_eq!(p.kind, "control");
+        assert!(p.body.contains("goal pause"));
+        assert!(!p.body.contains("attempt-1"));
+        assert!(!s.topic_projection_active(local).unwrap());
+        s.topic_publication_parts(p.id, std::slice::from_ref(&p.body))
+            .unwrap();
+        assert!(s.topic_publication_reserve(p.id, 0).unwrap());
+        s.topic_publication_receipt(p.id, 0, Some(10), false)
+            .unwrap();
+        s.topic_publication_finish(p.id).unwrap();
+        assert!(s.topic_publication_claim(key, 100).unwrap().is_none());
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM turns", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM interaction_instructions", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn failed_control_publication_retention_rolls_back_receipt() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let s = store(file.path());
+        let (_, key) = execution(&s);
+        control(&s, key);
+        s.conn.lock().unwrap().execute_batch("CREATE TRIGGER reject_control_notice BEFORE INSERT ON topic_publications WHEN NEW.kind='control' BEGIN SELECT RAISE(ABORT,'test publication retention failure'); END;").unwrap();
+        assert!(
+            s.goal_control_finish(
+                100,
+                SessionKey::new(100, Some(9)),
+                "control-1",
+                "attempt-1",
+                "acknowledged",
+                &json!({})
+            )
+            .is_err()
+        );
+        assert_eq!(
+            s.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT phase FROM interaction_goal_controls WHERE id='control-1'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "claimed"
+        );
+    }
+    #[test]
+    fn control_notice_observes_binding_and_revocation_at_actual_send() {
+        for revoke in [false, true] {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            let s = store(file.path());
+            let (_, key) = execution(&s);
+            control(&s, key);
+            s.goal_control_finish(
+                100,
+                SessionKey::new(100, Some(9)),
+                "control-1",
+                "attempt-1",
+                "uncertain",
+                &json!({}),
+            )
+            .unwrap();
+            let p = s.topic_publication_claim(key, 100).unwrap().unwrap();
+            assert!(p.body.contains("Outcome unknown"));
+            s.topic_publication_parts(p.id, std::slice::from_ref(&p.body))
+                .unwrap();
+            if revoke {
+                s.conn
+                    .lock()
+                    .unwrap()
+                    .execute("UPDATE users SET allowed=0 WHERE tg_user_id=100", [])
+                    .unwrap();
+            } else {
+                s.set_session_codex_thread(key, "replacement").unwrap();
+            }
+            assert!(!s.topic_publication_reserve(p.id, 0).unwrap());
+        }
     }
     #[test]
     fn pre_native_failure_notice_needs_owner_scope_but_no_native_receipt() {

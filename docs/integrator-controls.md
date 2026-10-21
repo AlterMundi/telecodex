@@ -155,6 +155,17 @@ Introduce mutating operations in the delivery order below rather than exposing
 an unrestricted RPC tunnel. Return the result to the requesting integrator and
 make the same event inspectable in the destination's ordinary projection.
 
+Routed goal receipts enqueue a concise attributed outcome in the existing topic
+publication journal, keyed by the retained control, native attempt and outcome.
+The target is the retained destination binding; the integrator's local turn is
+only provenance and is never admitted as target input. The same owner/binding
+checks apply again immediately before Telegram send. Transport uncertainty does
+not repeat the control or its publication. Native acknowledgments remain distinct
+from incorporation of an optional follow-up. This does not implement attributed
+CLI notices or visibility for every non-goal action: #241 remains open for those
+requirements and receiving qualification.
+
+
 A control record retains the original human input, logical target/current native
 binding, selected goal snapshot and operation, exact payload, execution outcome
 and the requested next input. Proposed outcome categories distinguish retained
