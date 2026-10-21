@@ -84,7 +84,19 @@ The CompAII receiver selects the #249/#250 listener executable verified from CI.
 The native daemon, existing collectors, goals and credentials were preserved.
 The new notice read was observed against that running receiver. Codex#7 passed
 full native qualification and an actual TUI rendering check using a synthetic
-owner feed, with no human input or additional native turn.
+owner feed. Subsequent bounded qualification exercised an actual conditional
+native goal clear on an existing idle scratch session and an actual worker-created
+task retired by its integrating session. Both actions produced one destination
+Telegram publication through the synthetic HTTP peer, a real owner-journal notice
+and a retained notice rendered by the actual foreground CLI. The integrating
+conversation retained each result. Native worker turns did not increase during
+the clear or retirement, and observation recovery did not repeat either action.
+
+The first CLI observation windows expired while resuming their native sessions;
+reopening the same retained sessions rendered both notices. This establishes
+retained recovery, not reliable first-start latency or live arrival in those
+attempts. The initial resume/readiness delay remains under investigation in #241;
+no cause or timing guarantee is inferred. Human seeing/hearing remains separate.
 
 A receiving-local launcher selects that client for new normal CLI launches and
 binds the existing owner socket. It leaves the system CLI used by the native
