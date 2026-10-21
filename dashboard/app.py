@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import html
+import http.client
 import json
 import os
 from pathlib import Path
@@ -12,10 +13,10 @@ import sqlite3
 import stat
 import time
 import tomllib
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, urlparse, urlencode
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response, StreamingResponse, RedirectResponse
 from init_data_py import errors, validate_by_signature
 
 from .provider import Provider, ProviderUnavailable
@@ -26,6 +27,7 @@ from .menu_attention import attention_projection
 from .operator import sessions_selection
 from .speech import Speech, SpeechUnavailable
 from .companion import Grants as CompanionGrants, permitted as companion_permitted
+from .home_auth import HomeAuth
 from scripts.speech_render import RenderError
 
 
@@ -55,6 +57,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         config = tomllib.loads(Path(os.environ['TELECODEX_DASHBOARD_CONFIG']).read_text())
     provider = provider or Provider(config)
     companions = CompanionGrants(config, provider)
+    home_auth = HomeAuth(config, provider)
     speech = Speech(config['speech']) if config.get('speech') else None
     origin = config['origin']
     prefix = config.get('prefix', '/sessions')
@@ -148,7 +151,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         # administrative routes, even when a browser also carries a valid cookie.
         if any(value.lower().startswith('companion') for value in request.headers.getlist('authorization')):
             try:
-                authorize(request)
+                await authorize_async(request)
             except HTTPException as exc:
                 return JSONResponse({'detail':exc.detail}, status_code=exc.status_code)
         if request.method == 'POST':
@@ -158,7 +161,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             # Bound chunked bodies as well as Content-Length before parsing them.
             if request.url.path in ('/api/interaction/voice','/api/interaction/visual'):
                 try:
-                    selected = authorize(request)
+                    selected = await authorize_async(request)
                     if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), selected['csrf']):
                         raise HTTPException(403, 'Action token missing')
                 except HTTPException as exc:
@@ -204,6 +207,17 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                     r'Bearer ([A-Za-z0-9_-]{43})', headers[0], re.IGNORECASE)):
                 raise HTTPException(401, 'Invalid dashboard session credential')
             token = match.group(1)
+        if not headers and not token and home_auth.enabled:
+            try:
+                shared = home_auth.authenticate(request)
+            except PermissionError as exc:
+                raise HTTPException(403, str(exc)) from None
+            except (ValueError, KeyError, TypeError):
+                raise HTTPException(401, 'Sign in to your conversation') from None
+            except (OSError, http.client.HTTPException):
+                raise HTTPException(503, 'Shared authentication unavailable; retry shortly') from None
+            if shared is not None:
+                return shared
         with database() as db:
             session = db.execute('SELECT * FROM sessions WHERE token_hash=? AND expires>?',
                                  (digest(token + binding), time.time())).fetchone()
@@ -223,12 +237,34 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             except (AlertsUnavailable, ProviderUnavailable, OSError):
                 raise HTTPException(503, 'Alerts receiving binding changed; operator must requalify Sessions') from None
 
+    async def authorize_async(request):
+        if (home_auth.enabled and not request.headers.getlist('authorization')
+                and not request.cookies.get('telecodex_dashboard')
+                and request.headers.get('host') == home_auth.host
+                and request.cookies.get('__Host-home')):
+            from starlette.concurrency import run_in_threadpool
+            return await run_in_threadpool(authorize, request)
+        return authorize(request)
+
     public = Path(__file__).parent / 'web'
 
     @app.get('/')
     def shell(request: Request):
         body = (public / 'index.html').read_text()
+        shared_entry = home_auth.enabled and (request.query_params.get('view') == 'conversation'
+            or request.headers.get('x-forwarded-prefix') == home_auth.entry.rstrip('/'))
+        if shared_entry and (request.headers.get('host') != home_auth.host
+                or request.query_params.get('view') != 'conversation'
+                or request.query_params.get('client') != 'standalone'):
+            query = {**dict(request.query_params), 'view': 'conversation', 'client': 'standalone'}
+            return RedirectResponse(home_auth.origin + home_auth.entry + '?' + urlencode(query), status_code=307)
         if request.query_params.get('view') == 'conversation' and request.query_params.get('client') == 'standalone':
+            if home_auth.enabled:
+                if request.headers.get('host') != home_auth.host:
+                    return RedirectResponse(home_auth.origin + home_auth.entry + '?view=conversation&client=standalone', status_code=307)
+                body = body.replace('<html lang="en">', '<html lang="en" data-shared-auth="true">')
+                body = body.replace('    <script src="assets/app.js" defer></script>',
+                    '    <script src="/access-client.js" defer></script>\n    <script src="assets/app.js" defer></script>')
             body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
         for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
@@ -239,6 +275,15 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             body = body.replace('</head>', '<link rel="stylesheet" data-home-style href="'+base+
                 '/style.css?surface=sessions"><script src="'+base+'/home-style.js" defer></script></head>')
         return HTMLResponse(body)
+
+    @app.get('/api/interaction/access')
+    def shared_access(request: Request):
+        if not home_auth.enabled or request.headers.getlist('authorization'):
+            raise HTTPException(401, 'Shared browser sign-in required')
+        session = authorize(request)
+        if dict(session).get('scope') != 'interaction_only':
+            raise HTTPException(403, 'Shared conversation grant required')
+        return {'csrf': session['csrf'], 'label': session.get('label', 'Your conversation')}
 
     @app.get('/assets/{name}')
     def asset(name: str, request: Request):
@@ -300,7 +345,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/api/interaction')
     async def interaction_sources(request: Request, delivery: int = 0, native: int = 0, direction: str = 'after', matrix: int | None = None):
-        session = authorize(request)
+        session = await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.presentation_list, delivery, native, direction) if matrix is None else await run_in_threadpool(provider.presentation_list, delivery, native, direction, matrix)
@@ -313,7 +358,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 files=await run_in_threadpool(provider.artifacts)
             except (ProviderUnavailable,OSError,ValueError):
                 files={'state':'unavailable'}
-        authorize(request)
+        await authorize_async(request)
         return {**result, 'csrf':session['csrf'],
                 'presentation_profile':dict(session).get('presentation_profile', companions.default_profile),
                 'can_listen':speech is not None,
@@ -322,7 +367,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/api/interaction/inputs')
     async def conversation_inputs(request: Request, before: int = 0, direction: str = 'before'):
-        session = authorize(request)
+        session = await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_inputs, before, direction)
@@ -330,7 +375,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid input history cursor') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Message history unavailable; refresh to reconnect') from None
-        authorize(request)
+        await authorize_async(request)
         viewer = {}
         if isinstance(session, dict) and session.get('scope') in ('monitor_readonly','interaction_only'):
             label = session.get('label')
@@ -341,7 +386,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/api/interaction/telegram-inputs')
     async def conversation_telegram_inputs(request: Request, before: int = 0, direction: str = 'before'):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result=await run_in_threadpool(provider.conversation_telegram_inputs,before,direction)
@@ -349,12 +394,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400,'Invalid Telegram observation cursor') from None
         except (ProviderUnavailable,OSError):
             raise HTTPException(503,'Telegram observation unavailable; no input was resent') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/inputs/{ident}')
     async def conversation_input_status(request: Request, ident: str):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_input_status, ident)
@@ -362,12 +407,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid message identity') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Message status unconfirmed; check again without resending') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/inputs/{ident}/trace')
     async def conversation_input_trace(request: Request, ident: str):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_input_trace, ident)
@@ -375,12 +420,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid message identity') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Routing observation unavailable; the input was not resent') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/inputs/{ident}/trace/{source}')
     async def conversation_trace_text(request: Request, ident: str, source: str, offset: int = 0):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_trace_text, ident, source, offset)
@@ -388,12 +433,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid trace text selection') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Saved text unavailable; the input was not resent') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.post('/api/interaction/inputs')
     async def conversation_input_submit(request: Request):
-        session = authorize(request)
+        session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         try:
@@ -406,12 +451,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Provide one original message of at most 32 KiB') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Submission unconfirmed. Check this message status before sending it again') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.post('/api/interaction/inputs/{ident}/route')
     async def conversation_input_route(request: Request, ident: str):
-        session = authorize(request)
+        session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         try:
@@ -422,12 +467,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Select one destination for this retained message') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(409, 'Selection unconfirmed or no longer current. Inspect the retained message; nothing was replayed') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.post('/api/interaction/inputs/{ident}/retry')
     async def conversation_input_retry(request: Request, ident: str):
-        session = authorize(request)
+        session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         try:
@@ -438,12 +483,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Select one saved route that was not sent') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(409, 'Recovery unconfirmed or no longer current. Check saved status without creating another message') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.post('/api/interaction/visual')
     async def conversation_visual(request: Request):
-        session=authorize(request)
+        session=await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf',''),session['csrf']):
             raise HTTPException(403,'Action token missing')
         if request.headers.get('content-type')!='image/png':raise HTTPException(400,'Select one PNG image')
@@ -452,22 +497,22 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             result=await run_in_threadpool(provider.conversation_visual_upload,await request.body(),request.headers.get('x-image-sha256',''))
         except ValueError:raise HTTPException(400,'Image unavailable or invalid. Select a still image of at most 2 MiB and 4 megapixels.') from None
         except (ProviderUnavailable,OSError):raise HTTPException(503,'Image upload unconfirmed. No conversation work was admitted.') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/inputs/{ident}/image')
     async def conversation_visual_image(request: Request,ident:str):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             data=await run_in_threadpool(provider.conversation_visual_image,ident)
         except (ValueError,ProviderUnavailable,OSError):raise HTTPException(409,'Selected image unavailable; do not substitute another view') from None
-        authorize(request)
+        await authorize_async(request)
         return Response(content=data,media_type='image/png')
 
     @app.post('/api/interaction/voice')
     async def conversation_voice(request: Request):
-        session = authorize(request)
+        session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         metadata = {key:request.headers.get(header, '') for key, header in
@@ -495,34 +540,34 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Provide one finalized recording of at most 20 MiB') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Voice capture unconfirmed; check its status before retrying this recording') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/sonic')
     async def conversation_sonic_state(request: Request):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result=await run_in_threadpool(provider.sonic_activity)
         except (ValueError,KeyError,ProviderUnavailable,OSError,sqlite3.Error):
             raise HTTPException(503,'Session sound state unavailable; conversation work is unchanged') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/artifacts')
     async def conversation_artifacts(request: Request):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result=await run_in_threadpool(provider.artifacts)
         except (ValueError,ProviderUnavailable,OSError):
             raise HTTPException(409,'Files unavailable; conversation work was not repeated') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/artifacts/{ident}')
     async def conversation_artifact_download(request: Request,ident: str):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             from datetime import datetime
@@ -531,7 +576,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         except (ValueError,ProviderUnavailable,OSError):
             raise HTTPException(409,'File unavailable, expired or changed; the text reply remains available') from None
         try:
-            authorize(request)
+            await authorize_async(request)
             deadline=datetime.fromisoformat(ref['expires_at']).timestamp()
             if time.time()>=deadline:
                 raise HTTPException(409,'File expired')
@@ -558,7 +603,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/api/interaction/goals')
     async def conversation_goals(request: Request, before: int = 0):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.goal_controls, before)
@@ -566,12 +611,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid control selection') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Goal controls unavailable; nothing was changed') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/goals/{ident}')
     async def conversation_goal_detail(request: Request, ident: str):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.goal_control_detail, ident)
@@ -579,12 +624,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid control selection') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(409, 'Control changed or is unavailable; nothing was changed') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/requests')
     async def conversation_requests(request: Request, after: int = 0):
-        session = authorize(request)
+        session = await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_requests, after)
@@ -592,12 +637,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid request cursor') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(503, 'Pending requests unavailable; refresh to reconnect') from None
-        authorize(request)
+        await authorize_async(request)
         return {**result, 'csrf':session['csrf']}
 
     @app.get('/api/interaction/requests/{ident}')
     async def conversation_request_detail(request: Request, ident: str, offset: int = 0, revision: str | None = None):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_request_detail, ident, offset, revision)
@@ -605,12 +650,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid native request selection') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(409, 'Request changed or is unavailable; refresh its current state') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/requests/{ident}/receipt')
     async def conversation_decision_receipt(request: Request, ident: str, revision: str):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_decision_receipt, ident, revision)
@@ -618,12 +663,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Invalid decision selection') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(409, 'Decision recording unconfirmed; no repeat was submitted') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.post('/api/interaction/requests/{ident}')
     async def conversation_request_decide(request: Request, ident: str):
-        session = authorize(request)
+        session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         try:
@@ -634,23 +679,23 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400, 'Select one exact native request decision') from None
         except (ProviderUnavailable, OSError):
             raise HTTPException(409, 'Decision unconfirmed or request changed. Check its current state before trying again') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.get('/api/interaction/part')
     async def interaction_part(request: Request, source: str, revision: str, offset: int = 0):
-        authorize(request)
+        await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.presentation_part, source, revision, offset)
         except (ProviderUnavailable, OSError, ValueError):
             raise HTTPException(409, 'Selected result changed or is unavailable; refresh the conversation') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.post('/api/interaction/audio')
     async def interaction_audio(request: Request):
-        session = authorize(request)
+        session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         if speech is None:
@@ -663,7 +708,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             selected = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
         except (ProviderUnavailable, OSError, ValueError, KeyError):
             raise HTTPException(409, 'Selected result changed or is unavailable; refresh the conversation') from None
-        authorize(request)
+        await authorize_async(request)
         try:
             data, rendered = await speech.render(selected)
             # Retained text, bindings and correction state are rechecked after synthesis.
@@ -672,7 +717,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 raise SpeechUnavailable('Presentation source changed')
         except (SpeechUnavailable, RenderError, ProviderUnavailable, OSError, ValueError, KeyError, TimeoutError):
             raise HTTPException(409, 'Speech outcome retained; refresh before continuing') from None
-        authorize(request)
+        await authorize_async(request)
         return Response(data, media_type='audio/wav', headers={
             'X-Presentation-Source':body['source'], 'X-Presentation-Revision':body['revision'],
             'X-Presentation-Offset':str(body['offset']),
@@ -712,7 +757,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.post('/api/alerts/acknowledge')
     async def acknowledge(request: Request):
-        session = authorize(request)
+        session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         if alerts is None:
@@ -731,7 +776,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 body['producer_id'], body['incident_id'], body['request_id'])
         except (AlertsUnavailable, ProviderUnavailable, OSError, ValueError, sqlite3.Error):
             raise HTTPException(503, 'Acknowledgment unconfirmed; refresh before retrying') from None
-        authorize(request)
+        await authorize_async(request)
         return result
 
     @app.post('/api/stop')
@@ -743,7 +788,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         return await action(request, 'resume')
 
     async def action(request, kind):
-        session = authorize(request)
+        session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
             raise HTTPException(403, 'Action token missing')
         try:

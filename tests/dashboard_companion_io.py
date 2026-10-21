@@ -1,5 +1,8 @@
 """Explicit device grants through actual private files, HTTP and speech cache."""
 import copy
+import asyncio
+import threading
+import httpx
 import hashlib
 import os
 import tempfile
@@ -56,6 +59,81 @@ class Companion(unittest.TestCase):
 
     def audio(self):
         return self.client.post('/api/interaction/audio',json=self.body,headers=self.headers)
+
+    def test_shared_home_session_is_fileless_scoped_and_revalidated(self):
+        self.config['shared_auth']={'enabled':True,'home_origin':'https://home.example.test'}
+        self.config['additional_origins']=['https://home.example.test']
+        self.client.close();self.client=self.client_for()
+        self.provider.conversation_inputs=lambda before,direction: {'items':[], 'more':False}
+        submitted=[]
+        self.provider.conversation_input_submit=lambda body: submitted.append(body) or {'phase':'queued'}
+        token='h'*43
+        headers={'Host':'home.example.test','Cookie':'__Host-home='+token,
+                 'Origin':'https://home.example.test'}
+        identity={'contract':'dm.home-session/v1','origin':'https://home.example.test','expires':int(time.time())+3600,
+                  'actor':{'ref':'human:telegram:100','kind':'human','name':'Fixture'}}
+        with patch('dashboard.home_auth.identity_response',return_value=identity) as current:
+            access=self.client.get('/api/interaction/access',headers=headers)
+            self.assertEqual(access.status_code,200,access.text)
+            self.assertNotIn(token,access.text)
+            self.assertEqual(self.client.get('/api/interaction',headers=headers).status_code,200)
+            self.assertEqual(self.client.get('/api/interaction/inputs',headers=headers).status_code,200)
+            payload={'id':str(uuid.uuid4()),'text':'Shared session text'}
+            for csrf in ('', 'wrong'):
+                denied=self.client.post('/api/interaction/inputs',json=payload,headers={**headers,'X-Dashboard-CSRF':csrf})
+                self.assertEqual(denied.status_code,403)
+            write_headers={**headers,'X-Dashboard-CSRF':access.json()['csrf']}
+            self.assertEqual(self.client.post('/api/interaction/inputs',json=payload,headers={**write_headers,'Origin':'https://unrelated.example.test'}).status_code,403)
+            self.assertEqual(submitted,[])
+            self.assertEqual(self.client.post('/api/interaction/inputs',json=payload,headers=write_headers).status_code,200)
+            self.assertEqual(submitted,[payload])
+            for path in ('/api/state','/api/traffic','/api/alerts'):
+                self.assertEqual(self.client.get(path,headers=headers).status_code,403,path)
+            self.assertEqual(self.client.post('/api/stop',json={},headers=headers).status_code,403)
+            self.assertEqual(current.call_args.args,('https://home.example.test',token))
+            self.assertEqual(self.client.get('/api/interaction',headers={**headers,'Authorization':'Companion invalid'}).status_code,401)
+            self.assertEqual(self.client.get('/api/interaction',headers={**headers,'Host':'other.example.test'}).status_code,401)
+            changed={**identity,'actor':{**identity['actor'],'ref':'human:telegram:200'}}
+            current.return_value=changed
+            self.assertEqual(self.client.get('/api/interaction/access',headers=headers).status_code,403)
+            current.side_effect=ValueError('revoked')
+            self.assertEqual(self.client.get('/api/interaction',headers=headers).status_code,401)
+        redirect=self.client.get('/?view=conversation&client=standalone',follow_redirects=False)
+        self.assertEqual(redirect.status_code,307)
+        self.assertEqual(redirect.headers['location'],'https://home.example.test/interaction/?view=conversation&client=standalone')
+        shell=self.client.get('/?view=conversation&client=standalone',headers={'Host':'home.example.test'})
+        self.assertIn('data-shared-auth="true"',shell.text)
+        self.assertIn('src="/access-client.js"',shell.text)
+        self.assertNotIn('telegram.org/js',shell.text)
+        self.assertLess(shell.text.index('src="/access-client.js"'),shell.text.index('src="assets/app.js'))
+        clean=self.client.get('/',headers={'Host':'home.example.test','X-Forwarded-Prefix':'/interaction'},follow_redirects=False)
+        self.assertEqual(clean.status_code,307)
+        self.assertEqual(clean.headers['location'],'https://home.example.test/interaction/?view=conversation&client=standalone')
+        shorthand=self.client.get('/?view=conversation',headers={'Host':'home.example.test'},follow_redirects=False)
+        self.assertEqual(shorthand.status_code,307)
+
+    def test_delayed_shared_identity_does_not_block_unrelated_dashboard_io(self):
+        self.config['shared_auth']={'enabled':True,'home_origin':'https://home.example.test'}
+        app=create_app(self.config,self.provider,lambda raw,bot:int(raw))
+        self.provider.conversation_inputs=lambda before,direction: {'items':[], 'more':False}
+        entered,release=threading.Event(),threading.Event()
+        def delayed(origin,token):
+            entered.set();release.wait(3)
+            return {'contract':'dm.home-session/v1','origin':origin,'expires':int(time.time())+3600,
+                    'actor':{'ref':'human:telegram:100','kind':'human','name':'Fixture'}}
+        async def scenario():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://home.example.test') as client:
+                work=asyncio.create_task(client.get('/api/interaction/inputs',headers={'Cookie':'__Host-home='+'h'*43}))
+                try:
+                    self.assertTrue(await asyncio.to_thread(entered.wait,1))
+                    started=time.monotonic()
+                    self.assertEqual((await client.get('/health')).status_code,200)
+                    self.assertLess(time.monotonic()-started,.5)
+                finally:release.set()
+                self.assertEqual((await work).status_code,200)
+        with patch('dashboard.home_auth.identity_response',side_effect=delayed) as lookup:
+            asyncio.run(scenario())
+        self.assertEqual(lookup.call_count,2,'Revalidate after I/O without a cross-request identity cache')
 
     def test_private_enrollment_and_actual_selected_audio_reuse_after_restart(self):
         self.assertEqual(self.output.stat().st_mode & 0o777,0o600)

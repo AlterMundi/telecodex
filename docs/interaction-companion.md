@@ -112,16 +112,25 @@ or real Telegram device acceptance.
 
 ## Browser access
 
-The human browser entry is `?view=conversation&client=standalone`. Integrate it
-with the existing [shared login](https://github.com/nicoechaniz/daimon-cluster/blob/main/docs/design/home-shared-login.md)
-at `https://auth.dmn.homes`, reusing the verified human and remembered session.
-The receiving conversation continues to enforce its own permissions. Login
-does not grant Sessions administration or access to another human's work.
+Mount the trusted conversation on the receiving registered home and reuse its
+existing [shared login](https://github.com/nicoechaniz/daimon-cluster/blob/main/docs/design/home-browser-client.md#trusted-application-identity)
+at `https://auth.dmn.homes`. The browser keeps the home's HttpOnly session;
+no credential file, browser token store or additional pairing service is used.
+The receiving backend checks `/access/identity` on that exact home, matches its
+verified human to the existing native receiving human, and enforces the same
+interaction-only permissions. Expiry and revocation stay with shared auth.
 
-The browser adapter is the remaining integration; device-file selection is not
-the onboarding solution. Do not introduce a replacement login, browser pairing
-service or credential handoff. Keep the enrollment commands in this document
-for clients such as the physical Talk device and the selected read-only monitor.
+Enable the receiving adapter with `[shared_auth]`, `enabled = true`, an exact
+`home_origin`, and `entry_path = "/interaction/"`. Add that exact home to
+`additional_origins`. The selected proxy strips only the entry prefix, preserves
+Host/cookies and supplies `X-Forwarded-Prefix: /interaction`. Mount `/access/*`
+and `/access-client.js` on the existing home gateway. The clean entry redirects
+to the standalone conversation and shared sign-in returns to that same path.
+`artifact_access = true` additionally permits the receiving conversation's
+existing generated-file downloads; administration and approvals stay separate.
+
+The enrollment commands above remain for physical Talk clients and the selected
+read-only monitor. They are not human browser onboarding.
 
 ## Standalone read-only routing monitor
 

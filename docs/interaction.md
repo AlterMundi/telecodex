@@ -37,7 +37,7 @@ evaluation are separate from that automated acceptance.
 ## Using the integrating conversation
 
 The browser entry uses [shared authentication](interaction-companion.md#browser-access)
-and a remembered session; its auth adapter remains to be integrated. The existing
+and a remembered session through its registered home. The existing
 Conversation view in authenticated Sessions and enrolled Talk devices use the
 same retained conversation. Text and committed voice clips enter that conversation.
 Talk starts a recording; a second press sends it. Holding the button discards the
