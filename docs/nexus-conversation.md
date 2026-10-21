@@ -220,3 +220,20 @@ audio deletion. Original discussion audio remains retained for hearing review,
 with separate explicit human confirmation before deletion. Native completion
 still requires an actual matched turn and final reply. Frontend polling reads
 retained receipts; it never resubmits a question or starts another model.
+
+## Report receiver adoption checkpoint — 2026-10-21
+
+The CompAII receiver adopted integrated source `49cde4d` after exact-source CI
+and a single-job release build. The existing writer-preserving route retained
+the native daemon, existing topic/thread, active goal and canonical journals;
+the successor collector was observed on the same active native writer. The web
+configuration was unchanged. No global Stop or new model kickoff occurred.
+The selected Nexus operator now uses the compatible report backend.
+
+This qualifies receiving adoption, not a completed report reflection. Each
+personal association still uses the authenticated `/nexus connect <table>`
+operation in its existing human topic. Browser table access alone never creates
+a private conversation binding, and another human's access does not enroll their
+daimon. Real response/continued-listening and physical hearing acceptance remain
+separate from source tests and service readiness. Exact receiving identifiers,
+configuration and receipts stay in the private owning runbook.
