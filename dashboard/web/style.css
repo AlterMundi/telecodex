@@ -659,3 +659,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
  .standalone-conversation #conversation-timeline { min-height:160px; }
 }
 @media(prefers-reduced-motion:reduce) { #conversation-companion pre { animation:none; } }
+
+/* Listening controls belong to the independent conversation, not diagnostics. */
+#conversation-sound-controls { display:flex; align-items:center; justify-content:center; gap:12px; flex-basis:100%; color:var(--muted); font-size:14px; }
+#conversation-sound-controls input { width:min(180px,45vw); min-height:36px; accent-color:var(--accent); }

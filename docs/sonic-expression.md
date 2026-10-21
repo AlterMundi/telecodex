@@ -1,9 +1,10 @@
 # Sonic expression
 
-The conversation client offers **State sound**, off by default. Clicking it
+The independent conversation client offers **Beacon**, off by default. Clicking it
 deliberately unlocks this browser's Web Audio context. It does not record audio,
-start inference or alter work. The score and volume control live under **Under
-the hood**. Muting, Stop audio, leaving the conversation, hiding the document or
+start inference or alter work. Activation, suspension, quieting, errors and mute are visible in the conversation.
+The volume appears there when listening is activated; the detailed score remains
+under **Under the hood**. Muting, Stop audio, leaving the conversation, hiding the document or
 going offline closes its owned context and cancels transitions. Returning does
 not resume playback without another click.
 
@@ -32,20 +33,31 @@ not enumerate arbitrary private sessions or infer emotion from conversation.
 ## Authored vocabulary
 
 The default `daimon.sonic-expression/v1` vocabulary is Source / CompAII's
-**Source hum**, revision 1: 65 Hz sine anchor, 0.22 Hz breathing gain, 100 ms
-attack and 180 ms release. Initial interval choices are working 1:3, waiting
+**Source hum**, revision 2: a 65 Hz anchor, weighted natural sine partials
+(1 × 0.64, 2 × 0.26, 3 × 0.10), 0.22 Hz breathing gain and a gentle 18 Hz
+amplitude texture at depth 0.12, with 180 ms attack and 350 ms release.
+The 65 Hz anchor follows NaturalHarmony’s maintained `DEFAULT_F1`; harmonic-shaper’s
+separate per-harmonic synthesis is the reference for the weighted partial body.
+The browser uses the existing local renderer, without importing those audio stacks. Initial interval choices are working 1:3, waiting
 1:7, blocked/limited 1:11, active goal without current work 1:2, unknown 1:13
 and passive silence. Here 1:N sounds at N times the fundamental. Waiting and
 blocked associations come from Nicolás; the remaining composition is authored
 by Source, drawing on NaturalHarmony and harmonic-shaper. These are artistic
 choices, not universal consonance, emotional or physiological claims.
 
+References: [NaturalHarmony decisions](https://github.com/AlterMundi/NaturalHarmony/blob/main/SOURCE_OF_TRUTH.md)
+and [harmonic-shaper synthesis](https://github.com/AlterMundi/harmonic-shaper/blob/main/src/harmonic_shaper/synth_pure.py).
+These inform this authored composition; this is not a claim of identical hardware sound.
+
 An owner may supply a complete `sonic_vocabulary` object in dashboard
 configuration. `dashboard/sonic.py` defines its fields and validation: 20–256 Hz
 fundamental, sine/triangle, 0–4 Hz pulse, 20–2000 ms envelopes, 1–32 session
 voices and complete state-to-ratio arrays. Empty arrays mean silence; two
 positive integer terms define a ratio. Catalog ID, revision, author and label
-are required. The server transmits exact canonical vocabulary JSON and SHA-256;
+are required. Optional `partials` contains one to four unique integer harmonics
+(1–8) and positive weights summing to at most one. Optional `texture_hz` (0–40 Hz)
+and `texture_depth` (0–0.25) author the purr; absent fields retain a pure tone.
+Each voice shares an envelope across its partials. The server transmits exact canonical vocabulary JSON and SHA-256;
 the browser verifies them before rendering. No executable macros or model loop
 are involved. Each being may choose a different vocabulary.
 
@@ -53,8 +65,9 @@ are involved. Each being may choose a different vocabulary.
 
 Voices are ordered waiting, blocked, working, goal-idle, unknown, passive, then
 stable source identity. The default mixes at most 24 session voices plus one
-anchor. Repeated intervals remain separate source voices. Tones beyond the
-browser sample-rate limit are omitted and reported. Old/new groups crossfade
+anchor. Repeated intervals remain separate source voices. Fundamental tones beyond
+the browser sample-rate limit are omitted and reported; higher partials outside
+that range are not synthesized. Old/new groups crossfade
 with at most two groups alive; owned timers and oscillators are canceled on
 Stop. Gain is normalized across voices and bounded by the authored peak limit
 (default 0.08 before the user volume). A zero volume keeps the score visible.
@@ -74,6 +87,8 @@ bounded voice membership, node/timer ownership, expiry and client lifecycle with
 an instrumented audio graph. A muted Chromium development journey additionally
 checked real browser activation and actual OfflineAudioContext samples, using
 synthetic states/native peers. These checks do not prove receiving operation or
-comfortable, recognizable sound. Complete S01–S05 in
+comfortable, recognizable sound. The revision-2 offline measurement also checks
+the actual 65/130/195 Hz body, waiting/blocked partials and 18 Hz modulation
+sidebands; mute and speech-priority quieting produce exact zero samples. Complete S01–S05 in
 `docs/interaction-qualification.md` against live sessions, then retain separately
 attributed human listening observations.

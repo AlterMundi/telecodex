@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from dashboard.app import create_app
 from dashboard.provider import Provider
 from dashboard.companion import Grants,permitted
+from dashboard.sonic import descriptor,DEFAULT
 from scripts.activity_indicator import atomic_json,inventory_source,readonly
 
 
@@ -130,6 +131,17 @@ topic_id=8
         self.assertEqual(set(self.sources()),{'100:1','100:9'})
         self.choices=[{'selector':'invalid','label':'Invalid'}]
         self.assertEqual(self.client.get('/api/interaction/sonic',headers=self.owner).status_code,503)
+
+
+class SonicVocabulary(unittest.TestCase):
+    def test_authored_partials_and_texture_are_bounded_and_legacy_is_supported(self):
+        self.assertEqual(json.loads(descriptor({})['vocabulary_json'])['fundamental_hz'],65)
+        for field,value in [('partials',[[1,0.8],[2,0.8]]),('partials',[[1,0.5],[1,0.5]]),
+                            ('partials',[[9,1]]),('texture_hz',41),('texture_depth',0.26),('texture_depth',float('nan'))]:
+            with self.subTest(field=field,value=value),self.assertRaises(ValueError):
+                descriptor({'sonic_vocabulary':{**DEFAULT,field:value}})
+        legacy={k:v for k,v in DEFAULT.items() if k not in ('partials','texture_hz','texture_depth')}
+        self.assertEqual(json.loads(descriptor({'sonic_vocabulary':legacy})['vocabulary_json']),legacy)
 
 
 if __name__=='__main__':unittest.main()

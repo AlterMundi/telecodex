@@ -11,9 +11,16 @@ window.ConversationSound = (() => {
     if(["blocked","usageLimited","budgetLimited"].includes(source.goal_state))return "blocked";
     return source.goal_state==="active"?"goal_idle":"passive";
   }
+  function validTimbre(v) {
+    const partials=v.partials===undefined?[[1,1]]:v.partials,number=(x,hi)=>typeof x==="number" && Number.isFinite(x) && x>=0 && x<=hi;
+    return Array.isArray(partials) && partials.length>=1 && partials.length<=4
+      && partials.every(p=>Array.isArray(p) && p.length===2 && Number.isInteger(p[0]) && p[0]>=1 && p[0]<=8 && number(p[1],1) && p[1]>0)
+      && new Set(partials.map(p=>p[0])).size===partials.length && partials.reduce((sum,p)=>sum+p[1],0)<=1.000001
+      && number(v.texture_hz??0,40) && number(v.texture_depth??0,0.25);
+  }
   function validate(v) {
     const number=(key,lo,hi)=>typeof v[key]==="number" && Number.isFinite(v[key]) && v[key]>=lo && v[key]<=hi;
-    return v?.schema==="daimon.sonic-expression/v1" && [v.id,v.revision].every(x=>typeof x==="string" && /^[A-Za-z0-9_.-]{1,80}$/.test(x))
+    return v?.schema==="daimon.sonic-expression/v1" && validTimbre(v) && [v.id,v.revision].every(x=>typeof x==="string" && /^[A-Za-z0-9_.-]{1,80}$/.test(x))
       && [v.author,v.label].every(x=>typeof x==="string" && x.length>0 && x.length<=256)
       && number("fundamental_hz",20,256) && number("pulse_hz",0,4) && number("attack_ms",20,2000) && number("release_ms",20,2000)
       && number("peak_gain",0.001,0.2) && Number.isInteger(v.max_sessions) && v.max_sessions>=1 && v.max_sessions<=32 && ["sine","triangle"].includes(v.wave)
@@ -47,10 +54,22 @@ window.ConversationSound = (() => {
       active={gain,nodes:[gain]};
       if(voices.length){
         const tone=(frequency,amplitude,id)=>{
-          const oscillator=context.createOscillator(),level=context.createGain();oscillator.type=v.wave;oscillator.frequency.value=frequency;
-          oscillator.sessionIdentity=id;level.gain.value=amplitude;oscillator.connect(level);level.connect(gain);oscillator.start(at);active.nodes.push(oscillator,level);
-          if(v.pulse_hz){const lfo=context.createOscillator(),depth=context.createGain();lfo.frequency.value=v.pulse_hz;depth.gain.value=amplitude*0.25;
-            lfo.connect(depth);depth.connect(level.gain);level.gain.value=amplitude*0.75;lfo.start(at);active.nodes.push(lfo,depth);}
+          // One envelope carries a voice's natural partials. The expression is
+          // authored timbre; none of these oscillators claim new work activity.
+          const level=context.createGain();level.connect(gain);active.nodes.push(level);
+          const depth=v.texture_depth||0,pulse=v.pulse_hz?0.25:0,texture=v.texture_hz?depth:0;
+          level.gain.value=amplitude*(1-pulse-texture);
+          for(const [rate,amount] of [[v.pulse_hz,pulse],[v.texture_hz,texture]])if(rate && amount){
+            const lfo=context.createOscillator(),modulation=context.createGain();
+            lfo.frequency.value=rate;modulation.gain.value=amplitude*amount;
+            lfo.connect(modulation);modulation.connect(level.gain);lfo.start(at);active.nodes.push(lfo,modulation);
+          }
+          for(const [harmonic,weight] of v.partials||[[1,1]]){
+            if(frequency*harmonic>=context.sampleRate*0.45)continue;
+            const oscillator=context.createOscillator(),partial=context.createGain();
+            oscillator.type=v.wave;oscillator.frequency.value=frequency*harmonic;oscillator.sessionIdentity=id;
+            partial.gain.value=weight;oscillator.connect(partial);partial.connect(level);oscillator.start(at);active.nodes.push(oscillator,partial);
+          }
         };
         tone(v.fundamental_hz,0.5,"anchor");
         for(const source of voices){const r=v.intervals[source.state];tone(v.fundamental_hz*r[1]/r[0],0.5/voices.length,source.id);}
@@ -67,8 +86,8 @@ window.ConversationSound = (() => {
   function mount({api,unauthorized=()=>{},getAuthority=()=>"",now=()=>performance.now()}={}) {
     const button=document.querySelector("#conversation-sound-toggle"),status=document.querySelector("#conversation-sound-status"),score=document.querySelector("#conversation-sound-score"),volume=document.querySelector("#conversation-sound-volume");
     if(!button || !status || !score || !volume)return;
-    const feedback=document.querySelector("#conversation-sound-feedback");
-    function setStatus(detail,brief=detail){status.textContent=detail;if(feedback){feedback.textContent=brief;feedback.hidden=detail==="Off";}}
+    const feedback=document.querySelector("#conversation-sound-feedback"),controls=document.querySelector("#conversation-sound-controls");
+    function setStatus(detail,brief=detail){status.textContent=detail;if(feedback){feedback.textContent=brief;feedback.hidden=detail==="Off";}if(controls)controls.hidden=!enabled;}
     let enabled=false,suspended=false,generation=0,authority,request,frame,vocabulary,catalog,received=0,requestElapsed=0,expiry,local={};
     const engine=renderer({changed(running){suspended=!running;if(enabled){button.textContent=running?"≈ Mute Beacon":"≈ Resume Beacon";if(!running)setStatus("Audio suspended · tap to resume");}}});
     const isQuiet=()=>["permission","recording","finalizing"].includes(local.capture) || local.uploading===true || ["playing","preparing"].includes(local.playback);
@@ -81,7 +100,7 @@ window.ConversationSound = (() => {
       const label=document.querySelector("#conversation-sound-vocabulary");if(label)label.textContent=`${vocabulary.label} · ${vocabulary.fundamental_hz} Hz anchor · ${vocabulary.wave} · revision ${vocabulary.revision}`;
       const silent=isQuiet();
       engine.setQuiet(silent);
-      setStatus(!played.running?"Audio suspended · tap to resume":Number(volume.value)===0?"Muted · state labels remain available":silent?"Quiet during voice capture or reply":`${played.voices.length} session voices · ${composition.unconfirmed} unconfirmed · ${composition.omitted+played.dropped} omitted${composition.truncated?" · additional sources unavailable":""}`, !played.running?"Beacon paused · tap to resume":Number(volume.value)===0?"Beacon muted":silent?"Beacon quiet while you speak or listen":played.voices.length?`Beacon · ${played.voices.length} session voices${composition.unconfirmed?" · some state unconfirmed":""}`:"Beacon quiet · no active session voices");
+      setStatus(!played.running?"Audio suspended · tap to resume":Number(volume.value)===0?"Muted · state labels remain available":silent?"Quiet during voice capture or reply":`${played.voices.length} session voices · ${composition.unconfirmed} unconfirmed · ${composition.omitted+played.dropped} omitted${composition.truncated?" · additional sources unavailable":""}`, !played.running?"Beacon paused · tap to resume":Number(volume.value)===0?"Beacon muted":silent?"Beacon quiet while you speak or listen":played.voices.length?`Beacon · ${played.voices.length} session voice${played.voices.length===1?"":"s"}${composition.unconfirmed?" · some state unconfirmed":""}`:"Beacon quiet · no active session voices");
       const rows=composition.sources.map(source=>{const row=document.createElement("li");
         const ratio=vocabulary.intervals[source.state];row.textContent=`${source.label||source.id} · ${source.state.replaceAll("_"," ")} · ${ratio.length?ratio.join(":"):"quiet"}${played.voices.some(v=>v.id===source.id)?"":" · outside this mix"}`;return row;});score.replaceChildren(...rows);
       clearTimeout(expiry);

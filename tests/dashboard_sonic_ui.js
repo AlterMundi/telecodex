@@ -19,7 +19,7 @@ class Audio{
 }
 const nodes=new Map(),events=new Map();
 const element=()=>({value:'0.3',children:[],handlers:{},textContent:'',setAttribute(k,v){this[k]=v;},replaceChildren(...v){this.children=v;},addEventListener(k,f){this.handlers[k]=f;}});
-for(const name of ['toggle','status','score','volume','vocabulary','feedback'])nodes.set('#conversation-sound-'+name,element());
+for(const name of ['toggle','status','score','volume','vocabulary','feedback','controls'])nodes.set('#conversation-sound-'+name,element());
 const document={hidden:false,querySelector:s=>nodes.get(s),createElement:element,addEventListener(name,fn){events.set(name,fn);}};
 const scope=vm.createContext({window:{AudioContext:Audio,addEventListener(name,fn){events.set(name,fn);}},document,crypto,TextEncoder,performance:{now:()=>0},setTimeout:timeout,clearTimeout:cancel});
 vm.runInContext(fs.readFileSync('dashboard/web/sonic.js','utf8'),scope);
@@ -28,6 +28,10 @@ const source=(n,extra={})=>({id:`100:${n}`,session:n,label:`Session ${n}`,fresh:
 const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,configured:true,connected:true,sources,...descriptor});
 (async()=>{
   assert(sound.validate(vocabulary));assert(!sound.validate({...vocabulary,max_sessions:33}));
+  assert(!sound.validate({...vocabulary,partials:[[1,.8],[2,.8]]}));
+  assert(!sound.validate({...vocabulary,partials:[[1,.5],[1,.5]]}));
+  assert(!sound.validate({...vocabulary,texture_depth:.5}));
+  assert(!sound.validate({...vocabulary,texture_hz:Infinity}));
   assert.equal(sound.state(source(1,{waiting_for_human:true}),1000000),'waiting');
   assert.equal(sound.state(source(1,{execution:'idle',goal_state:'blocked'}),1000000),'blocked');
   assert.equal(sound.state(source(1,{execution:'idle'}),1000000),'goal_idle');
@@ -42,6 +46,9 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   const audible=sound.plan(frame([source(1,{waiting_for_human:true}),source(2,{execution:'idle',goal_state:'blocked'})]),vocabulary);
   engine.render(audible,vocabulary);
   assert(context.nodes.some(n=>n.frequency.value===455));assert(context.nodes.some(n=>n.frequency.value===715));
+  for(const hz of [65,130,195,455,910,1365,715,1430,2145])assert(context.nodes.some(n=>n.frequency.value===hz),`Missing authored natural partial ${hz}`);
+  assert(context.nodes.some(n=>n.frequency.value===18),'Missing authored purr texture');
+  assert(context.nodes.length<100,'A three-voice composition grew beyond its bounded graph');
   const count=context.nodes.length;engine.render(audible,vocabulary);assert.equal(context.nodes.length,count,'Metadata refresh restarted unchanged voices');
   const master=context.nodes[0];engine.setQuiet(true);assert.equal(master.gain.value,0);engine.render(audible,vocabulary);assert.equal(master.gain.value,0);
   engine.setVolume(0);engine.setQuiet(false);assert.equal(master.gain.value,0);
@@ -56,7 +63,7 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   const client=sound.mount({api:async route=>{assert.equal(route,'interaction/sonic');calls++;return selected;},now:()=>now});
   assert.equal(calls,0,'Mount requested state before explicit listening');
   await nodes.get('#conversation-sound-toggle').handlers.click();assert.equal(calls,1);
-  assert.match(nodes.get('#conversation-sound-feedback').textContent,/Beacon · 1 session voices/);
+  assert.match(nodes.get('#conversation-sound-feedback').textContent,/Beacon · 1 session voice/);
   assert.equal(nodes.get('#conversation-sound-feedback').hidden,false);
   const live=Audio.instances.at(-1),liveMaster=live.nodes[0];assert(liveMaster.gain.value>0);
   client.update({capture:'recording'});assert.equal(liveMaster.gain.value,0);
