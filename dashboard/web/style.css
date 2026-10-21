@@ -663,3 +663,10 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 /* Listening controls belong to the independent conversation, not diagnostics. */
 #conversation-sound-controls { display:flex; align-items:center; justify-content:center; gap:12px; flex-basis:100%; color:var(--muted); font-size:14px; }
 #conversation-sound-controls input { width:min(180px,45vw); min-height:36px; accent-color:var(--accent); }
+
+/* Worker commentary is inspectable below; the chat keeps one latest update per session. */
+.standalone-conversation #conversation-replies { overflow:visible; min-height:0; }
+.standalone-conversation #conversation-replies > section:has(#conversation-answers) { display:none; }
+.standalone-conversation .session-update { border-inline-start:2px solid var(--line)!important; border-radius:0!important; padding-block:6px!important; }
+.standalone-conversation .session-update .reply-text { font-size:14px; color:var(--muted); }
+.standalone-conversation .session-update button { min-height:44px; font-size:14px; background:transparent; color:var(--muted); border-color:transparent; padding-inline:0; }

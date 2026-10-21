@@ -49,7 +49,9 @@ The next delivery must be assessed as one experience:
   voice capture and spoken replies take precedence.
 
 The current renderer work removes fixed-height/nested inspection scroll limits,
-keeps history controls under inspection, and separates authored response poses
+keeps history controls and full worker commentary under inspection, retains one
+attributed recent update per session and all useful final answers in the chat,
+and separates authored response poses
 from background work indicators so concurrent work cannot suppress expression.
 Beacon activation/status stays visible in the main app, including errors,
 suspension, quiet arbitration and mute. Browser-generated signal and muted zero

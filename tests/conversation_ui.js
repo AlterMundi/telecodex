@@ -211,13 +211,27 @@ function boot(readOnly=false,standalone=false,options={}) {
   const single=boot(false,true);
   single.originals.set('between',{id:'between',text:'A direction while work continues',sequence:1,phase:'accepted',received_at:'2024-01-01T00:00:04.500Z'});
   await single.ui.refresh();
+  const workers=boot(false,true);
+  workers.overrideSource(8,{kind:"worker_progress",label:"Alpha",target:{chat_id:100,thread_id:7},preview:"The newer useful update"});
+  workers.overrideSource(7,{kind:"worker_progress",label:"Alpha",target:{chat_id:100,thread_id:7},preview:"An earlier raw update"});
+  await workers.ui.refresh();
+  const workerTimeline=workers.nodes.get('#conversation-timeline'),workerDetails=workers.nodes.get('#conversation-results');
+  assert(!workerTimeline.children.some(c=>c.dataset.timelineKey==='native:8'),'raw worker commentary belongs under inspection');
+  assert(workerDetails.children.some(c=>c.dataset.sequence==='8'),'raw update must remain inspectable');
+  const compact=workerTimeline.children.filter(c=>c.dataset.timelineKey?.startsWith('session-update:'));
+  assert.equal(compact.length,1,'parallel session updates must coalesce by actual target, not title');
+  assert.equal(compact[0].children[1].textContent,'The newer useful update');
+  workers.addReplies(1);workers.overrideSource(9,{kind:"worker_result",label:"Alpha",target:{chat_id:100,thread_id:7},preview:"The useful final answer"});
+  await workers.ui.refresh();
+  assert(workerTimeline.children.some(c=>c.dataset.timelineKey==='native:9'),'the only useful final answer must stay in the main chat');
+  assert.equal(compact[0].removed,true,'a returned answer settles an earlier progress preview');
   const stream=single.nodes.get('#conversation-timeline');
   assert.deepEqual(stream.children.filter(c=>c.dataset.timelineKey).map(c=>c.dataset.timelineKey),['native:1','native:2','native:3','native:4','input:between','native:5','native:6','native:7','native:8']);
   assert.equal(stream.children.find(c=>c.dataset.timelineKey==='native:1').children[1].textContent,'Progress update.');
   assert.equal(stream.children.find(c=>c.dataset.timelineKey==='input:between').children[0].textContent,'You');
   await single.ui.refresh();
   assert.equal(stream.children.filter(c=>c.dataset.timelineKey).length,9,'Refreshing keeps one card per saved input or native item');
-  assert.equal(single.nodes.get('#conversation-replies').hidden,true);
+  assert.equal(single.nodes.get('#conversation-replies').hidden,false,'raw session updates remain available inside collapsed inspection');
   // Real browser review exposed lost follow mode when an existing voice card
   // grows from a placeholder into its transcript. Measure before DOM mutation.
   const follow=boot(false,true,{capture:true});await follow.ui.refresh();
