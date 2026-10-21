@@ -54,3 +54,14 @@ Development = "/your-development-mount"
 # grants_dir = "/private/receiving/companion-grants"
 
 # presentation_profile = "simple" # simple or explorer; appearance only, never permissions
+
+# Optional trusted same-origin browser application using the existing shared auth.
+# The home gateway must provide /access/identity and /access-client.js.
+# Mount this sidecar at entry_path, preserving Host/cookies and setting
+# X-Forwarded-Prefix to the entry path without its final slash.
+# Add the exact home_origin to additional_origins above.
+# [shared_auth]
+# enabled = true
+# home_origin = "https://your-registered-home"
+# entry_path = "/interaction/"
+# artifact_access = false

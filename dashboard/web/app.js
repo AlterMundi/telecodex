@@ -5,6 +5,8 @@ const standaloneConversation = new URL(location.href).searchParams.get('view') =
 const deviceMode = monitorOnly || standaloneConversation;
 const tg = deviceMode ? undefined : window.Telegram?.WebApp;
 let deviceAuthorization;
+let sharedConversationConnected = false;
+let sharedSignInAction;
 let snapshot,
   csrf,
   filter = "attention",
@@ -50,6 +52,8 @@ const elapsed = (n) =>
       : `${Math.floor(n / 60)}m ${n % 60}s`;
 function authorizationHeaders() {
   if(deviceMode){
+    if(sharedConversationConnected)return {};
+    if(standaloneConversation && document.documentElement.dataset.sharedAuth==='true')throw Error('Sign in to your conversation');
     if(!deviceAuthorization)throw new Error(monitorOnly ? 'Open a current monitor credential' : 'Open your conversation access file');
     return {Authorization:deviceAuthorization};
   }
@@ -583,8 +587,42 @@ const conversationView = window.Conversation?.mount({
   telegram: tg,
   readOnly: monitorOnly,
   standalone: standaloneConversation,
+  onUnauthorized: error => { if(error.status===401)sharedSignInAction?.(); },
 });
 (async () => {
+  if(standaloneConversation && document.documentElement.dataset.sharedAuth === 'true'){
+    document.title='Daimon Interaction';
+    const feedback=$('#feedback');
+    const signIn=el('button','Sign in');signIn.type='button';
+    sharedSignInAction=()=>{
+      sharedConversationConnected=false;authenticated=false;
+      feedback.replaceChildren(el('p','Sign in again to reconnect.'),signIn);
+    };
+    signIn.addEventListener('click',async()=>{
+      signIn.disabled=true;
+      try{
+        const result=await window.DaimonHomeAccess.createClient().signIn();
+        if(result?.status!=='redirecting')location.reload();
+      }catch(_){feedback.replaceChildren(el('p','Sign-in did not finish. You can try again.'),signIn);}
+      finally{signIn.disabled=false;}
+    });
+    try{
+      const response=await fetch('api/interaction/access',{credentials:'same-origin',redirect:'error',signal:AbortSignal.timeout(10000)});
+      if(!response.ok)throw Object.assign(Error('Sign in to continue'),{status:response.status});
+      const access=await response.json();
+      csrf=access.csrf;sharedConversationConnected=true;authenticated=true;
+      feedback.replaceChildren(el('span','Connected · '+access.label));
+      conversationView?.authenticated();await refresh(true);schedule();
+    }catch(error){
+      sharedConversationConnected=false;
+      feedback.replaceChildren(el('p',error.status===401?'Sign in with your existing Daimon Matrix account.':error.status===403?'This account cannot access this conversation.':'Connection unavailable. You can retry signing in.'),signIn);
+      if(error.status===401){
+        try{await window.DaimonHomeAccess.createClient().signIn();}
+        catch(_){/* Keep the explicit retry when a browser cancels sign-in. */}
+      }
+    }
+    return;
+  }
   if(deviceMode){
     const storageKey=monitorOnly?'routing-monitor':'interaction-client';
     const title=monitorOnly?'Routing monitor':'Daimon Interaction';

@@ -110,25 +110,27 @@ unrouted; revoked requests are refused before voice buffering or ASR. Both
 fixtures use zero inference. They do not prove a physical button, audible output
 or real Telegram device acceptance.
 
-## Standalone conversation browser
+## Browser access
 
-Open `?view=conversation&client=standalone` in an ordinary browser, then select the private
-interaction-only access file issued through the existing enrollment command.
-This entry loads without the Telegram SDK. It uses the same conversation, retained originals, text/voice endpoints and
-selected speech service as Talk. It does not exchange a Telegram login, create
-another native session owner or inherit ambient Sessions cookies.
+Mount the trusted conversation on the receiving registered home and reuse its
+existing [shared login](https://github.com/nicoechaniz/daimon-cluster/blob/main/docs/design/home-browser-client.md#trusted-application-identity)
+at `https://auth.dmn.homes`. The browser keeps the home's HttpOnly session;
+no credential file, browser token store or additional pairing service is used.
+The receiving backend checks `/access/identity` on that exact home, matches its
+verified human to the existing native receiving human, and enforces the same
+interaction-only permissions. Expiry and revocation stay with shared auth.
 
-The selected credential stays in this tab's session storage for reconnects.
-Its receiving grant remains authoritative, including operator renewal. Changing
-or refusing the file clears the selected access instead of falling back to an
-ambient session. Keep the file private; revocation and expiry use the existing
-grant commands above.
+Enable the receiving adapter with `[shared_auth]`, `enabled = true`, an exact
+`home_origin`, and `entry_path = "/interaction/"`. Add that exact home to
+`additional_origins`. The selected proxy strips only the entry prefix, preserves
+Host/cookies and supplies `X-Forwarded-Prefix: /interaction`. Mount `/access/*`
+and `/access-client.js` on the existing home gateway. The clean entry redirects
+to the standalone conversation and shared sign-in returns to that same path.
+`artifact_access = true` additionally permits the receiving conversation's
+existing generated-file downloads; administration and approvals stay separate.
 
-The conversation can inspect its own canonical input routing traces. Ordinary
-Telegram-topic history and Sessions administration remain outside this grant.
-Pending native questions can be read and answered through the conversation;
-approval controls require Sessions. Standalone mode does not display controls
-that its grant cannot operate.
+The enrollment commands above remain for physical Talk clients and the selected
+read-only monitor. They are not human browser onboarding.
 
 ## Standalone read-only routing monitor
 

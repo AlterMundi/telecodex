@@ -6,10 +6,10 @@ const vm = require("node:vm");
 const source = fs.readFileSync("dashboard/web/app.js", "utf8");
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf"})}), mode=false) {
+function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf"})}), mode=false, shared=false) {
   const monitor=mode===true, standalone=mode==='conversation', device=monitor||standalone;
   const nodes = new Map(), requests = [], timers = new Map();
-  let nextTimer = 0, monitorHeaders;
+  let nextTimer = 0, monitorHeaders, signIns=0, unauthorized;
   const saved = new Map();
   const element = () => ({
     style: {}, setAttribute(name, value) { this[name] = value; }, textContent: "", disabled: false, handlers: {}, children: [], dataset: {},
@@ -20,7 +20,7 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
   });
   const document = {
     hidden: true,
-    documentElement: { dataset: {} },
+    documentElement: { dataset: shared?{sharedAuth:'true'}:{} },
     querySelector(selector) {
       if (!nodes.has(selector)) nodes.set(selector, element());
       return nodes.get(selector);
@@ -32,10 +32,12 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
   const context = vm.createContext({
     document,
     window: { Telegram: { WebApp: { initData: standalone ? undefined : "synthetic", ready() {} } },
-      ...(device?{Conversation:{mount(options){monitorHeaders=options.headers;options.modeChanged(true,true);return {authenticated(){},refresh:async()=>{}};}}}:{}) },
+      DaimonHomeAccess:{createClient(){return {async signIn(){signIns++;return {status:'redirecting'};}};}},
+      ...(device?{Conversation:{mount(options){monitorHeaders=options.headers;unauthorized=options.onUnauthorized;options.modeChanged(true,true);return {authenticated(){},refresh:async()=>{}};}}}:{}) },
     sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},
     URL, location:{href:"https://fixture.invalid/sessions/"+(device?"?view="+(monitor?"monitor":"conversation"):""),origin:"https://fixture.invalid",pathname:"/sessions/"},
     AbortController,
+    AbortSignal,
     crypto: { randomUUID: () => "synthetic-action-nonce" },
     fetch(route, options) {
       requests.push({ route, options });
@@ -53,7 +55,7 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
     clearInterval() {},
   });
   vm.runInContext(source, context);
-  return { context, nodes, requests, timers, headers:()=>monitorHeaders(), saved };
+  return { context, nodes, requests, timers, headers:()=>monitorHeaders(), saved, signIns:()=>signIns, expire:()=>unauthorized({status:401}) };
 }
 
 const fixtureToken = "f".repeat(43);
@@ -66,6 +68,24 @@ const hung = (options) => new Promise((resolve, reject) => {
 });
 
 (async () => {
+  const shared=boot(()=>Promise.resolve({ok:true,json:async()=>({csrf:'shared-csrf',label:'Human'})}),undefined,'conversation',true);
+  await settle();
+  assert.equal(shared.requests[0].route,'api/interaction/access');
+  assert.equal(shared.requests[0].options.credentials,'same-origin');
+  assert.equal(shared.nodes.get('#feedback').children[0].textContent,'Connected · Human');
+  assert.equal(shared.saved.size,0,'Shared auth must not copy its session into JS storage');
+  assert.equal(shared.signIns(),0,'A remembered session reconnects without another login');
+  assert.equal(shared.headers().Authorization,undefined);
+  shared.expire();
+  assert.equal(shared.nodes.get('#feedback').children[0].textContent,'Sign in again to reconnect.');
+  assert.equal(shared.nodes.get('#feedback').children[1].textContent,'Sign in');
+  assert.equal(shared.signIns(),0,'Expiry exposes login without replaying work or silently starting another ceremony');
+  for(const status of [401,403,503]){
+    const denied=boot(()=>Promise.resolve({ok:false,status,json:async()=>({})}),undefined,'conversation',true);
+    await settle();
+    assert.equal(denied.signIns(),status===401?1:0,'Only a missing session starts common sign-in');
+    assert.equal(denied.nodes.get('#feedback').children[1].textContent,'Sign in');
+  }
   const monitor=boot(()=>Promise.resolve({ok:true,json:async()=>({binding:"fixture",viewer:{label:"TEST <fixture>",expires:1900000000}})}),undefined,true);
   await settle();
   assert.equal(monitor.requests.length,0,"An unopened monitor must not use ambient owner cookies");

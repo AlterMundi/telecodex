@@ -7,7 +7,7 @@ window.Conversation = (() => {
     if (cls) value.className = cls;
     return value;
   };
-  function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false, standalone=false}) {
+  function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false, standalone=false, onUnauthorized}) {
     let canFiles=false,filesConnected=true;
     const files=new Map(),fileDownloads=new Map(),fileStatus=new Map();let fileJobs=[];
     const fileCredential=()=>JSON.stringify(Object.entries(headers()).filter(([key])=>key.toLowerCase()==="authorization"));
@@ -594,6 +594,7 @@ window.Conversation = (() => {
     function failed(error) {
       presentState({connected:false});
       if (error.status === 401 || error.status === 403) {
+        onUnauthorized?.(error);
         clearFiles();
         pause();stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
@@ -925,7 +926,7 @@ window.Conversation = (() => {
     if(readOnly){document.body.classList.toggle("monitor-mode",true);$("#conversation-sent").open=true;}
     setMode(initialMode(), true, false);
     return {refresh, pause, stop:()=>{sound?.disable();disableVoice();},
-      unauthenticated() { ready=false; failed({status:401,message:"Open your conversation access file to reconnect."}); },
+      unauthenticated() { ready=false; failed({status:401,message:document.documentElement.dataset.sharedAuth==='true'?"Sign in again to reconnect.":"Open your conversation access file to reconnect."}); },
       authenticated() { ready = true; $("#conversation-open").disabled = false; }};
   }
   return {mount};

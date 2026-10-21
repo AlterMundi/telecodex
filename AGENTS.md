@@ -1,5 +1,11 @@
 # Interaction development boundaries
 
+Browser sign-in uses the existing shared authentication at auth.dmn.homes and
+its remembered session. Follow the daimon-home service-integration guidance and
+the maintained Cluster shared-login adapter. Do not add browser credential-file
+uploads, a second pairing flow or another identity store. Companion enrollment
+is a device API primitive, not the human browser onboarding path.
+
 Human correction, 2026-10-19. Treat destination discovery as registry/observer eligibility only. It never enrolls direct work-topic messages into routing or changes ordinary native input, commentary, final answers, controls or file delivery. Direct native work does not consume the integrator worker quota. Retain the shared single-writer coordination needed when actual routed work reaches an existing native execution.
 
 The current MVP is one web conversation supporting routed text and two-way voice. Telegram work topics use ordinary Telecodex. The legacy Telegram entry adapter defaults off; enabling it requires an explicit selected entry and never authorizes interception of work topics. Do not silently re-enable it as a deployment/test convenience.
