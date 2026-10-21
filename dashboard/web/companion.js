@@ -2,21 +2,18 @@
 // Original compact portrait, inspired by Ani/Oliva's ASCII-Interfaces orb/hub
 // vocabulary. Operational state comes from evidence, never the cosmetic pose.
 window.ConversationCompanion = (() => {
-  const faces = {
-    calm: ["o   o", "  v  "], curious: ["o   O", "  ?  "],
-    focused: ["-   -", "  .  "], listening: ["O   O", "  v  "],
-    speaking: ["^   ^", "  o  "], delighted: ["^   ^", " \\_/ "],
-    uncertain: [".   .", "  ~  "],
-  };
+  const fallbackExpressions=new Set(["calm","curious","focused","listening","speaking","delighted","uncertain"]);
   // Source's interval field: an abstract presence, not a generic human face.
   // Variations are authored locally; no inference is spent rendering a frame.
-  function portrait(pose) {
+  function portrait(pose,frame=0) {
     const centres={calm:" . : . ",curious:" . ? . ",focused:" > : < ",
       listening:"(  :  )",speaking:"~ .:. ~",delighted:"+  *  +",uncertain:" .   . "};
     const centre=centres[pose]||centres.calm;
-    return ["         . : .", "      .:'     ':.", "    .:   .---.   :.",
+    const rows=["         . : .", "      .:'     ':.", "    .:   .---.   :.",
       "   :   .'     '.   :", ` --:--( ${centre} )--:--`,
-      "   :   '.     .'   :", "    ':.  '---'  .:'", "       ':.   .:'", "          ':'"].join("\n");
+      "   :   '.     .'   :", "    ':.  '---'  .:'", "       ':.   .:'", "          ':'"];
+    const halo=frame===1?"*":frame===2?"+":".";
+    return rows.map(row=>row.replaceAll(".",halo).padEnd(26)).join("\n");
   }
   function mount({now=()=>Date.now()}={}) {
     const box=document.querySelector("#conversation-companion");
@@ -26,7 +23,7 @@ window.ConversationCompanion = (() => {
     const motion=window.matchMedia?.("(prefers-reduced-motion: reduce)");
     let state={}, observed=0, expiry, animation, lastReply, lastPhases, rest="calm";
     const staleAfter=20000;
-    let pack, catalog, packSignature, frameTimer, frameIndex=0, frameExpression;
+    let pack, catalog, packSignature, frameTimer, frameIndex=0, frameExpression,lastExpression;
     function stopFrames(){clearTimeout(frameTimer);frameTimer=undefined;frameIndex=0;frameExpression=undefined;}
     function validPack(value){
       const ident=x=>typeof x==="string" && /^[a-zA-Z0-9_.-]{1,80}$/.test(x);
@@ -50,7 +47,7 @@ window.ConversationCompanion = (() => {
       const signature=JSON.stringify([selected,digest]);
       if(signature===packSignature)return;
       stopFrames();animation?.cancel();pack=selected;catalog=digest;packSignature=signature;lastReply=undefined;
-      rest=pack?pack.defaults.app.expression:"calm";draw();
+      rest=pack?pack.defaults.app.expression:"calm";lastExpression=undefined;draw(false);
     }
     function selection(expression){
       const entry=pack.expressions[expression] || pack.expressions[pack.defaults.app.expression];
@@ -69,7 +66,18 @@ window.ConversationCompanion = (() => {
       }
       return {entry,frames:[entry.alt],frame_ms:0,fallback:true};
     }
-    function draw() {
+    function framesFor(expression){return pack?selection(expression):{frames:[0,1,2].map(frame=>portrait(expression,frame)),frame_ms:240};}
+    function playFrames(expression){
+      stopFrames();if(document.hidden || motion?.matches)return;
+      const selected=framesFor(expression);if(selected.frames.length<2)return;
+      frameExpression=expression;
+      const tick=()=>{frameIndex++;
+        if(frameIndex>=selected.frames.length){stopFrames();draw(false);return;}
+        draw(false);frameTimer=setTimeout(tick,selected.frame_ms);
+      };
+      frameTimer=setTimeout(tick,selected.frame_ms);
+    }
+    function draw(animateChange=true) {
       const fresh=state.connected && observed && now()-observed<staleAfter;
       const rows=[];
       const add=(icon,label)=>rows.push({icon,label});
@@ -94,8 +102,10 @@ window.ConversationCompanion = (() => {
       const pose=state.capture==="recording"?"listening":state.playback==="playing"?"speaking":
         state.question?"curious":!fresh?"uncertain":rows.length && !lastReply?"focused":rest;
       const expression=pack?(Object.hasOwn(pack.expressions,pose)?pose:rest):pose;
-      const selected=pack?selection(expression):undefined;
-      const art=selected?selected.frames[frameExpression===expression?Math.min(frameIndex,selected.frames.length-1):0]:portrait(pose);
+      const changed=expression!==lastExpression;lastExpression=expression;
+      if(changed){stopFrames();animation?.cancel();if(animateChange && (state.connected || state.capture==="recording"))playFrames(expression);}
+      const selected=pack?selection(expression):undefined,frames=selected||framesFor(expression);
+      const art=frames.frames[frameExpression===expression?Math.min(frameIndex,frames.frames.length-1):0];
       if(selected){face.setAttribute("aria-hidden","false");face.setAttribute("role","img");face.setAttribute("aria-label",selected.entry.alt);face.title=pack.authorship;face.dataset.fallback=String(!!selected.fallback);}
       else {face.setAttribute("aria-hidden","true");face.setAttribute("aria-label","Companion portrait");face.dataset.fallback="false";}
       if(face.textContent!==art)face.textContent=art;
@@ -134,20 +144,10 @@ window.ConversationCompanion = (() => {
       const hint=source.companion_hint;
       stopFrames();
       rest=pack?(hint?.catalog===catalog && hint?.pack===pack.id && hint?.revision===pack.revision && Object.hasOwn(pack.expressions,hint?.rest)
-        ?hint.rest:pack.defaults.app.expression):(Object.hasOwn(faces,hint?.rest)?hint.rest:"calm");
-      draw();
+        ?hint.rest:pack.defaults.app.expression):(fallbackExpressions.has(hint?.rest)?hint.rest:"calm");
+      draw(false);
       animation?.cancel();
-      if(pack && hint?.gesture!=="none" && !document.hidden && !motion?.matches){
-        const selected=selection(rest);
-        if(selected.frames.length>1){
-          frameExpression=rest;
-          const tick=()=>{frameIndex++;
-            if(frameIndex>=selected.frames.length){stopFrames();draw();return;}
-            draw();frameTimer=setTimeout(tick,selected.frame_ms);
-          };
-          frameTimer=setTimeout(tick,selected.frame_ms);
-        }
-      }
+      if(hint?.gesture!=="none" && !document.hidden && !motion?.matches)playFrames(rest);
       const gesture=["wave","nod","none"].includes(hint?.gesture)?hint.gesture:"wave";
       if(!pack && !document.hidden && !motion?.matches && gesture!=="none"){
         const frames=gesture==="nod"
@@ -156,7 +156,7 @@ window.ConversationCompanion = (() => {
         animation=face.animate?.(frames,{duration:850,iterations:1});
       }
     }
-    function reset(){clearTimeout(expiry);stopFrames();animation?.cancel();state={};observed=0;lastReply=undefined;rest=pack?pack.defaults.app.expression:"calm";draw();}
+    function reset(){clearTimeout(expiry);stopFrames();animation?.cancel();state={};observed=0;lastReply=undefined;rest=pack?pack.defaults.app.expression:"calm";lastExpression=undefined;draw(false);}
     document.addEventListener("visibilitychange",()=>{
       if(document.hidden){clearTimeout(expiry);stopFrames();animation?.cancel();draw();}
       else {draw();arm();}
