@@ -102,8 +102,8 @@ restart without resending it. These are exercised conditions, not universal faul
 or routing-accuracy claims.
 
 Initial CLI startup observations were inconclusive. An instrumented read-only
-reattachment later issued its first owner query at14.591seconds, received its
-response in0.0008seconds and displayed the notice at15.302seconds. The already-ready
+reattachment later issued its first owner query at 14.591 seconds, received its
+response in 0.0008 seconds and displayed the notice at 15.302 seconds. The already-ready
 live control case subsequently passed. Startup, owner transport and rendering
 must remain distinct; no universal cold-start timing guarantee is asserted.
 
@@ -112,8 +112,8 @@ must remain distinct; no universal cold-start timing guarantee is asserted.
 | Component | Selected qualified source | Evidence |
 | --- | --- | --- |
 | Independent web | `d65ff7a` | Served assets/private reads, populated narrow/keyboard layouts, full readable answers and collapsed inspection; automated access bootstrap adapted |
-| Listener | PR#253, tested commit `fcaf7623`, SHA-256 `ff0aed983258dececdc0466ce5d00557fc1d477320fbeb24446da0310ddd56b1` | Full qualification run39629205705 and retained real-native busy result recovery |
-| Marker observer | PR#254, head `65f5bfa` | Forty-eight local tests, qualified run39631734758 and receiving Telegram marker acknowledgment |
+| Listener | PR #253, tested commit `fcaf7623`, SHA-256 `ff0aed983258dececdc0466ce5d00557fc1d477320fbeb24446da0310ddd56b1` | Full qualification run 39629205705 and retained real-native busy result recovery |
+| Marker observer | PR #254, head `65f5bfa` | Forty-eight local tests, qualified run 39631734758 and receiving Telegram marker acknowledgment |
 | Next-launch local CLI | Codex#7, tested commit `f309a1d` | Full native CI, actual retained goal/task notices and an actual live busy-goal notice |
 
 The writer-preserving listener/observer adoption kept the native daemon, current
@@ -125,7 +125,7 @@ and unknown Telegram lifecycle. Its finite connected inventory retains unknown
 native state and recency rather than guessing. Existing running CLI clients keep
 their loaded code; no other body's adoption is implied.
 
-Implementation slices #203/#108/#210/#214/#215/#216/#241 are delivered. Stage#208
+Implementation slices #203/#108/#210/#214/#215/#216/#241 are delivered. Stage #208
 and #61/#213/#221 remain open for human comprehension, visual and physical sonic
 acceptance. Automated/native evidence for Q01-Q21, V01-V08 and S01-S05 is retained
 by method and source; human H observations are not filled in by code review,
