@@ -129,6 +129,15 @@ to the standalone conversation and shared sign-in returns to that same path.
 `artifact_access = true` additionally permits the receiving conversation's
 existing generated-file downloads; administration and approvals stay separate.
 
+Visible standalone answers expand through the existing immutable source/part
+endpoint without requiring a Read reply click. Intersection-driven reads use at
+most two automatic readers and do not block the next text/voice input. Completed
+text is kept only in the current page; ordinary metadata refresh does not fetch
+it again. Changed source revisions cannot apply late text to their replacement.
+Hidden pages stop starting further parts and resume pending reads in foreground.
+Very long answers retain Continue reading after the bounded automatic expansion;
+manual reading remains available when the browser lacks intersection observation.
+
 The enrollment commands above remain for physical Talk clients and the selected
 read-only monitor. They are not human browser onboarding.
 

@@ -116,6 +116,60 @@ window.Conversation = (() => {
       placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
     }
 
+    // Read visible answers through the existing immutable source endpoint. Two
+    // finite readers keep long history from blocking input or flooding the API.
+    const textQueue=[];let textJobs=0;
+    const textObserver=timeline && window.IntersectionObserver?new window.IntersectionObserver(entries=>{
+      for(const entry of entries){const card=cards.get(entry.target.dataset.sourceId);if(card){card.textVisible=entry.isIntersecting;if(card.textVisible)queueText(card);}}
+    },{root:timeline,rootMargin:"200px"}):undefined;
+    function autoTextEligible(card){return card && card.textVisible && cards.get(card.source.id)===card
+      && ["integrator_answer","worker_result","matrix_result"].includes(card.source.kind)
+      && card.source.native_binding_current!==false && !card.source.correction_pending
+      && Number.isSafeInteger(card.source.text_characters) && card.source.text_characters>Array.from(card.source.preview).length
+      && !(card.expanded && card.offset===null) && card.autoRevision!==card.source.revision;}
+    function queueText(card){
+      if(!autoTextEligible(card))return;
+      card.autoWanted=true;
+      if(!card.textLoading && !textQueue.includes(card))textQueue.push(card);
+      drainText();
+    }
+    function drainText(){
+      while(textJobs<2 && textQueue.length && enabled && ready && !document.hidden){
+        const card=textQueue.shift();if(!autoTextEligible(card)||card.textLoading)continue;
+        const revision=card.source.revision;textJobs++;
+        void readCard(card,true).finally(()=>{
+          textJobs--;if(card.autoWanted && card.source.revision!==revision)queueText(card);drainText();
+        });
+      }
+    }
+    function clearText(){textQueue.length=0;textObserver?.disconnect();}
+    async function readCard(card,automatic=false){
+      if(card.textLoading || cards.get(card.source.id)!==card)return;
+      const selected=card.source;card.textLoading=true;card.read.disabled=true;card.error.textContent="";
+      if(automatic)card.autoRevision=selected.revision;
+      try{
+        let parts=0;
+        do{
+          const result=await part(selected,card.offset);
+          if(cards.get(selected.id)!==card || card.source.revision!==selected.revision)return;
+          const following=atTimelineEnd();
+          card.body.textContent=(card.expanded?card.body.textContent:"")+result.text;
+          card.expanded=true;card.offset=result.next_offset;
+          card.read.hidden=card.offset===null;card.read.textContent="Continue reading";
+          if(following && timeline)timeline.scrollTop=timeline.scrollHeight;
+          parts++;
+        }while(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && enabled && !document.hidden && card.textVisible);
+        if(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && (!enabled || document.hidden || !card.textVisible)){
+          card.autoRevision=undefined;card.autoWanted=true;
+        }
+      }catch(error){
+        if(cards.get(selected.id)===card && card.source.revision===selected.revision){
+          card.error.textContent=error.message;
+          if(error.status===401 || error.status===403)failed(error);
+        }
+      }finally{card.textLoading=false;card.read.disabled=false;if(automatic && card.autoWanted && card.autoRevision===undefined)queueText(card);}
+    }
+
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
     const sendState = $("#conversation-send-state");
@@ -617,7 +671,7 @@ window.Conversation = (() => {
       if (error.status === 401 || error.status === 403) {
         onUnauthorized?.(error);
         clearFiles();
-        pause();stop(); cards.clear();clearProgress(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
+        pause();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else pause();
@@ -649,24 +703,11 @@ window.Conversation = (() => {
         card = {source, box, title, status, body, read, listen, error, offset:0, expanded:false};
         cards.set(source.id, card);
         reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
-        read.addEventListener("click", async () => {
-          read.disabled = true; error.textContent = "";
-          const selected = card.source;
-          try {
-            const result = await part(selected, card.offset);
-            if (cards.get(selected.id) !== card) return;
-            if (card.source.revision !== selected.revision) throw new Error("Reply changed. Refresh before continuing.");
-            body.textContent = (card.expanded ? body.textContent : "") + result.text;
-            card.expanded = true;
-            card.offset = result.next_offset;
-            read.hidden = card.offset === null;
-            read.textContent = "Continue reading";
-          } catch (e) { error.textContent = e.message; if (e.status === 401 || e.status === 403) failed(e); }
-          finally { read.disabled = false; }
-        });
+        read.addEventListener("click",()=>readCard(card));
         listen.hidden=readOnly;listen.addEventListener("click", () => !readOnly && listenTo(card.source));
       } else if (card.source.text_sha256 !== source.text_sha256) {
         card.body.textContent = source.preview;
+        card.autoRevision=undefined;card.autoWanted=false;
         card.offset = 0; card.expanded = false; card.read.hidden = false;
         card.read.textContent = "Read reply";
       }
@@ -674,7 +715,9 @@ window.Conversation = (() => {
         if(voiceQueue[n].id===source.id && voiceQueue[n].revision!==source.revision)voiceQueue.splice(n,1);
       if (active?.source.id === source.id && active.source.revision !== source.revision)
         stop("This reply changed. Refresh before listening.");
-      card.source = source;
+      const textChanged=card.source.revision!==source.revision;
+      card.source = source;card.box.dataset.sourceId=source.id;
+      if(!card.expanded && Number.isSafeInteger(source.text_characters) && source.text_characters===Array.from(source.preview).length)card.read.hidden=true;
       for(const file of source.artifacts||[])files.set(file.id,file);
       renderFiles(card);
       const integrator=source.kind.startsWith("integrator_");
@@ -690,12 +733,16 @@ window.Conversation = (() => {
       card.listen.hidden = !canListen;
       if(!progress)graph?.result(source);
       sessionProgress(source);
-      if(source.kind!=="worker_progress")placeInTimeline(card.box,source.id,source.observed_at,followingLive);
+      if(source.kind!=="worker_progress"){
+        placeInTimeline(card.box,source.id,source.observed_at,followingLive);
+        if(textChanged)textObserver?.unobserve(card.box);
+        textObserver?.observe(card.box);
+      }
     }
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        stop(); cards.clear();clearProgress(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
+        stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
@@ -740,6 +787,7 @@ window.Conversation = (() => {
     }
     async function refresh(force = false) {
       if (!enabled || !ready || reading || (document.hidden && !force)) return;
+      drainText();
       reading = true;
       $("#conversation-refresh").disabled = true;
       $("#conversation-older").disabled = true;
