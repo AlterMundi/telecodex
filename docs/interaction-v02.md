@@ -49,12 +49,18 @@ The next delivery must be assessed as one experience:
   voice capture and spoken replies take precedence.
 
 The current renderer work removes fixed-height/nested inspection scroll limits,
-keeps history controls under inspection, and separates authored response poses
+keeps history controls and full worker commentary under inspection, retains one
+attributed recent update per session and all useful final answers in the chat,
+and separates authored response poses
 from background work indicators so concurrent work cannot suppress expression.
 Beacon activation/status stays visible in the main app, including errors,
 suspension, quiet arbitration and mute. Browser-generated signal and muted zero
 output are measured separately from physical listening. These are implementation
-increments; the authored sonic composition and human experience remain unaccepted.
+increments. Source hum revision 2 now specifies weighted natural partials, a
+slow breath and an 18 Hz amplitude texture around the Beacon’s 65 Hz anchor.
+Offline browser measurements verify its spectrum, bounded transitions and exact
+mute/voice-priority silence. These measurements do not establish recognition or
+comfort on a phone; the complete human experience remains unaccepted.
 
 The human did not perceive avatar changes or hear state sound during use. Existing
 renderers, mappings and technical fixtures do not resolve those observations.

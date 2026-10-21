@@ -66,6 +66,7 @@ window.Conversation = (() => {
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
       if(selection.input){$("#conversation-sent").open=true;card.trace.open=true;readTrace(card);}
+      if(timeline && card.source?.kind==="worker_progress")$("#conversation-diagnostics").open=true;
       card.box.scrollIntoView({block:"nearest"});
     }}) : undefined;
     document.body.classList.toggle("standalone-conversation",standalone);
@@ -78,7 +79,7 @@ window.Conversation = (() => {
       diagnostics.querySelector?.(".conversation-diagnostics-content")?.prepend($("#conversation-observation"));
       $("#conversation-message").rows=2;
       $("#conversation-visual summary").textContent="Add an image";
-      timeline.hidden=false;$("#conversation-replies").hidden=true;$("#conversation-sent").hidden=true;
+      timeline.hidden=false;$("#conversation-replies").hidden=false;$("#conversation-sent").hidden=true;
       $("#conversation-inputs-older").textContent="Earlier messages";
       historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));
       diagnostics.querySelector?.(".conversation-diagnostics-content")?.append(historyTools);
@@ -95,7 +96,26 @@ window.Conversation = (() => {
       if(nearEnd)timeline.scrollTop=timeline.scrollHeight;
     }
     let graphCursor=0;
-    const cards = new Map();
+    const cards = new Map(),progressCards=new Map(),settledProgress=new Map();
+    function clearProgress(){for(const card of progressCards.values())card.box.remove();progressCards.clear();settledProgress.clear();}
+    function sessionProgress(source){
+      if(!timeline || !source.target || !["worker_progress","worker_result"].includes(source.kind))return;
+      const key=`${source.target.chat_id}:${source.target.thread_id??""}`,stamp=Date.parse(source.observed_at)||0,previous=progressCards.get(key);
+      if(source.kind==="worker_result"){
+        settledProgress.set(key,Math.max(settledProgress.get(key)||0,stamp));
+        if(previous && previous.stamp<=stamp){previous.box.remove();progressCards.delete(key);}return;
+      }
+      if(stamp<=(settledProgress.get(key)||0) || previous && previous.stamp>stamp)return;
+      let card=previous;
+      if(!card){
+        const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),inspect=node("button","Inspect update");
+        inspect.type="button";box.append(title,body,inspect);card={box,title,body,inspect};progressCards.set(key,card);
+        inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
+      }
+      card.source=source.id;card.stamp=stamp;card.title.textContent=`Update from ${source.label}`;card.body.textContent=source.preview;
+      placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
+    }
+
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
     const sendState = $("#conversation-send-state");
@@ -597,7 +617,7 @@ window.Conversation = (() => {
       if (error.status === 401 || error.status === 403) {
         onUnauthorized?.(error);
         clearFiles();
-        pause();stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
+        pause();stop(); cards.clear();clearProgress(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else pause();
@@ -625,7 +645,7 @@ window.Conversation = (() => {
         actions.append(read, listen,reply); box.append(title, status, body, actions, error);
         box.dataset.sequence = String(source.sequence);
         const following = [...container.children].find((item) => Number(item.dataset.sequence) < source.sequence);
-        if(!timeline)container.insertBefore(box, following || null);
+        if(!timeline || source.kind==="worker_progress")container.insertBefore(box, following || null);
         card = {source, box, title, status, body, read, listen, error, offset:0, expanded:false};
         cards.set(source.id, card);
         reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
@@ -669,12 +689,13 @@ window.Conversation = (() => {
       card.box.dataset.pending = String(!!source.correction_pending || source.native_binding_current === false);
       card.listen.hidden = !canListen;
       if(!progress)graph?.result(source);
-      placeInTimeline(card.box,source.id,source.observed_at,followingLive);
+      sessionProgress(source);
+      if(source.kind!=="worker_progress")placeInTimeline(card.box,source.id,source.observed_at,followingLive);
     }
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        stop(); cards.clear(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
+        stop(); cards.clear();clearProgress(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
         newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
