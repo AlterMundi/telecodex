@@ -239,6 +239,20 @@ jobs:
                   failed |= result.returncode != 0
           sys.exit(1 if failed else 0)
           PYTHON
+      - name: Record qualified receiving executable
+        run: |
+          git rev-parse HEAD > target/release/telecodex-source.txt
+          (cd target/release && sha256sum telecodex > telecodex.sha256)
+      - name: Retain qualified receiving executable
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: telecodex-text-linux
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            target/release/telecodex
+            target/release/telecodex-source.txt
+            target/release/telecodex.sha256
   audio:
     needs: scope
     if: needs.scope.outputs.audio == 'true'
