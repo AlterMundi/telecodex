@@ -155,7 +155,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   ui.authenticated();
   return {ui, nodes, requests, originals,replyTexts,partReads,
     holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
-    intersect(id){const target=nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);assert(target,JSON.stringify({id,keys:nodes.get("#conversation-timeline").children.map(c=>c.dataset),state:nodes.get("#conversation-state")?.textContent}));intersection([{target,isIntersecting:true}]);}, telegramOriginals, nativePosts,audioCalls,clock,recoveryPosts,
+    intersect(id,visible=true){const target=nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);assert(target,JSON.stringify({id,keys:nodes.get("#conversation-timeline").children.map(c=>c.dataset),state:nodes.get("#conversation-state")?.textContent}));intersection([{target,isIntersecting:visible}]);}, telegramOriginals, nativePosts,audioCalls,clock,recoveryPosts,
     profile(value){presentationProfile=value;},
     event(name){for(const fn of windowEvents.get(name)||[])fn();},
     hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
@@ -232,6 +232,13 @@ function boot(readOnly=false,standalone=false,options={}) {
   automatic.overrideSource(8,{preview:'🙂🙂',text_characters:8,text_sha256:'new-emoji',revision:'emoji-revision'});automatic.replyTexts.set('native:8','🙂🙂abcdef');
   await automatic.ui.refresh();automatic.intersect('native:8');await new Promise(setImmediate);
   assert.equal(automatic.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8').children[2].textContent,'🙂🙂abcdef','truncation uses Unicode code points, not UTF-16 units');
+  const scrolledAway=boot(false,true,{autoText:true});const longText='Visible text only. '.repeat(300);
+  scrolledAway.overrideSource(8,{preview:'Visible',text_characters:longText.length});scrolledAway.replyTexts.set('native:8',longText);
+  await scrolledAway.ui.refresh();const heldText=scrolledAway.holdReplyText('native:8');scrolledAway.intersect('native:8');await heldText.entered;
+  scrolledAway.intersect('native:8',false);heldText.release();await new Promise(setImmediate);
+  assert.equal(scrolledAway.partReads.length,1,'scrolling away must stop further automatic parts');
+  scrolledAway.intersect('native:8');await new Promise(setImmediate);
+  assert.equal(scrolledAway.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8').children[2].textContent,longText,'returning to the reply resumes its remaining parts');
   const replacement=boot(false,true,{autoText:true});
   replacement.overrideSource(8,{preview:'Old',text_characters:2000});replacement.replyTexts.set('native:8','Old answer '.repeat(200));
   await replacement.ui.refresh();const oldText=replacement.holdReplyText('native:8');replacement.intersect('native:8');await oldText.entered;

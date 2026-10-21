@@ -120,9 +120,9 @@ window.Conversation = (() => {
     // finite readers keep long history from blocking input or flooding the API.
     const textQueue=[];let textJobs=0;
     const textObserver=timeline && window.IntersectionObserver?new window.IntersectionObserver(entries=>{
-      for(const entry of entries)if(entry.isIntersecting)queueText(cards.get(entry.target.dataset.sourceId));
+      for(const entry of entries){const card=cards.get(entry.target.dataset.sourceId);if(card){card.textVisible=entry.isIntersecting;if(card.textVisible)queueText(card);}}
     },{root:timeline,rootMargin:"200px"}):undefined;
-    function autoTextEligible(card){return card && cards.get(card.source.id)===card
+    function autoTextEligible(card){return card && card.textVisible && cards.get(card.source.id)===card
       && ["integrator_answer","worker_result","matrix_result"].includes(card.source.kind)
       && card.source.native_binding_current!==false && !card.source.correction_pending
       && Number.isSafeInteger(card.source.text_characters) && card.source.text_characters>Array.from(card.source.preview).length
@@ -158,8 +158,8 @@ window.Conversation = (() => {
           card.read.hidden=card.offset===null;card.read.textContent="Continue reading";
           if(following && timeline)timeline.scrollTop=timeline.scrollHeight;
           parts++;
-        }while(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && enabled && !document.hidden);
-        if(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && (!enabled || document.hidden)){
+        }while(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && enabled && !document.hidden && card.textVisible);
+        if(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && (!enabled || document.hidden || !card.textVisible)){
           card.autoRevision=undefined;card.autoWanted=true;
         }
       }catch(error){
