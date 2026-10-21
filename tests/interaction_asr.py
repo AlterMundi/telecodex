@@ -67,6 +67,16 @@ class Retention(unittest.TestCase):
         self.assertTrue(list((self.root/'cache').rglob('source.media')))
         self.run_asr();self.assertEqual(self.calls(),1)
         self.assertFalse(list((self.root/'cache').rglob('source.media')))
+    def test_optional_preparation_receipt_distinguishes_pending_cleanup_without_asr_replay(self):
+        with patch.object(asr,'retire_preparation',side_effect=OSError('deferred')):
+            first=asr.process(self.source,self.binding,include_retention=True)
+        self.assertFalse(first['preparation_audio_deleted'])
+        self.assertTrue(list((self.root/'cache').rglob('source.media')))
+        recovered=asr.process(self.source,self.binding,include_retention=True)
+        self.assertTrue(recovered['preparation_audio_deleted'])
+        self.assertFalse(list((self.root/'cache').rglob('source.media')))
+        self.assertEqual(self.calls(),1)
+
     def test_uncertain_helper_is_never_automatically_retried(self):
         self.source.write_bytes(b'failed operation')
         for _ in range(2):

@@ -138,7 +138,7 @@ def retire_preparation(job, state):
         sync_directory(path.parent)
 
 
-def process(source, binding):
+def process(source, binding, include_retention=False):
     cfg = config(binding)
     source_hash = digest(private_bytes(source, MAX_SOURCE))
     route_bytes = private_bytes(cfg['route_binding'], 16384)
@@ -204,22 +204,28 @@ def process(source, binding):
                 state['phase'] = 'unconfirmed'
                 atomic(state_path, canonical(state))
                 raise RenderError('asr-unconfirmed-no-automatic-retry') from None
+        preparation_deleted = False
         try:
             retire_preparation(job, state)
+            preparation_deleted = True
         except (OSError, ValueError, KeyError, TypeError, RenderError):
             # Durable text remains usable; a later exact read can finish cleanup.
             pass
-        return {'text': state['result']['text'], 'final': True}
+        result = {'text': state['result']['text'], 'final': True}
+        if include_retention:
+            result['preparation_audio_deleted'] = preparation_deleted
+        return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binding', type=Path, required=True)
     parser.add_argument('source', type=Path)
+    parser.add_argument('--retention-receipt', action='store_true', help='Report verified adapter-owned preparation deletion separately from final text')
     args = parser.parse_args()
     os.umask(0o077)
     try:
-        print(json.dumps(process(args.source, args.binding), ensure_ascii=False))
+        print(json.dumps(process(args.source, args.binding, include_retention=args.retention_receipt), ensure_ascii=False))
         return 0
     except (OSError, ValueError, KeyError, TypeError, RenderError, subprocess.SubprocessError):
         print(json.dumps({'ok': False, 'error': 'interaction-asr-unavailable', 'automatic_retry': False}))

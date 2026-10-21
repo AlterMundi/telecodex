@@ -203,3 +203,20 @@ result. Provider observations and the Nexus work ledger own execution/completion
 The optional `tests/nexus_operator_io.py` qualification covers the real Nexus API;
 `tests/nexus_io.py ... reviewed_iteration` exercises process/HTTP/WebSocket/SQLite
 with a synthetic native endpoint. Neither claims a genuine model/provider effect.
+
+## Narrated report reflection mode
+
+The paired Nexus receiver may request `response_mode:"report_reflection"` for an
+anchored report contribution. `/nexus connect` advertises this mode only in the
+new receiver code; deploy a compatible Nexus backend before reconnecting. The
+backend freezes the exact report/chapter/narration context and rejects use through
+an older binding that has not advertised support. Existing ordinary contribution,
+iteration and peer prompt paths retain their meanings.
+
+The native reflection prompt asks for a brief source-grounded interpretation,
+question or proposed action during continued listening. Room statements and ASR
+remain evidence; they do not authorize execution, messages, issue creation or
+audio deletion. Original discussion audio remains retained for hearing review,
+with separate explicit human confirmation before deletion. Native completion
+still requires an actual matched turn and final reply. Frontend polling reads
+retained receipts; it never resubmits a question or starts another model.
