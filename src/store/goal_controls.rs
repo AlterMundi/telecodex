@@ -622,19 +622,22 @@ impl Store {
         {
             bail!("Invalid goal-control receipt");
         }
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        let current_attempt:Option<String>=conn.query_row("SELECT json_extract(doc,'$.attempt') FROM interaction_goal_controls WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4",params![id,human,entry.chat_id,entry.thread_id],|r|r.get(0))?;
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let current_attempt:Option<String>=tx.query_row("SELECT json_extract(doc,'$.attempt') FROM interaction_goal_controls WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4",params![id,human,entry.chat_id,entry.thread_id],|r|r.get(0))?;
         if current_attempt.as_deref() != Some(attempt) {
             return Ok(false);
         }
         // Preserve receipts after a binding/grant changes in flight; do not restore permission or resubmit.
-        let changed=conn.execute("UPDATE interaction_goal_controls SET phase=?5,result=?6 WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase IN ('claimed','submitted') AND instance_id=?7",params![id,human,entry.chat_id,entry.thread_id,phase,result.to_string(),self.instance_id])?;
+        let changed=tx.execute("UPDATE interaction_goal_controls SET phase=?5,result=?6 WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase IN ('claimed','submitted') AND instance_id=?7",params![id,human,entry.chat_id,entry.thread_id,phase,result.to_string(),self.instance_id])?;
         if changed == 0 {
-            let retained:(String,Option<String>)=conn.query_row("SELECT phase,result FROM interaction_goal_controls WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4",params![id,human,entry.chat_id,entry.thread_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            let retained:(String,Option<String>)=tx.query_row("SELECT phase,result FROM interaction_goal_controls WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4",params![id,human,entry.chat_id,entry.thread_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
             if retained != (phase.to_owned(), Some(result.to_string())) {
                 bail!("Goal receipt is immutable or belongs to another instance");
             }
         }
+        super::topic_publications::goal_control_on(&tx, id, phase)?;
+        tx.commit()?;
         Ok(changed == 1)
     }
 }

@@ -34,9 +34,12 @@ Human selection, 2026-10-19: an explicit human instruction to start, pause, resu
 or clear a selected goal needs no repeated permission request. If the assistant
 proposes the lifecycle change, explain the target/action/reason and wait for
 human confirmation. This is the selected initial policy, not blanket autonomous
-goal reactivation. The integrator/host control adapter remains planned in
-[Telecodex #210](https://github.com/AlterMundi/telecodex/issues/210); this correction
-does not itself expose new owner CLI verbs or install recovery services.
+goal reactivation. The selected integrator adapter in
+[Telecodex #210](https://github.com/AlterMundi/telecodex/issues/210) uses retained
+human originals, confirmed proposals, native preconditions and ordered follow-ups;
+see [integrator controls](integrator-controls.md). This is not an arbitrary owner
+shell interface or an autonomous recovery service. Destination visibility for
+controls without worker speech is owned by #241.
 
 ## Verification
 

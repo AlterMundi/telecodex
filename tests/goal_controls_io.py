@@ -15,7 +15,22 @@ class Controls(Inspection):
         self.revisions = {}
         self.lose_receipt = False
         self.owning_metadata = 0
+        self.drop_control_notice = False
         super().__init__(binary)
+
+    def start(self):
+        if self.routed:
+            text = self.config.read_text()
+            if 'telegram_projection=true' not in text:
+                self.config.write_text(text.replace('[interaction]\n', '[interaction]\ntelegram_projection=true\n'))
+        return super().start()
+
+    def before_send_message_reply(self, payload):
+        if self.drop_control_notice and 'Integrator action' in payload['text'] and 'Outcome unknown' in payload['text']:
+            self.drop_control_notice = False
+            return False  # Delivery may have happened; do not resend this notice.
+        inherited = getattr(super(), 'before_send_message_reply', None)
+        return inherited(payload) if inherited else None
 
     def handle_extra_rpc(self, message, send):
         method = message.get('method')
@@ -98,11 +113,17 @@ def qualify(binary):
         pause, _ = prepare('pause', original('Pause the current Alpha goal.'))
         paused = j.cli(entry, 'goal_execute', {'id': pause['control']['id']})
         assert paused['phase'] == 'acknowledged' and j.goals['native-topic-7']['status'] == 'paused'
+        j.wait(lambda: j.row("SELECT phase FROM topic_publications WHERE kind='control' AND json_extract(source,'$[0]')=?", (pause['control']['id'],)) == [('sent',)])
+        notices = [(m,p) for m,p in j.messages if 'Native session acknowledged the goal change.' in m['text']]
+        assert len(notices) == 1 and notices[0][0].get('message_thread_id') == 7
+        assert 'Integrator action' in notices[0][0]['text'] and 'goal pause' in notices[0][0]['text']
+        assert pause['control']['id'] not in notices[0][0]['text']
         assert j.goals['native-topic-7']['tokensUsed'] == 80
         assert j.owning_metadata == 2, 'Busy target metadata must use its current subscribed writer'
         count = sum(m.get('method') == 'thread/goal/conditionalSet' for m in j.rpc)
         j.cli(entry, 'goal_execute', {'id': pause['control']['id']})
         assert sum(m.get('method') == 'thread/goal/conditionalSet' for m in j.rpc) == count
+        assert j.row("SELECT COUNT(*) FROM topic_publications WHERE kind='control' AND json_extract(source,'$[0]')=?", (pause['control']['id'],)) == [(1,)]
         cancelled, _ = prepare('pause', reason='Assistant proposal that the human declines', followup='Ask the selected question afterward.')
         goal_views=view(['goals','list','0'])
         proposed_view=next(v for v in goal_views['items'] if v['id']==cancelled['control']['id'])
@@ -145,12 +166,15 @@ def qualify(binary):
         j.goals['native-topic-7'] = {'threadId': 'native-topic-7', 'objective': 'New work', 'status': 'active', 'tokenBudget': 100, 'tokensUsed': 81, 'timeUsedSeconds': 5, 'createdAt': 3, 'updatedAt': 3}
         uncertain, _ = prepare('pause', original('Pause the new Alpha goal.'))
         j.lose_receipt = True
+        j.drop_control_notice = True
         before = len(j.rpc)
         result = j.cli(entry, 'goal_execute', {'id': uncertain['control']['id']})
         assert result['phase'] == 'uncertain' and j.goals['native-topic-7']['status'] == 'paused'
+        j.wait(lambda: j.row("SELECT phase FROM topic_publications WHERE kind='control' AND json_extract(source,'$[0]')=?", (uncertain['control']['id'],)) == [('uncertain',)])
         attempts = len(j.rpc)
         j.cli(entry, 'goal_execute', {'id': uncertain['control']['id']})
         assert len(j.rpc) == attempts and attempts > before
+        assert j.row("SELECT COUNT(*) FROM topic_publications WHERE kind='control' AND json_extract(source,'$[0]')=?", (uncertain['control']['id'],)) == [(1,)]
         assert not any(m.get('method') in ('thread/goal/set', 'thread/goal/clear', 'turn/interrupt') for m in j.rpc)
         j.broadcast('native-topic-7', 'turn/completed', {'turn': {'id': j.runs['native-topic-7'], 'status': 'completed'}})
         thread = 'native-topic-9'
