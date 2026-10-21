@@ -95,11 +95,21 @@ the clear or retirement, and observation recovery did not repeat either action.
 The first CLI observation windows expired while resuming their native sessions;
 reopening the same retained sessions rendered both notices. This establishes
 retained recovery, not reliable first-start latency or live arrival in those
-attempts. The initial resume/readiness delay remains under investigation in #241;
-no cause or timing guarantee is inferred. Human seeing/hearing remains separate.
+attempts. An instrumented reattachment separated startup from a fast owner read, and an
+actual control notice was subsequently rendered in an already-ready CLI during
+busy native work. No universal cold-start timing guarantee is inferred. Human
+seeing/hearing remains separate.
 
 A receiving-local launcher selects that client for new normal CLI launches and
 binds the existing owner socket. It leaves the system CLI used by the native
 provider and the managed daemon package unchanged. An explicitly empty
 `CODEX_FOREGROUND_NOTICES_SOCKET` disables the reader. Already running clients
 retain their loaded code until restarted. No other body's adoption is implied.
+
+The receiving #253 listener also preserves source-topic output after an explicit
+goal control selects the integrating return on a turn that began as direct work.
+The existing projection flag selects that secondary output; the same canonical
+publication/reservation continues to own it. The actual busy-collector case
+verified both retained result/file access and source-topic progress/final recovery
+without native work replay. #254's observer separately shows known native goal
+state for an observed name with unknown Telegram lifecycle, without reopening it.

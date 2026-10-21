@@ -81,13 +81,57 @@ journal were inspected. The actual TUI rendered both retained notices without
 another worker turn or action replay. Telegram HTTP receipts in this campaign
 are synthetic; they are not human Telegram perception.
 
-Initial CLI observation windows expired while resuming; reopening the same
-sessions displayed the retained actions. #241 retains that first-start/readiness
-investigation. Actual retained presentation is now proven; reliable initial live
-arrival and human perception are not inferred. Existing open clients were not
-hot-reloaded.
-#213/#221 remain open for the complete visual and sonic experience. No full
-Q01–Q21/V01–V08 campaign or human aesthetic/hearing acceptance is claimed here.
+The final busy-collector case resumed a paused goal while ordinary direct work
+was active. The native receipt reported `steered` in the same physical turn; the
+ordered clause changed the actual JSON file, the goal completed, and the actual
+already-ready TUI displayed the control notice. The canonical integrating answer
+and authorized file bytes were verified separately. A missing source-topic reply
+was a real #215 publisher defect: a direct-origin publication was suppressed after
+its primary return selected the integrator despite enabled secondary projection.
+#253 fixes that condition. Its process regression fails on the prior executable
+and passes on the qualified candidate. The candidate delivered the original two
+proven-unsent fixture progress/final publications once, preserving their IDs and
+file bytes without repeating native/control/model work.
+
+A subsequent actual-provider V08 case held retained copying and source multipart
+upload while the same worker accepted ordinary direct and routed continuations.
+An idle fixture restart recovered the byte job without native replay; downloads
+matched exact bytes/hash, the direct-only file stayed outside the integrating
+audience, and a deliberately lost upload acknowledgment stayed uncertain across
+restart without resending it. These are exercised conditions, not universal fault
+or routing-accuracy claims.
+
+Initial CLI startup observations were inconclusive. An instrumented read-only
+reattachment later issued its first owner query at14.591seconds, received its
+response in0.0008seconds and displayed the notice at15.302seconds. The already-ready
+live control case subsequently passed. Startup, owner transport and rendering
+must remain distinct; no universal cold-start timing guarantee is asserted.
+
+## Receiving checkpoint — 2026-10-21
+
+| Component | Selected qualified source | Evidence |
+| --- | --- | --- |
+| Independent web | `d65ff7a` | Served assets/private reads, populated narrow/keyboard layouts, full readable answers and collapsed inspection; automated access bootstrap adapted |
+| Listener | PR#253, tested commit `fcaf7623`, SHA-256 `ff0aed983258dececdc0466ce5d00557fc1d477320fbeb24446da0310ddd56b1` | Full qualification run39629205705 and retained real-native busy result recovery |
+| Marker observer | PR#254, head `65f5bfa` | Forty-eight local tests, qualified run39631734758 and receiving Telegram marker acknowledgment |
+| Next-launch local CLI | Codex#7, tested commit `f309a1d` | Full native CI, actual retained goal/task notices and an actual live busy-goal notice |
+
+The writer-preserving listener/observer adoption kept the native daemon, current
+collector, goal definition/accounting and application configurations unchanged.
+A missing catalog name was reconciled from its actual retained bot-authored
+Telegram rename observation; it was not manufactured human speech. The observer
+received acknowledgment for the goal marker while preserving the canonical name
+and unknown Telegram lifecycle. Its finite connected inventory retains unknown
+native state and recency rather than guessing. Existing running CLI clients keep
+their loaded code; no other body's adoption is implied.
+
+Implementation slices #203/#108/#210/#214/#215/#216/#241 are delivered. Stage#208
+and #61/#213/#221 remain open for human comprehension, visual and physical sonic
+acceptance. Automated/native evidence for Q01-Q21, V01-V08 and S01-S05 is retained
+by method and source; human H observations are not filled in by code review,
+synthetic accounts or favorable digital measurements. This is not full product
+acceptance. Use the short human journeys below; do not replay completed technical
+work for a subjective review.
 
 ## Current experience acceptance
 
