@@ -129,3 +129,11 @@ it before STT. Completed transcript commit removes that exact file. Failed or
 uncertain clips remain counted, including interrupted temporary files; new voice
 is refused before download when capacity is unavailable. General conversation
 attachments and historical inbox recordings are outside this directory.
+
+The optional `interaction_asr.py --retention-receipt` flag adds
+`preparation_audio_deleted` to the existing `{text,final}` response. It reports
+successful verified retirement of this adapter's preparation files independently
+of final text availability; cleanup failure returns false while preserving the
+completed text receipt for exact recovery without a new provider call. The
+caller's original input and upstream provider retention are outside that scope.
+Without the flag the established response shape is unchanged.
