@@ -69,3 +69,11 @@ Qualify goal and task notices through actual owner/Telegram boundaries, duplicat
 observation, lost acknowledgment, revoked/replaced binding, cursor recovery and
 foreground CLI rendering. Match executable/source identity at receiving adoption.
 Do not equate a journal read with human seeing or hearing its contents.
+
+The successful text qualification job retains `telecodex-text-linux` for seven
+days: the tested executable, its SHA-256 and the checked-out source commit.
+Use that executable for compatible Linux receiving deployments instead of
+rebuilding on a memory-constrained session host. Retain the run's head and tested
+commit separately: pull-request qualification can check out a merge commit.
+Verify compatibility and reuse the existing writer-preserving listener handoff;
+artifact availability does not authorize a native daemon restart or work replay.
