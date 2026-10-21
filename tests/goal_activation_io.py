@@ -191,6 +191,10 @@ def qualify(binary):
         assert sum(m.get('method')=='turn/start' for m in j.rpc)==before
         j.finish_goal('native-topic-8','Busy paused continuation.',complete_goal=False)
         j.wait(lambda:j.row('SELECT busy FROM sessions WHERE thread_id=8')==[(0,)])
+        j.wait(lambda:j.has('Busy paused continuation.',8),seconds=5)
+        assert sum('Busy paused continuation.' in m['text'] and m.get('message_thread_id')==8 for m,_ in j.messages)==1
+        visible=j.cli(entry,'conversation')['presentation']['items']
+        assert sum(item.get('preview')=='Busy paused continuation.' for item in visible)==1
         # A rejected follow-up does not undo or replay its acknowledged clear.
         selected=prepare('clear','Beta','Clear Beta, then explain the outcome.',followup='explain the outcome.')
         j.deny_followup=True
