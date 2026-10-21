@@ -390,14 +390,22 @@ impl GoalExecutionGuard {
 }
 impl Drop for GoalExecutionGuard {
     fn drop(&mut self) {
-        if let Some(scope) = &self.scope
-            && self
-                .shared
-                .store
-                .goal_control_retire_execution(scope.human, scope.entry, &scope.id, &scope.attempt)
-                .is_err()
+        let Some(scope) = &self.scope else {
+            return;
+        };
+        if self
+            .shared
+            .store
+            .goal_control_retire_execution(scope.human, scope.entry, &scope.id, &scope.attempt)
+            .is_err()
         {
             tracing::warn!("Goal collector retirement outcome could not be retained");
+            return;
+        }
+        if tokio::runtime::Handle::try_current().is_ok()
+            && super::topic_publications::recover(self.shared.clone()).is_err()
+        {
+            tracing::warn!("Goal retirement notice retained without a publication wake");
         }
     }
 }

@@ -113,6 +113,14 @@ def qualify(binary):
         pause, _ = prepare('pause', original('Pause the current Alpha goal.'))
         paused = j.cli(entry, 'goal_execute', {'id': pause['control']['id']})
         assert paused['phase'] == 'acknowledged' and j.goals['native-topic-7']['status'] == 'paused'
+        before_notices = len(j.rpc)
+        import subprocess
+        notice_reply = subprocess.run([j.binary, '--control', str(j.config), 'topics', 'notices', 'native-topic-7'], capture_output=True, text=True, check=True, timeout=20)
+        notice_feed = json.loads(notice_reply.stdout)['result']
+        assert notice_feed['schema'] == 'telecodex.thread-notices/v1' and notice_feed['available']
+        assert notice_feed['native_thread'] == 'native-topic-7' and notice_feed['history']
+        assert 'Native session acknowledged' in notice_feed['items'][-1]['text']
+        assert len(j.rpc) == before_notices, 'Reading notices never contacts native or starts work'
         j.wait(lambda: j.row("SELECT phase FROM topic_publications WHERE kind='control' AND json_extract(source,'$[0]')=?", (pause['control']['id'],)) == [('sent',)])
         notices = [(m,p) for m,p in j.messages if 'Native session acknowledged the goal change.' in m['text']]
         assert len(notices) == 1 and notices[0][0].get('message_thread_id') == 7

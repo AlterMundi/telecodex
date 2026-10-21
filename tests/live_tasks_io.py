@@ -2,13 +2,23 @@
 """Live task retirement over the real controller and durable ledger; synthetic models."""
 import json
 import re
+import subprocess
 from pathlib import Path
 import sys
 from warm_controller_io import Warm
 
 
+class NotifiedWarm(Warm):
+    def start(self):
+        if self.routed:
+            text = self.config.read_text()
+            if 'telegram_projection=true' not in text:
+                self.config.write_text(text.replace('[interaction]\n', '[interaction]\ntelegram_projection=true\n'))
+        return super().start()
+
+
 def qualify(binary):
-    j=Warm(binary)
+    j=NotifiedWarm(binary)
     try:
         j.prepare(seed_entry=True)
         j.allow_native_launch=True
@@ -36,9 +46,18 @@ def qualify(binary):
         worker=j.access(7)
         own=j.cli(worker,'human_tasks')['items']
         assert any(item['id']==selected['id'] for item in own)
+        before_packets=len(j.packets['native-topic-7'])
         result=j.cli(entry,'withdraw_task',args)
         assert result['new_withdrawal'] and result['human_completion'] is False
         assert not j.cli(entry,'withdraw_task',args)['new_withdrawal']
+        j.wait(lambda:j.row("SELECT phase FROM topic_publications WHERE kind='task_control' AND json_extract(source,'$[0]')=?",(selected['id'],))==[('sent',)])
+        notices=[m for m,_ in j.messages if 'Integrator action' in m['text'] and 'request withdrawn' in m['text']]
+        assert len(notices)==1 and notices[0].get('message_thread_id')==7
+        assert selected['id'] not in notices[0]['text'] and args['reason'] not in notices[0]['text']
+        assert len(j.packets['native-topic-7'])==before_packets, 'A visible retirement never becomes more worker input'
+        reply=subprocess.run([j.binary,'--control',str(j.config),'topics','notices','native-topic-7'],capture_output=True,text=True,check=True,timeout=20)
+        feed=json.loads(reply.stdout)['result']
+        assert feed['available'] and 'request withdrawn' in feed['items'][-1]['text']
         assert j.cli(entry,'human_tasks')['items']==[]
         row=j.row("SELECT state,payload_json FROM human_interactions WHERE id=?",(selected['id'],))[0]
         assert row[0]=='cancelled'

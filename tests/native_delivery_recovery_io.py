@@ -192,7 +192,7 @@ def projection_modes(binary):
         # No integrator opt-in or enrollment is configured; only the direct row can publish.
         j.start()
         j.wait(lambda:j.has('Direct queue survives restart.',8))
-        j.wait(lambda:j.row("SELECT phase FROM topic_publications WHERE body='Disabled mirror must not send.'")==[('retired',)])
+        j.wait(lambda:j.row("SELECT phase FROM topic_publications WHERE body='Disabled mirror must not send.'")==[('not_selected',)])
         assert j.exact('Disabled mirror must not send.')==0
         print('PASS old opt-in mirror remains disabled while new direct queue resumes without routing enrollment')
     finally:j.close()
