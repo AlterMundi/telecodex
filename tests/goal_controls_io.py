@@ -26,7 +26,7 @@ class Controls(Inspection):
         return super().start()
 
     def before_send_message_reply(self, payload):
-        if self.drop_control_notice and 'Integrator action' in payload['text']:
+        if self.drop_control_notice and 'Integrator action' in payload['text'] and 'Outcome unknown' in payload['text']:
             self.drop_control_notice = False
             return False  # Delivery may have happened; do not resend this notice.
         inherited = getattr(super(), 'before_send_message_reply', None)
