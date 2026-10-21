@@ -8,9 +8,15 @@ window.ConversationCompanion = (() => {
     speaking: ["^   ^", "  o  "], delighted: ["^   ^", " \\_/ "],
     uncertain: [".   .", "  ~  "],
   };
+  // Source's interval field: an abstract presence, not a generic human face.
+  // Variations are authored locally; no inference is spent rendering a frame.
   function portrait(pose) {
-    const [eyes, mouth] = faces[pose] || faces.calm;
-    return `    . + .\n  .-~~~~~-.\n (  ${eyes}  )\n  \\ ${mouth} /\n   '.___.'\n  _/| : |\\_\n (__)___(__)`;
+    const centres={calm:" . : . ",curious:" . ? . ",focused:" > : < ",
+      listening:"(  :  )",speaking:"~ .:. ~",delighted:"+  *  +",uncertain:" .   . "};
+    const centre=centres[pose]||centres.calm;
+    return ["         . : .", "      .:'     ':.", "    .:   .---.   :.",
+      "   :   .'     '.   :", ` --:--( ${centre} )--:--`,
+      "   :   '.     .'   :", "    ':.  '---'  .:'", "       ':.   .:'", "          ':'"].join("\n");
   }
   function mount({now=()=>Date.now()}={}) {
     const box=document.querySelector("#conversation-companion");
@@ -76,7 +82,7 @@ window.ConversationCompanion = (() => {
         const sources=state.activity?.sources || [];
         const observer=sources.reduce((n,s)=>n+(s.known && Number(s.observer_synthesizing)||0),0);
         const workers=sources.filter(s=>s.known && s.busy).length;
-        if(observer)add("◈",`Observer · ${observer}`);
+        if(observer)add("◉",`Observer · ${observer}`);
         if(workers)add("⌘",`${workers} ${workers===1?"session":"sessions"} active`);
         if(state.activity?.truncated || sources.some(s=>!s.known))add("◇","Some session activity unconfirmed");
         if(state.routing)add("⇄","Routing pending");
@@ -86,7 +92,7 @@ window.ConversationCompanion = (() => {
       if(state.playback==="playing")add("♫","Speaking");
       if(!fresh)add("◇",state.connected?"Session activity unconfirmed":state.connected===false?"Reconnecting":"Connect to begin");
       const pose=state.capture==="recording"?"listening":state.playback==="playing"?"speaking":
-        state.question?"curious":!fresh?"uncertain":rows.length?"focused":rest;
+        state.question?"curious":!fresh?"uncertain":rows.length && !lastReply?"focused":rest;
       const expression=pack?(Object.hasOwn(pack.expressions,pose)?pose:rest):pose;
       const selected=pack?selection(expression):undefined;
       const art=selected?selected.frames[frameExpression===expression?Math.min(frameIndex,selected.frames.length-1):0]:portrait(pose);
@@ -146,8 +152,8 @@ window.ConversationCompanion = (() => {
       if(!pack && !document.hidden && !motion?.matches && gesture!=="none"){
         const frames=gesture==="nod"
           ?[{transform:"translateY(0)"},{transform:"translateY(4px)"},{transform:"translateY(0)"}]
-          :[{transform:"rotate(0deg)"},{transform:"rotate(-5deg)"},{transform:"rotate(4deg)"},{transform:"rotate(0deg)"}];
-        animation=face.animate?.(frames,{duration:550,iterations:1});
+          :[{transform:"scale(1) rotate(0deg)",opacity:1},{transform:"scale(1.08) rotate(-3deg)",opacity:.65},{transform:"scale(1.04) rotate(3deg)",opacity:1},{transform:"scale(1) rotate(0deg)",opacity:1}];
+        animation=face.animate?.(frames,{duration:850,iterations:1});
       }
     }
     function reset(){clearTimeout(expiry);stopFrames();animation?.cancel();state={};observed=0;lastReply=undefined;rest=pack?pack.defaults.app.expression:"calm";draw();}
