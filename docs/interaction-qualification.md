@@ -61,7 +61,26 @@ evidence does not establish that every scenario passed on the final release.
 Reuse matching evidence, qualify affected changes and retain unresolved cases.
 The native writer and listener were preserved during these web-only deployments.
 
-#241 remains open for visible routed non-message actions at their destinations.
+The subsequent #249/#250 listener adoption preserved three active native
+collectors and their goals/accounting. A real two-worker finishing journey on
+that exact executable exercised direct input during the same active routed
+execution: no extra router admission, later correction reflected in the actual
+file, independent other-worker completion, one destination answer and a retained
+canonical integrating return. The authorized file was downloaded and matched its
+hash. Missing verifier observations were completed against retained API data,
+without repeating model work. The representative delivery request and canonical
+result ID must not be confused with full membership and delivery identity.
+
+The Codex#7 foreground client passed full CI and rendered a synthetic notice in
+an actual TUI attached to an idle native fixture thread, with unchanged native
+turns and daemon. New normal local launches select that client. This proves the
+client wiring; it does not turn a synthetic notice into a real goal change or
+establish human perception.
+
+#241 now has a deployed backend and a selected foreground CLI for new local launches.
+Actual native TUI rendering was checked with a synthetic owner notice; the current
+receiving journal read was verified separately. Existing open clients were not
+hot-reloaded, and no human seeing or hearing a routed control is inferred.
 #213/#221 remain open for the complete visual and sonic experience. No full
 Q01–Q21/V01–V08 campaign or human aesthetic/hearing acceptance is claimed here.
 

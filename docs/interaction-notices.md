@@ -77,3 +77,17 @@ rebuilding on a memory-constrained session host. Retain the run's head and teste
 commit separately: pull-request qualification can check out a merge commit.
 Verify compatibility and reuse the existing writer-preserving listener handoff;
 artifact availability does not authorize a native daemon restart or work replay.
+
+## Current receiving selection
+
+The CompAII receiver selects the #249/#250 listener executable verified from CI.
+The native daemon, existing collectors, goals and credentials were preserved.
+The new notice read was observed against that running receiver. Codex#7 passed
+full native qualification and an actual TUI rendering check using a synthetic
+owner feed, with no human input or additional native turn.
+
+A receiving-local launcher selects that client for new normal CLI launches and
+binds the existing owner socket. It leaves the system CLI used by the native
+provider and the managed daemon package unchanged. An explicitly empty
+`CODEX_FOREGROUND_NOTICES_SOCKET` disables the reader. Already running clients
+retain their loaded code until restarted. No other body's adoption is implied.
