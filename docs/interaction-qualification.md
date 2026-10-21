@@ -72,15 +72,20 @@ without repeating model work. The representative delivery request and canonical
 result ID must not be confused with full membership and delivery identity.
 
 The Codex#7 foreground client passed full CI and rendered a synthetic notice in
-an actual TUI attached to an idle native fixture thread, with unchanged native
-turns and daemon. New normal local launches select that client. This proves the
-client wiring; it does not turn a synthetic notice into a real goal change or
-establish human perception.
+an actual TUI, with unchanged native turns and daemon. New normal local launches
+select that client. Subsequent real-native qualification cleared one explicitly
+selected paused scratch goal without worker speech and retired an actual routed
+worker task through the integrator. The native receipt and withdrawal provenance,
+correlated integrating results, destination publication receipts and real owner
+journal were inspected. The actual TUI rendered both retained notices without
+another worker turn or action replay. Telegram HTTP receipts in this campaign
+are synthetic; they are not human Telegram perception.
 
-#241 now has a deployed backend and a selected foreground CLI for new local launches.
-Actual native TUI rendering was checked with a synthetic owner notice; the current
-receiving journal read was verified separately. Existing open clients were not
-hot-reloaded, and no human seeing or hearing a routed control is inferred.
+Initial CLI observation windows expired while resuming; reopening the same
+sessions displayed the retained actions. #241 retains that first-start/readiness
+investigation. Actual retained presentation is now proven; reliable initial live
+arrival and human perception are not inferred. Existing open clients were not
+hot-reloaded.
 #213/#221 remain open for the complete visual and sonic experience. No full
 Q01–Q21/V01–V08 campaign or human aesthetic/hearing acceptance is claimed here.
 
