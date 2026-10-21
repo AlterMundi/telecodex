@@ -209,145 +209,43 @@ Milestone: [v0.2](https://github.com/AlterMundi/telecodex/milestone/8).
 | lifecycle | [#108](https://github.com/AlterMundi/telecodex/issues/108) |
 | native_delivery | [#203](https://github.com/AlterMundi/telecodex/issues/203) |
 
-## Implementation checkpoint — 2026-10-19
+## Current receiving checkpoint — 2026-10-21
 
-- Plan/protocol review merged as #217; shared visible-footer correction merged
-  as #212. Receiving adoption remains batched with the qualified product.
-- The installed-native two-client experiment reproduced all three stale goal
-  mutation cases without inference or work-session mutation. #210 requires native
-  generation/definition preconditions on set and clear; see integrator-controls.md.
-- A live scoped terminal fallback for older native tool sets is implemented in
-  the #203 branch. It reuses the same controller handlers and current execution,
-  including a routed steer into an already-running worker. The synthetic process
-  journey passes routing, dependency/return, immutable retry, binding/role/token
-  denial, expiry and ordinary direct ingress independence; Clippy passes.
-  This is development evidence, not receiving or real-model acceptance.
-- UI/companion, speech pacing, native control preconditions/transactions, task
-  withdrawal, projections/lifecycle and artifact delivery remain in progress or
-  pending in their owning issues. The finished-version real-session campaign
-  has not started.
+The standalone web selects `d65ff7a`, including #243–#246. Populated desktop,
+phone and keyboard-sized browser checks cover readable replies, collapsed
+inspection, finite Source glyph/response transitions and reduced motion.
+The receiver-selected expression pack retains independent client defaults;
+[companion contracts](interaction-companion.md), [visual expression](interaction-avatar.md)
+and the shared ASCII skill own that vocabulary. They do not imply every existing
+terminal or Telegram client automatically renders an avatar.
 
-### Conversation shell development checkpoint — 2026-10-20
+Source hum revision 2 and its actual generated spectrum/mute/speech-priority
+behavior have device-free evidence. The receiving app exposes activation, volume
+and distinct quiet/suspended/error states. [Sonic expression](sonic-expression.md)
+owns configuration and composition. Human recognition, comfort and visual appeal
+remain unaccepted in #213/#221.
 
-The standalone client now groups observation controls and routing/history panes
-under one initially collapsed **Under the hood** panel. Live requests remain in
-the main interaction area. The shell uses explicit grid rows for history, text,
-voice, playback and diagnostics, preserving the existing DOM/API contracts and
-Homemaker roles. The existing foreground refresh timer uses two seconds in
-conversation mode and ten seconds for the session dashboard; this adds no poller.
+The listener now selects the exact CI-tested executable from #249/#250
+(PR head `1b7ad96`, tested commit `fdd5aedd`). Three active collectors reattached
+to the unchanged native daemon; observed goal definitions, states, budgets and
+accounting were preserved. No global Stop or new native kickoff was used.
+The current owner notice feed is available. The optional foreground client from
+[Codex#7](https://github.com/compaii/codex/pull/7) is selected for new ordinary local
+CLI launches, after full native CI and an actual TUI check with a synthetic owner
+notice. Existing running clients do not hot-reload. See
+[passive notices](interaction-notices.md) for source/client boundaries.
 
-Development evidence: existing conversation/request/microphone/dashboard UI
-checks pass. Actual Chromium with synthetic native messages was visually checked
-at 1100×850 and 390×844; the diagnostic panel opens, retains refresh/monitor
-controls, and a 390×460 viewport remains scrollable without horizontal overflow.
-These checks are not a real-session campaign, actual Android keyboard test or
-receiving adoption. Companion gestures, truthful phase indicators and the rest of
-#213 remain unfinished; the issue stays in progress.
+A real two-worker journey received ordinary direct input while routed work was
+active in that same native execution. The direct input created no router
+admission, its later correction changed the actual output, the other worker
+finished independently, and one destination answer plus the canonical integrating
+reply were retained. API observation of the existing reply and authorized file
+verified its actual bytes/hash without replaying work. The verifier must follow
+normalized shared-request membership, distinguish result IDs from delivery IDs
+and page history; one representative request or first page is insufficient.
 
-### UI controls and profiles checkpoint — 2026-10-20
-
-Draft #220 now implements the original portrait, finite local gestures, concurrent
-receiver/local indicators, and optional immutable native-turn-bound cosmetic
-choices through the existing stable controller (including warm fallback). Simple
-and explorer presentation profiles are selected by receiving configuration or
-operator enrollment; they only choose the initial read-only diagnostic-panel
-state and do not grant owner controls or approvals. Existing credentials retain
-their identity/audience, and manual inspection survives ordinary refresh.
-
-Companion/conversation tests and 27 HTTP grant/capture/profile tests pass locally.
-CI at `8fed690` passed formatting, Clippy, unit tests and release build; its process
-journeys and the subsequent profile change require final-head qualification.
-The process fixture now covers existing integrator/worker hint registration,
-immutable repeat, invalid/changed choices and retained returned-source metadata.
-This is implementation/development progress, not receiving deployment or the
-finished-version Q/V campaign. #213 remains open for integration and acceptance.
-
-### Per-being representation scope — 2026-10-20
-
-Human steering expands #213 from one portrait to a selected per-being visual
-vocabulary, with independent defaults/rendering for terminal, Telegram and the
-animated app. The shared `ascii-expression` skill supplies guidance, a bounded
-portable renderer and an explicitly selected abstract Source example. A daimon
-need not resemble a human, share Source's appearance or use fixed mood names.
-
-The existing seven-pose implementation remains provisional. #213 must integrate
-a receiver-selected pack before final acceptance, retaining native source
-fences, ordinary evidence labels and finite local playback. Extend its component
-checks and the finished-version campaign to cover two different vocabularies,
-client defaults, narrow layout fallback, unknown expression, delayed/repeated
-source, reduced motion and unavailable activity without false operational claims.
-HIT may inform an evolving vocabulary; there is no universal mapping of
-consonance/dissonance to emotions. Shared-skill delivery and product integration
-are separate evidence.
-
-### Expression pack implementation checkpoint — 2026-10-20
-
-The optional receiver-selected `interaction.expression_pack` is now implemented
-in draft #220: bounded inert vocabulary, per-client defaults, advertised exact
-pack/revision/content fingerprint, immutable native-turn choices and matched web
-rendering. This replaces hardwired expression names when a pack is selected while
-preserving existing turn/source fences. The app fits complete compositions and
-plays finite local sequences; no universal face/mood ontology is imposed.
-
-Shared skill publication merged as AlterMundi/Skills#102; selective local
-installation and the Hermes/Codex surface check passed. New web component checks
-pass with two vocabularies, stale selection, reduced motion and narrow fallback.
-Server validation and legacy/custom warm process journeys still require final
-head CI. Full browser, real-session campaign and receiving adoption remain
-outstanding; this checkpoint does not complete #213 or the stage.
-
-### Sonic expression direction — 2026-10-20
-
-Human steering adds opt-in Beacon-derived humming/purring/rhythm and a chord of
-current session voices, tracked in #221 (milestone 8 / Project 14). Initial
-authored associations are 1:11 for blockage and 1:7 for waiting on a reply; they
-are vocabulary proposals, not universal acoustic or emotional facts. Consult
-maintained Beacon/HIT and the research corpus before selecting synthesis.
-
-Reuse actual state observations and per-being vocabulary/event provenance. Keep
-unknown/stale states distinct, aggregate membership visible and silence/volume
-under human control. The sound layer must cooperate with owned speech playback,
-local browser audio activation and suspension. No new inference loop, capture,
-background attention or unsolicited hardware playback is authorized. Qualify
-mapping, finite transitions, concurrent membership and real mute/stop behavior
-device-free before opt-in browser/listening acceptance. See #221 for scope and
-dependencies. The implementation checkpoint below records development evidence;
-receiving adoption and the full S01–S05 campaign remain separate requirements.
-
-### Sonic expression implementation checkpoint — 2026-10-20
-
-The web client now has an explicit opt-in Web Audio renderer, owner-selected
-bounded vocabulary and an inspectable per-session score under collapsed
-diagnostics. It reuses the existing database-bound activity observer, including
-native waiting flags; the sound endpoint starts neither inference nor a new
-native observer. Missing configuration, stale observations, changed native
-bindings and unauthorized targets remain unknown. Logical topic identity is
-stable across native renewal. See `docs/sonic-expression.md` for configuration,
-authored interval meanings, limits and speech priority.
-
-Four actual SQLite/cache/HTTP tests and shipped JavaScript mapping/audio-graph
-tests pass. Muted headless Chromium also verified deliberate audio activation,
-owned context closure, responsive layouts and actual OfflineAudioContext signal
-samples: the selected blocked interval was present, with zero samples after
-quiet/stop. Its native peer and state stimuli were synthetic, with no models or
-physical playback. This does not establish live-session state transitions,
-receiving acceptance or human perception; those remain in S01–S05.
-
-### Live task reassessment checkpoint — 2026-10-20
-
-The #61 branch adds live `human_tasks` / `human_task` / `withdraw_task` operations
-to the existing integrator and worker controller, including warm fallback. It
-reuses the task ledger, manifest mutation, agent-attributed audit and capture
-arming lock. Reads and writes require the actual owned running execution; exact
-task revision and an immediate SQLite transaction fence changes/answers. Native
-questions/approvals and uncertain human receipts cannot be retired by this API.
-
-The coordinator's cross-session scope is tied to the original routed local turn,
-not a sticky native-thread association, so a later direct task remains direct.
-Unit cases and an actual-controller synthetic process journey were added for
-revision/receipt denial, immutable retry, attribution, active issuer, worker
-isolation and direct-topic independence. All combined CI39357678404 jobs passed and PR222 merged as427d666,
-including the actual-controller synthetic process journey. Receiving adoption
-and the finished real-session campaign remain outstanding; #61 stays open.
-The runtime guidance now points scoped callers to these live operations while
-retaining the successful-turn manifest fallback.
+The [qualification protocol](interaction-qualification.md) retains the scope and
+limits of earlier native, deterministic and human evidence. Complete only after
+its explicit requirements are reconciled against the delivered version. Human
+visual/hearing assessment and normal daily use remain open; source publication,
+installation, observed transport and human perception are separate findings.
