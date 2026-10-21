@@ -19,7 +19,7 @@ class Audio{
 }
 const nodes=new Map(),events=new Map();
 const element=()=>({value:'0.3',children:[],handlers:{},textContent:'',setAttribute(k,v){this[k]=v;},replaceChildren(...v){this.children=v;},addEventListener(k,f){this.handlers[k]=f;}});
-for(const name of ['toggle','status','score','volume','vocabulary'])nodes.set('#conversation-sound-'+name,element());
+for(const name of ['toggle','status','score','volume','vocabulary','feedback'])nodes.set('#conversation-sound-'+name,element());
 const document={hidden:false,querySelector:s=>nodes.get(s),createElement:element,addEventListener(name,fn){events.set(name,fn);}};
 const scope=vm.createContext({window:{AudioContext:Audio,addEventListener(name,fn){events.set(name,fn);}},document,crypto,TextEncoder,performance:{now:()=>0},setTimeout:timeout,clearTimeout:cancel});
 vm.runInContext(fs.readFileSync('dashboard/web/sonic.js','utf8'),scope);
@@ -56,14 +56,17 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   const client=sound.mount({api:async route=>{assert.equal(route,'interaction/sonic');calls++;return selected;},now:()=>now});
   assert.equal(calls,0,'Mount requested state before explicit listening');
   await nodes.get('#conversation-sound-toggle').handlers.click();assert.equal(calls,1);
+  assert.match(nodes.get('#conversation-sound-feedback').textContent,/Beacon · 1 session voices/);
+  assert.equal(nodes.get('#conversation-sound-feedback').hidden,false);
   const live=Audio.instances.at(-1),liveMaster=live.nodes[0];assert(liveMaster.gain.value>0);
   client.update({capture:'recording'});assert.equal(liveMaster.gain.value,0);
+  assert.match(nodes.get('#conversation-sound-feedback').textContent,/quiet while/);
   client.update({capture:'idle'});assert(liveMaster.gain.value>0);
   client.update({playback:'playing'});assert.equal(liveMaster.gain.value,0);
   client.update({playback:undefined});assert(liveMaster.gain.value>0);
   now=21000;const expiry=[...timers.entries()].find(([,t])=>t.ms===20001);assert(expiry);timers.delete(expiry[0]);expiry[1].fn();assert.match(nodes.get('#conversation-sound-status').textContent,/1 unconfirmed/);
   assert(live.nodes.some(n=>n.frequency.value===845),'Stale state was not represented by the authored unknown interval');
-  document.hidden=true;events.get('visibilitychange')();assert.equal(live.state,'closed');assert.equal(nodes.get('#conversation-sound-status').textContent,'Off');assert.equal(timers.size,0);
+  document.hidden=true;events.get('visibilitychange')();assert.equal(live.state,'closed');assert.equal(nodes.get('#conversation-sound-status').textContent,'Off');assert.equal(timers.size,0);assert.equal(nodes.get('#conversation-sound-feedback').hidden,true);
   await client.refresh();assert.equal(calls,1,'Hidden/reset client restarted metadata or playback');
   console.log('Sonic mapping/graph: 20-session bounded mix, authored ratios, unknown/stale distinction, independent vocabulary, no refresh replay, mute/capture/speech ownership, late resume and hidden teardown passed; simulated audio device, zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

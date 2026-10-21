@@ -90,3 +90,14 @@ h.companion.reply({...selected,companion_hint:{...selected.companion_hint,gestur
 h.elapse(300);assert.equal(h.face.textContent,pack.expressions.inquiry.variants.field.frames[0],'none stays static');
 h.companion.reply({...selected,id:'changed-bytes',observed_at:'2026-10-25T00:00:00Z',companion_hint:{...selected.companion_hint,catalog:'b'.repeat(64)}});
 assert.equal(h.box.dataset.pose,'weave','reused pack labels with different bytes do not select a new expression');
+
+const busyExpression=boot();
+busyExpression.companion.observe({schema:"telecodex.interaction-activity/v1",integrator_busy:true,sources:[{known:true,busy:true}]});
+busyExpression.companion.reply({...answer,id:"busy-answer",companion_hint:{rest:"delighted",gesture:"wave"}});
+assert.equal(busyExpression.box.dataset.pose,"delighted","parallel work must not suppress the authored reply expression");
+assert(busyExpression.labels().includes("1 session active"),"artistic expression must preserve independent work evidence");
+const expressionArt=busyExpression.face.textContent;
+busyExpression.companion.update({capture:"recording"});
+assert.notEqual(busyExpression.face.textContent,expressionArt,"local capture must produce a perceptibly different field");
+busyExpression.companion.update({capture:undefined});
+assert.equal(busyExpression.box.dataset.pose,"delighted","capture settles back into the authored response expression");

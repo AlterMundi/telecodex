@@ -80,7 +80,8 @@ window.Conversation = (() => {
       $("#conversation-visual summary").textContent="Add an image";
       timeline.hidden=false;$("#conversation-replies").hidden=true;$("#conversation-sent").hidden=true;
       $("#conversation-inputs-older").textContent="Earlier messages";
-      historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));timeline.append(historyTools);
+      historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));
+      diagnostics.querySelector?.(".conversation-diagnostics-content")?.append(historyTools);
     }
     function atTimelineEnd() {return !!timeline && timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;}
     function placeInTimeline(box, key, timestamp, nearEnd=atTimelineEnd()) {
@@ -165,7 +166,7 @@ window.Conversation = (() => {
     }
     function resetInputs() {
       companion?.reset();sound?.reset();goalControls?.reset();presentationProfile=undefined;
-      disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren(historyTools);
+      disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren();
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
       telegramCursor=0;telegramNewest=0;telegramLoaded=false;
@@ -579,8 +580,8 @@ window.Conversation = (() => {
       enabled = value;
       document.body.classList.toggle("conversation-mode", enabled);
       $("#conversation").hidden = !enabled;
-      $(".identity h1").textContent = readOnly ? "Routing monitor" : enabled ? "Conversation" : "Sessions";
-      document.title = `${enabled ? "Conversation" : "Sessions"} · Telecodex`;
+      $(".identity h1").textContent = standalone ? "Daimon" : readOnly ? "Routing monitor" : enabled ? "Conversation" : "Sessions";
+      document.title = standalone ? "Daimon Interaction" : `${enabled ? "Conversation" : "Sessions"} · Telecodex`;
       if (navigate && !readOnly) {
         const url = new URL(location.href);
         if (enabled) url.searchParams.set("view", "conversation");

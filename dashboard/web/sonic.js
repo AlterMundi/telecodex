@@ -67,19 +67,21 @@ window.ConversationSound = (() => {
   function mount({api,unauthorized=()=>{},getAuthority=()=>"",now=()=>performance.now()}={}) {
     const button=document.querySelector("#conversation-sound-toggle"),status=document.querySelector("#conversation-sound-status"),score=document.querySelector("#conversation-sound-score"),volume=document.querySelector("#conversation-sound-volume");
     if(!button || !status || !score || !volume)return;
+    const feedback=document.querySelector("#conversation-sound-feedback");
+    function setStatus(detail,brief=detail){status.textContent=detail;if(feedback){feedback.textContent=brief;feedback.hidden=detail==="Off";}}
     let enabled=false,suspended=false,generation=0,authority,request,frame,vocabulary,catalog,received=0,requestElapsed=0,expiry,local={};
-    const engine=renderer({changed(running){suspended=!running;if(enabled){button.textContent=running?"≈ Mute state sound":"≈ Resume state sound";if(!running)status.textContent="Audio suspended · tap to resume";}}});
+    const engine=renderer({changed(running){suspended=!running;if(enabled){button.textContent=running?"≈ Mute Beacon":"≈ Resume Beacon";if(!running)setStatus("Audio suspended · tap to resume");}}});
     const isQuiet=()=>["permission","recording","finalizing"].includes(local.capture) || local.uploading===true || ["playing","preparing"].includes(local.playback);
-    function disable(){enabled=false;authority=undefined;generation++;clearTimeout(expiry);request=undefined;frame=undefined;engine.stop();button.setAttribute("aria-pressed","false");button.textContent="≈ State sound";status.textContent="Off";score.replaceChildren();}
+    function disable(){enabled=false;authority=undefined;generation++;clearTimeout(expiry);request=undefined;frame=undefined;engine.stop();button.setAttribute("aria-pressed","false");button.textContent="≈ Beacon";setStatus("Off");score.replaceChildren();}
     function draw(){
       if(!enabled || !frame || !vocabulary)return;
       const elapsed=Math.max(0,now()-received)+requestElapsed,composition=plan(frame,vocabulary,elapsed);
-      if(!frame.configured){disable();status.textContent="State observer is not configured";return;}
+      if(!frame.configured){disable();setStatus("State observer is not configured");return;}
       const played=engine.render(composition,vocabulary);
       const label=document.querySelector("#conversation-sound-vocabulary");if(label)label.textContent=`${vocabulary.label} · ${vocabulary.fundamental_hz} Hz anchor · ${vocabulary.wave} · revision ${vocabulary.revision}`;
       const silent=isQuiet();
       engine.setQuiet(silent);
-      status.textContent=!played.running?"Audio suspended · tap to resume":Number(volume.value)===0?"Muted · state labels remain available":silent?"Quiet during voice capture or reply":`${played.voices.length} session voices · ${composition.unconfirmed} unconfirmed · ${composition.omitted+played.dropped} omitted${composition.truncated?" · additional sources unavailable":""}`;
+      setStatus(!played.running?"Audio suspended · tap to resume":Number(volume.value)===0?"Muted · state labels remain available":silent?"Quiet during voice capture or reply":`${played.voices.length} session voices · ${composition.unconfirmed} unconfirmed · ${composition.omitted+played.dropped} omitted${composition.truncated?" · additional sources unavailable":""}`, !played.running?"Beacon paused · tap to resume":Number(volume.value)===0?"Beacon muted":silent?"Beacon quiet while you speak or listen":played.voices.length?`Beacon · ${played.voices.length} session voices${composition.unconfirmed?" · some state unconfirmed":""}`:"Beacon quiet · no active session voices");
       const rows=composition.sources.map(source=>{const row=document.createElement("li");
         const ratio=vocabulary.intervals[source.state];row.textContent=`${source.label||source.id} · ${source.state.replaceAll("_"," ")} · ${ratio.length?ratio.join(":"):"quiet"}${played.voices.some(v=>v.id===source.id)?"":" · outside this mix"}`;return row;});score.replaceChildren(...rows);
       clearTimeout(expiry);
@@ -99,12 +101,12 @@ window.ConversationSound = (() => {
           if([...new Uint8Array(digest)].map(n=>n.toString(16).padStart(2,"0")).join("")!==value.vocabulary_sha256)throw Error("Sound vocabulary changed");
           const selected=JSON.parse(value.vocabulary_json);if(!validate(selected))throw Error("Unsupported sound vocabulary");vocabulary=selected;catalog=key;}
         frame=value;received=now();requestElapsed=Math.max(0,received-start);draw();
-      }catch(error){if(owned!==generation)return;engine.stop();frame=undefined;status.textContent=error.message||"Session state unavailable";if([401,403].includes(error.status)){disable();unauthorized(error);}}
+      }catch(error){if(owned!==generation)return;engine.stop();frame=undefined;setStatus(error.message||"Session state unavailable");if([401,403].includes(error.status)){disable();unauthorized(error);}}
       finally{if(request===pending)request=undefined;}
     }
     button.addEventListener("click",async()=>{
-      if(enabled && !suspended){disable();return;}request=undefined;enabled=true;authority=getAuthority();const owned=++generation;button.setAttribute("aria-pressed","true");button.textContent="≈ Mute state sound";status.textContent="Opening audio…";
-      try{if(!await engine.start() || owned!==generation)return;status.textContent="Waiting for session state";await refresh();}catch(error){if(owned===generation){disable();status.textContent=error.message;}}
+      if(enabled && !suspended){disable();return;}request=undefined;enabled=true;authority=getAuthority();const owned=++generation;button.setAttribute("aria-pressed","true");button.textContent="≈ Mute Beacon";setStatus("Opening audio…");
+      try{if(!await engine.start() || owned!==generation)return;setStatus("Waiting for session state");await refresh();}catch(error){if(owned===generation){disable();setStatus(error.message);}}
     });
     volume.addEventListener("input",()=>engine.setVolume(Number(volume.value)));
     document.addEventListener("visibilitychange",()=>{if(document.hidden)disable();});

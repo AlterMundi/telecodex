@@ -42,7 +42,7 @@
       <section id="conversation" hidden aria-label="Integrating conversation">
         <section id="conversation-companion" hidden aria-label="Conversation companion">
           <pre aria-hidden="true"></pre>
-          <div><p class="companion-caption"></p><div class="companion-phases" role="status" aria-live="polite" aria-label="Observed activity"></div></div>
+          <div><span class="companion-name">DAIMON <span aria-hidden="true">/</span> INTERACTION</span><p class="companion-caption"></p><div class="companion-phases" role="status" aria-live="polite" aria-label="Observed activity"></div></div>
         </section>
         <div class="conversation-tools" id="conversation-observation"><button id="conversation-back" type="button">← Sessions</button><button id="conversation-refresh" type="button">Refresh replies</button>
         <p id="conversation-state" role="status" aria-live="polite">Connecting to your conversation…</p></div>
@@ -81,11 +81,12 @@
         <section id="conversation-voice" hidden aria-label="Speak to your conversation">
           <div class="conversation-tools"><button id="conversation-voice-replies" type="button" aria-pressed="false">Read aloud</button><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
         </section>
-        <div class="conversation-tools"><button id="conversation-sound-toggle" type="button" aria-pressed="false">≈ State sound</button></div>
+        <div class="conversation-tools"><button id="conversation-sound-toggle" type="button" aria-pressed="false">≈ Beacon</button></div>
+        <p id="conversation-sound-feedback" class="note" role="status" aria-live="polite" hidden></p>
         <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
         </div>
-        <details id="conversation-diagnostics" open>
-        <summary>Under the hood <span aria-hidden="true">↗</span></summary>
+        <details id="conversation-diagnostics">
+        <summary>Under the hood <span aria-hidden="true">+</span></summary>
         <div class="conversation-diagnostics-content">
         <details id="conversation-sound"><summary>Session sound <span id="conversation-sound-status" role="status">Off</span></summary>
           <p id="conversation-sound-vocabulary" class="note"></p>
@@ -104,7 +105,7 @@
         <details id="conversation-sent"><summary>Routing monitor · your inputs and destinations</summary><p class="note">Open a message to inspect its original text, destination and forwarded input. Refreshing this monitor never resends work.</p><p id="conversation-telegram-state" class="note" role="status"></p><div id="conversation-inputs"></div><button id="conversation-inputs-older" type="button" hidden>Earlier app/device inputs</button><button id="conversation-telegram-older" type="button" hidden>Earlier Telegram inputs</button></details>
         <div id="conversation-replies" tabindex="-1">
           <section aria-labelledby="conversation-answers-title"><h2 id="conversation-answers-title">Conversation replies</h2><div id="conversation-answers"></div></section>
-          <section aria-labelledby="conversation-results-title"><h2 id="conversation-results-title">From your sessions</h2><div id="conversation-results"></div></section>
+          <section aria-labelledby="conversation-results-title"><h2 id="conversation-results-title">Session activity · original messages</h2><div id="conversation-results"></div></section>
           <button id="conversation-older" type="button" hidden>Earlier replies</button>
         </div>
         </div>

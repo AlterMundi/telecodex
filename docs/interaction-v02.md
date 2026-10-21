@@ -48,6 +48,14 @@ The next delivery must be assessed as one experience:
   emotional claims. Provide an obvious opt-in listening control, volume and mute;
   voice capture and spoken replies take precedence.
 
+The current renderer work removes fixed-height/nested inspection scroll limits,
+keeps history controls under inspection, and separates authored response poses
+from background work indicators so concurrent work cannot suppress expression.
+Beacon activation/status stays visible in the main app, including errors,
+suspension, quiet arbitration and mute. Browser-generated signal and muted zero
+output are measured separately from physical listening. These are implementation
+increments; the authored sonic composition and human experience remain unaccepted.
+
 The human did not perceive avatar changes or hear state sound during use. Existing
 renderers, mappings and technical fixtures do not resolve those observations.
 #213 owns the complete UI/expression delivery; #221 owns diagnosing silent output
