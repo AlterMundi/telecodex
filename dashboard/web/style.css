@@ -552,7 +552,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .timeline-history button { min-height:44px; font-size:14px; }
 #conversation-diagnostics { display:contents; }
 #conversation-diagnostics > summary { display:none; }
-#conversation-companion { display:flex; align-items:center; gap:20px; min-width:0; }
+#conversation-companion { display:flex; flex-wrap:wrap; align-items:center; gap:20px; min-width:0; }
 #conversation-companion pre { flex:none; margin:0; font:12px/1.05 ui-monospace,monospace; color:var(--accent); transform-origin:50% 50%; }
 #conversation-companion pre[data-fallback="true"] { white-space:normal; overflow-wrap:anywhere; max-width:100%; }
 #conversation-companion > div { min-width:0; }
