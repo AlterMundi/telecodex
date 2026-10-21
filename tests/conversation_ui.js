@@ -18,7 +18,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     return setTimeout(fn,ms);
   };
   const cancelTimeout=id=>{if(gaps.has(id))gaps.delete(id);else clearTimeout(id);};
-  let capture;
+  let capture,intersection;const replyTexts=new Map(),partReads=[],replyHolds=new Map();
   function element() {
     return {
       children: [], dataset: {}, handlers: {}, classList: {toggle() {}},
@@ -45,6 +45,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       return nodes.get(selector);
     },
   };
+  let presentationProfile="simple";
   let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false,audioFailures=0;
   const source = n => ({id:`native:${n}`, kind:standalone&&n===1?"integrator_progress":"integrator_answer", sequence:n, observed_at:new Date(1704067200000+n*1000).toISOString(),
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`,...sourceOverrides.get(n)});
@@ -110,6 +111,10 @@ function boot(readOnly=false,standalone=false,options={}) {
     }
     if (url.pathname.endsWith("/part")) {
       if (heldValidation) { heldValidation.started = true; return heldValidation.promise; }
+      const sourceId=url.searchParams.get('source'),offset=Number(url.searchParams.get('offset'));
+      partReads.push({source:sourceId,offset});
+      if(replyHolds.has(sourceId)){const hold=replyHolds.get(sourceId);replyHolds.delete(sourceId);hold.started();await hold.promise;}
+      if(replyTexts.has(sourceId)){const text=replyTexts.get(sourceId),end=Math.min(offset+1600,text.length);return {text:text.slice(offset,end),next_offset:end<text.length?end:null};}
       return {text:"Selected reply", next_offset:null};
     }
     const direction = url.searchParams.get("direction");
@@ -143,9 +148,14 @@ function boot(readOnly=false,standalone=false,options={}) {
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){}};}};
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
+  if(options.autoText)context.window.IntersectionObserver=class{
+    constructor(callback){intersection=callback;}observe(){}unobserve(){}disconnect(){}
+  };
   const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals, telegramOriginals, nativePosts,audioCalls,clock,recoveryPosts,
+  return {ui, nodes, requests, originals,replyTexts,partReads,
+    holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
+    intersect(id){const target=nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);assert(target,JSON.stringify({id,keys:nodes.get("#conversation-timeline").children.map(c=>c.dataset),state:nodes.get("#conversation-state")?.textContent}));intersection([{target,isIntersecting:true}]);}, telegramOriginals, nativePosts,audioCalls,clock,recoveryPosts,
     profile(value){presentationProfile=value;},
     event(name){for(const fn of windowEvents.get(name)||[])fn();},
     hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
@@ -199,6 +209,35 @@ function boot(readOnly=false,standalone=false,options={}) {
 }
 
 (async () => {
+  const automatic=boot(false,true,{autoText:true});
+  const bodies=new Map([['native:8','A complete answer. '.repeat(200)],['native:7','A second topic. '.repeat(200)],['native:6','A third topic. '.repeat(200)]]);
+  const holds=new Map();
+  for(const [id,text] of bodies){const n=Number(id.split(':')[1]);automatic.overrideSource(n,{preview:text.slice(0,20),text_characters:text.length});automatic.replyTexts.set(id,text);holds.set(id,automatic.holdReplyText(id));}
+  await automatic.ui.refresh();
+  for(const id of bodies.keys())automatic.intersect(id);
+  await Promise.all([holds.get('native:8').entered,holds.get('native:7').entered]);
+  assert.equal(automatic.partReads.length,2,'visible answers may use only two concurrent readers');
+  const autoCompose=automatic.nodes.get('#conversation-compose'),autoDraft=automatic.nodes.get('#conversation-message');
+  autoDraft.value='A direction while answer text is still arriving';await autoCompose.handlers.submit({preventDefault(){}});
+  assert.equal(automatic.originals.size,1,'answer retrieval must not block the next human input');
+  holds.get('native:8').release();holds.get('native:7').release();
+  await holds.get('native:6').entered;holds.get('native:6').release();await new Promise(setImmediate);
+  for(const [id,text] of bodies){
+    const card=automatic.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);
+    assert.equal(card.children[2].textContent,text,'normal visible answers should expand without a Read reply click');
+    assert.equal(card.children[3].children[0].hidden,true);
+  }
+  const loaded=automatic.partReads.length;for(const id of bodies.keys())automatic.intersect(id);await automatic.ui.refresh();await new Promise(setImmediate);
+  assert.equal(automatic.partReads.length,loaded,'unchanged metadata/visibility must not reread completed text');
+  automatic.overrideSource(8,{preview:'🙂🙂',text_characters:8,text_sha256:'new-emoji',revision:'emoji-revision'});automatic.replyTexts.set('native:8','🙂🙂abcdef');
+  await automatic.ui.refresh();automatic.intersect('native:8');await new Promise(setImmediate);
+  assert.equal(automatic.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8').children[2].textContent,'🙂🙂abcdef','truncation uses Unicode code points, not UTF-16 units');
+  const replacement=boot(false,true,{autoText:true});
+  replacement.overrideSource(8,{preview:'Old',text_characters:2000});replacement.replyTexts.set('native:8','Old answer '.repeat(200));
+  await replacement.ui.refresh();const oldText=replacement.holdReplyText('native:8');replacement.intersect('native:8');await oldText.entered;
+  replacement.overrideSource(8,{preview:'New',text_characters:2600,text_sha256:'replacement-hash',revision:'replacement-revision'});replacement.replyTexts.set('native:8','New answer '.repeat(250));
+  await replacement.ui.refresh();replacement.intersect('native:8');oldText.release();await new Promise(setImmediate);
+  assert.equal(replacement.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8').children[2].textContent,'New answer '.repeat(250),'late text from an earlier revision must not overwrite its replacement');
   const profile=boot(false,true);
   profile.profile("explorer");await profile.ui.refresh();
   assert.equal(profile.nodes.get("#conversation-diagnostics").open,true);
