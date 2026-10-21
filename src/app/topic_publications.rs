@@ -69,11 +69,14 @@ async fn drain(shared: &Arc<AppShared>, key: SessionKey, human: i64, files: bool
                 shared
                     .telegram
                     .send_message_checked(key.chat_id, || {
-                        if (!publication.direct && !enabled(shared, key, human)
-                            || publication.direct
-                                && shared
+                        // A goal control can select the integrating return on an
+                        // already-running direct turn. Its opted-in source-topic
+                        // projection still uses this same canonical publication.
+                        if (!enabled(shared, key, human)
+                            && (!publication.direct
+                                || shared
                                     .store
-                                    .conversation_turn_return(publication.local_turn)?)
+                                    .conversation_turn_return(publication.local_turn)?))
                             || !shared
                                 .store
                                 .topic_publication_reserve(publication.id, part)?
