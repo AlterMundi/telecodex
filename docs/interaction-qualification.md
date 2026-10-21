@@ -1,8 +1,6 @@
 # Daimon Interaction: qualification and next roadmap
 
-Status: acceptance protocol aligned with the reviewed [v0.2 executable plan](interaction-v02.md), 2026-10-19; execution pending. This document does not report
-execution of the campaign or authorize new capture, publication or background
-attention. Owner: [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
+Status: qualification is in progress against the reviewed [v0.2 executable plan](interaction-v02.md). Selected native journeys and the standalone UI have receiving evidence; full product acceptance remains open. This protocol does not authorize new capture, publication or background attention. Owner: [Daimon Interaction](https://github.com/AlterMundi/daimon-matrix/issues/313).
 Design: [integrating conversation](interaction.md).
 
 ## Product outcome
@@ -39,6 +37,33 @@ repeat all model work after every cosmetic edit.
 The human voice round trip confirms one successful real journey. It does not
 establish statistical routing accuracy, faithful summaries for every session,
 or complete coverage of the interactions between implemented features.
+
+## Current implementation and evidence
+
+The independent conversation UI increments in #243–#246 are merged and deployed.
+The current web release is `d65ff7a`; its served companion script and stylesheet
+match the qualified source bytes. Populated browser checks cover complete visible
+reply expansion, collapsed inspection, narrow layout, finite glyph changes,
+reduced motion and Beacon controls. A receiving check reads actual private state
+with a temporary scoped QA device; only access bootstrap is adapted, and the
+device is revoked afterward. It is not human shared-login acceptance.
+
+Source hum revision 2 uses the Beacon's 65 Hz anchor, weighted natural partials,
+slow breath and an 18 Hz amplitude texture. Offline Web Audio measurements cover
+spectrum, bounded transitions and exact mute/voice-priority silence. Receiving
+state and browser activation are observed separately from physical hearing.
+
+Retained real native journeys cover parallel work and corrections, question
+answers, semantic observer repair, unhinted routing, artifact return and logical
+continuity. Their source revisions and outcomes differ: a recovered goal artifact
+return must not erase the original failed campaign boundary, and earlier native
+evidence does not establish that every scenario passed on the final release.
+Reuse matching evidence, qualify affected changes and retain unresolved cases.
+The native writer and listener were preserved during these web-only deployments.
+
+#241 remains open for visible routed non-message actions at their destinations.
+#213/#221 remain open for the complete visual and sonic experience. No full
+Q01–Q21/V01–V08 campaign or human aesthetic/hearing acceptance is claimed here.
 
 ## Current experience acceptance
 
