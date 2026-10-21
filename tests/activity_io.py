@@ -849,6 +849,19 @@ class ActivityIO(unittest.TestCase):
         return {'connected': True, 'observations': {'100:7': {'native': 'one', 'human': 100,
             'observed_at': now, 'goal_state': 'active', 'execution': 'idle'}}}
 
+    def test_known_name_with_unknown_lifecycle_still_shows_observed_native_goal(self):
+        database = self.marker_database()
+        doc = json.loads(database.execute('SELECT value FROM bot_state').fetchone()[0])
+        doc.pop('lifecycle')
+        database.execute('UPDATE bot_state SET value=?', (json.dumps(doc),))
+        markers = activity.TopicMarkers(self.telegram, self.root / 'unknown-lifecycle.json')
+        now = time.time()
+        markers.update(database, self.marker_snapshot(now), now=now)
+        self.assertEqual(self.calls, [('editForumTopic',
+            {'chat_id': 100, 'message_thread_id': 7, 'name': '🎯 Human title'})])
+        self.assertEqual(json.loads(database.execute('SELECT value FROM bot_state').fetchone()[0]), doc)
+        self.assertNotIn('lifecycle', doc)  # No inferred open/reopen operation.
+
     def test_topic_markers_preserve_canonical_names_and_icons_and_restore_without_loop(self):
         database = self.marker_database()
         path = self.root / 'markers.json'

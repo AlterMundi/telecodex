@@ -1114,7 +1114,10 @@ class TopicMarkers:
             if len(desired) > 128:
                 desired = base  # Keep the whole canonical name, including long titles.
             lifecycle = (item.get('telegram') or {}).get('lifecycle', {}).get('value')
-            if lifecycle == 'deleted' or (lifecycle != 'open' and not entry.get('applied')):
+            # Native goal/execution evidence does not establish Telegram's
+            # lifecycle. An observed name may be decorated while lifecycle is
+            # unknown; editing a title neither opens a topic nor starts work.
+            if lifecycle == 'deleted' or (lifecycle == 'closed' and not entry.get('applied')):
                 continue
             if (entry.get('phase') in ('attempting', 'uncertain') or
                     (now < entry.get('retry_at', 0) and not (restore and entry.get('phase') == 'applied')) or

@@ -52,3 +52,14 @@ establish receiving adoption. #215 separately owns attributed exchange projectio
 and shared publication deduplication.
 
 Wire fields follow the [Telegram service-message contract](https://core.telegram.org/bots/api#forumtopiccreated), including explicit empty emoji resets.
+
+An observed canonical name and unknown Telegram lifecycle are independent facts.
+An opted-in title marker may show fresh native goal/execution evidence without
+asserting that Telegram's topic is open. It edits only the title; explicitly
+closed/deleted topics retain their existing handling. Missing names remain
+undecorated rather than using a native title or prompt summary.
+
+For a legacy cache gap, retain the original service event and update watermark
+when reconciling its observed fields. A bot-authored rename is a Telegram name
+observation, not a new human instruction. Never replay the ordinary input handler
+to repair metadata, infer missing lifecycle, or overwrite newer catalog fields.
