@@ -226,10 +226,23 @@ fn validate_claimed_on(
 
 impl Store {
     pub(super) fn init_goal_controls(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch("CREATE TABLE IF NOT EXISTS interaction_goal_controls(id TEXT PRIMARY KEY,human_id INTEGER NOT NULL,entry_chat INTEGER NOT NULL,entry_topic INTEGER NOT NULL,target_chat INTEGER NOT NULL,target_topic INTEGER NOT NULL,phase TEXT NOT NULL,doc TEXT NOT NULL,result TEXT,instance_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS interaction_goal_inputs(human_id INTEGER NOT NULL,source_kind TEXT NOT NULL,source_event TEXT NOT NULL,control_id TEXT NOT NULL REFERENCES interaction_goal_controls(id),PRIMARY KEY(human_id,source_kind,source_event));")?;
-        conn.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='submitted' THEN 'uncertain' ELSE 'retained_unsent' END WHERE instance_id!=?1 AND phase IN ('prepared','claimed','submitted')",[&self.instance_id])?;
+        let tx = conn.transaction()?;
+        let interrupted = {
+            let mut query=tx.prepare("SELECT id,CASE WHEN phase='submitted' THEN 'uncertain' ELSE 'retained_unsent' END FROM interaction_goal_controls WHERE instance_id!=?1 AND phase IN ('claimed','submitted') AND json_extract(doc,'$.attempt') IS NOT NULL")?;
+            query
+                .query_map([&self.instance_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        tx.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='submitted' THEN 'uncertain' ELSE 'retained_unsent' END WHERE instance_id!=?1 AND phase IN ('prepared','claimed','submitted')",[&self.instance_id])?;
+        for (id, phase) in interrupted {
+            super::topic_publications::goal_control_on(&tx, &id, &phase)?;
+        }
+        tx.commit()?;
         Ok(())
     }
     pub fn goal_control_read(&self, human: i64, entry: SessionKey, id: &str) -> Result<Value> {
@@ -602,8 +615,18 @@ impl Store {
         id: &str,
         attempt: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        conn.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='claimed' THEN 'known_unsent' ELSE 'uncertain' END,result=json_patch(COALESCE(result,'{}'),?5) WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase IN ('claimed','submitted') AND instance_id=?6 AND json_extract(doc,'$.attempt')=?7",params![id,human,entry.chat_id,entry.thread_id,json!({"error":"Selected collector ended before retaining a goal-control receipt","automatic_retry":false}).to_string(),self.instance_id,attempt])?;
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let changed = tx.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='claimed' THEN 'known_unsent' ELSE 'uncertain' END,result=json_patch(COALESCE(result,'{}'),?5) WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4 AND phase IN ('claimed','submitted') AND instance_id=?6 AND json_extract(doc,'$.attempt')=?7",params![id,human,entry.chat_id,entry.thread_id,json!({"error":"Selected collector ended before retaining a goal-control receipt","automatic_retry":false}).to_string(),self.instance_id,attempt])?;
+        if changed == 1 {
+            let phase: String = tx.query_row(
+                "SELECT phase FROM interaction_goal_controls WHERE id=?",
+                [id],
+                |r| r.get(0),
+            )?;
+            super::topic_publications::goal_control_on(&tx, id, &phase)?;
+        }
+        tx.commit()?;
         Ok(())
     }
     pub fn goal_control_finish(

@@ -153,6 +153,9 @@ pub(super) fn withdraw_task_on(
     doc["source"]["agentWithdrawal"] = serde_json::json!({"reason":entry.reason,"links":entry.links,"sourceTurn":turn,"at":at,"actor":actor});
     tx.execute("UPDATE human_interactions SET state='cancelled',payload_json=?2,updated_at=?3 WHERE id=?1 AND state='pending'",params![entry.id,serde_json::to_string(&doc)?,at])?;
     tx.execute("INSERT INTO audit_log(actor_user_id,action,details_json,created_at) VALUES(NULL,'human_task_withdrawn_by_agent',?1,?2)",params![serde_json::json!({"interaction_id":entry.id,"requester":user,"source_turn":turn,"reason":entry.reason,"links":entry.links,"actor":actor}).to_string(),at])?;
+    if actor.is_object() {
+        super::topic_publications::task_withdrawal_on(tx, &entry.id)?;
+    }
     Ok(true)
 }
 
@@ -737,6 +740,13 @@ mod lifecycle_tests {
         let item = store.interaction(key, 100, "live").unwrap().unwrap();
         assert_eq!(item.state, "withdrawn");
         assert_eq!(item.action, "Do the selected human action");
+        assert!(
+            store.topic_publication_inventory(100).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["kind"] != "task_control")
+        );
         assert_eq!(
             item.source["agentWithdrawal"]["actor"]["session"],
             json!(key)

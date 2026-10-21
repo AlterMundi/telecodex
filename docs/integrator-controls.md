@@ -18,7 +18,8 @@ the unchanged intent without a second human confirmation, retaining earlier
 outcomes. Attempt fences prevent late retirement/receipts from changing a newer
 attempt. Restart does not replay uncertain or partially applied work.
 
-This is development source, not receiving adoption. The native dependency is
+Source contracts alone do not establish receiving adoption; use the receiving
+release record and case-specific qualification. The native dependency is
 [compaii/codex #5](https://github.com/compaii/codex/pull/5); older receivers must
 refuse unsupported conditional activation rather than stage a legacy goal or
 insert a priming model turn. Canonical results from the linked goal collector
@@ -66,34 +67,27 @@ can be a client, but the useful capability is a typed operation with retained
 identity and outcome, not the location of the process executing it. Sending
 literal `/goal resume` to a model is not equivalent to invoking goal control.
 
-## Evidence and limits of this inspection
+## Evidence and limits
 
-- Installed CLI: `codex-cli 0.163.0`. The actual daemon release and CLI executable
-  have identical SHA-256 `399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215`.
-- Generated the experimental JSON schema using that installed executable. It
-  advertises the methods and fields below. Schema generation performs no inference.
-- Connected read-only to the existing daemon through the maintained activity
-  client's WebSocket proxy. `thread/goal/get` succeeded; the selected conversation's
-  old goal was `complete`, while `thread/read` reported an active session.
-  No goal mutation, turn submission, service restart or model call was made.
-- An initial scratch client incorrectly treated the shared proxy as JSON lines
-  and timed out at initialize. The maintained client succeeded. This is a probe
-  mistake, not evidence of a product outage. Shared proxy transport needs its
-  WebSocket handshake; private app-server stdio transport is different.
-- Inspected the Codex source checkout at `296a388a2afd70f8686fc5ea0d140486eefdf808`,
-  especially `ext/goal/src/{spec,tool,api,runtime}.rs`,
-  `app-server/src/request_processors/thread_goal_processor.rs`,
-  `app-server-protocol/src/protocol/v2/{thread,turn}.rs`, and
-  `state/src/runtime/goals.rs` (all beneath `codex-rs/`). This source inspection
-  explains behavior; it is not a claim that the checkout commit produced the
-  installed release. Mutation semantics still need the selected-runtime tests below.
-- Inspected Telecodex `src/main.rs`, `src/control_client.rs`, `src/codex/goals.rs`,
-  `src/app/{goals,stopping,dialogue,conversation_requests}.rs`, the activity observer
-  and existing goal/question/control fixtures. Current owner CLI has no general
-  `goal` control verb. Telegram already has the lifecycle adapter we should extend.
+Resolve the current native package from the receiving binding and loaded process.
+A historical CLI digest or source checkout is not a runtime selector. The native
+contracts are maintained in the Interaction fork and the selected source files
+`src/codex/goals.rs`, `src/app/goal_controls.rs` and `src/store/goal_controls.rs`.
+Schema advertisement is distinct from runtime admission and provider incorporation.
 
-Private probe receipts and schemas remain in the owning operation record; do
-not copy private conversations, credentials or connection bindings into this plan.
+Deterministic owner/native-proxy/SQLite journeys qualify conditional controls,
+original exclusivity, stale refusal, ordered follow-ups and uncertain outcomes.
+Selected real native goal/artifact journeys have also run: their original failed
+campaign boundary and subsequent observation-only artifact recovery are retained
+separately. They do not establish every branch or the finished human experience.
+Use [the qualification protocol](interaction-qualification.md) for remaining cases.
+
+The owner CLI has no arbitrary goal shell tunnel. The integrating controller's
+typed operations retain attribution, native preconditions and human confirmation
+where required. [Passive control notices](interaction-notices.md) describe the
+separate destination presentation path; a read or notice never starts work.
+Private originals, receipts and receiving bindings remain in the owning operation
+record, outside public plans.
 
 ## Capability inventory
 
@@ -297,7 +291,9 @@ journey only where needed to prove that work actually resumes and later input is
 incorporated. Inspect existing receiving journals rather than repeating effects.
 The human-facing acceptance is one integrating conversation controlling two work
 sessions, resolving a question and a recoverable obstacle, and returning results
-without visiting either topic. These mutation/journey tests have not yet run.
+without visiting either topic. Selected native journeys and observation-only
+recovery have evidence; the complete combined campaign and human acceptance
+remain open. Record each result against its actual source and receiving release.
 
 References: [official Goals guide](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex),
 [official App Server lifecycle](https://learn.chatgpt.com/docs/app-server),

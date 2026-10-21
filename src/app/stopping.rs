@@ -30,6 +30,18 @@ pub(super) async fn command(
     if args == "topics publications" {
         return app.shared.store.topic_publication_inventory(human);
     }
+    if let Some(selected) = args.strip_prefix("topics notices ") {
+        let mut fields = selected.split_whitespace();
+        let native = fields.next().context("Native thread required")?;
+        let after = fields.next().map(str::parse).transpose()?;
+        if fields.next().is_some() {
+            bail!("Expected topics notices NATIVE_THREAD [AFTER]");
+        }
+        return app
+            .shared
+            .store
+            .thread_control_notices(human, native, after);
+    }
     if let Some(selected) = args.strip_prefix("observer ") {
         return observer::owner_command(app, human, selected);
     }

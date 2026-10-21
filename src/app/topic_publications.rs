@@ -48,6 +48,12 @@ async fn drain(shared: &Arc<AppShared>, key: SessionKey, human: i64, files: bool
             shared: shared.clone(),
             id: publication.id,
         };
+        if !publication.direct && !enabled(shared, key, human) {
+            shared
+                .store
+                .topic_publication_not_selected(publication.id)?;
+            continue;
+        }
         let chunks = if publication.kind == "artifact" {
             vec![publication.body.clone()]
         } else {

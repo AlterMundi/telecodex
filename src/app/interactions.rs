@@ -559,6 +559,7 @@ pub(super) async fn live_task_tool(
             if armed.get(&(target, human)) == Some(&withdrawal.id) {
                 armed.remove(&(target, human));
             }
+            super::topic_publications::wake(app.shared.clone(), target);
             Ok(result)
         }
         _ => bail!("Unsupported human task operation"),
