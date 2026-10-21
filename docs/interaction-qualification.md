@@ -79,8 +79,7 @@ grant; historical evidence remains intact.
 
 For Q17, inspect each key control’s bounds with populated voice status and the player visible; document-level overflow alone can miss clipping inside a scroll container. Growing transcripts and replies must preserve live following, while updates must not move a reader browsing earlier history. Explicit text/voice submission returns to the live conversation.
 
-Use isolated test credentials/workers where needed. Do not replace the human's
-active access file. Use synthetic destructive scenarios. A global Stop requires
+Use isolated test credentials/workers where needed. Preserve the human's browser session and existing device grants. Use synthetic destructive scenarios. A global Stop requires
 a fresh explicit human request for that operation, including during testing.
 Hardware capture and shared-device tests need their actual authorization/window.
 

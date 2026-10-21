@@ -36,8 +36,10 @@ evaluation are separate from that automated acceptance.
 
 ## Using the integrating conversation
 
-Open Conversation in the authenticated Sessions app, or use an operator-enrolled
-Talk device. Text and committed voice clips enter the same retained conversation.
+The browser entry uses [shared authentication](interaction-companion.md#browser-access)
+and a remembered session; its auth adapter remains to be integrated. The existing
+Conversation view in authenticated Sessions and enrolled Talk devices use the
+same retained conversation. Text and committed voice clips enter that conversation.
 Talk starts a recording; a second press sends it. Holding the button discards the
 current recording. Work continues while the device is disconnected.
 
