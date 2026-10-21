@@ -40,6 +40,27 @@ The human voice round trip confirms one successful real journey. It does not
 establish statistical routing accuracy, faithful summaries for every session,
 or complete coverage of the interactions between implemented features.
 
+## Current experience acceptance
+
+The human finds routing usable and useful, but the current interface is a draft;
+no avatar changes or Beacon state sound were perceived. #213 and #221 remain
+unaccepted. Verify the independent web app entry, without a Telegram launch or
+WebView. Its product direction includes a child using only this app, with a future
+native/badge client; shared Matrix authentication remains the existing access path.
+
+For the next UI delivery, inspect the actual served revision on desktop and phone:
+chat/composer first; readable collapsed-at-bottom inspection; long histories;
+live questions and intermediate results; no nested scroll slivers; actual visible
+expression changes and restful pose; shared appearance and reduced motion.
+A fixture screenshot does not establish the delivered phone experience.
+
+For sound, exercise explicit activation and distinguish browser suspension,
+quiet/passive evidence, unavailable observation and synthesis failure. Measure
+nonzero generated audio and bounded mix/transitions device-free, including voice
+arbitration and mute. Then assess the actual Beacon-derived humming/purring/rhythm
+and session chord by listening. Do not treat a mock oscillator or interval mapping
+as proof that the user heard the intended composition.
+
 ## Execution method
 
 Complete the integrated v0.2 implementation first, then run this campaign with

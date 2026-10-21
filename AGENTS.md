@@ -1,5 +1,13 @@
 # Interaction development boundaries
 
+Interaction is an independent application: web now, native/badge clients later.
+Telegram is an optional session projection, never the application shell or a
+required launch path. A child should be able to use only this app. Current UI
+and Beacon sound delivery is owned by #213/#221 and docs/interaction-v02.md:
+readable conversation first, read-only machinery below and initially collapsed,
+perceptible per-being ASCII expression and an audible opt-in sonic composition.
+Do not equate renderer/mapping tests with the delivered visual or sonic experience.
+
 Browser sign-in uses the existing shared authentication at auth.dmn.homes and
 its remembered session. Follow the daimon-home service-integration guidance and
 the maintained Cluster shared-login adapter. Do not add browser credential-file

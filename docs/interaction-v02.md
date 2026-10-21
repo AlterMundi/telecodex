@@ -1,6 +1,6 @@
 # Daimon Interaction v0.2 — coherent single-chat experience
 
-Status: executable plan, amended after the human-requested Astra high constructive adversarial review on 2026-10-19. Implementation and acceptance remain pending; the review inspected source and did not execute native race experiments. Parent: AlterMundi/daimon-matrix#313; coordination: Daimon Interaction Project 14. Build progressively toward the final local product, reuse native state and existing adapters, and use Git for history. No throwaway staging architecture.
+Status: the human finds the routed text/voice workflow usable and useful, with latency still needing improvement. The visual and Beacon-derived sonic experience is NOT accepted. Current delivery focus is the complete standalone UI and perceptible visual/sonic expression under #213 and #221, not further unrelated infrastructure. Parent: AlterMundi/daimon-matrix#313; milestone 8; Daimon Interaction Project 14.
 
 ## Outcome and scope
 
@@ -15,6 +15,46 @@ This is the single-body product stage following immutable first-functional v0.1.
 - Pending requests lead with one short concrete action, its brief purpose and how to answer. Ordinary text/voice answers should reach the selected live request without duplicate entry. Ambiguity gets conversational clarification. Agent-issued tasks that become unnecessary are withdrawn with a reason/evidence, not called human-completed. Expired native answer channels cannot be fabricated.
 - Automate all meaningful tests possible. Use inexpensive real workers for necessary semantic/effect checks. Ask the human only for a genuinely non-automatable observation, after preparing the whole journey. No physical capture is implicit in a deployment or readiness check.
 - Preserve existing credentials, native bindings, accepted/uncertain work, live goals, raw canonical events and immutable release tags. Successful source audio is deleted after durable transcript verification; failed/uncertain audio and TTS caches retain their actual bounded policy. No new raw-media archive.
+
+## Current UI and sound delivery
+
+Interaction is an independent application: web now, native later, compatible
+with a physical/Bluetooth badge. Telegram is an optional session projection, not
+the app shell, entry requirement or identity experience. A child should be able
+to interact with their daimon entirely inside this app. Reuse shared Matrix auth;
+account provisioning gaps must remain explicit rather than becoming another login
+or pairing system.
+
+The next delivery must be assessed as one experience:
+
+- An authored, beautiful composition centered on readable conversation and one
+  obvious text/voice interaction. Useful intermediate communication and live
+  questions remain understandable and reachable.
+- Monitoring, raw worker output, test-session material, graph and operational
+  detail live below the conversation, collapsed by default. Inspection is readable
+  when expanded, without tiny nested scroll panes. Do not hide the only copy of a
+  useful worker answer merely because it lacks an integrator paraphrase.
+- Simple presentation is the default; read-only exploration remains discoverable.
+  Advanced presentation never grants otherwise unavailable permissions.
+- A cared-for per-being ASCII presence, inspired by inspected Ani/Oliva/Nexus
+  material with attribution; independent terminal, Telegram and app renderings.
+  Local finite gestures, response/rest expressions and real phase changes must be
+  perceptible in actual use, with reduced motion and static accessible alternatives.
+- Compact, truthful transcription, routing, observer and parallel-work indicators.
+  Visual polish must not counterfeit progress or conceal latency.
+- A recognizable Beacon-derived hum/purr/rhythm and aggregate session chord,
+  with authored register, voicing, envelopes and transitions. Preserve the proposed
+  1:11 blocked and 1:7 waiting relationships as artistic vocabulary, not universal
+  emotional claims. Provide an obvious opt-in listening control, volume and mute;
+  voice capture and spoken replies take precedence.
+
+The human did not perceive avatar changes or hear state sound during use. Existing
+renderers, mappings and technical fixtures do not resolve those observations.
+#213 owns the complete UI/expression delivery; #221 owns diagnosing silent output
+and delivering the audible composition. Both stay open. Qualify actual served
+assets and real entry, long conversation, phone/keyboard layout, questions,
+playback, diagnostics, motion settings and produced audio. Human aesthetic/hearing
+acceptance remains separate from automated evidence.
 
 ## Existing basis and corrections
 
