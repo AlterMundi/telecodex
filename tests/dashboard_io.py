@@ -442,4 +442,8 @@ class DashboardAppearance(unittest.TestCase):
                 with self.assertRaises(ValueError):create_app({**config,'appearance_origin':origin},Receiver())
 
 
+# Include the optional health transport contract in the existing dashboard CI
+# entrypoint; the real installed package is additionally qualified when selected.
+from dashboard_computer_health_io import HealthTests
+
 if __name__ == '__main__': unittest.main()

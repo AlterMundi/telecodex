@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, Response
 from init_data_py import errors, validate_by_signature
 
 from .provider import Provider, ProviderUnavailable
+from .computer_health import ComputerHealth, HealthUnavailable
 from .visual import VisualSelectionInvalid
 from .alerts import Receiver as AlertsReceiver, AlertsUnavailable
 from .traffic import Traffic
@@ -96,6 +97,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     info = state.lstat()
     if not state.is_dir() or state.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ValueError('Dashboard state must be owner-only')
+    computer_health = ComputerHealth(config)
     db_path = state / 'dashboard.sqlite3'
     if db_path.exists() or db_path.is_symlink():
         info = db_path.lstat()
@@ -141,6 +143,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             alerts.close()
         if traffic is not None:
             traffic.close()
+        computer_health.close()
         provider.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -250,6 +253,10 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/')
     def shell(request: Request):
+        if computer_health.enabled and (request.query_params.get('view') == 'health'
+                or computer_health.default_view and not request.query_params.get('view')):
+            computer_health.assert_binding()
+            return HTMLResponse(computer_health.shell)
         body = (public / 'index.html').read_text()
         shared_entry = home_auth.enabled and (request.query_params.get('view') == 'conversation'
             or request.headers.get('x-forwarded-prefix') == home_auth.entry.rstrip('/'))
@@ -287,7 +294,11 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
 
     @app.get('/assets/{name}')
     def asset(name: str, request: Request):
-        if name not in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name in ('health.css', 'health-ui.js') and computer_health.enabled:
+            computer_health.assert_binding()
+            data, media = computer_health.assets[name]
+            return Response(data, media_type=media)
+        if name not in ('health-live.js', 'app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -324,6 +335,16 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         response.set_cookie('telecodex_dashboard', token, httponly=True, secure=True,
                             samesite='strict', path=prefix, max_age=3600)
         return response
+
+    @app.get('/api/computer-health')
+    def health_snapshot(request: Request):
+        authorize(request)
+        try:
+            result = computer_health.snapshot()
+        except HealthUnavailable:
+            raise HTTPException(503, 'Computer health binding changed; operator must requalify') from None
+        authorize(request)
+        return result
 
     @app.get('/api/state')
     def snapshot(request: Request):
