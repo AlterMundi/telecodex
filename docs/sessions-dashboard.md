@@ -196,3 +196,68 @@ and Telegram cooldown/recovery state. Refresh uses the existing visible-page
 cadence; an unavailable native probe does not hide the traffic or Alerts panels.
 See [capture setup and actionable Alerts](bot-traffic.md#sessions-and-actionable-alerts)
 for scoped configuration, condition/recovery policy, qualification and rollback.
+
+## Pulso: open directly to private computer health
+
+Optional `computer_health` reuses the existing receiving owner, Telegram signature
+validation, session cookie/bearer, live allowed-human check and private prefix.
+There is no public metrics endpoint, browser credential file, new bot consumer,
+model call or native conversation read. `?view=health` opens the Pulso view;
+`?view=sessions` retains the ordinary Sessions view. `default_view=true` makes
+health the default only for this explicitly configured receiver.
+
+Install the qualified `computer-health` skill 1.1.0 or newer through its supported
+selective updater. Keep the receiving machine profile owner-only and outside the
+repository; it selects only machines the human has actually authorized. Resolve
+its paths from the receiving infrastructure map/binding, never the author's.
+
+```toml
+[computer_health]
+enabled = true
+default_view = true
+package_dir = "/PRIVATE/installed-skills/computer-health"
+config_file = "/PRIVATE/computer-health/config.json"
+```
+
+The backend pins the profile and collector/renderer bytes at startup. Drift
+returns 503 until operator requalification rather than showing old data under a
+changed binding. `/api/computer-health` checks the current receiving grant before
+and after the read. Interaction-only and monitor companions acquire no health
+scope. Anonymous access receives only the empty shell. The live renderer hides
+file import, reuses the shared validated report event and holds its short-lived
+session only in memory. Sessions' strict CSP externalizes the maintained viewer
+script/style; artifact sandbox rules are unchanged.
+
+Opening starts one finite read; visible clients reconcile every 30 seconds.
+Concurrent readers share one in-flight collection and the previous successful
+reading is returned immediately. Cold clients see collection progress. Collection
+stops being requested while hidden; an already admitted finite read can finish.
+The backend stores only one bounded owner-only current report, not an immutable
+publication per refresh or an unbounded history. A missing remote machine retains
+its original timestamp separately from the failed attempt. Authorization errors
+clear the private view. Whole-host/cgroup scope, reclaimable cache, cumulative
+counters and untested application readiness remain visible distinctions.
+
+For qualification:
+
+```text
+python -B tests/dashboard_computer_health_io.py
+PULSO_TEST_PACKAGE=/PRIVATE/installed-skills/computer-health python -B tests/dashboard_computer_health_io.py
+```
+
+The first runs offline transport/auth/single-flight contract fixtures; the second
+also exercises the real installed collector and renderer. Browser fixtures must
+verify cold open, automatic reads without a file picker, stale remote readings,
+visibility suspension and authorization loss. They do not establish real Telegram
+launch or a phone acceptance receipt.
+
+Deploy through the existing receiving sidecar operator, preserving native/bot
+units, reverse proxy, receiving grants and SQLite action/session journals. Restart
+only the sidecar at a suitable point; no global Stop is needed. A system-owned
+unit requires its actual administrator when the receiving user cannot manage it.
+Qualify the existing HTTPS prefix and private 401 boundary after activation, then
+publish the receiving launch through the maintained home/Apps contract. A general
+pair capability requires its registered receiving route; do not invent one or
+redirect other humans into the author's private bot. An explicitly author-owned
+machine dashboard may use the documented author dependency with that reason
+visible. Shared source publication is not receiving deployment.
