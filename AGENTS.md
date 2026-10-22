@@ -25,3 +25,15 @@ Evaluate the whole user-visible flow: input received, destination/progress under
 The owning design is docs/interaction.md; the roadmap is AlterMundi/daimon-matrix#313. Historical completion records do not override the current repair requirements. Use existing repository qualification and supported receiving adoption; global Stop requires fresh explicit human consent.
 
 A native session is not permanently attached to the web return surface. A later ordinary direct message selects its own topic for native presentation, including during an active routed turn. This is presentation selection from the existing ingress journal, never router admission or controller wrapping. A delayed earlier transcript must not reverse a later surface selection. Qualify switching surfaces in the same session, not only direct work in a different session.
+
+## Beacon composition — human correction, 2026-10-22
+
+The sonic target is the Beacon series of 40.4: idle F1; active adds F2; running
+tools/subagents add F3; active goal adds F4; pending adds F7; blockage/error adds
+F11. These are concurrent additive components, not one exclusive note per state.
+Follow docs/sonic-expression.md. The deployed 65 Hz revision-2 mapping is rejected,
+not an accepted target. Do not fix its high harmonics by inventing another palette.
+
+F1 = 40.4 Hz; Fn = n × 40.4 Hz. Use only sine waves with gently pulsing
+amplitude, no additional harmonic stacks or 18 Hz texture (human confirmation,
+2026-10-22). Pending stays F7 and blockage/error stays F11.

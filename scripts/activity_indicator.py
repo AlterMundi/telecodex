@@ -1020,6 +1020,8 @@ def topic_activity_inventory(database, snapshot, days=7, now=None):
                       'title_summary': row['session_title'], 'category': category,
                       'marker': marker, 'execution': execution, 'goal_state': goal,
                       'waiting_for_human': observed.get('waiting_for_human') if fresh and type(observed.get('waiting_for_human')) is bool else None,
+                      'tools_running': observed.get('tools_running') if fresh and type(observed.get('tools_running')) is bool else None,
+                      'error': observed.get('error') if fresh and type(observed.get('error')) is bool else None,
                       'fresh': fresh, 'observed_at': at if matched else None,
                       'last_observed_conversation_at': last, 'recent_conversation': recent})
     return {'schema': 'telecodex.topic-activity/v1', 'observed_at': now,
@@ -1255,6 +1257,8 @@ def run(args):
                         'execution': ('working' if work_active else 'idle')
                             if status.get('type') in ('active', 'idle', 'notLoaded') else 'unknown',
                         'goal_state': observed_goal['state'],
+                        'tools_running': bool(reader.calls or any(child.get('type') == 'active' for child in children)) if status.get('type') in ('active','idle','notLoaded') else None,
+                        'error': status.get('type') == 'systemError' if status.get('type') in ('active','idle','notLoaded','systemError') else None,
                         'waiting_for_human': any(flag in status.get('activeFlags', []) for flag in ('waitingOnApproval','waitingOnUserInput')) if status.get('type') in ('active','idle','notLoaded') else None,
                         'last_conversation_at': reader.last_conversation_at}
                     update = pending_update_line(args.pending_update_record, key, now)

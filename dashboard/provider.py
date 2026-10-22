@@ -15,7 +15,7 @@ import threading
 import time
 import tomllib
 
-from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp, read_topic_inventory, topic_activity_inventory
+from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp, read_topic_inventory, topic_activity_inventory, pending_requests
 from scripts.speech_render import sync_directory
 
 
@@ -219,10 +219,14 @@ class Provider:
             items=[]
             for key,label in selected.items():
                 item=owned.get(key,{})
+                chat,topic=map(int,key.split(':'))
+                requests=pending_requests(db,chat,topic,self.human) if item.get('session') else None
                 items.append({'id':key,'label':label,'session':item.get('session'),
                     'observed_at':item.get('observed_at'),'fresh':item.get('fresh',False),
                     'execution':item.get('execution','unknown'),'goal_state':item.get('goal_state','unknown'),
-                    'waiting_for_human':item.get('waiting_for_human')})
+                    'waiting_for_human':item.get('waiting_for_human'),
+                    'tools_running':item.get('tools_running'),'error':item.get('error'),
+                    'pending':bool(requests and requests['pending']) or item.get('waiting_for_human') is True})
         self.assert_binding()
         if not self.authorized(self.human):
             raise ProviderUnavailable('Interaction state audience changed')
