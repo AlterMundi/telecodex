@@ -4,7 +4,7 @@ const clone=value=>JSON.parse(JSON.stringify(value));
 const deferred=()=>{let release,enter;return {promise:new Promise(yes=>{release=yes;}),entered:new Promise(yes=>{enter=yes;}),release:()=>release(),enter:()=>enter()};};
 function boot(count=1, mayDecide=true) {
   const nodes=new Map();
-  const element=tag=>({tag,children:[],handlers:{},textContent:'',value:'',hidden:false,disabled:false,
+  const element=tag=>({tag,children:[],handlers:{},dataset:{},textContent:'',value:'',hidden:false,disabled:false,
     setAttribute(key,value){this[key]=value;},addEventListener(name,fn){this.handlers[name]=fn;},
     append(...values){for(const child of values){child.parent=this;this.children.push(child);}},
     replaceChildren(...values){this.children=[];this.append(...values);},
@@ -53,12 +53,12 @@ function boot(count=1, mayDecide=true) {
     if(heldDetail){const hold=heldDetail;heldDetail=undefined;hold.enter();await hold.promise;}
     return value;
   }
-  const context=vm.createContext({window:{},document,TextEncoder,URLSearchParams});
+  const context=vm.createContext({window:{},document,TextEncoder,URL,URLSearchParams});
   vm.runInContext(fs.readFileSync('dashboard/web/requests.js','utf8'),context);
   let ui;ui=context.window.RequestControls.mount({api,getBinding:()=>binding,setCsrf(){},unauthorized(){ui.reset();},onReply:(reference,label)=>replies.push({reference:clone(reference),label}),onListen:source=>listens.push(clone(source)),getCanListen:()=>canListen,getCanDecide:()=>mayDecide});
   const all=(el,predicate)=>[...(predicate(el)?[el]:[]),...el.children.flatMap(child=>all(child,predicate))];
   const button=(card,text)=>all(card,el=>el.tag==='button'&&el.textContent===text)[0];
-  return {ui,nodes,sources,receipts,calls,replies,listens,button,all,goals:args=>context.window.GoalControls.mount({getBinding:()=>binding,...args}),speech(value){canListen=value;},
+  return {ui,nodes,sources,receipts,calls,replies,listens,button,all,tasks:args=>context.window.HumanTaskControls.mount({getBinding:()=>binding,...args}),goals:args=>context.window.GoalControls.mount({getBinding:()=>binding,...args}),speech(value){canListen=value;},
     cards:()=>nodes.get('#conversation-request-cards').children,
     mode:value=>{mode=value;},bind(value){binding=value;for(const source of sources.values())source.binding=value;},
     holdList(){return heldList=deferred();},holdDetail(){return heldDetail=deferred();},holdPost(){return heldPost=deferred();},
@@ -182,6 +182,27 @@ function boot(count=1, mayDecide=true) {
   const readonly=boot(0), ro=readonly.goals({readOnly:true,api:async()=>clone(proposal),onChoose:()=>{throw Error('Read-only client chose');}});
   await ro.observe({binding:"bound",items:[proposal],cursor:1,more:false});const readonlyCard=readonly.nodes.get('#conversation-goal-cards').children[0];
   await readonly.button(readonlyCard,'Review proposal and outcome').handlers.click();assert(readonly.button(readonlyCard,'Confirm in conversation').hidden);
+  }
+  {
+    const f=boot(0), replies=[];let offline=false,hold;
+    let task={id:'a'.repeat(32),binding:'bound',revision:'r1',kind:'task',state:'pending',title:'Observe the result',label:'#Alpha',preview:'Original action',body:'Original action <script> is literal text.',offset:0,next_offset:null,read_only:true,can_withdraw:false,links:[{label:'Unsafe',url:'javascript:alert(1)'},{label:'App',url:'https://example.test'}]};
+    const ui=f.tasks({onReply:v=>{replies.push(clone(v));return true;},api:async route=>{
+      if(offline)throw Error('Offline');
+      if(route.startsWith('interaction/tasks?'))return {binding:'bound',items:task.state==='pending'?[clone(task)]:[],cursor:1,more:false};
+      const value=clone(task);if(hold){const h=hold;hold=undefined;h.enter();await h.promise;}return value;
+    }});
+    await ui.refresh();let card=f.nodes.get('#conversation-task-cards').children[0];
+    assert(f.button(card,'Reply in conversation').disabled);
+    await f.button(card,'Read action').handlers.click();assert(!f.button(card,'Reply in conversation').disabled);
+    assert(f.all(card,n=>n.tag==='div'&&n.textContent.includes('<script>')).length);
+    assert.equal(f.all(card,n=>n.tag==='a').length,1,'Only HTTP(S) task links may be rendered');
+    f.button(card,'Reply in conversation').handlers.click();assert.equal(replies[0].id,task.id);assert(task.state==='pending','Reading/reply preparation must not resolve a task');
+    offline=true;await ui.refresh();assert(f.button(card,'Reply in conversation').disabled);
+    offline=false;task={...task,state:'withdrawn',revision:'r2'};await ui.refresh();assert(f.button(card,'Reply in conversation').disabled);
+    assert(f.all(card,n=>n.textContent==='No longer needed.').length);
+    task={...task,id:'b'.repeat(32),state:'pending',revision:'r3'};await ui.refresh();card=f.nodes.get('#conversation-task-cards').children.at(-1);
+    hold=deferred();const h=hold,pending=f.button(card,'Read action').handlers.click();await h.entered;ui.reset();h.release();await pending;
+    assert.equal(f.nodes.get('#conversation-task-cards').children.length,0,'A late task read must not revive a reset scope');
   }
   console.log('Request UI: full-source gating, source-fenced choices, receipt-only recovery, exact retry, saved drafts, pagination/closure and async scope reset passed; zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

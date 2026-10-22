@@ -49,7 +49,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false,audioFailures=0;
   const source = n => ({id:`native:${n}`, kind:standalone&&n===1?"integrator_progress":"integrator_answer", sequence:n, observed_at:new Date(1704067200000+n*1000).toISOString(),
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`,...sourceOverrides.get(n)});
-  const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), nativePosts = [];
+  const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), humanTasks=new Map(), nativePosts = [];
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
@@ -70,6 +70,8 @@ function boot(readOnly=false,standalone=false,options={}) {
         routes:[{label:'Alpha',instruction:'retained-instruction',requests:['parent-request'],relation:{kind:'amends'},transport_phase:'accepted',forwarded_original:'Exact correction <script>literal</script>',target_available:true,results:[]}],
         evidence:'Receiver-retained original; native acceptance is not incorporation.'};
     }
+    if (url.pathname === "/interaction/tasks") return {binding:"fixture",items:[...humanTasks.values()],cursor:humanTasks.size,more:false};
+    if (url.pathname.startsWith("/interaction/tasks/")) return {...humanTasks.get(url.pathname.split("/").at(-1)),offset:0,next_offset:null};
     if (url.pathname === "/interaction/requests") return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
     if (url.pathname.startsWith("/interaction/requests/")) {
       if (body) {nativePosts.push(JSON.parse(JSON.stringify(body)));throw new TypeError("Lost decision acknowledgement");}
@@ -153,7 +155,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   };
   const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
   ui.authenticated();
-  return {ui, nodes, requests, originals,replyTexts,partReads,
+  return {ui, nodes, requests, originals,replyTexts,partReads,humanTasks,
     holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
     intersect(id,visible=true){const target=nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);assert(target,JSON.stringify({id,keys:nodes.get("#conversation-timeline").children.map(c=>c.dataset),state:nodes.get("#conversation-state")?.textContent}));intersection([{target,isIntersecting:visible}]);}, telegramOriginals, nativePosts,audioCalls,clock,recoveryPosts,
     profile(value){presentationProfile=value;},
@@ -671,6 +673,21 @@ function boot(readOnly=false,standalone=false,options={}) {
   await fileClient.ui.refresh();
   assert.equal(fileCard.children[5].children[1].children[0].disabled,false,'Late global file metadata must update an already-seen reply');
   assert.equal(fileCard.children[5].children[1].children[0].textContent,'↓ native-output.txt');
+  {
+    const f=boot(false,true),task={id:'a'.repeat(32),binding:'fixture',revision:'b'.repeat(64),state:'pending',kind:'task',title:'Observe the result',label:'#Alpha',body:'Tell us what you observed.',preview:'Tell us what you observed.',read_only:true};
+    f.humanTasks.set(task.id,task);await f.ui.refresh();
+    const card=f.nodes.get('#conversation-task-cards').children[0];
+    await card.children.find(n=>n.textContent==='Read action').handlers.click();
+    const reply=card.children.find(n=>n.textContent==='Reply in conversation');
+    f.nodes.get('#conversation-message').value='Keep this draft';reply.handlers.click();
+    assert.equal(f.nodes.get('#conversation-message').value,'Keep this draft');
+    f.nodes.get('#conversation-message').value='';reply.handlers.click();
+    f.nodes.get('#conversation-message').value='Here is what I observed';
+    await f.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+    const original=[...f.originals.values()].at(-1);
+    assert.equal(original.text,'Here is what I observed');
+    assert.equal(original.reply.source,'task:'+task.id);assert.equal(original.reply.revision,task.revision);assert.equal(original.reply.context_only,true);
+  }
   const viewer=boot(true);
   viewer.originals.set('view-only',{id:'view-only',text:'#Missing Inspect only',sequence:1,phase:'awaiting_target',binding:'fixture'});
   await viewer.ui.refresh();

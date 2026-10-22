@@ -218,6 +218,55 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         bail!("Conversation request owner mismatch");
     }
     let entry = cfg.entry();
+    if let Some(args) = args.strip_prefix("tasks ") {
+        let fields: Vec<_> = args.split_whitespace().collect();
+        return match fields.as_slice() {
+            ["list", after] => {
+                let mut value =
+                    app.shared
+                        .store
+                        .conversation_human_tasks(human, entry, after.parse()?)?;
+                for item in value["items"].as_array_mut().context("Missing task list")? {
+                    let key: SessionKey = serde_json::from_value(item["target"].clone())?;
+                    item["label"] = json!(if key == entry {
+                        "Conversation".into()
+                    } else {
+                        format!("#{}", super::routing::label(&app.shared, key))
+                    });
+                }
+                Ok(value)
+            }
+            ["detail", id, offset] | ["detail", id, offset, _] if id.len() <= 64 => {
+                let mut value = app.shared.store.conversation_human_task(human, entry, id)?;
+                if fields.len() == 4 && value["revision"] != fields[3] {
+                    bail!("Task changed; read its current action");
+                }
+                let body = value["body"].as_str().context("Missing task action")?;
+                let offset: usize = offset.parse()?;
+                let length = body.chars().count();
+                if offset > length {
+                    bail!("Invalid task text offset");
+                }
+                let text: String = body.chars().skip(offset).take(4000).collect();
+                let end = offset + text.chars().count();
+                value["body"] = json!(text);
+                value["offset"] = json!(offset);
+                value["next_offset"] = if end < length {
+                    json!(end)
+                } else {
+                    Value::Null
+                };
+                let key: SessionKey = serde_json::from_value(value["target"].clone())?;
+                value["label"] = json!(if key == entry {
+                    "Conversation".into()
+                } else {
+                    format!("#{}", super::routing::label(&app.shared, key))
+                });
+                Ok(value)
+            }
+            _ => bail!("Expected tasks list CURSOR or detail ID OFFSET [REVISION]"),
+        };
+    }
     if let Some(raw) = args.strip_prefix("decide ") {
         let decision: Decision = serde_json::from_str(raw)?;
         return decide(app, human, entry, decision, None, None).await;

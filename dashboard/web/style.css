@@ -670,3 +670,10 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation .session-update { border-inline-start:2px solid var(--line)!important; border-radius:0!important; padding-block:6px!important; }
 .standalone-conversation .session-update .reply-text { font-size:14px; color:var(--muted); }
 .standalone-conversation .session-update button { min-height:44px; font-size:14px; background:transparent; color:var(--muted); border-color:transparent; padding-inline:0; }
+
+/* Long durable actions read in the document, outside a small attention scroller. */
+.standalone-conversation main:has(.task-card[data-expanded="true"]) { height:auto; min-height:100dvh; }
+.standalone-conversation #conversation:has(.task-card[data-expanded="true"]) { overflow:visible; grid-template-rows:auto auto minmax(300px,55dvh) auto auto auto auto; }
+.standalone-conversation #conversation-attention:has(.task-card[data-expanded="true"]) { max-height:none; overflow:visible; }
+.task-card > button { margin:8px 6px 0 0; }
+.task-card p,.task-card a { overflow-wrap:anywhere; }

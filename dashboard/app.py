@@ -627,6 +627,32 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         await authorize_async(request)
         return result
 
+    @app.get('/api/interaction/tasks')
+    async def conversation_tasks(request: Request, after: int = 0):
+        session=await authorize_async(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.conversation_tasks,after)
+        except ValueError:
+            raise HTTPException(400,'Invalid task cursor') from None
+        except (ProviderUnavailable,OSError):
+            raise HTTPException(503,'Human tasks unavailable; refresh to reconnect') from None
+        await authorize_async(request)
+        return {**result,'csrf':session['csrf']}
+
+    @app.get('/api/interaction/tasks/{ident}')
+    async def conversation_task_detail(request: Request, ident: str, offset: int = 0, revision: str | None = None):
+        await authorize_async(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.conversation_task_detail,ident,offset,revision)
+        except ValueError:
+            raise HTTPException(400,'Invalid task selection') from None
+        except (ProviderUnavailable,OSError):
+            raise HTTPException(409,'Task changed or is unavailable; refresh its current state') from None
+        await authorize_async(request)
+        return result
+
     @app.get('/api/interaction/requests')
     async def conversation_requests(request: Request, after: int = 0):
         session = await authorize_async(request)
