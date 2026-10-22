@@ -6,7 +6,7 @@ window.ConversationSound = (() => {
     const age=serverNow-Number(source.observed_at)*1000+elapsed;
     if(!source.fresh || !Number.isFinite(age) || age<0 || age>20000 || !states.has(source.goal_state)
       || !["working","idle"].includes(source.execution) || typeof source.waiting_for_human!=="boolean")return "unknown";
-    if(source.waiting_for_human)return "waiting";
+    if(source.waiting_for_human || source.pending===true)return "waiting";
     if(source.execution==="working")return "working";
     if(["blocked","usageLimited","budgetLimited"].includes(source.goal_state))return "blocked";
     return source.goal_state==="active"?"goal_idle":"passive";
@@ -34,11 +34,11 @@ window.ConversationSound = (() => {
   }
   function plan(frame,vocabulary,elapsed=0) {
     if(frame?.schema!=="telecodex.sonic-state/v1" || !Array.isArray(frame.sources) || frame.sources.length>65 || !Number.isFinite(frame.observed_at))throw Error("State observation unavailable");
-    const seen=new Set(),rank={waiting:0,blocked:1,working:2,goal_idle:3,unknown:4,passive:5};
+    const seen=new Set(),priority=s=>s.components.includes("pending")?0:s.components.includes("blocked")?1:s.components.includes("active")?2:s.components.includes("goal")?3:4;
     const sources=frame.sources.filter(s=>typeof s.id==="string" && /^-?\d+:\d+$/.test(s.id) && !seen.has(s.id) && seen.add(s.id))
       .map(s=>{const observed={...s,fresh:s.fresh && frame.connected===true};return {...s,state:state(observed,frame.observed_at*1000,elapsed),components:components(observed,frame.observed_at*1000,elapsed)};});
     const eligible=sources.filter(s=>Number.isSafeInteger(s.session) && s.session>0 && s.components.length>0)
-      .sort((a,b)=>rank[a.state]-rank[b.state] || a.id.localeCompare(b.id));
+      .sort((a,b)=>priority(a)-priority(b) || a.id.localeCompare(b.id));
     return {sources,voices:eligible.slice(0,vocabulary.max_sessions),omitted:eligible.length-Math.min(eligible.length,vocabulary.max_sessions),
       unconfirmed:sources.filter(s=>s.state==="unknown" || [s.tools_running,s.error,s.pending].some(value=>typeof value!=="boolean")).length,truncated:!!frame.truncated};
   }
@@ -97,7 +97,7 @@ window.ConversationSound = (() => {
       const elapsed=Math.max(0,now()-received)+requestElapsed,composition=plan(frame,vocabulary,elapsed);
       if(!frame.configured){disable();setStatus("State observer is not configured");return;}
       const played=engine.render(composition,vocabulary);
-      const label=document.querySelector("#conversation-sound-vocabulary");if(label)label.textContent=`${vocabulary.label} · ${vocabulary.fundamental_hz} Hz anchor · ${vocabulary.wave} · revision ${vocabulary.revision}`;
+      const label=document.querySelector("#conversation-sound-vocabulary");if(label)label.textContent=`${vocabulary.label} · ${vocabulary.fundamental_hz} Hz F1 · ${vocabulary.wave} · revision ${vocabulary.revision}`;
       const silent=isQuiet();
       engine.setQuiet(silent);
       setStatus(!played.running?"Audio suspended · tap to resume":Number(volume.value)===0?"Muted · state labels remain available":silent?"Quiet during voice capture or reply":`${played.voices.length} session voices · ${composition.unconfirmed} unconfirmed · ${composition.omitted+played.dropped} omitted${composition.truncated?" · additional sources unavailable":""}`, !played.running?"Beacon paused · tap to resume":Number(volume.value)===0?"Beacon muted":silent?"Beacon quiet while you speak or listen":played.voices.length?`Beacon · ${played.voices.length} session voice${played.voices.length===1?"":"s"}${composition.unconfirmed?" · some state unconfirmed":""}`:"Beacon quiet · no active session voices");

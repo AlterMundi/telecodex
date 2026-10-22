@@ -146,6 +146,18 @@ topic_id=8
         self.assertIsNone(item['tools_running']);self.assertIsNone(item['error'])
 
 
+    def test_durable_pending_task_contributes_without_native_wait(self):
+        self.observation['observations']['100:7']['waiting_for_human']=False;self.save()
+        with closing(sqlite3.connect(self.db)) as db:
+            db.executescript("""CREATE TABLE human_interactions(kind TEXT,state TEXT,instance_id TEXT,native_thread TEXT,session_id INTEGER,requester INTEGER);
+                CREATE TABLE app_instance_lock(key TEXT,instance_id TEXT,heartbeat_at TEXT);
+                INSERT INTO human_interactions VALUES('task','pending','owner','worker',2,100);""")
+        self.assertTrue(self.sources()['100:7']['pending'])
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute("UPDATE human_interactions SET state='completed'");db.commit()
+        self.assertFalse(self.sources()['100:7']['pending'])
+
+
 class SonicVocabulary(unittest.TestCase):
     def test_confirmed_additive_sine_vocabulary_and_rejected_extra_texture(self):
         value=json.loads(descriptor({})['vocabulary_json'])

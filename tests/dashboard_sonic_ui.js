@@ -41,6 +41,8 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   const many=frame(Array.from({length:20},(_,n)=>source(n+1)));
   assert.equal(sound.plan(many,vocabulary).voices.length,20);
   const bounded=sound.plan(many,{...vocabulary,max_sessions:8});assert.equal(bounded.voices.length,8);assert.equal(bounded.omitted,12);
+  const priority=sound.plan(frame([...Array.from({length:24},(_,n)=>source(n+1,{execution:'idle',goal_state:'absent'})),source(99,{execution:'idle',goal_state:'absent',pending:true})]),vocabulary);
+  assert.equal(priority.voices[0].id,'100:99','A pending idle session was omitted behind passive voices');
   const unknown=sound.plan({...many,connected:false},vocabulary);assert.equal(unknown.unconfirmed,20);assert.equal(unknown.voices.length,0,'Unknown evidence must not create a pitch');
   const layered=source(1,{tools_running:true,pending:true,error:true});
   assert.deepEqual(Array.from(sound.components(layered,1000000)),['idle','active','tools','goal','pending','blocked']);
