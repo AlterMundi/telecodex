@@ -31,7 +31,7 @@ A native session is not permanently attached to the web return surface. A later 
 The sonic target is the Beacon series of 40.4: idle F1; active adds F2; running
 tools/subagents add F3; active goal adds F4; pending adds F7; blockage/error adds
 F11. These are concurrent additive components, not one exclusive note per state.
-Follow docs/sonic-expression.md. The deployed 65 Hz revision-2 mapping is rejected,
+Follow docs/sonic-expression.md. The earlier 65 Hz revision-2 mapping is rejected,
 not an accepted target. Do not fix its high harmonics by inventing another palette.
 
 F1 = 40.4 Hz; Fn = n × 40.4 Hz. Use only sine waves with gently pulsing

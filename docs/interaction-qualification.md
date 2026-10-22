@@ -41,14 +41,15 @@ or complete coverage of the interactions between implemented features.
 ## Current implementation and evidence
 
 The independent conversation UI increments in #243–#246 are merged and deployed.
-The current web release is `d65ff7a`; its served companion script and stylesheet
-match the qualified source bytes. Populated browser checks cover complete visible
+The retained UI release `d65ff7a` had matching served companion script and stylesheet
+bytes. Its unchanged layout evidence remains applicable; #221 tracks the later
+Beacon revision-3 source and actual receiving selection. Populated browser checks cover complete visible
 reply expansion, collapsed inspection, narrow layout, finite glyph changes,
 reduced motion and Beacon controls. A receiving check reads actual private state
 with a temporary scoped QA device; only access bootstrap is adapted, and the
 device is revoked afterward. It is not human shared-login acceptance.
 
-Rejected deployed Source hum revision 2 uses a 65 Hz anchor, weighted natural partials,
+Rejected Source hum revision 2 used a 65 Hz anchor, weighted natural partials,
 slow breath and an 18 Hz amplitude texture. Offline Web Audio measurements cover
 spectrum, bounded transitions and exact mute/voice-priority silence. Receiving
 state and browser activation are observed separately from physical hearing.
