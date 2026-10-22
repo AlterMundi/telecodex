@@ -507,15 +507,15 @@ class Provider:
         if value is None: return
         if (not isinstance(value, dict) or set(value) not in ({'source', 'revision'}, {'source', 'revision', 'context_only'})
                 or 'context_only' in value and value['context_only'] is not True
-                or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:', 'request:', 'matrix:'))
+                or not isinstance(value['source'], str) or not value['source'].startswith(('delivery:', 'input:', 'request:', 'matrix:', 'task:'))
                 or not isinstance(value['revision'], str) or not re.fullmatch('[a-f0-9]{64}', value['revision'])):
             raise ValueError('Select one retained original or worker result')
-        if value.get('context_only') and not value['source'].startswith(('request:', 'delivery:', 'input:', 'matrix:')):
+        if value.get('context_only') and not value['source'].startswith(('request:', 'delivery:', 'input:', 'matrix:', 'task:')):
             raise ValueError('Context must refer to a reported conversation source')
-        if value['source'].startswith('matrix:') and not value.get('context_only'):
-            raise ValueError('Matrix replies are selected contextual evidence')
+        if value['source'].startswith(('matrix:','task:')) and not value.get('context_only'):
+            raise ValueError('Matrix/task references are selected contextual evidence')
         ident=value['source'].split(':', 1)[1]
-        if value['source'].startswith('request:'):
+        if value['source'].startswith(('request:','task:')):
             if not re.fullmatch('[a-f0-9]{32}',ident):
                 raise ValueError('Select one current question')
         else:

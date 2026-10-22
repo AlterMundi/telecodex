@@ -13,8 +13,22 @@ from dashboard.companion import permitted
 from live_tasks_io import NotifiedWarm
 
 
+class TaskJourney(NotifiedWarm):
+    def handle_extra_rpc(self,message,send):
+        p=message.get('params',{});method=message.get('method')
+        if self.routed and method in ('turn/start','turn/steer') and p.get('threadId')=='native-topic-9' and not p.get('clientUserMessageId','').startswith('telegram:'):
+            thread=p['threadId'];self.packets.setdefault(thread,[]).append(p)
+            if method=='turn/start':
+                turn='task-root-'+str(len(self.packets[thread]));self.runs[thread]=turn
+                send({'id':message['id'],'result':{'turn':{'id':turn}}})
+                self.broadcast(thread,'turn/started',{'turn':{'id':turn,'status':'inProgress'}})
+            else:send({'id':message['id'],'result':{'turnId':self.runs[thread]}})
+            return True
+        return super().handle_extra_rpc(message,send)
+
+
 def qualify(binary):
-    j=NotifiedWarm(str(Path(binary).resolve()));client=None
+    j=TaskJourney(str(Path(binary).resolve()));client=None
     try:
         j.prepare(seed_entry=True);j.allow_native_launch=True
         j.admit('Coordinate selected work.',topic=1)
@@ -48,6 +62,29 @@ def qualify(binary):
         assert client.post('/api/interaction/tasks/'+task['id'],headers=headers,json={'state':'completed'}).status_code in (403,405)
         assert j.row('SELECT state FROM human_interactions WHERE id=?',(task['id'],))==[('pending',)]
         assert client.get('/api/interaction/tasks/'+task['id'],headers=headers,params={'offset':1,'revision':'0'*64}).status_code==409
+        # The selected task remains metadata from capture through actual worker
+        # delivery, without changing the human text or resolving the action.
+        before=len(j.packets['native-topic-7']);original_id=str(uuid.uuid4())
+        post_headers={**headers,'origin':config['origin'],'x-dashboard-csrf':page['csrf']}
+        for invalid in ({'source':'task:'+task['id'],'revision':view['revision']},
+                        {'source':'task:bad-id','revision':view['revision'],'context_only':True}):
+            rejected=client.post('/api/interaction/inputs',headers=post_headers,json={'id':str(uuid.uuid4()),'binding':page['binding'],'text':'Invalid reference','reply':invalid})
+            assert rejected.status_code==400,rejected.text
+        posted=client.post('/api/interaction/inputs',headers=post_headers,json={'id':original_id,'binding':page['binding'],
+            'text':'Here is what I observed.','reply':{'source':'task:'+task['id'],'revision':view['revision'],'context_only':True}})
+        assert posted.status_code==200,posted.text
+        j.wait(lambda:j.row('SELECT phase FROM conversation_inputs WHERE id=?',(original_id,))==[('accepted',)])
+        access=j.access(1)
+        j.cli(access,'dispatch',{'input_ref':original_id,'destinations':[{'selector':'Alpha','relation':'new','requests':[]}]})
+        j.wait(lambda:len(j.packets['native-topic-7'])>before)
+        packet=j.packets['native-topic-7'][-1]['input'][0]['text']
+        provenance=json.loads(next(line.removeprefix('Transport provenance: ') for line in packet.splitlines() if line.startswith('Transport provenance: ')))
+        assert provenance['task_context']['source']=='task:'+task['id']
+        assert provenance['task_context']['revision']==view['revision']
+        assert provenance['original_human_author']==100 and 'Here is what I observed.' in packet
+        retained=json.loads(j.row('SELECT doc FROM conversation_inputs WHERE id=?',(original_id,))[0][0])
+        assert retained['text']=='Here is what I observed.'
+        assert j.row('SELECT state FROM human_interactions WHERE id=?',(task['id'],))==[('pending',)]
         # Add exact, synthetic ledger records to exercise scope and pagination;
         # the original routed declaration above used the real broker/controller.
         with sqlite3.connect(j.root/'state.sqlite') as db:

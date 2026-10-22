@@ -846,7 +846,10 @@ fn packet(shared: &AppShared, i: &Instruction, preparing_local: Option<i64>) -> 
         .as_ref()
         .map(|value| value.rendered())
         .unwrap_or_default();
-    let provenance = serde_json::json!({"visual":visual,"input_ref":original["input_ref"],"capture_order":original["capture_order"],"selection":original["selection"],"via":"interaction-controller","original_human_author":if author.is_none(){Some(i.human_id)}else{None},"authorized_human":i.human_id,"author":author,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id,"transcription":source.transcription});
+    let mut provenance = serde_json::json!({"visual":visual,"input_ref":original["input_ref"],"capture_order":original["capture_order"],"selection":original["selection"],"via":"interaction-controller","original_human_author":if author.is_none(){Some(i.human_id)}else{None},"authorized_human":i.human_id,"author":author,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id,"transcription":source.transcription});
+    if !original["task_context"].is_null() {
+        provenance["task_context"] = original["task_context"].clone();
+    }
     // Native history already contains previously delivered inputs. Include only
     // later-captured related deltas when dispatch arrives out of source order.
     // In particular, destination discovery is not permission to replay a topic.

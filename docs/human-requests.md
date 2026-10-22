@@ -45,7 +45,9 @@ required. Lists are paginated; complete action text is revision-pinned.
 
 Read and **Reply in conversation** do not complete, approve, withdraw or send
 anything. Reply preserves an existing draft and selects a `task:ID` context hint
-for the next ordinary text/voice original. That hint is source metadata, never
+for the next ordinary text/voice original. Its ID/revision also reach the selected
+worker as bounded provenance, so a short reply retains its task context. That hint
+is source metadata, never
 human speech or authorization. The integrator must inspect `human_task` before
 interpreting feedback and use the existing scoped `withdraw_task` only when the
 action is obsolete, preserving its reason and actual actor. Stale hints do not
