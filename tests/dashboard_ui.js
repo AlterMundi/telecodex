@@ -278,5 +278,6 @@ const hung = (options) => new Promise((resolve, reject) => {
   vm.runInContext('traffic({state:"unavailable"})', independent.context);
   assert.equal(independent.nodes.get("#traffic-topics").children.length,0);
   assert.match(independent.nodes.get("#traffic-status").textContent,/cannot be confirmed/);
+  await require("./dashboard_health_ui.js")();
   console.log("dashboard UI: hidden launch, retry, HTTP deadlines and uncertain Stop passed");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
