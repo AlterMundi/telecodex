@@ -24,7 +24,7 @@ const document={hidden:false,querySelector:s=>nodes.get(s),createElement:element
 const scope=vm.createContext({window:{AudioContext:Audio,addEventListener(name,fn){events.set(name,fn);}},document,crypto,TextEncoder,performance:{now:()=>0},setTimeout:timeout,clearTimeout:cancel});
 vm.runInContext(fs.readFileSync('dashboard/web/sonic.js','utf8'),scope);
 const sound=scope.window.ConversationSound;
-const source=(n,extra={})=>({id:`100:${n}`,session:n,label:`Session ${n}`,fresh:true,observed_at:1000,execution:'working',goal_state:'active',waiting_for_human:false,...extra});
+const source=(n,extra={})=>({id:`100:${n}`,session:n,label:`Session ${n}`,fresh:true,observed_at:1000,execution:'working',goal_state:'active',waiting_for_human:false,tools_running:false,error:false,pending:false,...extra});
 const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,configured:true,connected:true,sources,...descriptor});
 (async()=>{
   assert(sound.validate(vocabulary));assert(!sound.validate({...vocabulary,max_sessions:33}));
@@ -41,20 +41,28 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   const many=frame(Array.from({length:20},(_,n)=>source(n+1)));
   assert.equal(sound.plan(many,vocabulary).voices.length,20);
   const bounded=sound.plan(many,{...vocabulary,max_sessions:8});assert.equal(bounded.voices.length,8);assert.equal(bounded.omitted,12);
-  const unknown=sound.plan({...many,connected:false},vocabulary);assert.equal(unknown.unconfirmed,20);assert(unknown.voices.every(v=>v.state==='unknown'));
+  const priority=sound.plan(frame([...Array.from({length:24},(_,n)=>source(n+1,{execution:'idle',goal_state:'absent'})),source(99,{execution:'idle',goal_state:'absent',pending:true})]),vocabulary);
+  assert.equal(priority.voices[0].id,'100:99','A pending idle session was omitted behind passive voices');
+  const unknown=sound.plan({...many,connected:false},vocabulary);assert.equal(unknown.unconfirmed,20);assert.equal(unknown.voices.length,0,'Unknown evidence must not create a pitch');
+  const layered=source(1,{tools_running:true,pending:true,error:true});
+  assert.deepEqual(Array.from(sound.components(layered,1000000)),['idle','active','tools','goal','pending','blocked']);
+  assert.deepEqual(Array.from(sound.components(source(1,{execution:'idle',goal_state:'absent'}),1000000)),['idle']);
   const engine=sound.renderer({Context:Audio});await engine.start();const context=Audio.instances.at(-1);
-  const audible=sound.plan(frame([source(1,{waiting_for_human:true}),source(2,{execution:'idle',goal_state:'blocked'})]),vocabulary);
+  const audible=sound.plan(frame([source(1,{waiting_for_human:true,pending:true,tools_running:true}),source(2,{execution:'idle',goal_state:'blocked'})]),vocabulary);
   engine.render(audible,vocabulary);
-  assert(context.nodes.some(n=>n.frequency.value===455));assert(context.nodes.some(n=>n.frequency.value===715));
-  for(const hz of [65,130,195,455,910,1365,715,1430,2145])assert(context.nodes.some(n=>n.frequency.value===hz),`Missing authored natural partial ${hz}`);
-  assert(context.nodes.some(n=>n.frequency.value===18),'Missing authored purr texture');
-  assert(context.nodes.length<100,'A three-voice composition grew beyond its bounded graph');
+  const pitched=context.nodes.filter(n=>n.sessionIdentity);
+  const first=pitched.filter(n=>n.sessionIdentity==='100:1').map(n=>n.frequency.value);
+  assert.deepEqual(first,[1,2,3,4,7].map(n=>40.4*n));
+  assert.deepEqual(pitched.filter(n=>n.sessionIdentity==='100:2').map(n=>n.frequency.value),[40.4,40.4*11]);
+  assert(pitched.every(n=>n.type==='sine'));
+  assert(!context.nodes.some(n=>n.frequency.value===18 || n.frequency.value===845));
+  assert(context.nodes.length<60,'Two-session layered composition exceeded its bounded graph');
   const count=context.nodes.length;engine.render(audible,vocabulary);assert.equal(context.nodes.length,count,'Metadata refresh restarted unchanged voices');
   const master=context.nodes[0];engine.setQuiet(true);assert.equal(master.gain.value,0);engine.render(audible,vocabulary);assert.equal(master.gain.value,0);
   engine.setVolume(0);engine.setQuiet(false);assert.equal(master.gain.value,0);
   engine.setVolume(1);assert.equal(master.gain.value,vocabulary.peak_gain/2);
-  const alternate={...vocabulary,id:'geometric-pulse',label:'Geometric pulse',author:'An independent author',fundamental_hz:40.4,wave:'triangle',intervals:{...vocabulary.intervals,waiting:[2,3]}};
-  engine.render(audible,alternate);assert(context.nodes.some(n=>n.sessionIdentity==='100:1' && Math.abs(n.frequency.value-60.6)<1e-8 && n.type==='triangle'));
+  const alternate={...vocabulary,id:'another-being',label:'Another sine vocabulary',author:'Independent author',fundamental_hz:50};
+  engine.render(audible,alternate);assert(context.nodes.some(n=>n.sessionIdentity==='100:1' && n.frequency.value===350));
   engine.stop();assert.equal(context.state,'closed');assert(context.nodes.filter(n=>n.kind==='osc').every(n=>n.stopped));assert.equal(timers.size,0);
   // A late resume belongs to its old context and cannot close the newer one.
   Audio.delay=true;const delayed=sound.renderer({Context:Audio});const oldStart=delayed.start(),old=Audio.instances.at(-1);delayed.stop();
@@ -72,8 +80,10 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   client.update({playback:'playing'});assert.equal(liveMaster.gain.value,0);
   client.update({playback:undefined});assert(liveMaster.gain.value>0);
   now=21000;const expiry=[...timers.entries()].find(([,t])=>t.ms===20001);assert(expiry);timers.delete(expiry[0]);expiry[1].fn();assert.match(nodes.get('#conversation-sound-status').textContent,/1 unconfirmed/);
-  assert(live.nodes.some(n=>n.frequency.value===845),'Stale state was not represented by the authored unknown interval');
+  assert(!live.nodes.some(n=>n.frequency.value===845),'Stale evidence invented a pitch');
+  const retirement=[...timers.entries()].find(([,t])=>t.ms===vocabulary.release_ms*2);assert(retirement);timers.delete(retirement[0]);retirement[1].fn();
+  assert(!live.nodes.filter(n=>!n.stopped).some(n=>n.sessionIdentity),'Stale sources retained notes after release');
   document.hidden=true;events.get('visibilitychange')();assert.equal(live.state,'closed');assert.equal(nodes.get('#conversation-sound-status').textContent,'Off');assert.equal(timers.size,0);assert.equal(nodes.get('#conversation-sound-feedback').hidden,true);
   await client.refresh();assert.equal(calls,1,'Hidden/reset client restarted metadata or playback');
-  console.log('Sonic mapping/graph: 20-session bounded mix, authored ratios, unknown/stale distinction, independent vocabulary, no refresh replay, mute/capture/speech ownership, late resume and hidden teardown passed; simulated audio device, zero models.');
+  console.log('Sonic mapping/graph: 40.4Hz additive sine components, 20-session bounded mix, unknown/stale silence, independent vocabulary, no refresh replay, mute/capture/speech ownership, late resume and hidden teardown passed; simulated audio device, zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -6,36 +6,41 @@ window.ConversationSound = (() => {
     const age=serverNow-Number(source.observed_at)*1000+elapsed;
     if(!source.fresh || !Number.isFinite(age) || age<0 || age>20000 || !states.has(source.goal_state)
       || !["working","idle"].includes(source.execution) || typeof source.waiting_for_human!=="boolean")return "unknown";
-    if(source.waiting_for_human)return "waiting";
+    if(source.waiting_for_human || source.pending===true)return "waiting";
     if(source.execution==="working")return "working";
     if(["blocked","usageLimited","budgetLimited"].includes(source.goal_state))return "blocked";
     return source.goal_state==="active"?"goal_idle":"passive";
   }
-  function validTimbre(v) {
-    const partials=v.partials===undefined?[[1,1]]:v.partials,number=(x,hi)=>typeof x==="number" && Number.isFinite(x) && x>=0 && x<=hi;
-    return Array.isArray(partials) && partials.length>=1 && partials.length<=4
-      && partials.every(p=>Array.isArray(p) && p.length===2 && Number.isInteger(p[0]) && p[0]>=1 && p[0]<=8 && number(p[1],1) && p[1]>0)
-      && new Set(partials.map(p=>p[0])).size===partials.length && partials.reduce((sum,p)=>sum+p[1],0)<=1.000001
-      && number(v.texture_hz??0,40) && number(v.texture_depth??0,0.25);
+  function components(source,serverNow,elapsed=0) {
+    const age=serverNow-Number(source.observed_at)*1000+elapsed;
+    if(!source.fresh || !Number.isFinite(age) || age<0 || age>20000)return [];
+    const result=[];
+    if(["idle","working"].includes(source.execution))result.push("idle");
+    if(source.execution==="working")result.push("active");
+    if(source.tools_running===true)result.push("tools");
+    if(source.goal_state==="active")result.push("goal");
+    if(source.pending===true)result.push("pending");
+    if(source.error===true || ["blocked","usageLimited","budgetLimited"].includes(source.goal_state))result.push("blocked");
+    return result;
   }
   function validate(v) {
     const number=(key,lo,hi)=>typeof v[key]==="number" && Number.isFinite(v[key]) && v[key]>=lo && v[key]<=hi;
-    return v?.schema==="daimon.sonic-expression/v1" && validTimbre(v) && [v.id,v.revision].every(x=>typeof x==="string" && /^[A-Za-z0-9_.-]{1,80}$/.test(x))
+    return v?.schema==="daimon.sonic-expression/v2" && [v.id,v.revision].every(x=>typeof x==="string" && /^[A-Za-z0-9_.-]{1,80}$/.test(x))
       && [v.author,v.label].every(x=>typeof x==="string" && x.length>0 && x.length<=256)
-      && number("fundamental_hz",20,256) && number("pulse_hz",0,4) && number("attack_ms",20,2000) && number("release_ms",20,2000)
-      && number("peak_gain",0.001,0.2) && Number.isInteger(v.max_sessions) && v.max_sessions>=1 && v.max_sessions<=32 && ["sine","triangle"].includes(v.wave)
-      && ["working","waiting","blocked","goal_idle","passive","unknown"].every(key=>Array.isArray(v.intervals?.[key]) && [0,2].includes(v.intervals[key].length)
-        && v.intervals[key].every(n=>Number.isInteger(n) && n>=1 && n<=64));
+      && number("fundamental_hz",20,256) && number("pulse_hz",0,1) && number("pulse_depth",0,0.5) && number("attack_ms",20,2000) && number("release_ms",20,2000)
+      && number("peak_gain",0.001,0.2) && Number.isInteger(v.max_sessions) && v.max_sessions>=1 && v.max_sessions<=32 && v.wave==="sine"
+      && !["partials","texture_hz","texture_depth","intervals"].some(key=>key in v)
+      && Object.keys(v.components||{}).length===6 && ["idle","active","tools","goal","pending","blocked"].every(key=>Number.isInteger(v.components?.[key]) && v.components[key]>=1 && v.components[key]<=64);
   }
   function plan(frame,vocabulary,elapsed=0) {
     if(frame?.schema!=="telecodex.sonic-state/v1" || !Array.isArray(frame.sources) || frame.sources.length>65 || !Number.isFinite(frame.observed_at))throw Error("State observation unavailable");
-    const seen=new Set(),rank={waiting:0,blocked:1,working:2,goal_idle:3,unknown:4,passive:5};
+    const seen=new Set(),priority=s=>s.components.includes("pending")?0:s.components.includes("blocked")?1:s.components.includes("active")?2:s.components.includes("goal")?3:4;
     const sources=frame.sources.filter(s=>typeof s.id==="string" && /^-?\d+:\d+$/.test(s.id) && !seen.has(s.id) && seen.add(s.id))
-      .map(s=>({...s,state:state({...s,fresh:s.fresh && frame.connected===true},frame.observed_at*1000,elapsed)}));
-    const eligible=sources.filter(s=>Number.isSafeInteger(s.session) && s.session>0 && vocabulary.intervals[s.state].length===2)
-      .sort((a,b)=>rank[a.state]-rank[b.state] || a.id.localeCompare(b.id));
+      .map(s=>{const observed={...s,fresh:s.fresh && frame.connected===true};return {...s,state:state(observed,frame.observed_at*1000,elapsed),components:components(observed,frame.observed_at*1000,elapsed)};});
+    const eligible=sources.filter(s=>Number.isSafeInteger(s.session) && s.session>0 && s.components.length>0)
+      .sort((a,b)=>priority(a)-priority(b) || a.id.localeCompare(b.id));
     return {sources,voices:eligible.slice(0,vocabulary.max_sessions),omitted:eligible.length-Math.min(eligible.length,vocabulary.max_sessions),
-      unconfirmed:sources.filter(s=>s.state==="unknown").length,truncated:!!frame.truncated};
+      unconfirmed:sources.filter(s=>s.state==="unknown" || [s.tools_running,s.error,s.pending].some(value=>typeof value!=="boolean")).length,truncated:!!frame.truncated};
   }
   function renderer({Context=window.AudioContext||window.webkitAudioContext,changed=()=>{}}={}) {
     let context,master,active,retiring,quiet=false,volume=0.3,signature="",catalog;
@@ -44,8 +49,8 @@ window.ConversationSound = (() => {
     function level(){if(master && context){const p=master.gain;p.cancelScheduledValues(context.currentTime);p.setValueAtTime(quiet?0:volume*(catalog?.peak_gain||0)/2,context.currentTime);}}
     function render(composition,v){
       catalog=v;level();if(!context || context.state!=="running")return {voices:[],dropped:composition.voices.length,running:false};
-      const voices=composition.voices.filter(s=>v.fundamental_hz*v.intervals[s.state][1]/v.intervals[s.state][0]<context.sampleRate*0.45);
-      const key=JSON.stringify([v,voices.map(s=>[s.id,s.state])]);
+      const voices=composition.voices.filter(s=>s.components.every(key=>v.fundamental_hz*v.components[key]<context.sampleRate*0.45));
+      const key=JSON.stringify([v,voices.map(s=>[s.id,s.components])]);
       if(key===signature)return {voices,dropped:composition.voices.length-voices.length,running:true};
       signature=key;halt(retiring);retiring=active;const at=context.currentTime;
       if(retiring){retiring.gain.gain.cancelScheduledValues(at);retiring.gain.gain.setTargetAtTime(0,at,v.release_ms/3000);
@@ -54,25 +59,20 @@ window.ConversationSound = (() => {
       active={gain,nodes:[gain]};
       if(voices.length){
         const tone=(frequency,amplitude,id)=>{
-          // One envelope carries a voice's natural partials. The expression is
-          // authored timbre; none of these oscillators claim new work activity.
           const level=context.createGain();level.connect(gain);active.nodes.push(level);
-          const depth=v.texture_depth||0,pulse=v.pulse_hz?0.25:0,texture=v.texture_hz?depth:0;
-          level.gain.value=amplitude*(1-pulse-texture);
-          for(const [rate,amount] of [[v.pulse_hz,pulse],[v.texture_hz,texture]])if(rate && amount){
+          const depth=v.pulse_hz?v.pulse_depth:0;
+          level.gain.value=amplitude*(1-depth);
+          if(depth){
             const lfo=context.createOscillator(),modulation=context.createGain();
-            lfo.frequency.value=rate;modulation.gain.value=amplitude*amount;
+            lfo.type="sine";lfo.frequency.value=v.pulse_hz;modulation.gain.value=amplitude*depth;
             lfo.connect(modulation);modulation.connect(level.gain);lfo.start(at);active.nodes.push(lfo,modulation);
           }
-          for(const [harmonic,weight] of v.partials||[[1,1]]){
-            if(frequency*harmonic>=context.sampleRate*0.45)continue;
-            const oscillator=context.createOscillator(),partial=context.createGain();
-            oscillator.type=v.wave;oscillator.frequency.value=frequency*harmonic;oscillator.sessionIdentity=id;
-            partial.gain.value=weight;oscillator.connect(partial);partial.connect(level);oscillator.start(at);active.nodes.push(oscillator,partial);
-          }
+          const oscillator=context.createOscillator();
+          oscillator.type="sine";oscillator.frequency.value=frequency;oscillator.sessionIdentity=id;
+          oscillator.connect(level);oscillator.start(at);active.nodes.push(oscillator);
         };
-        tone(v.fundamental_hz,0.5,"anchor");
-        for(const source of voices){const r=v.intervals[source.state];tone(v.fundamental_hz*r[1]/r[0],0.5/voices.length,source.id);}
+        for(const source of voices)for(const key of source.components)
+          tone(v.fundamental_hz*v.components[key],1/(voices.length*source.components.length),source.id);
       }
       return {voices,dropped:composition.voices.length-voices.length,running:true};
     }
@@ -97,12 +97,12 @@ window.ConversationSound = (() => {
       const elapsed=Math.max(0,now()-received)+requestElapsed,composition=plan(frame,vocabulary,elapsed);
       if(!frame.configured){disable();setStatus("State observer is not configured");return;}
       const played=engine.render(composition,vocabulary);
-      const label=document.querySelector("#conversation-sound-vocabulary");if(label)label.textContent=`${vocabulary.label} · ${vocabulary.fundamental_hz} Hz anchor · ${vocabulary.wave} · revision ${vocabulary.revision}`;
+      const label=document.querySelector("#conversation-sound-vocabulary");if(label)label.textContent=`${vocabulary.label} · ${vocabulary.fundamental_hz} Hz F1 · ${vocabulary.wave} · revision ${vocabulary.revision}`;
       const silent=isQuiet();
       engine.setQuiet(silent);
       setStatus(!played.running?"Audio suspended · tap to resume":Number(volume.value)===0?"Muted · state labels remain available":silent?"Quiet during voice capture or reply":`${played.voices.length} session voices · ${composition.unconfirmed} unconfirmed · ${composition.omitted+played.dropped} omitted${composition.truncated?" · additional sources unavailable":""}`, !played.running?"Beacon paused · tap to resume":Number(volume.value)===0?"Beacon muted":silent?"Beacon quiet while you speak or listen":played.voices.length?`Beacon · ${played.voices.length} session voice${played.voices.length===1?"":"s"}${composition.unconfirmed?" · some state unconfirmed":""}`:"Beacon quiet · no active session voices");
       const rows=composition.sources.map(source=>{const row=document.createElement("li");
-        const ratio=vocabulary.intervals[source.state];row.textContent=`${source.label||source.id} · ${source.state.replaceAll("_"," ")} · ${ratio.length?ratio.join(":"):"quiet"}${played.voices.some(v=>v.id===source.id)?"":" · outside this mix"}`;return row;});score.replaceChildren(...rows);
+        const notes=source.components.map(key=>`F${vocabulary.components[key]}`);row.textContent=`${source.label||source.id} · ${source.state.replaceAll("_"," ")} · ${notes.length?notes.join(" + "):"quiet"}${played.voices.some(v=>v.id===source.id)?"":" · outside this mix"}`;return row;});score.replaceChildren(...rows);
       clearTimeout(expiry);
       const remaining=frame.sources.map(s=>20001-(frame.observed_at*1000-Number(s.observed_at)*1000+elapsed)).filter(t=>Number.isFinite(t)&&t>0);
       if(remaining.length)expiry=setTimeout(()=>{try{draw();}catch{engine.stop();}},Math.min(...remaining));
@@ -133,5 +133,5 @@ window.ConversationSound = (() => {
     window.addEventListener("offline",disable);
     return {refresh,reset(){disable();local={};},disable,update(patch){local={...local,...patch};engine.setQuiet(isQuiet());if(enabled && frame)draw();}};
   }
-  return {state,validate,plan,renderer,mount};
+  return {state,components,validate,plan,renderer,mount};
 })();

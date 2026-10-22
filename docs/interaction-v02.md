@@ -43,9 +43,9 @@ The next delivery must be assessed as one experience:
 - Compact, truthful transcription, routing, observer and parallel-work indicators.
   Visual polish must not counterfeit progress or conceal latency.
 - A recognizable Beacon-derived hum/purr/rhythm and aggregate session chord,
-  with authored register, voicing, envelopes and transitions. Preserve the proposed
-  1:11 blocked and 1:7 waiting relationships as artistic vocabulary, not universal
-  emotional claims. Provide an obvious opt-in listening control, volume and mute;
+  using the Beacon series of 40.4 and additive components: idle F1, active F2,
+  running tools/subagents F3, active goal F4, pending F7, blockage/error F11.
+  Follow the corrected composition in sonic-expression.md. Provide an obvious opt-in listening control, volume and mute;
   voice capture and spoken replies take precedence.
 
 The current renderer work removes fixed-height/nested inspection scroll limits,
@@ -56,8 +56,10 @@ from background work indicators so concurrent work cannot suppress expression.
 Beacon activation/status stays visible in the main app, including errors,
 suspension, quiet arbitration and mute. Browser-generated signal and muted zero
 output are measured separately from physical listening. These are implementation
-increments. Source hum revision 2 now specifies weighted natural partials, a
-slow breath and an 18 Hz amplitude texture around the Beacon’s 65 Hz anchor.
+increments. Source Beacon revision 3 implements the confirmed additive 40.4 Hz
+series using only gently pulsing sine waves. It replaces the rejected 65 Hz
+revision-2 composition. See sonic-expression.md and #221 for the current receiving
+selection and qualification; digital measurements remain separate from human acceptance.
 Offline browser measurements verify its spectrum, bounded transitions and exact
 mute/voice-priority silence. These measurements do not establish recognition or
 comfort on a phone; the complete human experience remains unaccepted.
@@ -209,7 +211,7 @@ Milestone: [v0.2](https://github.com/AlterMundi/telecodex/milestone/8).
 | lifecycle | [#108](https://github.com/AlterMundi/telecodex/issues/108) |
 | native_delivery | [#203](https://github.com/AlterMundi/telecodex/issues/203) |
 
-## Current receiving checkpoint — 2026-10-21
+## Retained receiving checkpoint — 2026-10-21
 
 The standalone web selects `d65ff7a`, including #243–#246. Populated desktop,
 phone and keyboard-sized browser checks cover readable replies, collapsed

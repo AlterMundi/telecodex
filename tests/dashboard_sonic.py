@@ -133,15 +133,42 @@ topic_id=8
         self.assertEqual(self.client.get('/api/interaction/sonic',headers=self.owner).status_code,503)
 
 
+    def test_component_observations_are_current_and_not_inferred_from_working(self):
+        item=self.sources()['100:7']
+        self.assertIsNone(item['tools_running'])
+        self.assertIsNone(item['error'])
+        self.assertTrue(item['pending'])
+        self.observation['observations']['100:7'].update(tools_running=True,error=False)
+        self.save();item=self.sources()['100:7']
+        self.assertTrue(item['tools_running']);self.assertFalse(item['error'])
+        self.observation['observations']['100:7']['observed_at']=time.time()-30
+        self.save();item=self.sources()['100:7']
+        self.assertIsNone(item['tools_running']);self.assertIsNone(item['error'])
+
+
+    def test_durable_pending_task_contributes_without_native_wait(self):
+        self.observation['observations']['100:7']['waiting_for_human']=False;self.save()
+        with closing(sqlite3.connect(self.db)) as db:
+            db.executescript("""CREATE TABLE human_interactions(kind TEXT,state TEXT,instance_id TEXT,native_thread TEXT,session_id INTEGER,requester INTEGER);
+                CREATE TABLE app_instance_lock(key TEXT,instance_id TEXT,heartbeat_at TEXT);
+                INSERT INTO human_interactions VALUES('task','pending','owner','worker',2,100);""")
+        self.assertTrue(self.sources()['100:7']['pending'])
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute("UPDATE human_interactions SET state='completed'");db.commit()
+        self.assertFalse(self.sources()['100:7']['pending'])
+
+
 class SonicVocabulary(unittest.TestCase):
-    def test_authored_partials_and_texture_are_bounded_and_legacy_is_supported(self):
-        self.assertEqual(json.loads(descriptor({})['vocabulary_json'])['fundamental_hz'],65)
-        for field,value in [('partials',[[1,0.8],[2,0.8]]),('partials',[[1,0.5],[1,0.5]]),
-                            ('partials',[[9,1]]),('texture_hz',41),('texture_depth',0.26),('texture_depth',float('nan'))]:
+    def test_confirmed_additive_sine_vocabulary_and_rejected_extra_texture(self):
+        value=json.loads(descriptor({})['vocabulary_json'])
+        self.assertEqual(value['fundamental_hz'],40.4)
+        self.assertEqual(value['components'],dict(idle=1,active=2,tools=3,goal=4,pending=7,blocked=11))
+        for field,value in [('wave','triangle'),('partials',[[1,1]]),('texture_hz',18),
+                            ('pulse_depth',0.6),('pulse_hz',18),('pulse_depth',float('nan')),
+                            ('components',{'idle':1}),('schema','daimon.sonic-expression/v1')]:
             with self.subTest(field=field,value=value),self.assertRaises(ValueError):
                 descriptor({'sonic_vocabulary':{**DEFAULT,field:value}})
-        legacy={k:v for k,v in DEFAULT.items() if k not in ('partials','texture_hz','texture_depth')}
-        self.assertEqual(json.loads(descriptor({'sonic_vocabulary':legacy})['vocabulary_json']),legacy)
+
 
 
 if __name__=='__main__':unittest.main()

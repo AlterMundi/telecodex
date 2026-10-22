@@ -41,14 +41,15 @@ or complete coverage of the interactions between implemented features.
 ## Current implementation and evidence
 
 The independent conversation UI increments in #243–#246 are merged and deployed.
-The current web release is `d65ff7a`; its served companion script and stylesheet
-match the qualified source bytes. Populated browser checks cover complete visible
+The retained UI release `d65ff7a` had matching served companion script and stylesheet
+bytes. Its unchanged layout evidence remains applicable; #221 tracks the later
+Beacon revision-3 source and actual receiving selection. Populated browser checks cover complete visible
 reply expansion, collapsed inspection, narrow layout, finite glyph changes,
 reduced motion and Beacon controls. A receiving check reads actual private state
 with a temporary scoped QA device; only access bootstrap is adapted, and the
 device is revoked afterward. It is not human shared-login acceptance.
 
-Source hum revision 2 uses the Beacon's 65 Hz anchor, weighted natural partials,
+Rejected Source hum revision 2 used a 65 Hz anchor, weighted natural partials,
 slow breath and an 18 Hz amplitude texture. Offline Web Audio measurements cover
 spectrum, bounded transitions and exact mute/voice-priority silence. Receiving
 state and browser activation are observed separately from physical hearing.
@@ -467,7 +468,7 @@ remain appropriate. Playback requires deliberate client audio activation.
 
 | ID | Journey | Required evidence |
 | --- | --- | --- |
-| S01 | Select a per-being vocabulary, fundamental, register/timbre and initial authored 1:11 blocked / 1:7 awaiting-reply motifs | Actual configured ratios, synthesis parameters and provenance; chosen artistic meaning is distinct from operational facts and universal perceptual claims |
+| S01 | Verify the Beacon 40.4 series: idle F1, active +F2, tools/subagents +F3, active goal +F4, pending +F7, blockage/error +F11 | Actual Beacon F-index convention and additive simultaneous components; real tool/subagent, goal, pending and error evidence; no extra arbitrary harmonics or unknown-state pitch |
 | S02 | Advance, block, await a live answer, lose freshness, disconnect and reconnect | The mapping follows the actual selected state and current membership. Unknown/stale is not silently rendered as idle, waiting or blockage; no invented emotional state or historical-event replay |
 | S03 | Overlap session voices, including repeated intervals and changing membership | Deterministic bounded aggregate signal with inspectable contributing sessions; omissions/unknowns explicit, transitions finite and levels controlled. The chord and monitor refer to the same selected set |
 | S04 | Start a speech reply, answer a question, adjust volume/mute, stop during a transition and reconnect | Declared ducking/priority policy matches owned playback; mute/stop silence actual owned audio nodes, cancel scheduled transitions and do not cancel tasks. No new inference or microphone capture |

@@ -30,47 +30,57 @@ unknown. Browser elapsed time and request duration also age the observation.
 The score distinguishes omitted, unconfirmed and unavailable sources. It does
 not enumerate arbitrary private sessions or infer emotion from conversation.
 
-## Authored vocabulary
+## Required composition — human correction, 2026-10-22
 
-The default `daimon.sonic-expression/v1` vocabulary is Source / CompAII's
-**Source hum**, revision 2: a 65 Hz anchor, weighted natural sine partials
-(1 × 0.64, 2 × 0.26, 3 × 0.10), 0.22 Hz breathing gain and a gentle 18 Hz
-amplitude texture at depth 0.12, with 180 ms attack and 350 ms release.
-The 65 Hz anchor follows NaturalHarmony’s maintained `DEFAULT_F1`; harmonic-shaper’s
-separate per-harmonic synthesis is the reference for the weighted partial body.
-The browser uses the existing local renderer, without importing those audio stacks. Initial interval choices are working 1:3, waiting
-1:7, blocked/limited 1:11, active goal without current work 1:2, unknown 1:13
-and passive silence. Here 1:N sounds at N times the fundamental. Waiting and
-blocked associations come from Nicolás; the remaining composition is authored
-by Source, drawing on NaturalHarmony and harmonic-shaper. These are artistic
-choices, not universal consonance, emotional or physiological claims.
+Use the Beacon series of **40.4**, with additive session-state components:
 
-References: [NaturalHarmony decisions](https://github.com/AlterMundi/NaturalHarmony/blob/main/SOURCE_OF_TRUTH.md)
-and [harmonic-shaper synthesis](https://github.com/AlterMundi/harmonic-shaper/blob/main/src/harmonic_shaper/synth_pure.py).
-These inform this authored composition; this is not a claim of identical hardware sound.
+| Observed condition | Component |
+| --- | --- |
+| Idle session | F1 — 40.4 Hz |
+| Active session | Add F2 — 80.8 Hz |
+| Running tool calls or subagents | Add F3 — 121.2 Hz |
+| Active goal | Add F4 — 161.6 Hz |
+| Pending human action | Add F7 — 282.8 Hz |
+| Blockage or error | Add F11 — 444.4 Hz |
 
-An owner may supply a complete `sonic_vocabulary` object in dashboard
-configuration. `dashboard/sonic.py` defines its fields and validation: 20–256 Hz
-fundamental, sine/triangle, 0–4 Hz pulse, 20–2000 ms envelopes, 1–32 session
-voices and complete state-to-ratio arrays. Empty arrays mean silence; two
-positive integer terms define a ratio. Catalog ID, revision, author and label
-are required. Optional `partials` contains one to four unique integer harmonics
-(1–8) and positive weights summing to at most one. Optional `texture_hz` (0–40 Hz)
-and `texture_depth` (0–0.25) author the purr; absent fields retain a pure tone.
-Each voice shares an envelope across its partials. The server transmits exact canonical vocabulary JSON and SHA-256;
-the browser verifies them before rendering. No executable macros or model loop
-are involved. Each being may choose a different vocabulary.
+Conditions coexist: an active session with an active goal and running tools must
+retain F1, F2, F3 and F4 together. Pending/error components do not
+replace the activity or goal components. F1 is the 40.4 Hz fundamental; Fn = n × 40.4 Hz.
+Use only sine oscillators with gently pulsing amplitude. No added overtone stacks,
+triangle waves, 18 Hz roughness texture or frequency modulation. Do not
+replace this specification with octave folding, a 65 Hz base, arbitrary per-note
+partials, a tone for unknown state, or a mutually exclusive state classifier.
+Unknown evidence remains visibly unknown; it is not an error or idle assertion.
+Tool/subagent, pending and error components require their actual current evidence,
+not inference from `execution=working` or from one generic wait flag.
+
+The default `daimon.sonic-expression/v2` Source Beacon vocabulary (revision 3)
+implements this composition. Revision 2 was rejected after the human reported
+excessive high harmonics; its old spectrum measurements are historical evidence,
+not acceptance. The renderer uses 0.22 Hz sinusoidal amplitude breathing with
+25% depth, 180 ms attack and 350 ms release. No additional partial stack exists.
+An owner can supply a complete v2 vocabulary; legacy v1 palettes fail explicitly
+rather than silently restoring the rejected sound.
+
+The observer exposes actual outstanding rollout calls or currently active linked
+subagents as `tools_running`, and native `systemError` as `error`. Blocked/limited
+goal states also contribute F11. Pending comes from the existing human-request
+ledger plus a current native approval/input wait. Missing legacy tool/error flags
+remain unknown. Known independent components can still sound; missing data never
+creates an unknown-state pitch. Stale/disconnected sources are silent.
 
 ## Composition and speech priority
 
-Voices are ordered waiting, blocked, working, goal-idle, unknown, passive, then
-stable source identity. The default mixes at most 24 session voices plus one
-anchor. Repeated intervals remain separate source voices. Fundamental tones beyond
-the browser sample-rate limit are omitted and reported; higher partials outside
-that range are not synthesized. Old/new groups crossfade
-with at most two groups alive; owned timers and oscillators are canceled on
-Stop. Gain is normalized across voices and bounded by the authored peak limit
-(default 0.08 before the user volume). A zero volume keeps the score visible.
+The score lists every contributing F component per session. At most 24 sessions
+sound, with waiting/blocked/working sessions prioritized before idle sessions.
+Each session's sine components share its normalized gain budget; the sum is
+normalized across included sessions. Idle sessions contribute F1 rather than
+silence. Repeated frequencies retain their session membership. The default maximum
+frequency is F11 (444.4 Hz), plus the narrow sidebands inherent in gentle amplitude
+pulsing. Notes outside the browser sample-rate limit are omitted and reported.
+Old/new groups crossfade with at most two groups alive; owned timers and oscillators
+are canceled on Stop. The peak limit is 0.08 before user volume; zero volume keeps
+the score visible.
 
 Microphone permission/recording/finalization, voice upload and preparing/playing
 an owned speech reply silence the state layer. Idle and paused speech do not.
@@ -87,8 +97,8 @@ bounded voice membership, node/timer ownership, expiry and client lifecycle with
 an instrumented audio graph. A muted Chromium development journey additionally
 checked real browser activation and actual OfflineAudioContext samples, using
 synthetic states/native peers. These checks do not prove receiving operation or
-comfortable, recognizable sound. The revision-2 offline measurement also checks
-the actual 65/130/195 Hz body, waiting/blocked partials and 18 Hz modulation
-sidebands; mute and speech-priority quieting produce exact zero samples. Complete S01–S05 in
-`docs/interaction-qualification.md` against live sessions, then retain separately
-attributed human listening observations.
+comfortable, recognizable sound. The corrected-series qualification measures actual OfflineAudioContext output,
+all six selected frequencies, absence of the rejected high partial stack, and
+exact mute/speech-priority silence. Complete S01–S05 in
+`docs/interaction-qualification.md` against current sessions and retain human
+listening observations separately; no human acceptance is inferred from tests.
