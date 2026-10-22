@@ -636,6 +636,23 @@ class Provider:
             raise ValueError('Invalid native request cursor')
         return self.presentation(f'requests list {after}')
 
+    def conversation_tasks(self, after=0):
+        if type(after) is not int or not 0<=after<=2**63-1:
+            raise ValueError('Invalid task cursor')
+        return self.presentation(f'requests tasks list {after}')
+
+    def conversation_task_detail(self, ident, offset=0, revision=None):
+        import re
+        self.request_id(ident)
+        if type(offset) is not int or not 0<=offset<=10**9:
+            raise ValueError('Invalid task text offset')
+        if revision is not None and (not isinstance(revision,str) or not re.fullmatch('[a-f0-9]{64}',revision)):
+            raise ValueError('Invalid task revision')
+        if offset and revision is None:
+            raise ValueError('Select the task revision before continuing')
+        suffix=' '+revision if revision is not None else ''
+        return self.presentation(f'requests tasks detail {ident} {offset}{suffix}')
+
     def goal_controls(self, before=0):
         if type(before) is not int or not 0 <= before <= 2**63 - 1:
             raise ValueError('Invalid goal-control cursor')

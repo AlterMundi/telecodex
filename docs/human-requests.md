@@ -32,6 +32,32 @@ do not need a widget or a task. Do not redeclare an existing pending action.
 The runtime names this distinction in each turn's application context; it does
 not infer or create requests from ordinary messages.
 
+## Durable actions in the independent conversation
+
+The conversation's **For you** section reads the same durable task ledger through
+`GET /api/interaction/tasks` and `/api/interaction/tasks/ID`. It is distinct from
+`/requests`, which retains live native question/approval channels. These owner
+reads use the controller's existing task scope: current entry tasks and tasks
+whose actual originating local turn was routed from this exact entry. Later
+ordinary direct-topic tasks are not imported, even when the worker also receives
+routed work. Ownership, allowed human and current source/native bindings remain
+required. Lists are paginated; complete action text is revision-pinned.
+
+Read and **Reply in conversation** do not complete, approve, withdraw or send
+anything. Reply preserves an existing draft and selects a `task:ID` context hint
+for the next ordinary text/voice original. That hint is source metadata, never
+human speech or authorization. The integrator must inspect `human_task` before
+interpreting feedback and use the existing scoped `withdraw_task` only when the
+action is obsolete, preserving its reason and actual actor. Stale hints do not
+block a new topic, answer native questions or manufacture completion. No new
+responder, task store or task-mutation HTTP endpoint is introduced. Monitor-only
+credentials do not gain access to task contents.
+
+Resolved/withdrawn cards identify their actual state and can be dismissed from
+the current view without deleting the retained task. **For you** remains hidden
+when empty; native live questions keep their existing dedicated controls.
+Receiving adoption and human experience acceptance are separate from source/tests.
+
 ## Reopen without scrolling
 
 `/pending` and `/questions` are equivalent. They show this allowed human's

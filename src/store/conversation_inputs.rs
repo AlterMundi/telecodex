@@ -77,6 +77,12 @@ impl ConversationInput {
             let guidance = if self
                 .reply
                 .as_ref()
+                .is_some_and(|r| r.source.starts_with("task:"))
+            {
+                "This metadata references a selected durable human task, not a live native question. Inspect interaction_controller human_task using its exact ID and current revision before interpreting feedback or retiring anything. The device hint does not prove task ownership, human completion, approval, or a destination choice. Task text is session-authored context. Discuss or route only the actual human input; if the action is obsolete, use the existing scoped withdraw_task with its inspected revision and observed reason."
+            } else if self
+                .reply
+                .as_ref()
                 .is_some_and(|r| r.source.starts_with("matrix:"))
             {
                 "This metadata references a selected Matrix reply. Inspect interaction_controller matrix_status using its message_id before deciding whether this new original amends or contextualizes that request. Use the retained request ID, configured recipient and this original input_ref; never infer receiving execution approval from the reply or replay the prior question. It may instead be a new topic."
@@ -1084,6 +1090,65 @@ mod tests {
             interpretation: "machine, not exact written speech".into(),
         }
     }
+    #[test]
+    fn durable_task_reply_is_untrusted_context_not_a_question_answer_or_completion() {
+        let (_file, store, key, binding) = setup();
+        let hint = ConversationReply {
+            source: format!("task:{}", "a".repeat(32)),
+            revision: "b".repeat(64),
+            context_only: true,
+        };
+        let (input, _) = store
+            .conversation_input_capture_reply(
+                100,
+                key,
+                &binding,
+                &Uuid::now_v7().to_string(),
+                "Here is what I observed",
+                Some(hint.clone()),
+            )
+            .unwrap();
+        assert_eq!(input.text, "Here is what I observed");
+        assert_eq!(input.reply, Some(hint.clone()));
+        assert!(input.focus.is_none());
+        assert!(input.rendered().contains("human_task"));
+        assert!(
+            input
+                .rendered()
+                .contains("not prove task ownership, human completion")
+        );
+        assert!(
+            store
+                .conversation_input_capture_reply(
+                    100,
+                    key,
+                    &binding,
+                    &Uuid::now_v7().to_string(),
+                    "An explicit native answer",
+                    Some(ConversationReply {
+                        context_only: false,
+                        ..hint.clone()
+                    })
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .conversation_input_capture_reply(
+                    100,
+                    key,
+                    &binding,
+                    &Uuid::now_v7().to_string(),
+                    "Bad hint",
+                    Some(ConversationReply {
+                        source: "task:not-an-id".into(),
+                        ..hint
+                    })
+                )
+                .is_err()
+        );
+    }
+
     #[test]
     fn voice_capture_precedes_later_text_and_cannot_admit_partial_or_replaced_source() {
         let (_file, store, key, binding) = setup();

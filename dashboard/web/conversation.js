@@ -56,6 +56,10 @@ window.Conversation = (() => {
     let speechWait;
     const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
+    const taskControls=window.HumanTaskControls?.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,canReply:()=>!readOnly,onReply:task=>{
+      if(readOnly || posting || draft.value.trim())return false;
+      voiceContext=undefined;selectFocus({source:`task:${task.id}`,revision:task.revision,context_only:true},`${task.label} · ${task.title}`);return true;
+    }});
     const goalControls=window.GoalControls?.mount({api,getBinding:()=>binding,readOnly,onChoose:message=>{
       if(readOnly || posting || draft.value.trim())return false;
       clearFocus();voiceContext=undefined;draft.value=message;draft.focus?.();compose.scrollIntoView?.({block:"nearest"});return true;
@@ -435,7 +439,7 @@ window.Conversation = (() => {
       const result = await api(`interaction/inputs?before=${before}&direction=${direction}`);
       if (owned !== inputGeneration) return;
       if (result.binding !== binding) throw new Error("Conversation changed. Refresh before sending.");
-      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();}
+      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();}
       inputBinding = result.binding;
       setCsrf(result.csrf);routingChoices=result.routing_choices||[];
       for (const value of result.items) inputCard(value, observation);
@@ -671,7 +675,7 @@ window.Conversation = (() => {
       if (error.status === 401 || error.status === 403) {
         onUnauthorized?.(error);
         clearFiles();
-        pause();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
+        pause();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else pause();
@@ -742,7 +746,7 @@ window.Conversation = (() => {
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); microphone?.reset(); visual?.reset();
+        stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
         newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
@@ -825,6 +829,7 @@ window.Conversation = (() => {
         }
         if(!readOnly){
           await requestControls.refresh();
+          await taskControls?.refresh();
           const questions=requestControls.audioSources?.()||[];
           presentState({question:questions.length>0});
           const current=source=>questions.some(q=>q.id===source.id && q.revision===source.revision);

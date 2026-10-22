@@ -18,12 +18,16 @@ fn is_false(value: &bool) -> bool {
 }
 impl ConversationReply {
     pub(super) fn validate_context(&self) -> Result<()> {
-        let question = self.source.strip_prefix("request:").is_some_and(|id| {
-            id.len() == 32
-                && id
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        });
+        let question = self
+            .source
+            .strip_prefix("request:")
+            .or_else(|| self.source.strip_prefix("task:"))
+            .is_some_and(|id| {
+                id.len() == 32
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            });
         let delivery = self
             .source
             .strip_prefix("delivery:")

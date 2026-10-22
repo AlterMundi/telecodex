@@ -37,3 +37,10 @@ not an accepted target. Do not fix its high harmonics by inventing another palet
 F1 = 40.4 Hz; Fn = n × 40.4 Hz. Use only sine waves with gently pulsing
 amplitude, no additional harmonic stacks or 18 Hz texture (human confirmation,
 2026-10-22). Pending stays F7 and blockage/error stays F11.
+
+Durable human tasks and native questions have distinct read paths. The independent
+client's For you section reuses the ledger and exact entry/routed-local-turn task
+scope. A task:ID reply is untrusted context for ordinary text/voice, never a native
+answer, human completion or approval. Inspect human_task before interpreting it;
+use the existing scoped withdrawal only when obsolete. Do not import later direct
+tasks or create another task store, responder, mutation endpoint or review request.

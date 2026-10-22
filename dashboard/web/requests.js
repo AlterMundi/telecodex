@@ -377,3 +377,78 @@ window.GoalControls = (() => {
   }
   return {mount};
 })();
+
+// Durable actions share the request ledger, not native question responders.
+// Reply only drafts ordinary human text; Send remains the admission boundary.
+window.HumanTaskControls = (() => {
+  function mount({api,getBinding,setCsrf=()=>{},unauthorized=()=>{},onReply,canReply=()=>true}) {
+    const section=document.querySelector('#conversation-tasks'),container=document.querySelector('#conversation-task-cards');
+    const state=document.querySelector('#conversation-task-state'),more=document.querySelector('#conversation-tasks-more');
+    if(!section||!container||!state||!more)return;
+    const cards=new Map();let generation=0,reading=false,cursor=0,probe=0;
+    const terminal=v=>['answered','completed','cancelled','withdrawn','expired'].includes(v?.state);
+    const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
+    const owns=(card,token)=>token===generation&&cards.get(card.id)===card;
+    function reset(){generation++;cards.clear();container.replaceChildren();section.hidden=true;cursor=probe=0;reading=false;more.hidden=true;state.textContent='';}
+    function controls(card){card.dismiss.hidden=!terminal(card.view);card.read.disabled=card.loading;card.reply.hidden=!canReply();card.reply.disabled=card.unavailable||card.loading||!card.complete||card.view?.state!=='pending'||card.view.binding!==getBinding();}
+    function metadata(card,v){
+      if(v.binding!==getBinding())throw Error('Conversation changed; refresh current actions.');
+      if(terminal(card.view)&&!terminal(v))return;
+      if(card.view?.revision!==v.revision){card.complete=false;card.body.textContent='';card.body.hidden=true;card.links.hidden=true;card.box.dataset.expanded='false';card.preview.hidden=false;card.read.textContent='Read action';card.offset=undefined;card.links.replaceChildren();}
+      card.unavailable=false;card.view=v;card.title.textContent=`${v.label} · ${v.title}`;
+      card.preview.textContent=v.preview||'';card.status.textContent=({pending:'An action for you.',answering:'Feedback receipt is unconfirmed.',unknown:'Earlier feedback is unconfirmed.',answered:'Feedback recorded.',completed:'Marked done by you.',withdrawn:'No longer needed.',cancelled:'Cancelled.',expired:'This action is closed.'})[v.state]||'Current action unavailable.';
+      controls(card);
+    }
+    async function detail(card,continueReading=false){
+      if(card.loading)return;const token=generation;card.loading=true;controls(card);
+      const selectedRevision=card.view?.revision;
+      const offset=continueReading?card.offset||0:0,revision=continueReading?card.view.revision:undefined;
+      try{
+        const query=new URLSearchParams({offset:String(offset)});if(revision)query.set('revision',revision);
+        const v=await api(`interaction/tasks/${card.id}?${query}`);
+        if(!owns(card,token))return;
+        if(card.view?.revision!==selectedRevision&&v.revision!==card.view?.revision || terminal(card.view)&&!terminal(v))return;
+        if(v.id!==card.id||revision&&v.revision!==revision||v.offset!==offset)throw Error('Task changed; read its current action.');
+        const previous=card.body.textContent;metadata(card,v);
+        card.body.textContent=(offset?previous:'')+v.body;card.offset=v.next_offset;card.complete=v.next_offset===null;
+        card.preview.hidden=true;card.box.dataset.expanded='true';card.body.hidden=card.links.hidden=false;card.read.textContent=card.complete?'Hide action':'Continue reading';
+        card.links.replaceChildren();for(const link of v.links||[]){
+          try{const url=new URL(link.url);if(!['http:','https:'].includes(url.protocol))continue;
+            const a=el('a',link.label);a.href=url.href;a.target='_blank';a.rel='noopener noreferrer';card.links.append(a);
+          }catch{}
+        }
+        card.note.textContent='';
+      }catch(e){if(owns(card,token)){card.complete=false;card.note.textContent='Action unavailable. Refresh before replying.';if([401,403].includes(e.status))unauthorized(e);}}
+      finally{if(owns(card,token)){card.loading=false;controls(card);}}
+    }
+    function create(v){
+      const box=el('article');box.className='reply task-card';box.dataset.expanded='false';const title=el('h3'),status=el('p'),preview=el('p'),body=el('div'),links=el('div'),note=el('p');
+      status.className='reply-status';body.className='reply-text';body.hidden=links.hidden=true;links.className='reply-actions';note.setAttribute('role','status');
+      const read=el('button','Read action'),reply=el('button','Reply in conversation'),dismiss=el('button','Dismiss');read.type=reply.type=dismiss.type='button';
+      box.append(title,status,preview,body,links,read,reply,dismiss,note);container.append(box);
+      const card={id:v.id,box,title,status,preview,body,links,note,read,reply,dismiss,complete:false,loading:false};cards.set(v.id,card);
+      read.addEventListener('click',()=>{if(card.complete&&box.dataset.expanded==='true'){box.dataset.expanded='false';body.hidden=links.hidden=true;preview.hidden=false;read.textContent='Read action';return;}return detail(card,card.offset!==undefined&&card.offset!==null);});
+      dismiss.addEventListener('click',()=>{if(!terminal(card.view))return;cards.delete(card.id);box.remove();section.hidden=!cards.size;});
+      reply.addEventListener('click',()=>{
+        if(!canReply()||!card.complete||card.loading||card.view.state!=='pending'||card.view.binding!==getBinding())return;
+        if(onReply?.(card.view)!==true)card.note.textContent='Your draft is kept. Send or clear it before preparing this reply.';
+      });return card;
+    }
+    async function refresh(after=0){
+      if(reading||!getBinding())return;reading=true;more.disabled=true;const token=generation;
+      try{
+        const page=await api(`interaction/tasks?after=${after}`);if(token!==generation)return;
+        if(page.binding!==getBinding())throw Error('Conversation changed');setCsrf(page.csrf);
+        const seen=new Set();for(const v of page.items){seen.add(v.id);metadata(cards.get(v.id)||create(v),v);}
+        cursor=Math.max(cursor,page.cursor);more.hidden=!page.more;
+        const absent=[...cards.values()].filter(c=>!seen.has(c.id)&&!terminal(c.view));
+        const selected=absent.length?Array.from({length:Math.min(8,absent.length)},(_,n)=>absent[(probe+n)%absent.length]):[];probe+=selected.length;
+        await Promise.all(selected.map(c=>detail(c)));if(token!==generation)return;
+        section.hidden=!cards.size;state.textContent='You can respond here while sessions keep working.';
+      }catch(e){if(token===generation){for(const card of cards.values()){card.unavailable=true;controls(card);}section.hidden=false;state.textContent='Human actions unavailable. Refresh to reconnect.';if([401,403].includes(e.status))unauthorized(e);}}
+      finally{if(token===generation){reading=false;more.disabled=false;}}
+    }
+    more.addEventListener('click',()=>refresh(cursor));return {refresh,reset};
+  }
+  return {mount};
+})();

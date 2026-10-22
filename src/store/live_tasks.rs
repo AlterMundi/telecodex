@@ -1,4 +1,4 @@
-//! Live agent-issued task retirement; never a human answer or native approval.
+//! Scoped durable tasks: owner reads and live agent retirement; never native approval.
 use super::*;
 use anyhow::bail;
 use serde_json::{Value, json};
@@ -51,6 +51,23 @@ fn revision(actor: &LiveTaskActor<'_>, item: &HumanInteraction, key: SessionKey)
         )
     )
 }
+fn owner_task_view(
+    entry: SessionKey,
+    native: &str,
+    key: SessionKey,
+    item: &HumanInteraction,
+    full: bool,
+) -> Value {
+    let revision = format!(
+        "{:x}",
+        Sha256::digest(json!([entry, native, key, item]).to_string().as_bytes())
+    );
+    json!({"schema":"telecodex.conversation-task/v1","id":item.id,"revision":revision,
+        "kind":"task","state":item.state,"target":key,"title":item.title,
+        "preview":item.action.chars().take(240).collect::<String>(),
+        "body":if full {json!(item.action)}else{Value::Null},"links":item.source["links"],
+        "withdrawal":item.source["agentWithdrawal"],"can_withdraw":false,"read_only":true})
+}
 fn actor_identity(actor: &LiveTaskActor<'_>, selected_revision: &str) -> Value {
     json!({"session":actor.key,"native_thread":actor.native,"task_revision":selected_revision,"physical_turn":actor.physical})
 }
@@ -89,6 +106,95 @@ fn selected_on(
     Ok((owner, SessionKey::new(chat, Some(topic)), item))
 }
 impl Store {
+    /// Owner read path for the same exact entry/routed-task scope as the controller.
+    /// It does not impersonate a running controller or authorize task retirement.
+    pub fn conversation_human_tasks(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        after: i64,
+    ) -> Result<Value> {
+        if after < 0 {
+            bail!("Invalid task cursor");
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
+        let binding = super::presentation::entry_binding(&conn, human, entry, session)?;
+        let query = (scoped_query("h.rowid>?1 AND h.state IN ('pending','answering','unknown')")
+            + " ORDER BY h.rowid LIMIT 11")
+            .replacen("SELECT h.payload_json", "SELECT h.rowid,h.payload_json", 1);
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt
+            .query_map(
+                params![after, human, entry.chat_id, entry.thread_id, true, session],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, i64>(5)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let more = rows.len() > 10;
+        let mut cursor = after;
+        let mut items = Vec::new();
+        for (sequence, raw, state, chat, topic) in rows.into_iter().take(10) {
+            let mut item: HumanInteraction = serde_json::from_str(&raw)?;
+            item.state = state;
+            let mut result = owner_task_view(
+                entry,
+                &native,
+                SessionKey::new(chat, Some(topic)),
+                &item,
+                false,
+            );
+            result["entry_binding"] = json!([human, entry, session, native]);
+            result["binding"] = json!(binding);
+            items.push(result);
+            cursor = sequence;
+        }
+        Ok(
+            json!({"schema":"telecodex.conversation-task-list/v1","entry_binding":[human,entry,session,native],
+            "binding":binding,"items":items,"cursor":cursor,"more":more,"read_only":true}),
+        )
+    }
+    pub fn conversation_human_task(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<Value> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
+        let (raw, state, _, chat, topic): (String, String, i64, i64, i64) = conn
+            .query_row(
+                &scoped_query("h.id=?1"),
+                params![id, human, entry.chat_id, entry.thread_id, true, session],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .context("Task is outside this current owned conversation")?;
+        let mut item: HumanInteraction = serde_json::from_str(&raw)?;
+        item.state = if state == "cancelled" && item.source["agentWithdrawal"].is_object() {
+            "withdrawn".into()
+        } else {
+            state
+        };
+        let mut result = owner_task_view(
+            entry,
+            &native,
+            SessionKey::new(chat, Some(topic)),
+            &item,
+            true,
+        );
+        result["entry_binding"] = json!([human, entry, session, native]);
+        result["binding"] = json!(super::presentation::entry_binding(
+            &conn, human, entry, session
+        )?);
+        Ok(result)
+    }
     pub fn live_human_tasks(
         &self,
         actor: &LiveTaskActor<'_>,
