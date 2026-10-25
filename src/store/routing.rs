@@ -255,12 +255,22 @@ impl Store {
             selected.push((order, sequence, origin, authored, request));
         }
         selected.sort_by_key(|(order, sequence, _, _, _)| std::cmp::Reverse((*order, *sequence)));
+        // An explicitly shared entry is one requesting conversation across both carriers.
+        let shared_entry: Option<(i64, i64)> = tx
+            .query_row(
+                "SELECT json_extract(value,'$[1]'),json_extract(value,'$[2]') FROM bot_state
+             WHERE key='telegram_entry_projection' AND json_extract(value,'$[0]')=?1",
+                [human],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
         let mut groups: Vec<(ReturnRoute, Option<String>, Vec<String>)> = Vec::new();
         for (_, _, origin, authored, request) in selected {
             if let Some((_, _, requests)) = groups.iter_mut().find(|(prior, kind, _)| {
                 prior.chat_id == origin.chat_id
                     && prior.thread_id == origin.thread_id
-                    && prior.message_id.is_some() == origin.message_id.is_some()
+                    && (prior.message_id.is_some() == origin.message_id.is_some()
+                        || shared_entry == Some((origin.chat_id, origin.thread_id)))
                     && *kind == authored
             }) {
                 if !requests.contains(&request) {

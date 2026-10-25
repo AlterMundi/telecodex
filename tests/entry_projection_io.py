@@ -40,6 +40,10 @@ def qualify(binary):
         for _ in range(2):
             j.broadcast(native,'item/completed',{'turnId':physical,'item':{'id':'worker-progress','type':'agentMessage','phase':'commentary','text':'Scoped routed progress.'}})
         j.wait(lambda:copies('Scoped routed progress.')==1)
+        # Mixed app/Telegram instructions in this same turn share one canonical return.
+        j.admit('#Alpha Telegram correction of the same live work',topic=1)
+        j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[-1][1]=='accepted')
+        assert copies('Telegram correction of the same live work')==0,'Telegram originals must not be echoed as new bot input'
         j.answer(7,'Canonical routed result.',duplicate=True)
         j.wait(lambda:copies('Canonical routed result.')==1)
         j.wait(lambda:j.primary('Canonical routed result.'));j.idle()
