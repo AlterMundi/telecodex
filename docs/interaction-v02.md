@@ -299,3 +299,24 @@ in flight are coalesced. A slow stream is reconnected with bounded backoff; prox
 buffering is disabled. Stream authorization is checked on admission and every
 15 seconds, including current scope expiry. Other Sessions views retain their
 existing refresh behavior. Voice-on/background intent remains independent.
+
+
+### Recovering a failed voice original
+
+A failed preparation retains the original audio UUID, digest and ingress order.
+The owner control `input voice recover` accepts that exact UUID and current entry
+binding. It claims only `preparation_unconfirmed` under the existing ingress lock;
+already active/completed originals are observed without repeating work. The
+optional `voice.completed_transcription_command` must be a completed-result reader,
+never a transcription command. The maintained adapter's `--completed-only` mode
+checks the source, route, helper and completed result digest without probing or
+calling a provider. Missing or uncertain results remain unconfirmed. Normal
+upload retries continue to observe existing captures without restarting ASR.
+
+For operator recovery, inspect the adapter journal before doing anything. A job
+with no intent and only its lock precedes the maintained adapter's provider call;
+an explicitly requested recovery may finish that preparation once. A retained
+provider intent/uncertain outcome cannot be retried this way. Once completed text
+exists, recover the same original through owner control, not a fabricated text
+input or direct database mutation. Commit precedes audio retirement and routing;
+all original authorship, corrections and receiving grants remain applicable.

@@ -34,11 +34,16 @@ def qualify(binary):
         transcriber=j.root/'asr.py';transcriber.write_text('''import hashlib,json,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]);digest=hashlib.sha256(pathlib.Path(sys.argv[-1]).read_bytes()).hexdigest()
 item=json.loads((root/'transcripts.json').read_text())[digest]
+if '--completed-only' in sys.argv:
+    result=root/('completed-'+digest+'.json')
+    if not result.exists():sys.exit(2)
+    print(result.read_text());sys.exit(0)
+if item.get('fail'):sys.exit(2)
 with (root/'asr-calls').open('a') as output:output.write(digest+'\\n')
 while item.get('hold') and not (root/('release-'+digest)).exists():time.sleep(.02)
 print(json.dumps({'text':item['text'],'final':True}))
 ''')
-        j.config.write_text(j.config.read_text()+j.target_config+'\n[voice]\ntranscriber_label="synthetic/no-inference"\ntimeout_seconds=20\ntranscription_command='+json.dumps(['/usr/bin/python3',str(transcriber),str(j.root)])+'\n')
+        j.config.write_text(j.config.read_text()+j.target_config+'\n[voice]\ntranscriber_label="synthetic/no-inference"\ntimeout_seconds=20\ntranscription_command='+json.dumps(['/usr/bin/python3',str(transcriber),str(j.root)])+'\ncompleted_transcription_command='+json.dumps(['/usr/bin/python3',str(transcriber),str(j.root),'--completed-only'])+'\n')
         j.start();j.wait_control_socket(j.socket);j.routing=True
         binding=j.read('presentation','list','0','0')['result']['binding'];j.messages.clear()
         config={'receiver_config':str(j.config),'state_dir':str(j.root/'dashboard'),'origin':'https://example.test','bot_id':123}
@@ -100,13 +105,35 @@ print(json.dumps({'text':item['text'],'final':True}))
         silent=audio(silence=True);register(silent,'Never use hallucinated silence')
         silent_id,r=upload(silent);assert r.status_code==200
         j.wait(lambda:status(silent_id)['phase']=='preparation_unconfirmed');assert len(calls())==1 and len(j.packets)==2
+        # Failed originals recover only already completed text, preserving order/identity.
+        recovery_data=audio(610);recovery_digest=register(recovery_data,'Recovered original')
+        transcripts[recovery_digest]['fail']=True
+        (j.root/'transcripts.json').write_text(json.dumps(transcripts))
+        recovery_id,r=upload(recovery_data);assert r.status_code==200
+        j.wait(lambda:status(recovery_id)['phase']=='preparation_unconfirmed')
+        before_calls=list(calls())
+        command={'binding':binding,'id':recovery_id}
+        def recover():
+            return j.read('input','voice','recover',json.dumps(command))
+        recover()
+        j.wait(lambda:status(recovery_id)['phase']=='preparation_unconfirmed')
+        assert calls()==before_calls and not status(recovery_id)['text']
+        (j.root/('completed-'+recovery_digest+'.json')).write_text(json.dumps({'text':'Recovered original','final':True}))
+        recover();j.wait(lambda:status(recovery_id)['phase']=='accepted')
+        assert calls()==before_calls and status(recovery_id)['text']=='Recovered original'
+        saved=status(recovery_id)['voice']['transcription']
+        assert saved['capture_id']==recovery_id and saved['audio_sha256']==recovery_digest
+        assert not Path(str(j.root/'state.sqlite')+'.voice').joinpath(recovery_id).exists()
+        recover();assert calls()==before_calls
+        # The additional accepted original is real fixture work, not another upload.
+        assert len(j.packets)==3
         # Restoring a revoked grant cannot revive an in-flight voice capture.
         data2=audio(660);digest2=register(data2,'Must not run after authority retirement',True)
         retired,r=upload(data2);assert r.status_code==200;j.wait(lambda:digest2 in calls())
         with sqlite3.connect(j.root/'state.sqlite') as db:
             db.execute('UPDATE users SET allowed=0 WHERE tg_user_id=100');db.execute('UPDATE users SET allowed=1 WHERE tg_user_id=100')
         (j.root/('release-'+digest2)).touch();j.wait(lambda:status(retired)['phase']=='preparation_unconfirmed')
-        assert status(retired)['retired'] and len(j.packets)==2
+        assert status(retired)['retired'] and len(j.packets)==3
         # Grant restoration creates a new browser binding. An old tab cannot
         # capture input with its retired generation, even for the same UUID.
         stale=upload(data2,retired)[1];assert stale.status_code==503,stale.text
@@ -117,7 +144,7 @@ print(json.dumps({'text':item['text'],'final':True}))
         binding=current.json()['binding']
         repeated=upload(data2,retired)[1];assert repeated.status_code==200,repeated.text
         assert repeated.json()['new_input'] is False and repeated.json()['retired']
-        assert calls().count(digest2)==1 and len(j.packets)==2
+        assert calls().count(digest2)==1 and len(j.packets)==3
         # Restart closes only fixture processes, retaining uncertainty without ASR/native replay.
         data3=audio(770);digest3=register(data3,'Never replay after restart',True)
         interrupted,r=upload(data3);assert r.status_code==200;j.wait(lambda:digest3 in calls())

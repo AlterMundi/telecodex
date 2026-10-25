@@ -544,6 +544,40 @@ impl Store {
         Ok((input, true))
     }
 
+    /// Explicit recovery claims only a failed original, preserving ingress order.
+    pub fn conversation_voice_resume(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+    ) -> Result<(ConversationInput, bool)> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let (session, _) = super::presentation::entry_on(&tx, human, entry)?;
+        if binding != super::presentation::entry_binding(&tx, human, entry, session)? {
+            bail!("Entry changed before voice recovery");
+        }
+        let mut input = read_on(&tx, id, human)?;
+        eligible_on(&tx, &input)?;
+        if input.entry != entry
+            || input.session != session
+            || input
+                .voice
+                .as_ref()
+                .is_none_or(|v| v.transcription.is_some())
+        {
+            bail!("Recovery requires the same untranscribed voice original");
+        }
+        if input.phase != "preparation_unconfirmed" {
+            return Ok((input, false));
+        }
+        input.phase = "preparing".into();
+        let changed=tx.execute("UPDATE conversation_inputs SET doc=?1,phase='preparing',instance_id=?2 WHERE id=?3 AND human_id=?4 AND phase='preparation_unconfirmed'",params![serde_json::to_string(&input)?,self.instance_id,id,human])?;
+        tx.commit()?;
+        Ok((input, changed == 1))
+    }
+
     pub fn conversation_voice_validate(&self, human: i64, id: &str) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let input = read_on(&conn, id, human)?;
@@ -1093,6 +1127,54 @@ mod tests {
             interpretation: "machine, not exact written speech".into(),
         }
     }
+    #[test]
+    fn completed_voice_recovery_claim_is_owned_idempotent_and_preserves_original_order() {
+        let (_file, store, key, binding) = setup();
+        let id = Uuid::now_v7().to_string();
+        store
+            .conversation_voice_capture_reply(100, key, &binding, &id, clip(), true, None, None)
+            .unwrap();
+        assert!(
+            !store
+                .conversation_voice_resume(100, key, &binding, &id)
+                .unwrap()
+                .1
+        );
+        store.conversation_voice_fail(100, &id).unwrap();
+        assert!(
+            store
+                .conversation_voice_resume(100, key, "wrong", &id)
+                .is_err()
+        );
+        assert!(
+            store
+                .conversation_voice_resume(101, key, &binding, &id)
+                .is_err()
+        );
+        assert!(
+            store
+                .conversation_voice_resume(100, key, &binding, &id)
+                .unwrap()
+                .1
+        );
+        assert!(
+            !store
+                .conversation_voice_resume(100, key, &binding, &id)
+                .unwrap()
+                .1
+        );
+        store
+            .conversation_voice_commit(100, &id, "Recovered original", voice_proof(&id))
+            .unwrap();
+        assert!(
+            store
+                .conversation_voice_resume(100, key, &binding, &id)
+                .is_err()
+        );
+        let conn = store.conn.lock().unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM original_ingress_order WHERE channel='conversation' AND event_id=?1",[&id],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
     #[test]
     fn durable_task_reply_is_untrusted_context_not_a_question_answer_or_completion() {
         let (_file, store, key, binding) = setup();

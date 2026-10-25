@@ -77,6 +77,15 @@ class Retention(unittest.TestCase):
         self.assertFalse(list((self.root/'cache').rglob('source.media')))
         self.assertEqual(self.calls(),1)
 
+    def test_completed_only_reader_never_probes_or_calls_provider(self):
+        with self.assertRaises(asr.RenderError):
+            asr.process(self.source,self.binding,completed_only=True)
+        self.assertEqual(self.calls(),0)
+        self.run_asr()
+        with patch.object(asr,'probe_duration',side_effect=AssertionError('Reader prepared audio')):
+            self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Final words')
+        self.assertEqual(self.calls(),1)
+
     def test_uncertain_helper_is_never_automatically_retried(self):
         self.source.write_bytes(b'failed operation')
         for _ in range(2):
