@@ -1395,7 +1395,7 @@ mod tests {
         store
             .save_bot_state(
                 "telegram_entry_projection",
-                &json!([100, key.chat_id, key.thread_id]).to_string(),
+                &serde_json::json!([100, key.chat_id, key.thread_id]).to_string(),
             )
             .unwrap();
         let id = Uuid::now_v7().to_string();
