@@ -739,3 +739,5 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 
 .standalone-conversation #conversation-audio-tools #conversation-player:not([hidden]) { position:static; transform:none; width:100%; padding:0; border:0; border-radius:0; grid-row:auto; }
 .standalone-conversation #conversation:has(#conversation-diagnostics[open]) { grid-template-rows:auto auto minmax(220px,50dvh) auto auto auto auto; }
+
+#conversation-visual > summary .attachment-icon { display:block; width:24px; height:24px; flex:none; }
