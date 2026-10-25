@@ -9,16 +9,19 @@ window.VoiceInput = (() => {
     const supported=()=>!!(window.isSecureContext && window.MediaRecorder && typeof window.MediaRecorder.isTypeSupported==='function' && window.navigator?.mediaDevices?.getUserMedia && window.crypto?.subtle);
     const ownsSend=()=>['permission','recording','ready','finalizing'].includes(phase) || uploading || !!pending;
     let ownedSend=false;
+    function syncSend(){
+      const owned=ownsSend();button.hidden=owned;
+      if(send){send.type=owned?'button':'submit';send.setAttribute('aria-label',owned?'Send voice message':'Send text message');
+        if(owned)send.disabled=button.disabled || !(['recording','ready'].includes(phase)||pending);else if(ownedSend)send.disabled=!getBinding();}
+      ownedSend=owned;
+    }
     function controls() {
       box.hidden=!available;
       button.textContent=phase==='recording'||phase==='ready'?'↑':pending?'↻':['permission','finalizing'].includes(phase)||uploading?'…':'🎙';
       button.setAttribute('aria-label',phase==='recording'?'Send voice message':phase==='ready'?'Send recording':pending?'Retry this recording':'Record a voice message');
       button.disabled=!available || !getBinding() || !supported() || uploading || phase==='permission' || phase==='finalizing';
       button.setAttribute('aria-pressed',String(phase==='recording'));
-      const owned=ownsSend();button.hidden=owned;
-      if(send){send.type=owned?'button':'submit';send.setAttribute('aria-label',owned?'Send voice message':'Send text message');
-        if(owned)send.disabled=button.disabled || !(['recording','ready'].includes(phase)||pending);else if(ownedSend)send.disabled=!getBinding();}
-      ownedSend=owned;
+      syncSend();
       discard.hidden=!['permission','recording','ready','finalizing'].includes(phase);
       discard.textContent='×';discard.setAttribute('aria-label','Discard recording');discard.title='Discard recording';
       check.hidden=!pending; check.disabled=uploading;
@@ -145,7 +148,7 @@ window.VoiceInput = (() => {
     });
     document.addEventListener('visibilitychange',()=>{if(document.hidden)deactivate();});
     window.addEventListener('pagehide',deactivate);telegram?.onEvent?.('deactivated',deactivate);
-    controls();return {configure,reset,deactivate,observe,submit,ownsSend,syncControls:controls};
+    controls();return {configure,reset,deactivate,observe,submit,ownsSend,syncControls:syncSend};
   }
   return {mount};
 })();

@@ -148,7 +148,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   });
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
-  if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){}};}};
+  if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.()};}};
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   if(options.autoText)context.window.IntersectionObserver=class{
     constructor(callback){intersection=callback;}observe(){}unobserve(){}disconnect(){}
@@ -300,6 +300,11 @@ function boot(readOnly=false,standalone=false,options={}) {
   await follow.ui.refresh();
   assert.equal(live.scrollTop,live.scrollHeight,'The committed transcript cannot silently leave following mode');
   const until=async check=>{for(let n=0;n<100;n++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error("Voice transition did not finish");};
+  let voiceSubmissions=0;
+  const ownedVoice=boot(false,false,{capture:true,ownsVoice:true,voiceSubmit:()=>{voiceSubmissions++;}});await ownedVoice.ui.refresh();
+  ownedVoice.nodes.get('#conversation-message').value='Keep this text draft while sending speech';
+  await ownedVoice.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+  assert.equal(voiceSubmissions,1);assert.equal(ownedVoice.nativePosts.length,0);assert.equal(ownedVoice.nodes.get('#conversation-message').value,'Keep this text draft while sending speech');ownedVoice.ui.stop();
   const voice=boot();voice.audio();await voice.ui.refresh();
   voice.nodes.get('#conversation-voice-replies').handlers.click();
   assert.equal(voice.audioCalls.length,0,'Enabling voice never recites old history');

@@ -48,6 +48,8 @@ window.Conversation = (() => {
       finally{clearTimeout(deadline);if(fileDownloads.get(file.id)===controller)fileDownloads.delete(file.id);refreshFiles();}
     }
     let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext;
+    // Reuse the same presence renderer in the fixed header, freeing conversation space.
+    if(standalone){const presence=$("#conversation-companion"),identity=$("header .identity");if(presence && identity)identity.append(presence);}
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
     const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential});
     const presentState=patch=>{companion?.update(patch);sound?.update(patch);};
