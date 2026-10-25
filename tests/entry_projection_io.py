@@ -14,7 +14,7 @@ def qualify(binary):
             j.wait(lambda:j.has('Initial goal turn delivered.',topic));j.idle()
         j.stop()
         j.config.write_text(j.config.read_text().replace('[interaction]\n',
-            '[interaction]\ntelegram_ingress=true\ntelegram_projection=true\n')+j.target_config)
+            '[interaction]\ntelegram_ingress=true\ntelegram_projection=true\ntelegram_entry_projection=true\n')+j.target_config)
         j.start();j.wait_control_socket(j.socket);j.routing=True
         binding=j.read('presentation','list','0','0')['result']['binding'];j.messages.clear()
         def copies(text,topic=1):

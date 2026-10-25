@@ -13,9 +13,9 @@ impl Drop for Lease {
 
 pub(super) fn enabled(shared: &AppShared, key: SessionKey, human: i64) -> bool {
     shared.config.interaction.as_ref().is_some_and(|c| {
-        c.telegram_projection
-            && c.human_id == human
-            && (super::routing::enrolled(shared, key) || (c.telegram_ingress && c.entry() == key))
+        c.human_id == human
+            && ((c.telegram_projection && super::routing::enrolled(shared, key))
+                || (c.telegram_entry_projection && c.entry() == key))
     })
 }
 

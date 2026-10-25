@@ -259,7 +259,7 @@ impl Store {
         config: Option<&crate::interaction::InteractionConfig>,
     ) -> Result<()> {
         let selected = config
-            .filter(|c| c.telegram_ingress && c.telegram_projection)
+            .filter(|c| c.telegram_entry_projection)
             .map(|c| json!([c.human_id, c.chat_id, c.topic_id]))
             .unwrap_or(serde_json::Value::Null);
         self.save_bot_state("telegram_entry_projection", &selected.to_string())
