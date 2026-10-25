@@ -28,11 +28,12 @@
           </svg>
           <h1>Sessions</h1>
         </div>
-        <div class="header-tools"><a class="apps-return" href="https://apps.dmn.homes/" aria-label="Back to Apps">▦ Apps</a><span id="provider">Telecodex</span></div>
+        <div class="header-tools"><a class="apps-return" href="https://apps.dmn.homes/" aria-label="Back to Apps">▦ Apps</a><span id="provider">Telecodex</span><span id="conversation-account" hidden></span></div>
       </header>
       <div id="feedback" role="status" aria-live="polite">
         Connecting to Telegram…
       </div>
+      <div id="conversation-presence" role="status" aria-live="polite" hidden></div>
       <div class="toolbar">
         <span id="overview">Awaiting connection</span
         ><div class="toolbar-actions"><button id="conversation-open" type="button" disabled>Conversation</button><button id="refresh" type="button" aria-label="Refresh sessions">
@@ -83,7 +84,6 @@
             <div class="image-choices"><label class="image-choice" for="conversation-image">🖼 Gallery<input id="conversation-image" type="file" accept="image/*"></label><label class="image-choice" for="conversation-camera">📷 Camera<input id="conversation-camera" type="file" accept="image/*" capture="environment"></label></div>
             <div class="visual-preview"><canvas id="conversation-image-view" tabindex="0" role="img" aria-label="Selected image. Click a point, use arrow keys, or enter X and Y below." hidden></canvas></div>
             <div id="conversation-image-coordinates" class="conversation-tools" hidden><label>X <input id="conversation-image-x" type="number" min="0" step="1" disabled></label><label>Y <input id="conversation-image-y" type="number" min="0" step="1" disabled></label></div><button id="conversation-image-clear" type="button" hidden>Remove image</button>
-            <label class="image-voice-option"><input id="conversation-image-with-voice" type="checkbox" checked> Include this image with voice</label>
             <p id="conversation-image-state" class="note" role="status" aria-live="polite"></p>
             </div>
           </details>

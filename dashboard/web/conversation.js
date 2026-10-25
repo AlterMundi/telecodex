@@ -56,6 +56,24 @@ window.Conversation = (() => {
       $("#conversation-sound").append($("#conversation-sound-controls"),$("#conversation-sound-feedback"));
     }
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
+    if(standalone){
+      const line=$("#conversation-presence"),caption=$("#conversation-companion .companion-caption");
+      if(line && caption){
+        line.append(caption);line.hidden=false;
+        let motion;const reduced=window.matchMedia?.("(prefers-reduced-motion: reduce)");
+        const fit=()=>{
+          motion?.cancel();motion=undefined;caption.title=caption.textContent;
+          const distance=caption.scrollWidth-line.clientWidth;
+          if(distance>1 && !reduced?.matches){
+            const travel=distance/18*1000,duration=travel+2000;
+            motion=caption.animate?.([{transform:"translateX(0)",offset:0},{transform:"translateX(0)",offset:1000/duration},{transform:`translateX(${-distance}px)`,offset:(1000+travel)/duration},{transform:`translateX(${-distance}px)`,offset:1}],{duration,iterations:Infinity,direction:"alternate",easing:"linear"});
+          }
+        };
+        if(window.ResizeObserver)new window.ResizeObserver(fit).observe(line);
+        if(window.MutationObserver)new window.MutationObserver(fit).observe(caption,{childList:true,characterData:true,subtree:true});
+        reduced?.addEventListener?.("change",fit);fit();
+      }
+    }
     const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential});
     const presentState=patch=>{companion?.update(patch);sound?.update(patch);};
     if(standalone)$("#conversation-diagnostics").open=false;

@@ -597,6 +597,7 @@ const conversationView = window.Conversation?.mount({
     const signIn=el('button','Sign in');signIn.type='button';
     sharedSignInAction=()=>{
       sharedConversationConnected=false;authenticated=false;
+      $('#conversation-account').textContent='';$('#conversation-account').hidden=true;
       feedback.replaceChildren(el('p','Sign in again to reconnect.'),signIn);
     };
     signIn.addEventListener('click',async()=>{
@@ -612,10 +613,12 @@ const conversationView = window.Conversation?.mount({
       if(!response.ok)throw Object.assign(Error('Sign in to continue'),{status:response.status});
       const access=await response.json();
       csrf=access.csrf;sharedConversationConnected=true;authenticated=true;
-      feedback.replaceChildren(el('span','Connected · '+access.label));
+      $('#conversation-account').textContent=access.label;$('#conversation-account').hidden=false;
+      feedback.replaceChildren();
       conversationView?.authenticated();await refresh(true);schedule();
     }catch(error){
       sharedConversationConnected=false;
+      $('#conversation-account').textContent='';$('#conversation-account').hidden=true;
       feedback.replaceChildren(el('p',error.status===401?'Sign in with your existing Daimon Matrix account.':error.status===403?'This account cannot access this conversation.':'Connection unavailable. You can retry signing in.'),signIn);
       if(error.status===401){
         try{await window.DaimonHomeAccess.createClient().signIn();}
