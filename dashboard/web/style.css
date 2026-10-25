@@ -796,3 +796,16 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-attachment-sheet .image-choices { margin:0; }
 .standalone-conversation #conversation-visual > summary { width:44px; height:44px; padding:10px; }
 .standalone-conversation #conversation:has(#conversation-visual[open]):not(:has(#conversation-diagnostics[open])) { overflow:visible; }
+
+/* Beacon belongs to the fixed presence; its detailed controls stay under the hood. */
+.standalone-conversation header #conversation-sound-toggle { width:44px; height:44px; min-width:44px; padding:6px; font-size:0; }
+.standalone-conversation header #conversation-sound-toggle::before { content:"≈"; font-size:24px; }
+.standalone-conversation header #conversation-sound-toggle[aria-pressed="true"] { color:var(--bg); background:var(--accent); }
+.standalone-conversation main > #conversation { grid-template-rows:auto minmax(0,1fr) auto auto 44px; }
+.standalone-conversation #conversation-audio-tools { height:auto; }
+.standalone-conversation #conversation-audio-tools:has(#conversation-player[hidden]) { display:none; }
+
+.standalone-conversation header .companion-name { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.standalone-conversation header .companion-caption { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.standalone-conversation header .companion-phases { max-height:16px; overflow:hidden; flex-wrap:nowrap; }
+.standalone-conversation header .companion-phases > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
