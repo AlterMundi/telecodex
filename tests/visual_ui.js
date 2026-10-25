@@ -25,6 +25,7 @@ function boot(){
  held.resolve(f.bitmap());await opening;
  await assert.rejects(f.ui.capture(),/Point to what you mean/);assert.equal(f.uploads.length,0);
  f.point();const selected=await f.ui.capture();assert.equal(selected.point.x,25);assert.equal(selected.point.y,30);assert.equal(f.uploads.length,1);assert.equal(f.nodes.get('#conversation-image').value,'selected.png');
+ const camera=boot();camera.nodes.get('#conversation-camera').files=[{name:'camera.jpg',size:100}];await camera.nodes.get('#conversation-camera').handlers.change();camera.point();const photo=await camera.ui.capture();assert(photo.image_sha256);assert.equal(camera.uploads.length,1);camera.ui.consumed(photo);assert.equal(camera.nodes.get('#conversation-camera').value,'');
  const failed=boot(),bad=failed.hold(),failure=failed.choose();bad.reject(Error('decode failed'));await failure;
  await assert.rejects(failed.ui.capture(),/selected image is unavailable/);assert(!failed.nodes.get('#conversation-image-clear').hidden);assert.equal(failed.uploads.length,0);
  failed.remove();assert.equal(await failed.ui.capture(),undefined,'Only explicit removal makes an unavailable selection empty');

@@ -5,10 +5,10 @@ import math
 import re
 
 DEFAULT = {
-    'schema':'daimon.sonic-expression/v2','id':'source-beacon','revision':'3',
+    'schema':'daimon.sonic-expression/v2','id':'source-beacon','revision':'4',
     'author':'Source / CompAII','label':'Source Beacon',
     'fundamental_hz':40.4,'wave':'sine','pulse_hz':0.22,'pulse_depth':0.25,
-    'attack_ms':180,'release_ms':350,'max_sessions':24,'peak_gain':0.08,
+    'attack_ms':180,'release_ms':350,'max_sessions':24,'peak_gain':0.6,
     'components':{'idle':1,'active':2,'tools':3,'goal':4,'pending':7,'blocked':11},
     'provenance':['Nicolas: 40.4 Hz F1; additive F1 idle, F2 active, F3 tools/subagents, F4 active goal, F7 pending, F11 blockage/error; pure sine waves with gentle amplitude pulses'],
 }
@@ -25,7 +25,7 @@ def descriptor(config):
         if not isinstance(value.get(key),str) or not 1<=len(value[key])<=128 or any(ord(c)<32 for c in value[key]):
             raise ValueError('Invalid sonic catalog label')
     for key,low,high in (('fundamental_hz',20,256),('pulse_hz',0,1),('pulse_depth',0,0.5),
-                         ('attack_ms',20,2000),('release_ms',20,2000),('peak_gain',0.001,0.2)):
+                         ('attack_ms',20,2000),('release_ms',20,2000),('peak_gain',0.001,0.8)):
         number=value.get(key)
         if type(number) not in (int,float) or not math.isfinite(number) or not low<=number<=high:
             raise ValueError('Invalid sonic synthesis parameter')

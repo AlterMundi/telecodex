@@ -9,7 +9,8 @@ window.VoiceInput = (() => {
     const supported=()=>!!(window.isSecureContext && window.MediaRecorder && typeof window.MediaRecorder.isTypeSupported==='function' && window.navigator?.mediaDevices?.getUserMedia && window.crypto?.subtle);
     function controls() {
       box.hidden=!available;
-      button.textContent=phase==='permission'?'Opening microphone…':phase==='recording'?'Send voice':phase==='ready'?'Send recording':pending?'Retry this recording':'Talk';
+      button.textContent=phase==='recording'||phase==='ready'?'↑':pending?'↻':['permission','finalizing'].includes(phase)||uploading?'…':'🎙';
+      button.setAttribute('aria-label',phase==='recording'?'Send voice message':phase==='ready'?'Send recording':pending?'Retry this recording':'Record a voice message');
       button.disabled=!available || !getBinding() || !supported() || uploading || phase==='permission' || phase==='finalizing';
       button.setAttribute('aria-pressed',String(phase==='recording'));
       discard.hidden=!['permission','recording','ready','finalizing'].includes(phase);

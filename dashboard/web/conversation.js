@@ -65,7 +65,7 @@ window.Conversation = (() => {
       clearFocus();voiceContext=undefined;draft.value=message;draft.focus?.();compose.scrollIntoView?.({block:"nearest"});return true;
     }});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -543,8 +543,9 @@ window.Conversation = (() => {
     function voiceKey(source) {return source.kind==="native_question"?`${source.id}:${source.revision}`:source.id;}
     function voiceStatus() {
       const button=$("#conversation-voice-replies");
+      button.checked=voiceEnabled && !voiceSuspended;
       button.setAttribute("aria-pressed",String(voiceEnabled));
-      button.textContent=voiceEnabled?voiceSuspended?"Voice paused · resume":`Voice on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read aloud";
+      (document.querySelector("#conversation-voice-label")||button).textContent=voiceEnabled?voiceSuspended?"Voice paused · resume":`Voice on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read aloud";
       button.title=voiceSuspended?"Voice replies paused · tap to resume":"Read new replies aloud";
     }
     function enableVoice() {

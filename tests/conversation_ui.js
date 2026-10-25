@@ -368,7 +368,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   reconnectVoice.addReplies(2);reconnectVoice.event('online');
   await until(()=>!reconnectVoice.nodes.get('#conversation-refresh').disabled);await reconnectVoice.ui.refresh();
   assert.equal(reconnectVoice.audioCalls.length,1,'Reconnect must not resume old queued audio or arrivals during suspension');
-  assert.match(reconnectVoice.nodes.get('#conversation-voice-replies').textContent,/paused/);
+  assert.match(reconnectVoice.nodes.get('#conversation-voice-label').textContent,/paused/);
   reconnectVoice.nodes.get('#conversation-voice-replies').handlers.click();
   await reconnectVoice.ui.refresh();assert.equal(reconnectVoice.audioCalls.length,1,'Explicit resume starts from the loaded current conversation, not old audio');
   reconnectVoice.addReplies(1);await reconnectVoice.ui.refresh();await until(()=>reconnectVoice.audioCalls.length===2&&!rp.paused);

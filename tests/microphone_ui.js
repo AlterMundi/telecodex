@@ -41,10 +41,10 @@ function boot(){
  const hinted=boot();hinted.select({reference:{source:'delivery:11111111-1111-1111-1111-111111111111',revision:'a'.repeat(64),context_only:true},version:1});
  await hinted.click();hinted.click();await until(()=>hinted.received.length===1);
  assert.equal(hinted.uploads[0].headers['X-Reply-Source'],'context:delivery:11111111-1111-1111-1111-111111111111','Device context must not become an explicit destination during voice upload');
- const f=boot();await f.click();assert.equal(f.button().textContent,'Send voice');assert.equal(f.paused(),1);
+ const f=boot();await f.click();assert.equal(f.button().textContent,'↑');assert.equal(f.paused(),1);
  assert.equal(f.uploads.length,0,'Partial recording cannot admit work');f.click();await until(()=>f.received.length===1);
  assert.equal(f.uploads.length,1);assert.equal(f.uploads[0].body.type,'audio/webm;codecs=opus');assert.equal(f.devices[0].stream.stopped,1);
- assert.equal(f.button().textContent,'Talk');assert(f.received[0].voice.audio_sha256);
+ assert.equal(f.button().textContent,'🎙');assert(f.received[0].voice.audio_sha256);
  assert.equal(f.activities.at(-1),true,'Audio replies wait until the transcript is ready');f.ui.observe({...f.received[0],phase:'accepted'},'Sent');assert.equal(f.activities.at(-1),false);
  const lost=boot();lost.mode('after');await lost.click();lost.click();await until(()=>lost.state().startsWith('Recording unconfirmed'));
  assert.equal(lost.originals.size,1);await lost.check();assert.equal(lost.uploads.length,1,'Status inspection must not upload again');assert.equal(lost.received.length,1);
@@ -53,7 +53,7 @@ function boot(){
  assert.equal(offline.uploads.length,2);assert.deepEqual(offline.uploads[0].headers,offline.uploads[1].headers);assert.equal(offline.uploads[0].body,offline.uploads[1].body,'Explicit retry preserves the exact original bytes');
  const hidden=boot();await hidden.click();hidden.events.pagehide();await until(()=>hidden.devices[0].state==='inactive');assert.equal(hidden.uploads.length,0);assert.equal(hidden.devices[0].stream.stopped,1);
  const delayed=boot(),permission=delayed.permission();const starting=delayed.click();delayed.cancel();const lateMedia=delayed.media();permission.resolve(lateMedia);await starting;assert.equal(lateMedia.stopped,1);assert.equal(delayed.devices.length,0);
- const limit=boot();await limit.click();limit.timers.find(t=>t.ms===120000).fn();await until(()=>limit.button().textContent==='Send recording');assert.equal(limit.uploads.length,0,'Duration limit cannot silently commit speech');limit.click();await until(()=>limit.received.length===1);
+ const limit=boot();await limit.click();limit.timers.find(t=>t.ms===120000).fn();await until(()=>limit.button()['aria-label']==='Send recording');assert.equal(limit.uploads.length,0,'Duration limit cannot silently commit speech');limit.click();await until(()=>limit.received.length===1);
  for(const [phase,retired,phrase] of [['answered',false,'answer recorded'],['retained_unsent',false,'no work was submitted'],['preparation_unconfirmed',false,'transcription unconfirmed'],['preparing',true,'no longer eligible']]){
   const saved=boot();saved.captureState(phase,retired);await saved.click();saved.click();await until(()=>saved.received.length===1);assert(saved.state().includes(phrase),'A receipt must show actual preparation eligibility');
  }
@@ -73,7 +73,7 @@ function boot(){
  focused.select({reference,version:1});const focusPermission=focused.permission(),focusStart=focused.click();
  focused.select({reference:{source:'input:newer',revision:'b'.repeat(64)},version:2});
  focusPermission.resolve(focused.media());await focusStart;focused.timers.find(t=>t.ms===120000).fn();
- await until(()=>focused.button().textContent==='Send recording');focused.mode('before');focused.click();
+ await until(()=>focused.button()['aria-label']==='Send recording');focused.mode('before');focused.click();
  await until(()=>focused.state().startsWith('Recording unconfirmed'));await focused.click();await until(()=>focused.received.length===1);
  assert.equal(focused.uploads[0].headers['X-Reply-Source'],reference.source);
  assert.equal(focused.uploads[0].headers['X-Reply-Revision'],reference.revision);
