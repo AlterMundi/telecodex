@@ -741,3 +741,6 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation:has(#conversation-diagnostics[open]) { grid-template-rows:auto auto minmax(220px,50dvh) auto auto auto auto; }
 
 #conversation-visual > summary .attachment-icon { display:block; width:24px; height:24px; flex:none; }
+
+#conversation-compose #conversation-voice-discard { width:48px; min-width:48px; height:48px; padding:6px; border-radius:50%; font-size:28px; color:var(--ink); background:var(--panel); border:2px solid #bd4949; }
+#conversation-compose #conversation-voice-discard:hover { background:color-mix(in srgb,#bd4949 16%,var(--panel)); }
