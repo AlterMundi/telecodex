@@ -56,7 +56,7 @@ from background work indicators so concurrent work cannot suppress expression.
 Beacon activation/status stays visible in the main app, including errors,
 suspension, quiet arbitration and mute. Browser-generated signal and muted zero
 output are measured separately from physical listening. These are implementation
-increments. Source Beacon revision 3 implements the confirmed additive 40.4 Hz
+increments. Source Beacon revision 4 implements the confirmed additive 40.4 Hz
 series using only gently pulsing sine waves. It replaces the rejected 65 Hz
 revision-2 composition. See sonic-expression.md and #221 for the current receiving
 selection and qualification; digital measurements remain separate from human acceptance.
@@ -251,3 +251,9 @@ limits of earlier native, deterministic and human evidence. Complete only after
 its explicit requirements are reconciled against the delivered version. Human
 visual/hearing assessment and normal daily use remain open; source publication,
 installation, observed transport and human perception are separate findings.
+
+## Real-use composer feedback — 2026-10-25
+
+The composer groups text, Send and an accessible microphone action in one block, with an explicit checkbox for spoken replies. Camera and gallery are separate image choices feeding the same immutable-image preview/point/upload path. Camera capture is user initiated through the device chooser; desktop/browser fallback may remain a file chooser. No live camera stream or automatic microphone start is added. Voice/draft/selection/retry ownership is unchanged. Beacon revision4 keeps the confirmed40.4Hz sine series while correcting low gain and discontinuous graph updates; see sonic-expression.md and #221.
+
+The real-use follow-up also requires stable composer coordinates across asynchronous conversation/observer updates, and a permanently visible recording/send icon. The audio region reserves its footprint; messages scroll separately. Image decoding falls back to browser Image/HTML canvas when ImageBitmap/OffscreenCanvas is unavailable or rejects the file. An explicit Include this image with voice checkbox lets the person keep a failed image and draft while speaking without it; nothing silently drops a selected attachment. The current backend accepts one selected image per original; multi-image messages remain a separate unimplemented increment, not a claimed fix.

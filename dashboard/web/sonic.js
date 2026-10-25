@@ -28,7 +28,7 @@ window.ConversationSound = (() => {
     return v?.schema==="daimon.sonic-expression/v2" && [v.id,v.revision].every(x=>typeof x==="string" && /^[A-Za-z0-9_.-]{1,80}$/.test(x))
       && [v.author,v.label].every(x=>typeof x==="string" && x.length>0 && x.length<=256)
       && number("fundamental_hz",20,256) && number("pulse_hz",0,1) && number("pulse_depth",0,0.5) && number("attack_ms",20,2000) && number("release_ms",20,2000)
-      && number("peak_gain",0.001,0.2) && Number.isInteger(v.max_sessions) && v.max_sessions>=1 && v.max_sessions<=32 && v.wave==="sine"
+      && number("peak_gain",0.001,0.8) && Number.isInteger(v.max_sessions) && v.max_sessions>=1 && v.max_sessions<=32 && v.wave==="sine"
       && !["partials","texture_hz","texture_depth","intervals"].some(key=>key in v)
       && Object.keys(v.components||{}).length===6 && ["idle","active","tools","goal","pending","blocked"].every(key=>Number.isInteger(v.components?.[key]) && v.components[key]>=1 && v.components[key]<=64);
   }
@@ -43,43 +43,63 @@ window.ConversationSound = (() => {
       unconfirmed:sources.filter(s=>s.state==="unknown" || [s.tools_running,s.error,s.pending].some(value=>typeof value!=="boolean")).length,truncated:!!frame.truncated};
   }
   function renderer({Context=window.AudioContext||window.webkitAudioContext,changed=()=>{}}={}) {
-    let context,master,active,retiring,quiet=false,volume=0.3,signature="",catalog;
-    const halt=group=>{if(!group)return;clearTimeout(group.timer);for(const node of group.nodes){try{node.stop?.();}catch{}try{node.disconnect();}catch{}}};
-    function stop(){const old=context;context=undefined;master?.disconnect();halt(active);halt(retiring);active=retiring=master=undefined;signature="";old?.close().catch(()=>{});changed(false);}
-    function level(){if(master && context){const p=master.gain;p.cancelScheduledValues(context.currentTime);p.setValueAtTime(quiet?0:volume*(catalog?.peak_gain||0)/2,context.currentTime);}}
+    let context,master,breath,lfo,modulation,quiet=false,volume=0.3,catalog,masterEnvelope,pulseKey,signature;
+    const tones=new Map();
+    // Track our linear envelopes rather than reading an AudioParam's scheduled target.
+    const valueAt=(envelope,at)=>!envelope?0:at>=envelope.end?envelope.target:
+      envelope.from+(envelope.target-envelope.from)*Math.max(0,(at-envelope.start)/(envelope.end-envelope.start));
+    function ramp(node,envelope,target,at,seconds,force=false){
+      if(!force && envelope?.target===target)return envelope;
+      const from=valueAt(envelope,at);node.cancelScheduledValues(at);node.setValueAtTime(from,at);
+      node.linearRampToValueAtTime(target,at+seconds);
+      return {from,target,start:at,end:at+seconds};
+    }
+    const halt=tone=>{clearTimeout(tone.timer);tone.oscillator.stop();tone.oscillator.disconnect();tone.level.disconnect();};
+    function stop(){
+      const old=context;if(!old)return;
+      const owned=[...tones.values()];tones.clear();
+      const nodes=[master,breath,lfo,modulation];
+      masterEnvelope=ramp(master.gain,masterEnvelope,0,old.currentTime,0.012);
+      // Finish the fade before disconnect/close, even when a new context starts meanwhile.
+      setTimeout(()=>{for(const tone of owned)halt(tone);for(const node of nodes){try{node?.stop?.();}catch{}try{node?.disconnect();}catch{}}old.close().catch(()=>{});},20);
+      context=master=breath=lfo=modulation=masterEnvelope=undefined;pulseKey=signature=undefined;changed(false);
+    }
+    function level(){if(master && context)masterEnvelope=ramp(master.gain,masterEnvelope,quiet?0:volume*(catalog?.peak_gain||0),context.currentTime,0.012);}
     function render(composition,v){
       catalog=v;level();if(!context || context.state!=="running")return {voices:[],dropped:composition.voices.length,running:false};
       const voices=composition.voices.filter(s=>s.components.every(key=>v.fundamental_hz*v.components[key]<context.sampleRate*0.45));
-      const key=JSON.stringify([v,voices.map(s=>[s.id,s.components])]);
+      const at=context.currentTime,nextPulse=JSON.stringify([v.pulse_hz,v.pulse_depth]);
+      if(nextPulse!==pulseKey){
+        pulseKey=nextPulse;const depth=v.pulse_hz?v.pulse_depth:0;
+        breath.gain.setValueAtTime(1-depth,at);modulation.gain.setValueAtTime(depth,at);lfo.frequency.setValueAtTime(v.pulse_hz,at);
+      }
+      // Equal frequencies share a phase-continuous carrier; membership stays in the score.
+      const weights=new Map();
+      for(const source of voices)for(const key of source.components){const hz=v.fundamental_hz*v.components[key];weights.set(hz,(weights.get(hz)||0)+1/(voices.length*source.components.length));}
+      const seconds=Math.max(v.attack_ms,v.release_ms)/1000;
+      const key=JSON.stringify([[...weights].sort((a,b)=>a[0]-b[0]),seconds]);
       if(key===signature)return {voices,dropped:composition.voices.length-voices.length,running:true};
-      signature=key;halt(retiring);retiring=active;const at=context.currentTime;
-      if(retiring){retiring.gain.gain.cancelScheduledValues(at);retiring.gain.gain.setTargetAtTime(0,at,v.release_ms/3000);
-        const owned=retiring;owned.timer=setTimeout(()=>{halt(owned);if(retiring===owned)retiring=undefined;},v.release_ms*2);}
-      const gain=context.createGain();gain.gain.setValueAtTime(0,at);gain.gain.linearRampToValueAtTime(1,at+v.attack_ms/1000);gain.connect(master);
-      active={gain,nodes:[gain]};
-      if(voices.length){
-        const tone=(frequency,amplitude,id)=>{
-          const level=context.createGain();level.connect(gain);active.nodes.push(level);
-          const depth=v.pulse_hz?v.pulse_depth:0;
-          level.gain.value=amplitude*(1-depth);
-          if(depth){
-            const lfo=context.createOscillator(),modulation=context.createGain();
-            lfo.type="sine";lfo.frequency.value=v.pulse_hz;modulation.gain.value=amplitude*depth;
-            lfo.connect(modulation);modulation.connect(level.gain);lfo.start(at);active.nodes.push(lfo,modulation);
-          }
-          const oscillator=context.createOscillator();
-          oscillator.type="sine";oscillator.frequency.value=frequency;oscillator.sessionIdentity=id;
-          oscillator.connect(level);oscillator.start(at);active.nodes.push(oscillator);
-        };
-        for(const source of voices)for(const key of source.components)
-          tone(v.fundamental_hz*v.components[key],1/(voices.length*source.components.length),source.id);
+      signature=key;
+      for(const [hz,weight] of weights){
+        let tone=tones.get(hz);
+        if(!tone){const oscillator=context.createOscillator(),gain=context.createGain();gain.gain.setValueAtTime(0,at);oscillator.type="sine";oscillator.frequency.value=hz;
+          oscillator.connect(gain);gain.connect(master);oscillator.start(at);tone={oscillator,level:gain};tones.set(hz,tone);}
+        clearTimeout(tone.timer);tone.timer=undefined;
+        tone.envelope=ramp(tone.level.gain,tone.envelope,weight,at,seconds,true);
+      }
+      for(const [hz,tone] of tones)if(!weights.has(hz)){
+        clearTimeout(tone.timer);
+        tone.envelope=ramp(tone.level.gain,tone.envelope,0,at,seconds,true);
+        tone.timer=setTimeout(()=>{if(tones.get(hz)===tone){halt(tone);tones.delete(hz);}},seconds*1000+20);
       }
       return {voices,dropped:composition.voices.length-voices.length,running:true};
     }
     return {async start(){if(!Context)throw Error("State sound is unavailable in this browser");
         const owned=context || (context=new Context());
-        if(!master){master=owned.createGain();master.gain.value=0;master.connect(owned.destination);}
-        owned.onstatechange=()=>{if(context!==owned)return;if(owned.state!=="running"){halt(active);halt(retiring);active=retiring=undefined;signature="";master.gain.value=0;}changed(owned.state==="running");};
+        if(!master){master=owned.createGain();master.gain.value=0;breath=owned.createGain();lfo=owned.createOscillator();modulation=owned.createGain();
+          breath.gain.value=1;modulation.gain.value=0;lfo.type="sine";lfo.frequency.value=0;
+          master.connect(breath);breath.connect(owned.destination);lfo.connect(modulation);modulation.connect(breath.gain);lfo.start();}
+        owned.onstatechange=()=>{if(context!==owned)return;if(owned.state!=="running"){for(const tone of tones.values())halt(tone);tones.clear();master.gain.value=0;masterEnvelope=signature=undefined;}changed(owned.state==="running");};
         await owned.resume();if(context!==owned){owned.close().catch(()=>{});return false;}changed(owned.state==="running");return owned.state==="running";},
       render,stop,setVolume(value){volume=Math.max(0,Math.min(1,Number(value)||0));level();},setQuiet(value){quiet=!!value;level();}};
   }

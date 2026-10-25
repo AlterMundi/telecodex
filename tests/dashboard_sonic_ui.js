@@ -50,23 +50,25 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   const engine=sound.renderer({Context:Audio});await engine.start();const context=Audio.instances.at(-1);
   const audible=sound.plan(frame([source(1,{waiting_for_human:true,pending:true,tools_running:true}),source(2,{execution:'idle',goal_state:'blocked'})]),vocabulary);
   engine.render(audible,vocabulary);
-  const pitched=context.nodes.filter(n=>n.sessionIdentity);
-  const first=pitched.filter(n=>n.sessionIdentity==='100:1').map(n=>n.frequency.value);
-  assert.deepEqual(first,[1,2,3,4,7].map(n=>40.4*n));
-  assert.deepEqual(pitched.filter(n=>n.sessionIdentity==='100:2').map(n=>n.frequency.value),[40.4,40.4*11]);
+  const pitched=context.nodes.filter(n=>n.kind==='osc' && n.frequency.value>1);
+  assert.deepEqual(pitched.map(n=>n.frequency.value).sort((a,b)=>a-b),[1,2,3,4,7,11].map(n=>40.4*n));
   assert(pitched.every(n=>n.type==='sine'));
-  assert(!context.nodes.some(n=>n.frequency.value===18 || n.frequency.value===845));
-  assert(context.nodes.length<60,'Two-session layered composition exceeded its bounded graph');
-  const count=context.nodes.length;engine.render(audible,vocabulary);assert.equal(context.nodes.length,count,'Metadata refresh restarted unchanged voices');
-  const master=context.nodes[0];engine.setQuiet(true);assert.equal(master.gain.value,0);engine.render(audible,vocabulary);assert.equal(master.gain.value,0);
+  assert(context.nodes.length<20,'Identical frequencies must share carriers, not create a large per-session graph');
+  const count=context.nodes.length;engine.render(audible,vocabulary);assert.equal(context.nodes.length,count,'Metadata refresh restarted unchanged carriers');
+  context.currentTime=.2;
+  const modified=sound.plan(frame([source(1,{tools_running:true}),source(2,{execution:'idle',goal_state:'absent'})]),vocabulary);
+  engine.render(modified,vocabulary);
+  for(const carrier of pitched.filter(n=>[40.4,80.8,121.2,161.6].includes(n.frequency.value)))assert(!carrier.stopped,'Unchanged frequencies must stay phase-continuous');
+  const master=context.nodes[0];engine.setQuiet(true);assert.equal(master.gain.value,0);engine.render(modified,vocabulary);assert.equal(master.gain.value,0);
   engine.setVolume(0);engine.setQuiet(false);assert.equal(master.gain.value,0);
-  engine.setVolume(1);assert.equal(master.gain.value,vocabulary.peak_gain/2);
+  engine.setVolume(1);assert.equal(master.gain.value,vocabulary.peak_gain);
+  assert(vocabulary.peak_gain>=.5,'Maximum volume must have useful headroom, rather than the old .04 ceiling');
   const alternate={...vocabulary,id:'another-being',label:'Another sine vocabulary',author:'Independent author',fundamental_hz:50};
-  engine.render(audible,alternate);assert(context.nodes.some(n=>n.sessionIdentity==='100:1' && n.frequency.value===350));
-  engine.stop();assert.equal(context.state,'closed');assert(context.nodes.filter(n=>n.kind==='osc').every(n=>n.stopped));assert.equal(timers.size,0);
+  engine.render(audible,alternate);assert(context.nodes.some(n=>n.kind==='osc' && n.frequency.value===350));
+  engine.stop();for(const [id,t] of [...timers])if(t.ms===20){timers.delete(id);t.fn();}assert.equal(context.state,'closed');assert(context.nodes.filter(n=>n.kind==='osc').every(n=>n.stopped));assert.equal(timers.size,0);
   // A late resume belongs to its old context and cannot close the newer one.
   Audio.delay=true;const delayed=sound.renderer({Context:Audio});const oldStart=delayed.start(),old=Audio.instances.at(-1);delayed.stop();
-  Audio.delay=false;await delayed.start();const newer=Audio.instances.at(-1);old.release();assert.equal(await oldStart,false);assert.equal(newer.state,'running');delayed.stop();
+  Audio.delay=false;await delayed.start();const newer=Audio.instances.at(-1);old.release();assert.equal(await oldStart,false);assert.equal(newer.state,'running');delayed.stop();for(const [id,t] of [...timers])if(t.ms===20){timers.delete(id);t.fn();}
   let now=0,calls=0,selected=frame([source(7)]);
   const client=sound.mount({api:async route=>{assert.equal(route,'interaction/sonic');calls++;return selected;},now:()=>now});
   assert.equal(calls,0,'Mount requested state before explicit listening');
@@ -81,9 +83,9 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   client.update({playback:undefined});assert(liveMaster.gain.value>0);
   now=21000;const expiry=[...timers.entries()].find(([,t])=>t.ms===20001);assert(expiry);timers.delete(expiry[0]);expiry[1].fn();assert.match(nodes.get('#conversation-sound-status').textContent,/1 unconfirmed/);
   assert(!live.nodes.some(n=>n.frequency.value===845),'Stale evidence invented a pitch');
-  const retirement=[...timers.entries()].find(([,t])=>t.ms===vocabulary.release_ms*2);assert(retirement);timers.delete(retirement[0]);retirement[1].fn();
-  assert(!live.nodes.filter(n=>!n.stopped).some(n=>n.sessionIdentity),'Stale sources retained notes after release');
-  document.hidden=true;events.get('visibilitychange')();assert.equal(live.state,'closed');assert.equal(nodes.get('#conversation-sound-status').textContent,'Off');assert.equal(timers.size,0);assert.equal(nodes.get('#conversation-sound-feedback').hidden,true);
+  const retirement=[...timers.entries()].find(([,t])=>t.ms===vocabulary.release_ms+20);assert(retirement);for(const [id,t] of [...timers])if(t.ms===vocabulary.release_ms+20){timers.delete(id);t.fn();}
+  assert(!live.nodes.filter(n=>!n.stopped).some(n=>n.kind==='osc' && n.frequency.value>1),'Stale sources retained notes after release');
+  document.hidden=true;events.get('visibilitychange')();for(const [id,t] of [...timers])if(t.ms===20){timers.delete(id);t.fn();}assert.equal(live.state,'closed');assert.equal(nodes.get('#conversation-sound-status').textContent,'Off');assert.equal(timers.size,0);assert.equal(nodes.get('#conversation-sound-feedback').hidden,true);
   await client.refresh();assert.equal(calls,1,'Hidden/reset client restarted metadata or playback');
   console.log('Sonic mapping/graph: 40.4Hz additive sine components, 20-session bounded mix, unknown/stale silence, independent vocabulary, no refresh replay, mute/capture/speech ownership, late resume and hidden teardown passed; simulated audio device, zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

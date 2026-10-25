@@ -71,26 +71,33 @@
           <div id="conversation-focus" class="conversation-tools" hidden><span id="conversation-focus-label"></span><button id="conversation-focus-clear" type="button">Back to conversation</button></div>
           <label for="conversation-message">Your message</label>
           <textarea id="conversation-message" rows="2" placeholder="Continue a topic, add a correction, or start something new…" disabled></textarea>
-          <div class="conversation-tools">
+          <div class="conversation-tools composer-actions">
           <details id="conversation-visual">
-            <summary>Add an image</summary>
+            <summary aria-label="Add an image" title="Add an image"><span aria-hidden="true">＋</span><span class="visually-hidden">Add an image</span></summary>
             <p class="note">Choose an image, then point to what you mean. Only this captured image is sent; this does not share a live view.</p>
-            <label for="conversation-image">Image</label><input id="conversation-image" type="file" accept="image/*">
+            <div class="image-choices"><label class="image-choice" for="conversation-image">🖼 Choose image<input id="conversation-image" type="file" accept="image/*"></label><label class="image-choice" for="conversation-camera">📷 Take photo<input id="conversation-camera" type="file" accept="image/*" capture="environment"></label></div>
             <div class="visual-preview"><canvas id="conversation-image-view" tabindex="0" role="img" aria-label="Selected image. Click a point, use arrow keys, or enter X and Y below." hidden></canvas></div>
-            <div class="conversation-tools"><label>X <input id="conversation-image-x" type="number" min="0" step="1" disabled></label><label>Y <input id="conversation-image-y" type="number" min="0" step="1" disabled></label><button id="conversation-image-clear" type="button" hidden>Remove image</button></div>
+            <div id="conversation-image-coordinates" class="conversation-tools" hidden><label>X <input id="conversation-image-x" type="number" min="0" step="1" disabled></label><label>Y <input id="conversation-image-y" type="number" min="0" step="1" disabled></label></div><button id="conversation-image-clear" type="button" hidden>Remove image</button>
+            <label class="image-voice-option"><input id="conversation-image-with-voice" type="checkbox" checked> Include this image with voice</label>
             <p id="conversation-image-state" class="note" role="status" aria-live="polite"></p>
           </details>
-<span class="note">You can write again while sessions work.</span><button id="conversation-send" type="submit" disabled>Send</button></div>
+        <section id="conversation-voice" hidden aria-label="Speak to your conversation">
+          <div class="conversation-tools"><label class="voice-replies-switch"><input id="conversation-voice-replies" type="checkbox"><span id="conversation-voice-label">Read replies aloud</span></label><button id="conversation-talk" type="button" aria-pressed="false" disabled aria-label="Record a voice message" title="Record a voice message">🎙</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
+        </section>
+<button id="conversation-send" type="submit" disabled>Send</button></div>
+          <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
           <p id="conversation-send-state" role="status" aria-live="polite"></p>
         </form>
         <div id="conversation-audio-tools">
-        <section id="conversation-voice" hidden aria-label="Speak to your conversation">
-          <div class="conversation-tools"><button id="conversation-voice-replies" type="button" aria-pressed="false">Read aloud</button><button id="conversation-talk" type="button" aria-pressed="false" disabled>Talk</button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
-        </section>
         <div class="conversation-tools"><button id="conversation-sound-toggle" type="button" aria-pressed="false">≈ Beacon</button></div>
         <div id="conversation-sound-controls" hidden><label for="conversation-sound-volume">Beacon volume</label><input id="conversation-sound-volume" type="range" min="0" max="1" step="0.05" value="0.3"></div>
         <p id="conversation-sound-feedback" class="note" role="status" aria-live="polite" hidden></p>
-        <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
+
+        <section id="conversation-player" hidden aria-label="Reply audio">
+          <div class="conversation-tools"><strong id="conversation-playing"></strong><button id="conversation-stop" type="button">Stop audio</button></div>
+          <audio id="conversation-audio" controls preload="none"></audio>
+          <p id="conversation-audio-state" role="status" aria-live="polite"></p>
+        </section>
         </div>
         <details id="conversation-diagnostics">
         <summary>Under the hood <span aria-hidden="true">+</span></summary>
@@ -116,11 +123,6 @@
         </div>
         </div>
         </details>
-        <section id="conversation-player" hidden aria-label="Reply audio">
-          <div class="conversation-tools"><strong id="conversation-playing"></strong><button id="conversation-stop" type="button">Stop audio</button></div>
-          <audio id="conversation-audio" controls preload="none"></audio>
-          <p id="conversation-audio-state" role="status" aria-live="polite"></p>
-        </section>
         <p class="note">Work continues in its sessions while you read or listen.</p>
       </section>
       <details id="host" hidden>

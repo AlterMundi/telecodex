@@ -54,11 +54,11 @@ Unknown evidence remains visibly unknown; it is not an error or idle assertion.
 Tool/subagent, pending and error components require their actual current evidence,
 not inference from `execution=working` or from one generic wait flag.
 
-The default `daimon.sonic-expression/v2` Source Beacon vocabulary (revision 3)
+The default `daimon.sonic-expression/v2` Source Beacon vocabulary (revision 4)
 implements this composition. Revision 2 was rejected after the human reported
 excessive high harmonics; its old spectrum measurements are historical evidence,
 not acceptance. The renderer uses 0.22 Hz sinusoidal amplitude breathing with
-25% depth, 180 ms attack and 350 ms release. No additional partial stack exists.
+25% depth and phase-continuous carriers. Weight changes use a shared 350 ms linear transition (the larger attack/release duration), and volume/voice quieting uses a 12 ms fade. No additional partial stack exists.
 An owner can supply a complete v2 vocabulary; legacy v1 palettes fail explicitly
 rather than silently restoring the rejected sound.
 
@@ -75,12 +75,10 @@ The score lists every contributing F component per session. At most 24 sessions
 sound, with waiting/blocked/working sessions prioritized before idle sessions.
 Each session's sine components share its normalized gain budget; the sum is
 normalized across included sessions. Idle sessions contribute F1 rather than
-silence. Repeated frequencies retain their session membership. The default maximum
+silence. Repeated frequencies retain their session membership in the score and share one persistent oscillator in the audio graph. The default maximum
 frequency is F11 (444.4 Hz), plus the narrow sidebands inherent in gentle amplitude
 pulsing. Notes outside the browser sample-rate limit are omitted and reported.
-Old/new groups crossfade with at most two groups alive; owned timers and oscillators
-are canceled on Stop. The peak limit is 0.08 before user volume; zero volume keeps
-the score visible.
+All carrier weights transition together from their current envelope values, preserving a total weight no greater than one even under rapid changes. Zero-weight carriers are removed only after their fade; returning frequencies cancel retirement. Stop fades before closing its owned context. The default peak limit is 0.6 before user volume (previously an effective 0.04); zero volume keeps the score visible. Muting/voice priority reaches exact zero after the 12 ms fade.
 
 Microphone permission/recording/finalization, voice upload and preparing/playing
 an owned speech reply silence the state layer. Idle and paused speech do not.
@@ -102,3 +100,5 @@ all six selected frequencies, absence of the rejected high partial stack, and
 exact mute/speech-priority silence. Complete S01–S05 in
 `docs/interaction-qualification.md` against current sessions and retain human
 listening observations separately; no human acceptance is inferred from tests.
+
+Human real-use feedback on2026-10-25 rejected the low maximum volume and reported continuous clicks. Revision4 raises available gain15x and removes whole-group oscillator restarts and abrupt master changes. Offline audio checks exercise rapid state/volume/quiet transitions as well as quiet/stale silence; they do not rule out device buffer underruns or substitute for physical listening acceptance.
