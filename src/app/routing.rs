@@ -138,11 +138,27 @@ fn route(message: &Message) -> ReturnRoute {
 }
 
 pub(super) fn label(shared: &AppShared, key: SessionKey) -> String {
-    profile(shared)
-        .ok()
-        .and_then(|c| c.targets.into_iter().find(|t| t.topic_id == key.thread_id))
-        .map(|t| t.name)
-        .unwrap_or_else(|| format!("t{}", key.thread_id))
+    let cfg = profile(shared).ok();
+    let fallback = format!("t{}", key.thread_id);
+    let name = cfg
+        .as_ref()
+        .and_then(|c| c.targets.iter().find(|t| t.topic_id == key.thread_id))
+        .map(|t| t.name.clone())
+        .unwrap_or_else(|| fallback.clone());
+    if name == fallback
+        && cfg.as_ref().is_some_and(|c| {
+            c.chat_id == key.chat_id
+                && shared.store.session_creator(key).ok().flatten() == Some(c.human_id)
+        })
+        && let Ok(Some(session)) = shared.store.get_session(key)
+        && let Some(title) = session.session_title
+        && !title.trim().is_empty()
+        && title.len() <= 200
+        && !title.chars().any(char::is_control)
+    {
+        return title.trim().to_owned();
+    }
+    name
 }
 
 pub(super) fn notice(shared: Arc<AppShared>, origin: ReturnRoute, text: String) {
