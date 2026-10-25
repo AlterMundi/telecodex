@@ -11,7 +11,7 @@ class Param{constructor(value=0){this.value=value;}cancelScheduledValues(){}setV
 class Node{constructor(kind){this.kind=kind;this.gain=new Param();this.frequency=new Param();this.connections=[];this.stopped=false;}connect(n){this.connections.push(n);}disconnect(){this.connections=[];}start(){this.started=true;}stop(){this.stopped=true;}}
 class Audio{
   static instances=[];static delay=false;
-  constructor(){this.sampleRate=48000;this.currentTime=0;this.state='suspended';this.nodes=[];this.destination={};Audio.instances.push(this);}
+  constructor(options){this.options=options;this.sampleRate=48000;this.currentTime=0;this.state='suspended';this.nodes=[];this.destination={};Audio.instances.push(this);}
   createGain(){const n=new Node('gain');this.nodes.push(n);return n;}
   createOscillator(){const n=new Node('osc');this.nodes.push(n);return n;}
   async resume(){if(Audio.delay)await new Promise(resolve=>{this.release=resolve;});this.state='running';this.onstatechange?.();}
@@ -47,7 +47,7 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   const layered=source(1,{tools_running:true,pending:true,error:true});
   assert.deepEqual(Array.from(sound.components(layered,1000000)),['idle','active','tools','goal','pending','blocked']);
   assert.deepEqual(Array.from(sound.components(source(1,{execution:'idle',goal_state:'absent'}),1000000)),['idle']);
-  const engine=sound.renderer({Context:Audio});await engine.start();const context=Audio.instances.at(-1);
+  const engine=sound.renderer({Context:Audio});await engine.start();const context=Audio.instances.at(-1);assert.equal(context.options.latencyHint,'playback');
   const audible=sound.plan(frame([source(1,{waiting_for_human:true,pending:true,tools_running:true}),source(2,{execution:'idle',goal_state:'blocked'})]),vocabulary);
   engine.render(audible,vocabulary);
   const pitched=context.nodes.filter(n=>n.kind==='osc' && n.frequency.value>=20);
@@ -67,10 +67,14 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   assert(vocabulary.peak_gain>=.5,'Maximum volume must have useful headroom, rather than the old .04 ceiling');
   const alternate={...vocabulary,id:'another-being',label:'Another sine vocabulary',author:'Independent author',fundamental_hz:50};
   engine.render(audible,alternate);assert(context.nodes.some(n=>n.kind==='osc' && n.frequency.value===350));
-  engine.stop();for(const [id,t] of [...timers])if(t.ms===150){timers.delete(id);t.fn();}assert.equal(context.state,'closed');assert(context.nodes.filter(n=>n.kind==='osc').every(n=>n.stopped));assert.equal(timers.size,0);
+  engine.stop();
+  const firstCleanup=[...timers.entries()].find(([,t])=>Math.abs(t.ms-370)<.01);assert(firstCleanup);
+  timers.delete(firstCleanup[0]);firstCleanup[1].fn();
+  assert.equal(context.state,'running','Wall time alone must not close a still-fading audio clock');
+  for(const [id,t] of [...timers])if(Math.abs(t.ms-370)<.01){timers.delete(id);for(const c of Audio.instances)c.currentTime+=1;t.fn();}assert.equal(context.state,'closed');assert(context.nodes.filter(n=>n.kind==='osc').every(n=>n.stopped));assert.equal(timers.size,0);
   // A late resume belongs to its old context and cannot close the newer one.
   Audio.delay=true;const delayed=sound.renderer({Context:Audio});const oldStart=delayed.start(),old=Audio.instances.at(-1);delayed.stop();
-  Audio.delay=false;await delayed.start();const newer=Audio.instances.at(-1);old.release();assert.equal(await oldStart,false);assert.equal(newer.state,'running');delayed.stop();for(const [id,t] of [...timers])if(t.ms===150){timers.delete(id);t.fn();}
+  Audio.delay=false;await delayed.start();const newer=Audio.instances.at(-1);old.release();assert.equal(await oldStart,false);assert.equal(newer.state,'running');delayed.stop();for(const [id,t] of [...timers])if(Math.abs(t.ms-370)<.01){timers.delete(id);for(const c of Audio.instances)c.currentTime+=1;t.fn();}
   let now=0,calls=0,selected=frame([source(7)]);
   const client=sound.mount({api:async route=>{assert.equal(route,'interaction/sonic');calls++;return selected;},now:()=>now});
   assert.equal(calls,0,'Mount requested state before explicit listening');
@@ -85,9 +89,10 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   client.update({playback:undefined});assert(liveMaster.gain.value>0);
   now=21000;const expiry=[...timers.entries()].find(([,t])=>t.ms===20001);assert(expiry);timers.delete(expiry[0]);expiry[1].fn();assert.match(nodes.get('#conversation-sound-status').textContent,/1 unconfirmed/);
   assert(!live.nodes.some(n=>n.frequency.value===845),'Stale evidence invented a pitch');
-  const retirement=[...timers.entries()].find(([,t])=>t.ms===vocabulary.release_ms+20);assert(retirement);for(const [id,t] of [...timers])if(t.ms===vocabulary.release_ms+20){timers.delete(id);t.fn();}
-  assert(!live.nodes.filter(n=>!n.stopped).some(n=>n.kind==='osc' && n.frequency.value>=20),'Stale sources retained notes after release');
-  document.hidden=true;events.get('visibilitychange')();for(const [id,t] of [...timers])if(t.ms===150){timers.delete(id);t.fn();}assert.equal(live.state,'closed');assert.equal(nodes.get('#conversation-sound-status').textContent,'Off');assert.equal(timers.size,0);assert.equal(nodes.get('#conversation-sound-feedback').hidden,true);
+  const carriers=live.nodes.filter(n=>n.kind==='osc' && n.frequency.value>=20);
+  assert(carriers.every(n=>!n.stopped),'A stale state must fade its carriers without a wall-clock cutoff');
+  assert(![...timers.values()].some(t=>t.ms===vocabulary.release_ms+20),'Carrier retirement must not race the audio clock');
+  document.hidden=true;events.get('visibilitychange')();for(const [id,t] of [...timers])if(Math.abs(t.ms-370)<.01){timers.delete(id);for(const c of Audio.instances)c.currentTime+=1;t.fn();}assert.equal(live.state,'closed');assert.equal(nodes.get('#conversation-sound-status').textContent,'Off');assert.equal(timers.size,0);assert.equal(nodes.get('#conversation-sound-feedback').hidden,true);
   await client.refresh();assert.equal(calls,1,'Hidden/reset client restarted metadata or playback');
   document.hidden=false;const beforeMetadata=Audio.instances.length;let observedMetadata=0;
   const metadataView=sound.mount({api:async()=>frame([source(1)]),onState:()=>observedMetadata++});

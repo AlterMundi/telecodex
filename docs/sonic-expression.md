@@ -114,3 +114,13 @@ automated value before a replacement ramp. Existing weight fades and observed
 state/voice ownership remain in force. Digital signal qualification and physical
 phone click-free acceptance are separate; the latter remains a human listening
 check. Legacy vocabularies without pulse_mode retain the shared-pulse mode.
+
+
+Phone listening correction: avoiding clicks takes priority over loudness or
+expressive detail. The renderer requests playback buffering, retains its bounded
+carrier bank at zero gain rather than stopping/recreating notes on wall-clock
+timers, and checks the actual audio clock before final context teardown. Source
+revision6 uses 750/1000ms membership envelopes. These changes remove an identified
+clock-domain hazard; digital waveform checks still cannot guarantee a physical
+phone, browser interruption or loudspeaker will never click. Audible acceptance
+must remain explicit rather than inferred from offline synthesis.

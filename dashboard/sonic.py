@@ -5,10 +5,10 @@ import math
 import re
 
 DEFAULT = {
-    'schema':'daimon.sonic-expression/v2','id':'source-beacon','revision':'5',
+    'schema':'daimon.sonic-expression/v2','id':'source-beacon','revision':'6',
     'author':'Source / CompAII','label':'Source Beacon',
     'fundamental_hz':40.4,'wave':'sine','pulse_hz':0.25,'pulse_depth':0.25,'pulse_mode':'harmonic',
-    'attack_ms':180,'release_ms':350,'max_sessions':24,'peak_gain':0.6,
+    'attack_ms':750,'release_ms':1000,'max_sessions':24,'peak_gain':0.6,
     'components':{'idle':1,'active':2,'tools':3,'goal':4,'pending':7,'blocked':11},
     'provenance':['Nicolas: 40.4 Hz F1; additive F1 idle, F2 active, F3 tools/subagents, F4 active goal, F7 pending, F11 blockage/error; pure sine waves with gentle amplitude pulses'],
 }
