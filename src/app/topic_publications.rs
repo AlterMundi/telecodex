@@ -13,7 +13,9 @@ impl Drop for Lease {
 
 pub(super) fn enabled(shared: &AppShared, key: SessionKey, human: i64) -> bool {
     shared.config.interaction.as_ref().is_some_and(|c| {
-        c.telegram_projection && c.human_id == human && super::routing::enrolled(shared, key)
+        c.telegram_projection
+            && c.human_id == human
+            && (super::routing::enrolled(shared, key) || (c.telegram_ingress && c.entry() == key))
     })
 }
 
@@ -28,6 +30,12 @@ pub(super) fn wake(shared: Arc<AppShared>, key: SessionKey) {
     let Ok(Some(human)) = shared.store.topic_publication_owner(key) else {
         return;
     };
+    if let Some(c) = shared.config.interaction.as_ref()
+        && c.entry() != key
+        && enabled(&shared, c.entry(), c.human_id)
+    {
+        wake(shared.clone(), c.entry());
+    }
     for files in [false, true] {
         let shared = shared.clone();
         tokio::spawn(async move {

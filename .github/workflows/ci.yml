@@ -230,7 +230,7 @@ jobs:
           # Every suite owns its temporary native/HTTP peers, sockets and store.
           # Keep all existing gates and logs; at most four synthetic fixture processes.
           # Native/model work and physical devices are never shared by these suites.
-          suites = ('pending_io.py', 'merge_io.py', 'stopping_io.py', 'attachment_io.py', 'voice_io.py', 'goals_io.py', 'nexus_io.py', 'nexus_context_io.py', 'icons_io.py', 'stickers_io.py', 'reactions_io.py', 'fork_io.py', 'tribu_io.py', 'topic_projection_io.py', 'native_delivery_recovery_io.py')
+          suites = ('pending_io.py', 'merge_io.py', 'stopping_io.py', 'attachment_io.py', 'voice_io.py', 'goals_io.py', 'nexus_io.py', 'nexus_context_io.py', 'icons_io.py', 'stickers_io.py', 'reactions_io.py', 'fork_io.py', 'tribu_io.py', 'topic_projection_io.py', 'entry_projection_io.py', 'native_delivery_recovery_io.py')
           with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
               jobs = [pool.submit(qualify, suite) for suite in suites]
               for job in concurrent.futures.as_completed(jobs):

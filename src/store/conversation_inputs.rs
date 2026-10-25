@@ -951,6 +951,9 @@ impl Store {
             bail!("Conversation input belongs to a retired listener");
         }
         let updated = read_on(&tx, id, human)?;
+        if phase == "accepted" {
+            super::topic_publications::conversation_accepted_on(&tx, &updated)?;
+        }
         tx.commit()?;
         Ok(updated)
     }
@@ -1383,6 +1386,54 @@ mod tests {
             .record_turn_native_thread(local, "entry-native")
             .unwrap();
         local
+    }
+
+    #[test]
+    fn accepted_web_original_has_one_secondary_echo_without_another_submission() {
+        use ConversationInputEvent as E;
+        let (_file, store, key, binding) = setup();
+        store
+            .save_bot_state(
+                "telegram_entry_projection",
+                &json!([100, key.chat_id, key.thread_id]).to_string(),
+            )
+            .unwrap();
+        let id = Uuid::now_v7().to_string();
+        store
+            .conversation_input_capture(100, key, &binding, &id, "Exact app original")
+            .unwrap();
+        store.conversation_input_event(100, &id, E::Queue).unwrap();
+        let local = turn(&store, key);
+        store.topic_projection_register(local, 100, key).unwrap();
+        store
+            .conversation_input_event(
+                100,
+                &id,
+                E::Begin {
+                    local_turn: local,
+                    steer: false,
+                },
+            )
+            .unwrap();
+        assert!(store.topic_publication_claim(key, 100).unwrap().is_none());
+        for _ in 0..2 {
+            store
+                .conversation_input_event(100, &id, E::Accepted { local_turn: local })
+                .unwrap();
+        }
+        let echo = store.topic_publication_claim(key, 100).unwrap().unwrap();
+        assert_eq!(echo.body, "You · app\n\nExact app original");
+        assert_eq!(echo.local_turn, local);
+        assert_eq!(
+            store.topic_publication_inventory(100).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        store.topic_publication_release(echo.id).unwrap();
+        store.set_session_codex_thread(key, "replacement").unwrap();
+        assert!(store.topic_publication_claim(key, 100).unwrap().is_none());
     }
 
     #[test]

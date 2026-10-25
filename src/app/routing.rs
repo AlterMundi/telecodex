@@ -1513,9 +1513,16 @@ fn relevance(d: &crate::interaction::Delivery) -> &'static str {
 }
 
 fn publish(shared: Arc<AppShared>, delivery: crate::interaction::Delivery, human: i64) {
-    if delivery.origin.message_id.is_none() {
-        // The canonical presentation API already reads the retained delivery.
-        // No Telegram attempt, delivery receipt or hearing acknowledgment exists.
+    if delivery.origin.message_id.is_none()
+        && !shared.config.interaction.as_ref().is_some_and(|c| {
+            c.telegram_ingress
+                && c.telegram_projection
+                && c.human_id == human
+                && c.entry()
+                    == SessionKey::new(delivery.origin.chat_id, Some(delivery.origin.thread_id))
+        })
+    {
+        // Web-only entry keeps canonical results without a Telegram attempt.
         return;
     }
     tokio::spawn(async move {
