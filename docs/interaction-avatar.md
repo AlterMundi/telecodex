@@ -85,3 +85,13 @@ The UI has receiving adoption evidence, but that is separate from human aestheti
 acceptance. Q17/Q18/V07 in `interaction-qualification.md` retain the complete
 integration and actual-device boundaries; do not turn old development checkpoints
 or source-only tests into claims of perceived expressions or delight.
+
+The Source app also has a continuous local ambient layer, separate from finite
+response gestures and their selected resting expression. While reply audio plays,
+its glyph sequence continues at160ms per frame. Otherwise the observed activity
+and the existing Beacon state snapshot shape a slower cycle. Fitting static pack
+variants remain static. Hidden pages and reduced motion stop these timers;
+unchanged observations preserve phase. Stale source state returns to the baseline
+rhythm without claiming continued work. The existing chat refresh reads the same
+bounded observer metadata even when sound is off; it does not start audio,
+native work, inference or another polling loop.

@@ -8,7 +8,7 @@ window.ConversationCompanion = (() => {
   function portrait(pose,frame=0) {
     const centres={calm:" . : . ",curious:" . ? . ",focused:" > : < ",
       listening:"(  :  )",speaking:"~ .:. ~",delighted:"+  *  +",uncertain:" .   . "};
-    const centre=centres[pose]||centres.calm;
+    const centre=pose==="speaking"?["~ .:. ~","< ::: >","~ :.: ~"][frame%3]:centres[pose]||centres.calm;
     const rows=["         . : .", "      .:'     ':.", "    .:   .---.   :.",
       "   :   .'     '.   :", ` --:--( ${centre} )--:--`,
       "   :   '.     .'   :", "    ':.  '---'  .:'", "       ':.   .:'", "          ':'"];
@@ -25,6 +25,39 @@ window.ConversationCompanion = (() => {
     const staleAfter=20000;
     let pack, catalog, packSignature, frameTimer, frameIndex=0, frameExpression,lastExpression;
     function stopFrames(){clearTimeout(frameTimer);frameTimer=undefined;frameIndex=0;frameExpression=undefined;}
+    let ambientTimer,ambientIndex=0,ambientKey,sonicFrame,sonicAt=0;
+    function stopAmbient(){clearTimeout(ambientTimer);ambientTimer=undefined;ambientIndex=0;ambientKey=undefined;}
+    function ambientPeriod(){
+      if(state.playback==="playing")return 160;
+      let factor=1;
+      if(state.connected && observed && now()-observed<staleAfter){
+        if(state.activity?.integrator_busy || state.activity?.sources?.some(s=>s.known && s.busy))factor=2;
+        if(state.activity?.sources?.some(s=>s.known && s.observer_synthesizing>0))factor=3;
+      }
+      if(sonicFrame?.connected===true && now()-sonicAt<staleAfter){
+        for(const source of sonicFrame.sources){
+          if(!source || typeof source!=="object")continue;
+          const age=sonicFrame.observed_at*1000-Number(source.observed_at)*1000+now()-sonicAt;
+          if(source.fresh!==true || !Number.isFinite(age) || age<0 || age>staleAfter)continue;
+          if(source.execution==="working")factor=Math.max(factor,2);
+          if(source.tools_running===true)factor=Math.max(factor,3);
+          if(source.goal_state==="active")factor=Math.max(factor,4);
+          if(source.pending===true)factor=Math.max(factor,7);
+          if(source.error===true || ["blocked","usageLimited","budgetLimited"].includes(source.goal_state))factor=11;
+        }
+      }
+      return Math.round(1200/(1+Math.log2(factor)));
+    }
+    function ambient(expression,frames){
+      const interval=ambientPeriod(),enabled=!document.hidden && !motion?.matches && (state.connected || state.capture || state.playback);
+      const key=JSON.stringify([expression,interval,frames.frames.length,!!enabled]);
+      if(key===ambientKey)return;
+      stopAmbient();ambientKey=key;box.dataset.cycle=String(interval);
+      if(!enabled || frames.frames.length<2)return;
+      const tick=()=>{if(ambientKey!==key)return;ambientTimer=undefined;ambientIndex=(ambientIndex+1)%frames.frames.length;draw(false);if(ambientKey===key)ambientTimer=setTimeout(tick,interval);};
+      ambientTimer=setTimeout(tick,interval);
+    }
+
     function validPack(value){
       const ident=x=>typeof x==="string" && /^[a-zA-Z0-9_.-]{1,80}$/.test(x);
       if(!value || value.schema!=="daimon.ascii-expression/v1" || !ident(value.id) || !ident(value.revision)
@@ -46,7 +79,7 @@ window.ConversationCompanion = (() => {
       try {if(typeof digest==="string" && /^[a-f0-9]{64}$/.test(digest) && validPack(value))selected=value;}catch{}
       const signature=JSON.stringify([selected,digest]);
       if(signature===packSignature)return;
-      stopFrames();animation?.cancel();pack=selected;catalog=digest;packSignature=signature;lastReply=undefined;
+      stopAmbient();stopFrames();animation?.cancel();pack=selected;catalog=digest;packSignature=signature;lastReply=undefined;
       rest=pack?pack.defaults.app.expression:"calm";lastExpression=undefined;draw(false);
     }
     function selection(expression){
@@ -105,7 +138,8 @@ window.ConversationCompanion = (() => {
       const changed=expression!==lastExpression;lastExpression=expression;
       if(changed){stopFrames();animation?.cancel();if(animateChange && (state.connected || state.capture==="recording"))playFrames(expression);}
       const selected=pack?selection(expression):undefined,frames=selected||framesFor(expression);
-      const art=frames.frames[frameExpression===expression?Math.min(frameIndex,frames.frames.length-1):0];
+      ambient(expression,frames);
+      const art=frames.frames[frameExpression===expression?Math.min(frameIndex,frames.frames.length-1):ambientIndex%frames.frames.length];
       if(selected){face.setAttribute("aria-hidden","false");face.setAttribute("role","img");face.setAttribute("aria-label",selected.entry.alt);face.title=pack.authorship;face.dataset.fallback=String(!!selected.fallback);}
       else {face.setAttribute("aria-hidden","true");face.setAttribute("aria-label","Companion portrait");face.dataset.fallback="false";}
       if(face.textContent!==art)face.textContent=art;
@@ -156,14 +190,14 @@ window.ConversationCompanion = (() => {
         animation=face.animate?.(frames,{duration:850,iterations:1});
       }
     }
-    function reset(){clearTimeout(expiry);stopFrames();animation?.cancel();state={};observed=0;lastReply=undefined;rest=pack?pack.defaults.app.expression:"calm";lastExpression=undefined;draw(false);}
+    function reset(){clearTimeout(expiry);stopAmbient();sonicFrame=undefined;sonicAt=0;stopFrames();animation?.cancel();state={};observed=0;lastReply=undefined;rest=pack?pack.defaults.app.expression:"calm";lastExpression=undefined;draw(false);}
     document.addEventListener("visibilitychange",()=>{
-      if(document.hidden){clearTimeout(expiry);stopFrames();animation?.cancel();draw();}
+      if(document.hidden){clearTimeout(expiry);stopAmbient();stopFrames();animation?.cancel();draw();}
       else {draw();arm();}
     });
-    motion?.addEventListener?.("change",()=>{if(motion.matches){stopFrames();animation?.cancel();draw();}});
+    motion?.addEventListener?.("change",()=>{if(motion.matches){stopAmbient();stopFrames();animation?.cancel();}draw();});
     box.hidden=false;draw();
-    return {update,observe,reply,reset,configure};
+    return {update,observe,reply,reset,configure,sonic(value){if(value?.schema!=="telecodex.sonic-state/v1" || !Array.isArray(value.sources) || value.sources.length>65 || !Number.isFinite(value.observed_at))return;sonicFrame=value;sonicAt=now();draw(false);}};
   }
   return {mount};
 })();

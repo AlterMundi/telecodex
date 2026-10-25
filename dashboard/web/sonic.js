@@ -29,6 +29,7 @@ window.ConversationSound = (() => {
       && [v.author,v.label].every(x=>typeof x==="string" && x.length>0 && x.length<=256)
       && number("fundamental_hz",20,256) && number("pulse_hz",0,1) && number("pulse_depth",0,0.5) && number("attack_ms",20,2000) && number("release_ms",20,2000)
       && number("peak_gain",0.001,0.8) && Number.isInteger(v.max_sessions) && v.max_sessions>=1 && v.max_sessions<=32 && v.wave==="sine"
+      && (v.pulse_mode===undefined || ["shared","harmonic"].includes(v.pulse_mode))
       && !["partials","texture_hz","texture_depth","intervals"].some(key=>key in v)
       && Object.keys(v.components||{}).length===6 && ["idle","active","tools","goal","pending","blocked"].every(key=>Number.isInteger(v.components?.[key]) && v.components[key]>=1 && v.components[key]<=64);
   }
@@ -50,40 +51,51 @@ window.ConversationSound = (() => {
       envelope.from+(envelope.target-envelope.from)*Math.max(0,(at-envelope.start)/(envelope.end-envelope.start));
     function ramp(node,envelope,target,at,seconds,force=false){
       if(!force && envelope?.target===target)return envelope;
-      const from=valueAt(envelope,at);node.cancelScheduledValues(at);node.setValueAtTime(from,at);
+      const from=valueAt(envelope,at);if(node.cancelAndHoldAtTime)node.cancelAndHoldAtTime(at);else node.cancelScheduledValues(at);
+      // Anchor even after a settled hold; otherwise the next ramp can extend backward.
+      node.setValueAtTime(from,at);
       node.linearRampToValueAtTime(target,at+seconds);
       return {from,target,start:at,end:at+seconds};
     }
-    const halt=tone=>{clearTimeout(tone.timer);tone.oscillator.stop();tone.oscillator.disconnect();tone.level.disconnect();};
+    const halt=tone=>{clearTimeout(tone.timer);tone.oscillator.stop();tone.oscillator.disconnect();tone.level.disconnect();tone.pulse?.stop();tone.pulse?.disconnect();tone.pulseDepth?.disconnect();tone.breath?.disconnect();};
     function stop(){
       const old=context;if(!old)return;
       const owned=[...tones.values()];tones.clear();
       const nodes=[master,breath,lfo,modulation];
-      masterEnvelope=ramp(master.gain,masterEnvelope,0,old.currentTime,0.012);
+      masterEnvelope=ramp(master.gain,masterEnvelope,0,old.currentTime,0.12);
       // Finish the fade before disconnect/close, even when a new context starts meanwhile.
-      setTimeout(()=>{for(const tone of owned)halt(tone);for(const node of nodes){try{node?.stop?.();}catch{}try{node?.disconnect();}catch{}}old.close().catch(()=>{});},20);
+      setTimeout(()=>{for(const tone of owned)halt(tone);for(const node of nodes){try{node?.stop?.();}catch{}try{node?.disconnect();}catch{}}old.close().catch(()=>{});},150);
       context=master=breath=lfo=modulation=masterEnvelope=undefined;pulseKey=signature=undefined;changed(false);
     }
-    function level(){if(master && context)masterEnvelope=ramp(master.gain,masterEnvelope,quiet?0:volume*(catalog?.peak_gain||0),context.currentTime,0.012);}
+    function level(){if(master && context)masterEnvelope=ramp(master.gain,masterEnvelope,quiet?0:volume*(catalog?.peak_gain||0),context.currentTime,0.12);}
     function render(composition,v){
       catalog=v;level();if(!context || context.state!=="running")return {voices:[],dropped:composition.voices.length,running:false};
       const voices=composition.voices.filter(s=>s.components.every(key=>v.fundamental_hz*v.components[key]<context.sampleRate*0.45));
-      const at=context.currentTime,nextPulse=JSON.stringify([v.pulse_hz,v.pulse_depth]);
+      const at=context.currentTime,nextPulse=JSON.stringify([v.pulse_mode,v.pulse_hz,v.pulse_depth]);
       if(nextPulse!==pulseKey){
-        pulseKey=nextPulse;const depth=v.pulse_hz?v.pulse_depth:0;
-        breath.gain.setValueAtTime(1-depth,at);modulation.gain.setValueAtTime(depth,at);lfo.frequency.setValueAtTime(v.pulse_hz,at);
+        pulseKey=nextPulse;const depth=v.pulse_hz && v.pulse_mode!=="harmonic"?v.pulse_depth:0;
+        breath.gain.setValueAtTime(1-depth,at);modulation.gain.setValueAtTime(depth,at);lfo.frequency.setValueAtTime(v.pulse_mode==="harmonic"?0:v.pulse_hz,at);
       }
       // Equal frequencies share a phase-continuous carrier; membership stays in the score.
       const weights=new Map();
       for(const source of voices)for(const key of source.components){const hz=v.fundamental_hz*v.components[key];weights.set(hz,(weights.get(hz)||0)+1/(voices.length*source.components.length));}
       const seconds=Math.max(v.attack_ms,v.release_ms)/1000;
-      const key=JSON.stringify([[...weights].sort((a,b)=>a[0]-b[0]),seconds]);
+      const key=JSON.stringify([[...weights].sort((a,b)=>a[0]-b[0]),seconds,nextPulse]);
       if(key===signature)return {voices,dropped:composition.voices.length-voices.length,running:true};
       signature=key;
       for(const [hz,weight] of weights){
         let tone=tones.get(hz);
         if(!tone){const oscillator=context.createOscillator(),gain=context.createGain();gain.gain.setValueAtTime(0,at);oscillator.type="sine";oscillator.frequency.value=hz;
-          oscillator.connect(gain);gain.connect(master);oscillator.start(at);tone={oscillator,level:gain};tones.set(hz,tone);}
+          const envelope=context.createGain(),pulse=context.createOscillator(),pulseDepth=context.createGain();
+          envelope.gain.value=1;pulseDepth.gain.value=0;pulse.type="sine";pulse.frequency.value=0;
+          oscillator.connect(gain);gain.connect(envelope);envelope.connect(master);pulse.connect(pulseDepth);pulseDepth.connect(envelope.gain);
+          pulse.start(at);oscillator.start(at);tone={oscillator,level:gain,breath:envelope,pulse,pulseDepth};tones.set(hz,tone);}
+        if(tone.pulseKey!==nextPulse){
+          tone.pulseKey=nextPulse;const depth=v.pulse_mode==="harmonic" && v.pulse_hz?v.pulse_depth:0;
+          // Native audio-rate LFOs keep each harmonic's envelope off the UI clock.
+          tone.breath.gain.setTargetAtTime(1-depth,at,0.04);tone.pulseDepth.gain.setTargetAtTime(depth,at,0.04);
+          tone.pulse.frequency.setValueAtTime(v.pulse_mode==="harmonic"?v.pulse_hz*hz/v.fundamental_hz:0,at);
+        }
         clearTimeout(tone.timer);tone.timer=undefined;
         tone.envelope=ramp(tone.level.gain,tone.envelope,weight,at,seconds,true);
       }
@@ -103,7 +115,7 @@ window.ConversationSound = (() => {
         await owned.resume();if(context!==owned){owned.close().catch(()=>{});return false;}changed(owned.state==="running");return owned.state==="running";},
       render,stop,setVolume(value){volume=Math.max(0,Math.min(1,Number(value)||0));level();},setQuiet(value){quiet=!!value;level();}};
   }
-  function mount({api,unauthorized=()=>{},getAuthority=()=>"",now=()=>performance.now()}={}) {
+  function mount({api,unauthorized=()=>{},getAuthority=()=>"",onState=()=>{},now=()=>performance.now()}={}) {
     const button=document.querySelector("#conversation-sound-toggle"),status=document.querySelector("#conversation-sound-status"),score=document.querySelector("#conversation-sound-score"),volume=document.querySelector("#conversation-sound-volume");
     if(!button || !status || !score || !volume)return;
     const feedback=document.querySelector("#conversation-sound-feedback"),controls=document.querySelector("#conversation-sound-controls");
@@ -127,12 +139,14 @@ window.ConversationSound = (() => {
       const remaining=frame.sources.map(s=>20001-(frame.observed_at*1000-Number(s.observed_at)*1000+elapsed)).filter(t=>Number.isFinite(t)&&t>0);
       if(remaining.length)expiry=setTimeout(()=>{try{draw();}catch{engine.stop();}},Math.min(...remaining));
     }
-    async function refresh(){
+    async function refresh({observeOnly=false}={}){
       if(enabled && authority!==getAuthority()){disable();return;}
-      if(!enabled || request || document.hidden)return;
-      const owned=generation,start=now(),pending={};request=pending;
+      if((!enabled && !observeOnly) || request || document.hidden)return;
+      const owned=generation,start=now(),scope=getAuthority(),pending={};request=pending;
       try {
-        const value=await api("interaction/sonic");if(!enabled || owned!==generation || authority!==getAuthority()){if(owned===generation)disable();return;}
+        const value=await api("interaction/sonic");if(owned!==generation || scope!==getAuthority())return;
+        onState(value);if(!enabled)return;
+        if(authority!==getAuthority()){disable();return;}
         if(typeof value.vocabulary_json!=="string" || value.vocabulary_json.length>65536 || !/^[a-f0-9]{64}$/.test(value.vocabulary_sha256))throw Error("Sound vocabulary unavailable");
         const key=value.vocabulary_sha256+value.vocabulary_json;
         if(key!==catalog){const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value.vocabulary_json));

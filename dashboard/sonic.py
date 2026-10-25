@@ -5,9 +5,9 @@ import math
 import re
 
 DEFAULT = {
-    'schema':'daimon.sonic-expression/v2','id':'source-beacon','revision':'4',
+    'schema':'daimon.sonic-expression/v2','id':'source-beacon','revision':'5',
     'author':'Source / CompAII','label':'Source Beacon',
-    'fundamental_hz':40.4,'wave':'sine','pulse_hz':0.22,'pulse_depth':0.25,
+    'fundamental_hz':40.4,'wave':'sine','pulse_hz':0.25,'pulse_depth':0.25,'pulse_mode':'harmonic',
     'attack_ms':180,'release_ms':350,'max_sessions':24,'peak_gain':0.6,
     'components':{'idle':1,'active':2,'tools':3,'goal':4,'pending':7,'blocked':11},
     'provenance':['Nicolas: 40.4 Hz F1; additive F1 idle, F2 active, F3 tools/subagents, F4 active goal, F7 pending, F11 blockage/error; pure sine waves with gentle amplitude pulses'],
@@ -31,6 +31,8 @@ def descriptor(config):
             raise ValueError('Invalid sonic synthesis parameter')
     if value.get('wave')!='sine' or type(value.get('max_sessions')) is not int or not 1<=value['max_sessions']<=32:
         raise ValueError('Invalid sine renderer limit')
+    if value.get('pulse_mode','shared') not in ('shared','harmonic'):
+        raise ValueError('Invalid amplitude pulse mode')
     components=value.get('components')
     if (not isinstance(components,dict) or set(components)!=set(DEFAULT['components'])
             or any(type(n) is not int or not 1<=n<=64 for n in components.values())):

@@ -74,7 +74,7 @@ window.Conversation = (() => {
         reduced?.addEventListener?.("change",fit);fit();
       }
     }
-    const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential});
+    const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential,onState:value=>companion?.sonic?.(value)});
     const presentState=patch=>{companion?.update(patch);sound?.update(patch);};
     if(standalone)$("#conversation-diagnostics").open=false;
     const speechGaps={chunk:180,reply:450,question:1200};
@@ -788,7 +788,6 @@ window.Conversation = (() => {
       }
       companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
-      void sound?.refresh();
       binding = value.binding;
       canFiles=!readOnly && value.can_download_files===true;
       if(!canFiles)clearFiles();
@@ -867,6 +866,7 @@ window.Conversation = (() => {
             stop("This question is no longer current. Refresh before answering.");
         }
         await refreshTelegram();
+        void sound?.refresh({observeOnly:standalone});
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);
         if(graph){
           const closed=[...inputs.values()].filter(card=>!card.trace.open);

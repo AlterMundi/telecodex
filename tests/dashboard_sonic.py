@@ -164,7 +164,7 @@ class SonicVocabulary(unittest.TestCase):
         self.assertEqual(value['fundamental_hz'],40.4)
         self.assertEqual(value['components'],dict(idle=1,active=2,tools=3,goal=4,pending=7,blocked=11))
         for field,value in [('wave','triangle'),('partials',[[1,1]]),('texture_hz',18),
-                            ('pulse_depth',0.6),('pulse_hz',18),('pulse_depth',float('nan')),
+                            ('pulse_mode','unrecognized'),('pulse_depth',0.6),('pulse_hz',18),('pulse_depth',float('nan')),
                             ('components',{'idle':1}),('schema','daimon.sonic-expression/v1')]:
             with self.subTest(field=field,value=value),self.assertRaises(ValueError):
                 descriptor({'sonic_vocabulary':{**DEFAULT,field:value}})
