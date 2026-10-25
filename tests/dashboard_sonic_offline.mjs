@@ -10,7 +10,7 @@ assert(binary,'Chromium is required for the waveform regression');
 assert.equal(typeof WebSocket,'function','Node22 or newer is required');
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'telecodex-offline-audio-'));
 const log=fs.openSync(path.join(root,'browser.log'),'w');
-const browser=spawn(binary,['--headless=new','--no-sandbox','--disable-gpu','--mute-audio','--remote-debugging-port=0','--user-data-dir='+root,'about:blank'],{stdio:['ignore','ignore',log]});
+const browser=spawn(binary,['--headless=new','--no-sandbox','--disable-gpu','--mute-audio','--remote-debugging-port=0','--user-data-dir='+root,'about:blank'],{detached:true,stdio:['ignore','ignore',log]});
 let socket;
 try{
  let port;
@@ -40,8 +40,11 @@ try{
  assert(!result.exceptionDetails,JSON.stringify(result.exceptionDetails));assert(result.result.value?.offlineAudio);
  console.log(JSON.stringify(result.result.value));
 }finally{
- socket?.close();browser.kill('SIGTERM');
+ socket?.close();
+ try{process.kill(-browser.pid,'SIGTERM');}catch(error){if(error.code!=='ESRCH')throw error;}
  if(browser.exitCode===null)await Promise.race([new Promise(resolve=>browser.once('exit',resolve)),pause(3000)]);
  if(browser.exitCode===null){browser.kill('SIGKILL');await new Promise(resolve=>browser.once('exit',resolve));}
- fs.closeSync(log);fs.rmSync(root,{recursive:true,force:true});
+ // Chromium children may still be flushing their owned profile after the parent exits.
+ try{process.kill(-browser.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}
+ fs.closeSync(log);await fs.promises.rm(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});
 }
