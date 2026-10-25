@@ -27,7 +27,7 @@ const ENTRY_INPUT_SCOPE: &str = r#"(p.kind='entry_input' AND s.force_fresh_threa
         AND c.session_id=p.session_id AND c.human_id=p.human_id
         AND c.native_thread=s.codex_thread_id
         AND (c.local_turn=p.local_turn OR EXISTS(SELECT 1 FROM interaction_instructions i
-            JOIN interaction_sources x ON x.id=i.input_id WHERE i.local_turn=p.local_turn
+            JOIN interaction_sources x ON x.id=i.input_id WHERE json_extract(i.doc,'$.local_turn')=p.local_turn
             AND x.human_id=p.human_id AND x.channel='conversation' AND x.event_id=c.id))))"#;
 
 // A progress echo is visible only through the original web return binding.
