@@ -113,3 +113,18 @@ transition.motion.matches=true;transition.motion.change();transition.companion.u
 const staticSpeaking=transition.face.textContent;transition.elapse(720);
 assert.equal(transition.face.textContent,staticSpeaking,'reduced motion retains a static speaking expression');
 transition.document.hidden=true;transition.handlers.visibilitychange();assert.equal(transition.timers.size,0);
+
+// Continuous ambient expression is separate from finite response gestures.
+const speech=boot();speech.companion.observe({schema:'telecodex.interaction-activity/v1',sources:[]});
+speech.companion.update({playback:'playing'});
+speech.elapse(240);speech.elapse(240);speech.elapse(240);
+const spokenFrame=speech.face.textContent;speech.elapse(160);assert.notEqual(speech.face.textContent,spokenFrame,'Speaking must continue changing glyphs after the finite introduction');
+const runningTimers=speech.timers.size;speech.companion.update({playback:'playing'});assert.equal(speech.timers.size,runningTimers,'Unchanged observations preserve the running ambient phase');
+speech.companion.update({playback:undefined});assert.equal(speech.box.dataset.cycle,'1200');
+speech.companion.sonic({schema:'telecodex.sonic-state/v1',connected:true,observed_at:.1,sources:[{fresh:true,observed_at:.1,execution:'idle',goal_state:'active'}]});
+assert.equal(speech.box.dataset.cycle,'400','Visual rhythm follows the same observed active-goal component');
+speech.companion.sonic({schema:'telecodex.sonic-state/v1',connected:true,observed_at:.1,sources:[{fresh:true,observed_at:.1,error:true}]});
+assert.equal(speech.box.dataset.cycle,'269');
+speech.elapse(20001);assert.equal(speech.box.dataset.cycle,'1200','Stale state cannot keep the error/work rhythm');
+assert(speech.timers.size<=2,'Changing rhythm must not leave an old recurring timer behind');
+speech.document.hidden=true;speech.handlers.visibilitychange();assert.equal(speech.timers.size,0);

@@ -54,11 +54,11 @@ Unknown evidence remains visibly unknown; it is not an error or idle assertion.
 Tool/subagent, pending and error components require their actual current evidence,
 not inference from `execution=working` or from one generic wait flag.
 
-The default `daimon.sonic-expression/v2` Source Beacon vocabulary (revision 4)
+The default `daimon.sonic-expression/v2` Source Beacon vocabulary (revision 5)
 implements this composition. Revision 2 was rejected after the human reported
 excessive high harmonics; its old spectrum measurements are historical evidence,
-not acceptance. The renderer uses 0.22 Hz sinusoidal amplitude breathing with
-25% depth and phase-continuous carriers. Weight changes use a shared 350 ms linear transition (the larger attack/release duration), and volume/voice quieting uses a 12 ms fade. No additional partial stack exists.
+not acceptance. The renderer uses sinusoidal amplitude breathing at0.25Hz times each harmonic factor, with
+25% depth and phase-continuous carriers. Weight changes use a shared 350 ms linear transition (the larger attack/release duration), and volume/voice quieting uses a120ms fade. No additional partial stack exists.
 An owner can supply a complete v2 vocabulary; legacy v1 palettes fail explicitly
 rather than silently restoring the rejected sound.
 
@@ -78,7 +78,7 @@ normalized across included sessions. Idle sessions contribute F1 rather than
 silence. Repeated frequencies retain their session membership in the score and share one persistent oscillator in the audio graph. The default maximum
 frequency is F11 (444.4 Hz), plus the narrow sidebands inherent in gentle amplitude
 pulsing. Notes outside the browser sample-rate limit are omitted and reported.
-All carrier weights transition together from their current envelope values, preserving a total weight no greater than one even under rapid changes. Zero-weight carriers are removed only after their fade; returning frequencies cancel retirement. Stop fades before closing its owned context. The default peak limit is 0.6 before user volume (previously an effective 0.04); zero volume keeps the score visible. Muting/voice priority reaches exact zero after the 12 ms fade.
+All carrier weights transition together from their current envelope values, preserving a total weight no greater than one even under rapid changes. Zero-weight carriers are removed only after their fade; returning frequencies cancel retirement. Stop fades before closing its owned context. The default peak limit is 0.6 before user volume (previously an effective 0.04); zero volume keeps the score visible. Muting/voice priority reaches exact zero after the120ms fade.
 
 Microphone permission/recording/finalization, voice upload and preparing/playing
 an owned speech reply silence the state layer. Idle and paused speech do not.
@@ -102,3 +102,15 @@ exact mute/speech-priority silence. Complete S01–S05 in
 listening observations separately; no human acceptance is inferred from tests.
 
 Human real-use feedback on2026-10-25 rejected the low maximum volume and reported continuous clicks. Revision4 raises available gain15x and removes whole-group oscillator restarts and abrupt master changes. Offline audio checks exercise rapid state/volume/quiet transitions as well as quiet/stale silence; they do not rule out device buffer underruns or substitute for physical listening acceptance.
+
+
+Source revision5 uses `pulse_mode: harmonic`: F1=40.4Hz pulses at0.25Hz,
+once per four seconds. Each other component's pulse frequency scales by its
+harmonic factor (F2 at0.5Hz, F3 at0.75Hz, F4 at1Hz, F7 at1.75Hz, F11 at2.75Hz).
+The pulse modulators and carriers are native sine oscillators with persistent
+per-frequency gain stages. UI refreshes do not reschedule a sample buffer.
+Master transitions now span120ms, and supported AudioParams hold their current
+automated value before a replacement ramp. Existing weight fades and observed
+state/voice ownership remain in force. Digital signal qualification and physical
+phone click-free acceptance are separate; the latter remains a human listening
+check. Legacy vocabularies without pulse_mode retain the shared-pulse mode.
