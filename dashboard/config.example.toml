@@ -14,6 +14,8 @@ label = "This receiving bot"
 # Optional public pair appearance from the existing shared Homemaker consumer.
 # Resolves no viewer identity and grants no private preference/session access.
 # appearance_origin = "https://your-receiving-home"
+# Independent Interaction can select its authored design without changing Sessions.
+# conversation_appearance = "authored" # default: "inherit"
 # Optional: set only after BotFather confirms this named app on this same bot,
 # pointing to the origin + prefix above. Menu then uses its half-height link.
 # miniapp_short_name = "sessions"

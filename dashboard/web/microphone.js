@@ -127,7 +127,7 @@ window.VoiceInput = (() => {
         });
         current.addEventListener('error',()=>{if(owned===generation)cancelRecording('Recording failed. Nothing was sent.');});
         current.addEventListener('stop',()=>finish(owned,binding,mime,frozenSelection));
-        current.start(250);phase='recording';state.textContent='Listening. Press Send voice when you finish.';controls();
+        current.start(250);phase='recording';state.textContent='Listening. Press Send when you finish.';controls();
         timer=setTimeout(()=>{if(owned===generation && current.state==='recording'){phase='finalizing';current.stop();stopTracks();controls();}},120000);
       } catch(_) {if(owned===generation)cancelRecording('Microphone unavailable. You can keep writing.');}
     }

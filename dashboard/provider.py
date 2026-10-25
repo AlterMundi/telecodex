@@ -175,7 +175,48 @@ class Provider:
             selected = item.get('entry_binding', [])
             if len(selected) != 4 or selected[0] != self.human or selected[1] != expected:
                 raise ProviderUnavailable('Loaded integrating entry does not match the receiving configuration')
-        return result
+        return self.display_labels(result)
+
+    def display_labels(self, value):
+        """Resolve stable t<ID> display fallbacks from current owner bindings only.
+
+        Addresses, source revisions and authored aliases remain unchanged.
+        """
+        pending = []
+        def visit(node):
+            if isinstance(node, list):
+                for child in node: visit(child)
+            elif isinstance(node, dict):
+                label = node.get('label')
+                match = re.fullmatch(r'(#?)t([0-9]+)', label) if isinstance(label, str) else None
+                if match:
+                    tid = int(match[2])
+                    target = node.get('target')
+                    if isinstance(target, dict) and target.get('thread_id') == tid:
+                        chat = target.get('chat_id')
+                    elif node.get('selector') == 't'+str(tid):
+                        chat = self.receiver['interaction']['chat_id']
+                    else:
+                        chat = None
+                    if type(chat) is int:
+                        pending.append((node, chat, tid, match[1]))
+                for child in node.values(): visit(child)
+        visit(value)
+        if pending:
+            with closing(readonly(self.receiver['db_path'])) as db:
+                titles = {}
+                for _, chat, tid, _ in pending:
+                    key = (chat, tid)
+                    if key in titles: continue
+                    row = db.execute('''SELECT s.session_title FROM sessions s
+                        JOIN users u ON u.tg_user_id=s.creator_user_id
+                        WHERE s.creator_user_id=? AND u.allowed=1
+                        AND s.chat_id=? AND s.thread_id=?''', (self.human, chat, tid)).fetchone()
+                    title = row[0].strip() if row and isinstance(row[0], str) else ''
+                    titles[key] = title if title and len(title)<=200 and not any(ord(c)<32 or ord(c)==127 for c in title) else None
+                for node, chat, tid, prefix in pending:
+                    if titles[(chat, tid)]: node['label'] = prefix+titles[(chat, tid)]
+        return value
 
     def presentation_list(self, delivery, native, direction='after', matrix=None):
         if type(delivery) is not int or type(native) is not int or min(delivery, native) < 0:
