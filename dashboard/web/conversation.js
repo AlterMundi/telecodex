@@ -48,6 +48,8 @@ window.Conversation = (() => {
       finally{clearTimeout(deadline);if(fileDownloads.get(file.id)===controller)fileDownloads.delete(file.id);refreshFiles();}
     }
     let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext;
+    // Reuse the same presence renderer in the fixed header, freeing conversation space.
+    if(standalone){const presence=$("#conversation-companion"),identity=$("header .identity");if(presence && identity)identity.append(presence);}
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
     const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential});
     const presentState=patch=>{companion?.update(patch);sound?.update(patch);};
@@ -448,7 +450,7 @@ window.Conversation = (() => {
         $("#conversation-inputs-older").hidden = !result.more;
       }
       if (direction === "after" || (remember && !inputNewest)) inputNewest = Math.max(inputNewest, result.newest || 0);
-      draft.disabled = readOnly; send.disabled = readOnly || posting;
+      draft.disabled = readOnly; send.disabled = readOnly || posting;microphone?.syncControls?.();
       return result;
     }
     async function telegramPage(before=0,direction="before",remember=true) {
@@ -484,6 +486,7 @@ window.Conversation = (() => {
     });
     compose.addEventListener("submit", async event => {
       event.preventDefault();
+      if(microphone?.ownsSend?.())return microphone.submit();
       if (readOnly || posting || !ready || !binding || inputBinding !== binding) return;
       const text = draft.value;
       if (!text.trim() || text.includes("\0") || new TextEncoder().encode(text).length > 32768) {
@@ -496,7 +499,7 @@ window.Conversation = (() => {
       let selectedVisual;
       posting=true;send.disabled=true;
       try {if(visual)selectedVisual=await visual.capture();}
-      catch(e){posting=false;send.disabled=!inputBinding;sendState.textContent=e.message||"Select your image again.";return;}
+      catch(e){posting=false;send.disabled=!inputBinding;microphone?.syncControls?.();sendState.textContent=e.message||"Select your image again.";return;}
       const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation, focusAtSubmit=focusVersion;
       const context=replyFocus?.reference||voiceContext;
       const reply=context&&JSON.parse(JSON.stringify(context));
@@ -518,7 +521,7 @@ window.Conversation = (() => {
         if (id === latestComposerId) sendState.textContent = retained?.phase ? phaseText(retained)
           : "Submission unconfirmed. Check this message status; it will not be resent automatically.";
         if (e.status === 401 || e.status === 403) failed(e);
-      } finally { posting = false; send.disabled = !inputBinding; }
+      } finally { posting = false; send.disabled = !inputBinding;microphone?.syncControls?.(); }
     });
     $("#conversation-inputs-older").addEventListener("click", async () => {
       const button = $("#conversation-inputs-older"); button.disabled = true;

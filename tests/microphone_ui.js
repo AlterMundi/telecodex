@@ -41,6 +41,12 @@ function boot(){
  const hinted=boot();hinted.select({reference:{source:'delivery:11111111-1111-1111-1111-111111111111',revision:'a'.repeat(64),context_only:true},version:1});
  await hinted.click();hinted.click();await until(()=>hinted.received.length===1);
  assert.equal(hinted.uploads[0].headers['X-Reply-Source'],'context:delivery:11111111-1111-1111-1111-111111111111','Device context must not become an explicit destination during voice upload');
+ const unified=boot();await unified.click();
+ assert(unified.button().hidden,'Recording hides the redundant microphone/send control');
+ const send=unified.nodes.get('#conversation-send');assert.equal(send.type,'button');assert.equal(send['aria-label'],'Send voice message');assert(!send.disabled);
+ assert.equal(unified.nodes.get('#conversation-voice-discard').textContent,'×');assert(!unified.nodes.get('#conversation-voice-discard').hidden);
+ send.handlers.click();await until(()=>unified.received.length===1);assert.equal(unified.uploads.length,1);assert.equal(send.type,'submit');assert(!unified.button().hidden);
+ const cancelled=boot();await cancelled.click();cancelled.cancel();assert.equal(cancelled.nodes.get('#conversation-send').type,'submit');assert.equal(cancelled.uploads.length,0);
  const f=boot();await f.click();assert.equal(f.button().textContent,'↑');assert.equal(f.paused(),1);
  assert.equal(f.uploads.length,0,'Partial recording cannot admit work');f.click();await until(()=>f.received.length===1);
  assert.equal(f.uploads.length,1);assert.equal(f.uploads[0].body.type,'audio/webm;codecs=opus');assert.equal(f.devices[0].stream.stopped,1);
