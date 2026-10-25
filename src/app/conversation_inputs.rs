@@ -131,7 +131,27 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         return Ok(result);
     }
     if let Some(body) = args.strip_prefix("voice submit ") {
-        return voice_submit(app, human, cfg.entry(), body).await;
+        return voice_submit(app, human, cfg.entry(), body, false).await;
+    }
+    if let Some(body) = args.strip_prefix("voice recover ") {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Recovery {
+            binding: String,
+            id: String,
+        }
+        let selected: Recovery = serde_json::from_str(body)?;
+        let input = app
+            .shared
+            .store
+            .conversation_input_read(human, cfg.entry(), &selected.id)?;
+        if input.phase != "preparation_unconfirmed" {
+            return response(app, &input, false);
+        }
+        let voice = input.voice.context("Original voice capture unavailable")?;
+        let payload = json!({"binding":selected.binding,"id":selected.id,
+            "audio_sha256":voice.audio_sha256,"mime":voice.mime,"visual":input.visual,"reply":input.reply});
+        return voice_submit(app, human, cfg.entry(), &payload.to_string(), true).await;
     }
     if let Some(body) = args.strip_prefix("retry ") {
         let selected: Recover = serde_json::from_str(body)?;
@@ -585,15 +605,27 @@ struct VoiceSubmit {
     reply: Option<crate::store::ConversationReply>,
 }
 
-async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> Result<Value> {
+async fn voice_submit(
+    app: &App,
+    human: i64,
+    entry: SessionKey,
+    body: &str,
+    recover: bool,
+) -> Result<Value> {
     use crate::store::ConversationVoice;
     let request: VoiceSubmit = serde_json::from_str(body)?;
-    let config = app
+    let mut config = app
         .shared
         .config
         .voice
         .clone()
         .context("Voice input is not configured")?;
+    if recover {
+        config.transcription_command = config
+            .completed_transcription_command
+            .clone()
+            .context("Completed-transcript recovery is not configured")?;
+    }
     if Uuid::parse_str(&request.id)
         .ok()
         .is_none_or(|v| v.to_string() != request.id)
@@ -642,7 +674,10 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
         .try_acquire_owned()
         .ok();
     let _ingress = app.shared.conversation_ingress.lock().await;
-    let (input, fresh) = app.shared.store.conversation_voice_capture_reply(
+    if recover && permit.is_none() {
+        bail!("Voice preparation busy; recovery was not started");
+    }
+    let (mut input, mut fresh) = app.shared.store.conversation_voice_capture_reply(
         human,
         entry,
         &request.binding,
@@ -652,6 +687,14 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
         request.reply,
         request.visual,
     )?;
+    if recover {
+        (input, fresh) = app.shared.store.conversation_voice_resume(
+            human,
+            entry,
+            &request.binding,
+            &request.id,
+        )?;
+    }
     if fresh && input.phase == "preparing" {
         let worker = app.clone();
         let captured = input.clone();
@@ -697,13 +740,13 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
                 Ok::<_, anyhow::Error>(())
             });
             let result = tokio::select! {biased;_ = worker.shared.voice_shutdown.cancelled()=>Err(anyhow!("Voice preparation ended for listener restart")),result=preparation=>result};
-            if result.is_err() {
+            if let Err(error) = result {
                 let _ = worker
                     .shared
                     .store
                     .conversation_voice_fail(human, &captured.id);
                 tracing::warn!(
-                    "Committed conversation voice preparation unconfirmed; no automatic retry"
+                    error = %error, "Committed conversation voice preparation unconfirmed; no automatic retry"
                 );
             }
         });
@@ -713,6 +756,6 @@ async fn voice_submit(app: &App, human: i64, entry: SessionKey, body: &str) -> R
         &app.shared
             .store
             .conversation_input_read(human, entry, &input.id)?,
-        fresh,
+        fresh && !recover,
     )
 }

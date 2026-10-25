@@ -14,6 +14,9 @@ pub struct VoiceConfig {
     /// Owner-configured argv, never a shell fragment or model-provided command.
     pub transcription_command: Vec<String>,
     pub transcriber_label: String,
+    /// Read an already completed, source-bound transcript. Must never initiate ASR.
+    #[serde(default)]
+    pub completed_transcription_command: Option<Vec<String>>,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
 }
@@ -33,6 +36,16 @@ impl VoiceConfig {
             || !(1..=120).contains(&self.timeout_seconds)
         {
             bail!("Invalid bounded voice transcriber configuration");
+        }
+        if let Some(command) = &self.completed_transcription_command {
+            if command.is_empty()
+                || command.len() > 32
+                || command
+                    .iter()
+                    .any(|a| a.is_empty() || a.len() > 4096 || a.contains('\0'))
+            {
+                bail!("Invalid completed-transcript reader command");
+            }
         }
         #[cfg(not(unix))]
         bail!("Voice command lifecycle currently requires Unix process groups");
