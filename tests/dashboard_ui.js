@@ -51,7 +51,10 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
       return id;
     },
     clearTimeout(id) { timers.delete(id); },
-    setInterval() { throw new Error("Hidden WebView must not poll"); },
+    setInterval(callback, milliseconds) {
+      if(!standalone)throw new Error("Hidden Sessions/monitor must not poll");
+      const id=++nextTimer;timers.set(id,{callback,milliseconds});return id;
+    },
     clearInterval() {},
   });
   vm.runInContext(source, context);

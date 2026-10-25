@@ -83,6 +83,9 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         parsed = urlparse(candidate)
         if parsed.scheme != 'https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
             raise ValueError('Exact HTTPS launcher origin required')
+    conversation_appearance = config.get('conversation_appearance', 'inherit')
+    if conversation_appearance not in ('inherit', 'authored'):
+        raise ValueError('conversation_appearance must be inherit or authored')
     appearance = config.get('appearance_origin', '').rstrip('/')
     if appearance:
         u = urlparse(appearance)
@@ -276,7 +279,11 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
-        if appearance:
+        standalone_entry = (request.query_params.get('view') == 'conversation'
+                            and request.query_params.get('client') == 'standalone')
+        if standalone_entry and conversation_appearance == 'authored':
+            body = body.replace('<html lang="en"', '<html lang="en" data-style-policy="authored"', 1)
+        if appearance and not (standalone_entry and conversation_appearance == 'authored'):
             base = html.escape(appearance, quote=True)
             body = body.replace('<html lang="en">', '<html lang="en" data-style-policy="inherit">')
             body = body.replace('</head>', '<link rel="stylesheet" data-home-style href="'+base+

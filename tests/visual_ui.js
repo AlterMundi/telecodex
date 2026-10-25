@@ -1,19 +1,19 @@
 // Exercise the shipped image selector through user actions, with delayed decoding.
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),crypto=require('node:crypto').webcrypto;
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
-function boot(){
- const nodes=new Map(),uploads=[];let decode;
+function boot({photo=false}={}){
+ const nodes=new Map(),uploads=[],encodings=[];let decode;
  function element(){return {value:'',files:[],hidden:false,disabled:false,handlers:{},textContent:'',width:0,height:0,
   addEventListener(k,f){this.handlers[k]=f;},getContext(){return {drawImage(){},beginPath(){},arc(){},stroke(){}};},getBoundingClientRect(){return {left:0,top:0,width:200,height:100};}};}
  const document={querySelector(name){if(!nodes.has(name))nodes.set(name,element());return nodes.get(name);}};
- const bitmap=()=>({width:200,height:100,closed:false,close(){this.closed=true;}});
- class Canvas{constructor(w,h){this.width=w;this.height=h;}getContext(){return {drawImage(){}};}async convertToBlob(){return new Blob(['synthetic image bytes'],{type:'image/png'});}}
+ const bitmap=()=>({width:photo?4000:200,height:photo?3000:100,closed:false,close(){this.closed=true;}});
+ class Canvas{constructor(w,h){this.width=w;this.height=h;}getContext(){return {drawImage(){}};}async convertToBlob(){encodings.push([this.width,this.height]);return new Blob([photo?new Uint8Array(this.width*this.height*3):'synthetic image bytes'],{type:'image/png'});}}
  const context=vm.createContext({window:{},document,crypto,Blob,Uint8Array,AbortController,OffscreenCanvas:Canvas,setTimeout,clearTimeout,
   createImageBitmap(){if(decode){const held=decode;decode=undefined;return held.promise;}return Promise.resolve(bitmap());},
-  async fetch(route,options){uploads.push({route,options});return {ok:true,json:async()=>({image_sha256:options.headers['X-Image-Sha256'],width:200,height:100})};}});
+  async fetch(route,options){uploads.push({route,options});return {ok:true,json:async()=>({image_sha256:options.headers['X-Image-Sha256'],width:nodes.get('#conversation-image-view').width,height:nodes.get('#conversation-image-view').height})};}});
  vm.runInContext(fs.readFileSync('dashboard/web/visual.js','utf8'),context);
  const ui=context.window.VisualInput.mount({headers:()=>({}),getBinding:()=> 'entry-binding',unauthorized(){throw Error('Unexpected auth failure');}});
- return {ui,nodes,uploads,bitmap,
+ return {ui,nodes,uploads,encodings,bitmap,
   hold(){decode=deferred();return decode;},
   choose(){nodes.get('#conversation-image').files=[{name:'selected.png',size:100}];nodes.get('#conversation-image').value='selected.png';return nodes.get('#conversation-image').handlers.change();},
   remove(){nodes.get('#conversation-image-clear').handlers.click();},
@@ -25,6 +25,8 @@ function boot(){
  held.resolve(f.bitmap());await opening;
  await assert.rejects(f.ui.capture(),/Point to what you mean/);assert.equal(f.uploads.length,0);
  f.point();const selected=await f.ui.capture();assert.equal(selected.point.x,25);assert.equal(selected.point.y,30);assert.equal(f.uploads.length,1);assert.equal(f.nodes.get('#conversation-image').value,'selected.png');
+ const largePhoto=boot({photo:true});await largePhoto.choose();assert(largePhoto.encodings.length>1,'A large first PNG must be fitted automatically, not rejected');assert.deepEqual(largePhoto.encodings[0],[2048,1536]);largePhoto.point();const fitted=await largePhoto.ui.capture();assert.equal(largePhoto.uploads.length,1);assert(largePhoto.uploads[0].options.body.size<=2*1024*1024);assert(fitted.width<2048 && fitted.height<1536);assert(!largePhoto.nodes.get('#conversation-image-state').textContent.includes('too detailed'));
+ const large=boot();large.nodes.get('#conversation-image').files=[{size:21*1024*1024}];await large.nodes.get('#conversation-image').handlers.change();assert.match(large.nodes.get('#conversation-image-state').textContent,/20 MiB/);assert.equal(large.encodings.length,0);
  const camera=boot();camera.nodes.get('#conversation-camera').files=[{name:'camera.jpg',size:100}];await camera.nodes.get('#conversation-camera').handlers.change();camera.point();const photo=await camera.ui.capture();assert(photo.image_sha256);assert.equal(camera.uploads.length,1);camera.ui.consumed(photo);assert.equal(camera.nodes.get('#conversation-camera').value,'');
  const failed=boot(),bad=failed.hold(),failure=failed.choose();bad.reject(Error('decode failed'));await failure;
  await assert.rejects(failed.ui.capture(),/selected image is unavailable/);assert(!failed.nodes.get('#conversation-image-clear').hidden);assert.equal(failed.uploads.length,0);

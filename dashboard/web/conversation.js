@@ -543,6 +543,7 @@ window.Conversation = (() => {
     const initialMode = () => readOnly || new URL(location.href).searchParams.get("view") === "conversation"
       || new URLSearchParams(telegram?.initData || "").get("start_param") === "conversation";
 
+    const playbackAllowed = () => !document.hidden || (standalone && voiceEnabled && !voiceSuspended);
     function voiceKey(source) {return source.kind==="native_question"?`${source.id}:${source.revision}`:source.id;}
     function voiceStatus() {
       const button=$("#conversation-voice-replies");
@@ -607,7 +608,7 @@ window.Conversation = (() => {
         waiting.timer=setTimeout(()=>{
           if(speechWait!==waiting)return;
           speechWait=undefined;
-          resolve(generation===owned && enabled && !document.hidden && !captureBusy && !voiceSuspended);
+          resolve(generation===owned && enabled && playbackAllowed() && !captureBusy && !voiceSuspended);
         },speechGaps[kind]);
       });
     }
@@ -617,7 +618,7 @@ window.Conversation = (() => {
       if(await waitForSpeech(kind,source)){voiceBusy=false;drainVoice();}
     }
     async function drainVoice() {
-      if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || !enabled || !canListen || document.hidden)return;
+      if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || !enabled || !canListen || !playbackAllowed())return;
       const next=voiceQueue.shift();voiceStatus();if(!next)return;
       voiceBusy=true;
       const result=await listenTo(next,0,{queued:true});
@@ -794,7 +795,7 @@ window.Conversation = (() => {
       return value;
     }
     async function refresh(force = false) {
-      if (!enabled || !ready || reading || (document.hidden && !force)) return;
+      if (!enabled || !ready || reading || (!playbackAllowed() && !force)) return;
       drainText();
       reading = true;
       $("#conversation-refresh").disabled = true;
@@ -806,14 +807,14 @@ window.Conversation = (() => {
           initialized = true;
         } else {
           let more = true;
-          for (let n = 0; n < 4 && more && enabled && !document.hidden; n++) {
+          for (let n = 0; n < 4 && more && enabled && playbackAllowed(); n++) {
             const value = await page(newest, "after");
             if (!initialized) { newest = {delivery:0,native:0,matrix:0}; await page(newest,"before"); initialized = true; break; }
             more = value.more;
           }
-          if (enabled && !document.hidden) await page({delivery:0,native:0,matrix:0}, "before", false);
+          if (enabled && playbackAllowed()) await page({delivery:0,native:0,matrix:0}, "before", false);
         }
-        if (active && enabled && !document.hidden) {
+        if (active && enabled && playbackAllowed()) {
           const selected = active, owned = generation;
           try { await part(selected.source, selected.offset); }
           catch (_) {
@@ -857,7 +858,7 @@ window.Conversation = (() => {
 
     async function startPlayback() {
       const selected = active;
-      if (!selected || !blobUrl || document.hidden || !enabled) return;
+      if (!selected || !blobUrl || !playbackAllowed() || !enabled) return;
       const owned = selected.generation;
       const position = audio.currentTime;
       selected.verifying = true;
@@ -952,7 +953,7 @@ window.Conversation = (() => {
       if(active && !active.verifying && !audio.muted)presentState({playback:"playing"});
     });
     audio.addEventListener("ended", async () => {
-      if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || document.hidden || !enabled) return;
+      if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || !playbackAllowed() || !enabled) return;
       presentState({playback:undefined});
       const selected=active, owned=generation;selected.segmentEnded=true;
       if (selected.next !== null) {
@@ -968,7 +969,7 @@ window.Conversation = (() => {
       selected.finished=true;
       try {
         await part(selected.source, selected.offset);
-        if(active!==selected || generation!==owned || !selected.auto || document.hidden || !enabled || focusVersion!==selected.focusVersion)return;
+        if(active!==selected || generation!==owned || !selected.auto || !playbackAllowed() || !enabled || focusVersion!==selected.focusVersion)return;
         if(!voiceEnabled)selectFocus({source:selected.source.id,revision:selected.source.revision,context_only:true},selected.source.label);
         audioState("Question finished. Press Talk to answer or change topic.");
       } catch (_) {
@@ -992,8 +993,26 @@ window.Conversation = (() => {
       catch (e) { failed(e); }
       finally { reading = false; $("#conversation-older").disabled = false; }
     });
-    document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
-    window.addEventListener("pagehide", () => {pause();stop();clearFiles();});
+    document.addEventListener("visibilitychange", () => {
+      if(document.hidden){if(!playbackAllowed())pause();return;}
+      if(standalone && voiceEnabled && !voiceSuspended && enabled && ready){
+        // A browser suspension preserves intent; a human pause clears active.auto.
+        if(active?.auto && audio.ended && !active.segmentEnded)audio.dispatchEvent?.(new Event("ended"));
+        else if(active?.auto && audio.paused && blobUrl && !active.verifying)startPlayback();
+        else if(!active && !speechWait){voiceBusy=false;drainVoice();}
+      }
+      refresh(true);
+    });
+    window.addEventListener("pagehide", event => {
+      if(event?.persisted && standalone && voiceEnabled && !voiceSuspended)return;
+      pause();stop();clearFiles();
+    });
+    window.addEventListener("pageshow", event => {
+      if(event?.persisted && enabled && ready){
+        if(active?.auto && audio.paused && blobUrl && !active.verifying && playbackAllowed())startPlayback();
+        refresh(true);
+      }
+    });
     window.addEventListener("offline", () => {
       presentState({connected:false});
       pause(); $("#conversation-state").textContent = "Offline. Replies already loaded remain readable.";

@@ -723,9 +723,8 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-message { height:60px; resize:none; }
 .standalone-conversation #conversation-compose #conversation-talk { width:48px; height:48px; min-width:48px; padding:6px; font-size:22px; }
 .standalone-conversation #conversation-compose #conversation-talk[aria-pressed="true"] { color:var(--ink); background:var(--panel); border:3px solid var(--accent); }
-#conversation-compose #conversation-send-state,#conversation-compose #conversation-voice-state { margin:0; min-height:0; max-height:44px; overflow:auto; }
-#conversation-compose #conversation-send-state:not(:empty),#conversation-compose #conversation-voice-state:not(:empty) { position:absolute; bottom:100%; left:0; right:0; background:var(--panel); border-radius:10px; padding:6px 10px; font-size:14px; }
-#conversation-compose #conversation-voice-state:not(:empty) { bottom:calc(100% + 44px); }
+#conversation-compose-status { height:40px; overflow:auto; flex:0 0 40px; font-size:14px; line-height:20px; }
+#conversation-compose #conversation-send-state,#conversation-compose #conversation-voice-state { position:static; margin:0; padding:0; font-size:14px; }
 #conversation-compose .image-voice-option { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:400; }
 #conversation-compose .image-voice-option input { width:20px; height:20px; margin:0; }
 #conversation-visual > summary { list-style:none; }

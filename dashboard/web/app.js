@@ -472,8 +472,9 @@ function traffic(data) {
   if (data.alert_history_incomplete) $("#traffic-coverage").textContent += " Alert history exceeded its backlog bound; inspect retained traffic.";
 }
 async function refresh(force = false) {
-  if (refreshing || !authenticated || (document.hidden && !force)) return;
+  if (refreshing || !authenticated) return;
   if (conversationMode) return conversationView?.refresh(force);
+  if (document.hidden && !force) return;
   refreshing = true;
   $("#refresh").disabled = true;
   if (!snapshot) $("#overview").textContent = "Reading native state…";
@@ -505,7 +506,7 @@ async function refresh(force = false) {
 }
 function schedule() {
   clearInterval(timer);
-  if (!document.hidden) timer = setInterval(refresh, conversationMode ? 2000 : 10000);
+  if (!document.hidden || standaloneConversation) timer = setInterval(refresh, conversationMode ? 2000 : 10000);
 }
 $("#refresh").addEventListener("click", () => refresh(true));
 for (const button of document.querySelectorAll("[data-filter]"))

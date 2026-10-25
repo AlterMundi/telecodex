@@ -33,16 +33,30 @@ window.VisualInput = (() => {
         if(input.size>20*1024*1024)throw Error('Choose an image smaller than 20 MiB.');
         const bitmap=await decode(input);
         if(owned!==generation){bitmap.close();return;}
-        const scale=Math.min(1,2048/bitmap.width,2048/bitmap.height);
-        canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));
-        let blob;try {blob=await encode(bitmap,canvas.width,canvas.height);}finally{bitmap.close();}
-        if(blob.size>2*1024*1024)throw Error('This image is too detailed. Choose a smaller view.');
+        // The human chooses an ordinary photo; only our internal PNG has the 2 MiB bound.
+        const scale=Math.min(1,2048/bitmap.width,2048/bitmap.height),limit=2*1024*1024;
+        let width=Math.max(1,Math.round(bitmap.width*scale)),height=Math.max(1,Math.round(bitmap.height*scale)),blob;
+        try {
+          while(true){
+            if(owned!==generation)return;
+            blob=await encode(bitmap,width,height);
+            if(owned!==generation)return;
+            if(blob.size<=limit)break;
+            // PNG complexity varies by photo. Fit encoded bytes as well as dimensions.
+            const factor=Math.min(0.85,Math.sqrt(limit/blob.size)*0.9);
+            const nextWidth=Math.max(1,Math.floor(width*factor)),nextHeight=Math.max(1,Math.floor(height*factor));
+            if(nextWidth===width && nextHeight===height)throw Error('Image encoding unavailable');
+            width=nextWidth;height=nextHeight;status.textContent='Preparing your photo…';
+          }
+        } finally {bitmap.close();}
+        if(owned!==generation)return;
+        canvas.width=width;canvas.height=height;
         const image_sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer())),v=>v.toString(16).padStart(2,'0')).join('');
         const preview=await decode(blob);
         if(owned!==generation){preview.close();return;}
         chosen={blob,bitmap:preview,image_sha256,source_id:crypto.randomUUID(),captured_at:new Date().toISOString(),uploaded:false};
         selectionState='ready';canvas.hidden=false;if(coordinates)coordinates.hidden=false;clear.hidden=false;x.disabled=y.disabled=false;x.max=String(canvas.width-1);y.max=String(canvas.height-1);draw();status.textContent='Point to what you mean in this image. You can also enter X and Y.';
-      }catch(e){if(owned===generation){reset(false,'failed');status.textContent=['Choose an image smaller than 20 MiB.','This image is too detailed. Choose a smaller view.'].includes(e.message)?e.message:'Cannot open this image. Try a JPEG, PNG or WebP, or remove it; your text is kept.';}}
+      }catch(e){if(owned===generation){reset(false,'failed');status.textContent=e.message==='Choose an image smaller than 20 MiB.'?e.message:'Cannot open this image. Try a JPEG, PNG or WebP, or remove it; your text is kept.';}}
     }
     file.addEventListener('change',()=>choose(file));
     camera?.addEventListener('change',()=>choose(camera));

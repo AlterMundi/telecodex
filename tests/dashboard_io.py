@@ -341,6 +341,23 @@ class ProviderIO(unittest.TestCase):
         self.assertGreater(result['host']['memory_total'],0)
         self.assertNotIn('rollout_path',json.dumps(result))
         self.assertFalse(self.provider.authorized(101));self.assertFalse(self.provider.authorized(999))
+    def test_current_owned_titles_replace_only_stable_display_fallbacks(self):
+        self.provider.receiver['interaction']={'chat_id':100}
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute("UPDATE sessions SET session_title='H.B. Guitar' WHERE id=1")
+            db.commit()
+        value={'routing_choices':[{'label':'t7','selector':'t7'}],
+               'items':[{'label':'#t7','target':{'chat_id':100,'thread_id':7},'revision':'unchanged'},
+                        {'label':'#t8','target':{'chat_id':101,'thread_id':8}},
+                        {'label':'#Authored alias','target':{'chat_id':100,'thread_id':7}}]}
+        result=self.provider.display_labels(value)
+        self.assertEqual(result['routing_choices'],[{'label':'H.B. Guitar','selector':'t7'}])
+        self.assertEqual([r['label'] for r in result['items']],['#H.B. Guitar','#t8','#Authored alias'])
+        self.assertEqual(result['items'][0]['revision'],'unchanged')
+        with closing(sqlite3.connect(self.db)) as db:
+            db.execute('UPDATE sessions SET creator_user_id=101 WHERE id=1');db.commit()
+        self.assertEqual(self.provider.display_labels({'label':'#t7','target':{'chat_id':100,'thread_id':7}})['label'],'#t7')
+
     def test_scope_changes_invalidate_cached_results(self):
         self.provider.snapshot()
         with closing(sqlite3.connect(self.db)) as db:db.execute('UPDATE sessions SET creator_user_id=101 WHERE id=1');db.commit()
@@ -438,6 +455,13 @@ class DashboardAppearance(unittest.TestCase):
                 self.assertIn('immutable',client.get('/'+path).headers['cache-control'])
                 self.assertNotIn('immutable',client.get('/assets/app.js?v=old').headers['cache-control'])
                 self.assertEqual(client.get('/api/state').status_code,401)
+            with TestClient(create_app({**config,'conversation_appearance':'authored'},Receiver()),base_url='https://example.test') as client:
+                standalone=client.get('/?view=conversation&client=standalone').text
+                self.assertIn('data-style-policy="authored"',standalone)
+                self.assertNotIn('data-home-style',standalone)
+                self.assertNotIn('home-style.js',standalone)
+                self.assertIn('data-home-style',client.get('/').text)
+            with self.assertRaises(ValueError): create_app({**config,'conversation_appearance':'wrong'},Receiver())
             for origin in ('http://home.example.test','https://home.example.test/path','https://secret@home.example.test','https://home.example.test?token=x'):
                 with self.assertRaises(ValueError):create_app({**config,'appearance_origin':origin},Receiver())
 

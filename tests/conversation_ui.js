@@ -335,6 +335,17 @@ function boot(readOnly=false,standalone=false,options={}) {
   paced.clock.fire(1200);await until(()=>paced.audioCalls.length===3&&!pacedPlayer.paused);
   assert.equal(paced.audioCalls[2].source,'native:10');paced.ui.stop();
 
+  const background=boot(false,true,{clock:true});background.audio(true);await background.ui.refresh();
+  background.nodes.get('#conversation-voice-replies').handlers.click();background.addReplies(1);await background.ui.refresh();
+  const bgPlayer=background.nodes.get('#conversation-audio');await until(()=>background.audioCalls.length===1&&!bgPlayer.paused);
+  background.hide();assert.equal(bgPlayer.paused,false,'Standalone Voice on keeps playing when another app is foreground');
+  bgPlayer.ended=true;const bgEnding=bgPlayer.handlers.ended();background.clock.fire(180);await bgEnding;
+  await until(()=>background.audioCalls.length===2&&!bgPlayer.paused);
+  bgPlayer.paused=true;background.show();await until(()=>!bgPlayer.paused);
+  assert.equal(background.audioCalls.length,2,'Returning resumes the same verified segment without replaying its input');
+  background.ui.pause();background.hide();background.show();
+  assert.equal(bgPlayer.paused,true,'Returning never overrides an explicit human pause');background.ui.stop();
+
   for(const action of ['pause','stop','hide','disable','capture','offline','pagehide']){
     const gap=boot(false,false,{clock:true,capture:true});gap.audio(true);await gap.ui.refresh();
     gap.nodes.get('#conversation-voice-replies').handlers.click();gap.addReplies(1);await gap.ui.refresh();
