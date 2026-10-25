@@ -771,3 +771,28 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 }
 
 .standalone-conversation header .identity > h1 { display:block; position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+
+/* Familiar two-row chat composer. Routine phases belong to the header presence. */
+.standalone-conversation #conversation-compose { padding:8px; border-radius:20px; }
+.standalone-conversation #conversation-message { display:block; width:100%; height:44px; min-height:44px; max-height:44px; padding:10px 8px; line-height:22px; resize:none; }
+.standalone-conversation #conversation-compose > .composer-actions { margin-top:4px; grid-template-columns:44px minmax(0,1fr) 64px; gap:4px; min-height:44px; }
+.standalone-conversation #conversation-compose #conversation-voice { min-width:0; margin:0; }
+.standalone-conversation #conversation-compose #conversation-voice .conversation-tools { justify-content:flex-end; gap:6px; flex-wrap:nowrap; }
+.standalone-conversation #conversation-compose .voice-replies-switch { white-space:nowrap; max-width:none; gap:5px; font-size:14px; }
+.standalone-conversation #conversation-compose .voice-replies-switch input { width:18px; height:18px; }
+.standalone-conversation #conversation-compose #conversation-talk,.standalone-conversation #conversation-compose #conversation-voice-discard { width:44px; height:44px; min-width:44px; min-height:44px; padding:6px; }
+.standalone-conversation #conversation-send { width:64px; min-width:64px; height:44px; padding:8px; }
+.standalone-conversation #conversation-compose-status { height:auto; flex-basis:auto; overflow:visible; }
+.standalone-conversation #conversation-compose-status p { display:block; }
+.standalone-conversation #conversation-compose-status:has([data-attention="true"]:not(:empty)) p:not([data-attention="true"]) { display:none; }
+.standalone-conversation #conversation-compose-status p[data-attention="true"]:not(:empty) { display:block; margin:0 0 8px; color:var(--warn); overflow-wrap:anywhere; }
+.standalone-conversation #conversation-compose-status:not(:has([data-attention="true"]:not(:empty))) { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+/* Attachment choices open from the paperclip; their sheet does not stretch the dock. */
+.standalone-conversation #conversation-visual[open] { position:static; width:auto; }
+.standalone-conversation #conversation-compose .composer-actions #conversation-visual[open] { grid-column:1; }
+.standalone-conversation #conversation-compose .composer-actions:has(#conversation-visual[open]) > #conversation-voice { grid-column:2; }
+.standalone-conversation #conversation-visual[open] > :not(summary) { position:relative; }
+.standalone-conversation #conversation-attachment-sheet { position:absolute!important; bottom:calc(100% + 8px); left:0; width:100%; max-height:min(55dvh,420px); overflow:auto; padding:12px; border:1px solid var(--line); border-radius:18px; background:var(--panel); box-shadow:0 10px 30px #0006; z-index:6; }
+.standalone-conversation #conversation-attachment-sheet .image-choices { margin:0; }
+.standalone-conversation #conversation-visual > summary { width:44px; height:44px; padding:10px; }
+.standalone-conversation #conversation:has(#conversation-visual[open]):not(:has(#conversation-diagnostics[open])) { overflow:visible; }

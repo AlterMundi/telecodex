@@ -179,6 +179,8 @@ window.Conversation = (() => {
     const inputs = new Map();
     const compose = $("#conversation-compose"), draft = $("#conversation-message"), send = $("#conversation-send");
     const sendState = $("#conversation-send-state");
+    const composerNotice=(text,attention=true)=>{sendState.textContent=text;sendState.setAttribute('data-attention',String(attention));};
+    const inputNotice=value=>composerNotice(phaseText(value),['awaiting_target','preparation_unconfirmed','retained_unsent','uncertain','reselection'].includes(value.phase) || (!value.phase && !value.routing));
     let replyFocus, focusVersion = 0, routingChoices = [], presentationProfile;
     let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0, latestComposerId;
     let telegramCursor=0,telegramNewest=0,telegramLoaded=false,telegramReading=false;
@@ -248,7 +250,7 @@ window.Conversation = (() => {
       companion?.reset();sound?.reset();goalControls?.reset();presentationProfile=undefined;
       disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren();
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
-      latestComposerId = undefined; sendState.textContent = "";clearFocus();routingChoices=[];
+      latestComposerId = undefined; composerNotice("",false);clearFocus();routingChoices=[];
       telegramCursor=0;telegramNewest=0;telegramLoaded=false;
       $("#conversation-inputs").replaceChildren();
       $("#conversation-inputs-older").hidden = true;
@@ -398,7 +400,7 @@ window.Conversation = (() => {
         card.status.textContent = phaseText(card.value);
         microphone?.observe(card.value,phaseText(card.value));
         renderRetry(card);
-        if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
+        if (card.value.id === latestComposerId) inputNotice(card.value);
         renderRoute(card);graph?.input(card.value);inputActivity();return card;
       }
       // Native acceptance and retirement cannot be undone by a late snapshot.
@@ -423,7 +425,7 @@ window.Conversation = (() => {
       card.check.hidden=readOnly || card.value.read_only===true || (["accepted","routed","answered"].includes(card.value.phase) && (!!card.value.text || (card.value.preview?.length||0)<1000));
       microphone?.observe(card.value,phaseText(card.value));
       if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
-      if (card.value.id === latestComposerId) sendState.textContent = phaseText(card.value);
+      if (card.value.id === latestComposerId) inputNotice(card.value);
       renderRetry(card);
       renderRoute(card);
       card.box.dataset.sequence = String(card.value.capture_order ?? (card.value.ordering_unknown?Number.MIN_SAFE_INTEGER:card.value.sequence ?? Number.MAX_SAFE_INTEGER));
@@ -490,22 +492,22 @@ window.Conversation = (() => {
       if (readOnly || posting || !ready || !binding || inputBinding !== binding) return;
       const text = draft.value;
       if (!text.trim() || text.includes("\0") || new TextEncoder().encode(text).length > 32768) {
-        sendState.textContent = "Write a message of at most 32 KiB."; return;
+        composerNotice("Write a message of at most 32 KiB."); return;
       }
       if ([...inputs.values()].some(card => !card.value.phase && card.value.text === text)) {
-        sendState.textContent = "This message has an unconfirmed submission. Use Check status before sending it again.";
+        composerNotice("This message has an unconfirmed submission. Use Check status before sending it again.");
         $("#conversation-sent").open = true; return;
       }
       let selectedVisual;
       posting=true;send.disabled=true;
       try {if(visual)selectedVisual=await visual.capture();}
-      catch(e){posting=false;send.disabled=!inputBinding;microphone?.syncControls?.();sendState.textContent=e.message||"Select your image again.";return;}
+      catch(e){posting=false;send.disabled=!inputBinding;microphone?.syncControls?.();composerNotice(e.message||"Select your image again.");return;}
       const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation, focusAtSubmit=focusVersion;
       const context=replyFocus?.reference||voiceContext;
       const reply=context&&JSON.parse(JSON.stringify(context));
       posting = true; send.disabled = true; latestComposerId = id;
       inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); if(timeline)timeline.scrollTop=timeline.scrollHeight; $("#conversation-sent").open = true;
-      sendState.textContent = "Sending…";
+      composerNotice("Sending…",false);
       try {
         const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{}),...(selectedVisual?{visual:selectedVisual}:{})});
         if (owned !== inputGeneration) return;
@@ -513,13 +515,13 @@ window.Conversation = (() => {
         visual?.consumed(selectedVisual);
         if(focusAtSubmit===focusVersion)clearFocus();
         if (draft.value === text) draft.value = "";
-        sendState.textContent = phaseText(confirmed.value);
+        inputNotice(confirmed.value);
       } catch (e) {
         if (owned !== inputGeneration) return;
-        if(e.visualReselection){inputCard({id,phase:"reselection"},observation);sendState.textContent="Select the image again, then send. This attempt did not submit the message.";return;}
+        if(e.visualReselection){inputCard({id,phase:"reselection"},observation);composerNotice("Select the image again, then send. This attempt did not submit the message.");return;}
         const retained = inputs.get(id)?.value;
-        if (id === latestComposerId) sendState.textContent = retained?.phase ? phaseText(retained)
-          : "Submission unconfirmed. Check this message status; it will not be resent automatically.";
+        if (id === latestComposerId) composerNotice(retained?.phase ? phaseText(retained)
+          : "Submission unconfirmed. Check this message status; it will not be resent automatically.");
         if (e.status === 401 || e.status === 403) failed(e);
       } finally { posting = false; send.disabled = !inputBinding;microphone?.syncControls?.(); }
     });
@@ -549,8 +551,8 @@ window.Conversation = (() => {
       const button=$("#conversation-voice-replies");
       button.checked=voiceEnabled && !voiceSuspended;
       button.setAttribute("aria-pressed",String(voiceEnabled));
-      (document.querySelector("#conversation-voice-label")||button).textContent=voiceEnabled?voiceSuspended?"Voice paused · resume":`Voice on${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`:"Read aloud";
-      button.title=voiceSuspended?"Voice replies paused · tap to resume":"Read new replies aloud";
+      (document.querySelector("#conversation-voice-label")||button).textContent=voiceEnabled?voiceSuspended?"Voice paused":"Voice on":"Voice off";
+      button.title=voiceSuspended?"Voice replies paused · tap to resume":`Read new replies aloud${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`;
     }
     function enableVoice() {
       if(readOnly || !canListen)return;
