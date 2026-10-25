@@ -5,7 +5,7 @@ const deferred=()=>{let resolve;return {promise:new Promise(yes=>{resolve=yes;})
 function boot(){
  const nodes=new Map(),events={},timers=[],uploads=[],originals=new Map(),received=[],devices=[],activities=[];
  const document={hidden:false,addEventListener(name,fn){events[name]=fn;},querySelector(name){if(!nodes.has(name))nodes.set(name,{hidden:false,disabled:false,textContent:'',handlers:{},setAttribute(k,v){this[k]=v;},addEventListener(n,f){this.handlers[n]=f;}});return nodes.get(name);}};
- let visual,visualFailure,mediaRequests=0;
+ let visual,visualFailure,mediaRequests=0,confirmDiscard=true;const confirmations=[];
  let selection, binding='original-binding',mode,permission,receiptHold,uploadHold,capturePhase='preparing',captureRetired=false,paused=0,unauthorized=0;
  class Recorder{
   static isTypeSupported(type){return type==='audio/webm;codecs=opus';}
@@ -15,7 +15,7 @@ function boot(){
   stop(){if(this.state==='inactive')return;this.state='inactive';queueMicrotask(()=>{this.events.dataavailable({data:new Blob(['synthetic finalized audio'])});this.events.stop();});}
  }
  const media=()=>({stopped:0,getTracks(){return [{stop:()=>this.stopped++}];}});
- const window={isSecureContext:true,MediaRecorder:Recorder,crypto,addEventListener(n,fn){events[n]=fn;},navigator:{mediaDevices:{async getUserMedia(){mediaRequests++;if(permission)return permission.promise;return media();}}}};
+ const window={confirm(message){confirmations.push(message);return confirmDiscard;},isSecureContext:true,MediaRecorder:Recorder,crypto,addEventListener(n,fn){events[n]=fn;},navigator:{mediaDevices:{async getUserMedia(){mediaRequests++;if(permission)return permission.promise;return media();}}}};
  async function fetch(_route,options){
   uploads.push(options);const id=options.headers['X-Input-Id'];
   if(mode==='before'){mode=undefined;throw Error('Offline before capture');}
@@ -32,6 +32,7 @@ function boot(){
  let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
  ui.configure(true);
  return {ui,nodes,uploads,originals,received,devices,events,timers,media,activities,
+  confirmation:value=>{confirmDiscard=value;},confirmations,
   button:()=>nodes.get('#conversation-talk'),state:()=>nodes.get('#conversation-voice-state').textContent,
   click:()=>nodes.get('#conversation-talk').handlers.click(),cancel:()=>nodes.get('#conversation-voice-discard').handlers.click(),check:()=>nodes.get('#conversation-voice-check').handlers.click(),
   visual:value=>{visual=value;visualFailure=false;},failVisual:()=>{visualFailure=true;},mediaRequests:()=>mediaRequests,select:value=>{selection=value;},captureState:(value,retired=false)=>{capturePhase=value;captureRetired=retired;},mode:value=>{mode=value;},permission:()=>{permission=deferred();return permission;},holdReceipt:()=>{receiptHold=deferred();return receiptHold;},holdUpload:()=>{uploadHold=deferred();return uploadHold;},bind:value=>{binding=value;},paused:()=>paused,unauthorized:()=>unauthorized,
@@ -47,7 +48,7 @@ function boot(){
  const send=unified.nodes.get('#conversation-send');assert.equal(send.type,'button');assert.equal(send['aria-label'],'Send voice message');assert(!send.disabled);
  assert.equal(unified.nodes.get('#conversation-voice-discard').textContent,'×');assert(!unified.nodes.get('#conversation-voice-discard').hidden);
  send.handlers.click();await until(()=>unified.received.length===1);assert.equal(unified.uploads.length,1);assert.equal(send.type,'submit');assert(!unified.button().hidden);
- const cancelled=boot();await cancelled.click();cancelled.cancel();assert.equal(cancelled.nodes.get('#conversation-send').type,'submit');assert.equal(cancelled.uploads.length,0);
+ const cancelled=boot();await cancelled.click();cancelled.confirmation(false);cancelled.cancel();assert.equal(cancelled.devices[0].state,'recording','Declining confirmation must preserve the recording');assert.equal(cancelled.uploads.length,0);cancelled.confirmation(true);cancelled.cancel();assert.equal(cancelled.devices[0].state,'inactive');assert.equal(cancelled.nodes.get('#conversation-send').type,'submit');assert.equal(cancelled.uploads.length,0);assert.equal(cancelled.confirmations.length,2);assert.match(cancelled.confirmations[0],/deleted without sending/);
  const f=boot();await f.click();assert.equal(f.button().textContent,'↑');assert.equal(f.paused(),1);
  assert.equal(f.uploads.length,0,'Partial recording cannot admit work');f.click();await until(()=>f.received.length===1);
  assert.equal(f.uploads.length,1);assert.equal(f.uploads[0].body.type,'audio/webm;codecs=opus');assert.equal(f.devices[0].stream.stopped,1);

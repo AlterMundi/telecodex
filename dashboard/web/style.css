@@ -814,3 +814,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-presence > .companion-caption { margin:0; font-size:16px; line-height:24px; white-space:nowrap; width:max-content; max-width:none; }
 .standalone-conversation header .header-tools { flex-wrap:wrap; justify-content:flex-end; max-width:150px; }
 .standalone-conversation #conversation-account { flex-basis:100%; text-align:right; color:var(--muted); font-size:11px; line-height:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+#conversation-compose #conversation-voice-discard { position:relative; display:grid; place-items:center; font-size:0; border-radius:14px; border-width:1px; background:color-mix(in srgb,#bd4949 12%,var(--panel)); color:#ffb5b5; }
+#conversation-compose #conversation-voice-discard::before,#conversation-compose #conversation-voice-discard::after { content:""; position:absolute; left:50%; top:50%; width:16px; height:2px; border-radius:2px; background:currentColor; transform:translate(-50%,-50%) rotate(45deg); }
+#conversation-compose #conversation-voice-discard::after { transform:translate(-50%,-50%) rotate(-45deg); }

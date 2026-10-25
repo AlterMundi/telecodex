@@ -140,7 +140,7 @@ window.VoiceInput = (() => {
     }
     button.addEventListener('click',()=>ownsSend()?submit():start());
     send?.addEventListener('click',()=>{if(ownsSend())return submit();});
-    discard.addEventListener('click',()=>cancelRecording());
+    discard.addEventListener('click',()=>{if(window.confirm?.('Discard this voice recording? The recorded audio will be deleted without sending it. Choose Cancel to keep it.'))cancelRecording();});
     check.addEventListener('click',async()=>{
       if(!pending || uploading)return;const frozen=pending,owned=generation;uploading=true;controls();
       try {await confirmed(await api(`interaction/inputs/${frozen.id}`),frozen);}

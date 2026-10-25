@@ -279,3 +279,5 @@ A selected image uses the same immutable attachment for the next text or voice s
 The conversational caption uses a full-width presence row below the fixed header. Shared-login success shows only the human name in the small header account slot; it no longer occupies that row with a connected label.
 
 The presence caption keeps one fixed-height row. Overflow scrolls at18CSSpx/second with pauses and reverses smoothly; fitting text stays still. Reduced-motion preference keeps it static, with the full caption available as text/title.
+
+Discarding a voice recording requires explicit browser confirmation. Declining keeps the captured recording; confirming deletes it without sending. The centered discard icon has a fixed44px hit target.
