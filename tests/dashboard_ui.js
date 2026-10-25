@@ -31,7 +31,7 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
   };
   const context = vm.createContext({
     document,
-    window: { Telegram: { WebApp: { initData: standalone ? undefined : "synthetic", ready() {} } },
+    window: { InteractionLive:{mount(){return {start(){},stop(){}};}}, Telegram: { WebApp: { initData: standalone ? undefined : "synthetic", ready() {} } },
       DaimonHomeAccess:{createClient(){return {async signIn(){signIns++;return {status:'redirecting'};}};}},
       ...(device?{Conversation:{mount(options){monitorHeaders=options.headers;unauthorized=options.onUnauthorized;options.modeChanged(true,true);return {authenticated(){},refresh:async()=>{}};}}}:{}) },
     sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},

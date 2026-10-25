@@ -281,3 +281,21 @@ The conversational caption uses a full-width presence row below the fixed header
 The presence caption keeps one fixed-height row. Overflow scrolls at18CSSpx/second with pauses and reverses smoothly; fitting text stays still. Reduced-motion preference keeps it static, with the full caption available as text/title.
 
 Discarding a voice recording requires explicit browser confirmation. Declining keeps the captured recording; confirming deletes it without sending. The centered discard icon has a fixed44px hit target.
+
+
+### Installed client and live updates
+
+The independent conversation advertises a scoped web manifest with standalone
+window display, app icons and the existing shared-auth start URL. Installation
+adds no account or browser credential upload. There is no private offline cache;
+conversation APIs and authentication remain network-only.
+
+Conversation updates use an authenticated fetch/SSE connection. Linux inotify
+watches the existing receiving SQLite/WAL and atomically replaced observer file;
+no additional HTTP polling or message queue is introduced. Notifications only
+invalidate the current read view. Reconnection catches up through existing
+canonical cursors; it never replays a submission. Bursts and refreshes already
+in flight are coalesced. A slow stream is reconnected with bounded backoff; proxy
+buffering is disabled. Stream authorization is checked on admission and every
+15 seconds, including current scope expiry. Other Sessions views retain their
+existing refresh behavior. Voice-on/background intent remains independent.

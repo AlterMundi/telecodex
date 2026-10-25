@@ -816,8 +816,10 @@ window.Conversation = (() => {
       }
       return value;
     }
+    let refreshAgain = false;
     async function refresh(force = false) {
-      if (!enabled || !ready || reading || (!playbackAllowed() && !force)) return;
+      if(reading){refreshAgain ||= force;return;}
+      if (!enabled || !ready || (!playbackAllowed() && !force)) return;
       drainText();
       reading = true;
       $("#conversation-refresh").disabled = true;
@@ -833,6 +835,7 @@ window.Conversation = (() => {
             const value = await page(newest, "after");
             if (!initialized) { newest = {delivery:0,native:0,matrix:0}; await page(newest,"before"); initialized = true; break; }
             more = value.more;
+            if(n===3 && more)refreshAgain=true;
           }
           if (enabled && playbackAllowed()) await page({delivery:0,native:0,matrix:0}, "before", false);
         }
@@ -851,6 +854,7 @@ window.Conversation = (() => {
           let more = true;
           for (let n=0; n<4 && more; n++) {
             const result = await inputPage(inputNewest,"after"); more = !!result?.more;
+            if(n===3 && more)refreshAgain=true;
           }
           await inputPage(0,"before",false);
         }
@@ -876,7 +880,9 @@ window.Conversation = (() => {
         }
         drainVoice();
       } catch (e) { failed(e); }
-      finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false; }
+      finally { reading = false; $("#conversation-refresh").disabled = false; $("#conversation-older").disabled = false;
+        if(refreshAgain){refreshAgain=false;setTimeout(()=>refresh(true),0);}
+      }
     }
 
     async function startPlayback() {

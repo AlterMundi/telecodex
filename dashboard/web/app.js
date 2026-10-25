@@ -504,8 +504,15 @@ async function refresh(force = false) {
     $("#refresh").disabled = false;
   }
 }
+let liveConversation;
 function schedule() {
   clearInterval(timer);
+  if (standaloneConversation && authenticated && conversationMode) {
+    liveConversation ||= window.InteractionLive.mount({headers:authorizationHeaders, refresh:()=>refresh(true),
+      expired:()=>conversationView?.unauthenticated()});
+    liveConversation.start();return;
+  }
+  liveConversation?.stop();
   if (!document.hidden || standaloneConversation) timer = setInterval(refresh, conversationMode ? 2000 : 10000);
 }
 $("#refresh").addEventListener("click", () => refresh(true));
