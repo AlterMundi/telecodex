@@ -153,7 +153,14 @@ function boot(readOnly=false,standalone=false,options={}) {
   if(options.autoText)context.window.IntersectionObserver=class{
     constructor(callback){intersection=callback;}observe(){}unobserve(){}disconnect(){}
   };
+  document.querySelector("#conversation-message").rows=1;
   const ui = context.window.Conversation.mount({api,readOnly,standalone,headers:() => ({}),setCsrf() {},modeChanged() {}});
+  if(standalone){
+    assert.equal(document.querySelector("#conversation-visual summary").textContent,"","Mount must preserve the authored paperclip, not overwrite it with text");
+    assert.equal(document.querySelector("#conversation-message").rows,1);
+    assert(document.querySelector("header .header-tools").children.includes(document.querySelector("#conversation-sound-toggle")));
+    assert(document.querySelector("#conversation-sound").children.includes(document.querySelector("#conversation-sound-controls")));
+  }
   ui.authenticated();
   return {ui, nodes, requests, originals,replyTexts,partReads,humanTasks,
     holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
