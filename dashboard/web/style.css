@@ -725,8 +725,6 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-compose #conversation-talk[aria-pressed="true"] { color:var(--ink); background:var(--panel); border:3px solid var(--accent); }
 #conversation-compose-status { height:40px; overflow:auto; flex:0 0 40px; font-size:14px; line-height:20px; }
 #conversation-compose #conversation-send-state,#conversation-compose #conversation-voice-state { position:static; margin:0; padding:0; font-size:14px; }
-#conversation-compose .image-voice-option { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:400; }
-#conversation-compose .image-voice-option input { width:20px; height:20px; margin:0; }
 #conversation-visual > summary { list-style:none; }
 #conversation-visual > summary::-webkit-details-marker { display:none; }
 #conversation-visual > summary > span:first-child { display:inline; }
@@ -809,3 +807,14 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation header .companion-caption { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
 .standalone-conversation header .companion-phases { max-height:16px; overflow:hidden; flex-wrap:nowrap; }
 .standalone-conversation header .companion-phases > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* The conversational caption has the full row formerly occupied by the login label. */
+.standalone-conversation #feedback:empty { display:none; }
+.standalone-conversation #conversation-presence { flex-shrink:0; height:24px; min-height:24px; overflow:hidden; }
+.standalone-conversation #conversation-presence > .companion-caption { margin:0; font-size:16px; line-height:24px; white-space:nowrap; width:max-content; max-width:none; }
+.standalone-conversation header .header-tools { flex-wrap:wrap; justify-content:flex-end; max-width:150px; }
+.standalone-conversation #conversation-account { flex-basis:100%; text-align:right; color:var(--muted); font-size:11px; line-height:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+#conversation-compose #conversation-voice-discard { position:relative; display:grid; place-items:center; font-size:0; border-radius:14px; border-width:1px; background:color-mix(in srgb,#bd4949 12%,var(--panel)); color:#ffb5b5; }
+#conversation-compose #conversation-voice-discard::before,#conversation-compose #conversation-voice-discard::after { content:""; position:absolute; left:50%; top:50%; width:16px; height:2px; border-radius:2px; background:currentColor; transform:translate(-50%,-50%) rotate(45deg); }
+#conversation-compose #conversation-voice-discard::after { transform:translate(-50%,-50%) rotate(-45deg); }

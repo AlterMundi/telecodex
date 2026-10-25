@@ -273,3 +273,11 @@ Presentation resolves fallback `t<ID>` labels from the current authorized owner'
 The default standalone composer is two compact rows: one text line above a single attachment/voice/send strip. Routine capture/transcription/playback phases remain in the header presence; the composer retains their accessible status text without a duplicate visible line or reserved blank height. Actionable errors remain readable inside the composer and may expand it upward. The paperclip opens an anchored Camera/Gallery sheet and selected-image preview; closed attachment controls take no extra conversation space.
 
 Standalone chat startup preserves the authored paperclip and one-row text field. The Beacon toggle lives beside Apps in the fixed header; its volume and detailed sound status remain under the hood. The empty former sound row no longer reserves conversation space.
+
+A selected image uses the same immutable attachment for the next text or voice submission. There is no separate image-with-voice switch; Voice on controls spoken replies. Successful consumption clears that selection.
+
+The conversational caption uses a full-width presence row below the fixed header. Shared-login success shows only the human name in the small header account slot; it no longer occupies that row with a connected label.
+
+The presence caption keeps one fixed-height row. Overflow scrolls at18CSSpx/second with pauses and reverses smoothly; fitting text stays still. Reduced-motion preference keeps it static, with the full caption available as text/title.
+
+Discarding a voice recording requires explicit browser confirmation. Declining keeps the captured recording; confirming deletes it without sending. The centered discard icon has a fixed44px hit target.

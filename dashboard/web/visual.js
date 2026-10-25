@@ -6,7 +6,6 @@ window.VisualInput = (() => {
     const box=document.querySelector('#conversation-visual'),clear=document.querySelector('#conversation-image-clear');
     const status=document.querySelector('#conversation-image-state'),x=document.querySelector('#conversation-image-x'),y=document.querySelector('#conversation-image-y');
     const coordinates=document.querySelector('#conversation-image-coordinates');
-    const withVoice=document.querySelector('#conversation-image-with-voice');
     async function decode(input){
       try {if(typeof createImageBitmap==='function')return await createImageBitmap(input,{imageOrientation:'from-image'});}catch{}
       if(!window.Image)throw Error('Image decoder unavailable');
@@ -24,7 +23,7 @@ window.VisualInput = (() => {
       return await new Promise((resolve,reject)=>target.toBlob(blob=>blob?resolve(blob):reject(Error('Image encoding unavailable')),'image/png'));
     }
     let generation=0,chosen,point,selectedAt,selectionState="empty";
-    function reset(clearFile=true,nextState="empty"){generation++;chosen?.bitmap.close();chosen=point=selectedAt=undefined;selectionState=nextState;if(clearFile){file.value='';if(camera)camera.value='';if(withVoice)withVoice.checked=true;}canvas.hidden=true;if(coordinates)coordinates.hidden=true;clear.hidden=nextState==='empty';x.value=y.value='';x.disabled=y.disabled=true;status.textContent='Choose an image, then point to what you mean.';}
+    function reset(clearFile=true,nextState="empty"){generation++;chosen?.bitmap.close();chosen=point=selectedAt=undefined;selectionState=nextState;if(clearFile){file.value='';if(camera)camera.value='';}canvas.hidden=true;if(coordinates)coordinates.hidden=true;clear.hidden=nextState==='empty';x.value=y.value='';x.disabled=y.disabled=true;status.textContent='Choose an image, then point to what you mean.';}
     function draw(){if(!chosen)return;const c=canvas.getContext('2d');c.drawImage(chosen.bitmap.element||chosen.bitmap,0,0,canvas.width,canvas.height);if(point){const r=Math.max(6,canvas.width/80);c.strokeStyle='#ffffff';c.lineWidth=Math.max(3,canvas.width/200);c.beginPath();c.arc(point.x,point.y,r,0,2*Math.PI);c.stroke();c.strokeStyle='#111111';c.lineWidth=Math.max(1,canvas.width/500);c.stroke();}}
     function select(px,py){if(!chosen||!Number.isInteger(px)||!Number.isInteger(py)||px<0||py<0||px>=canvas.width||py>=canvas.height){point=undefined;status.textContent='Select one point inside this image.';return;}point={x:px,y:py};selectedAt=new Date().toISOString();x.value=String(px);y.value=String(py);draw();status.textContent='Point selected. Your next message will include this captured image.';}
     async function choose(source){
@@ -86,7 +85,7 @@ window.VisualInput = (() => {
       return reference;
     }
     function consumed(reference){if(reference&&chosen?.source_id===reference.source_id&&selectedAt===reference.selected_at)reset();}
-    reset();return {capture,captureForVoice:()=>withVoice?.checked===false?undefined:capture(),consumed,reset};
+    reset();return {capture,captureForVoice:capture,consumed,reset};
   }
   return {mount};
 })();
