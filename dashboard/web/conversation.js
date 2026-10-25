@@ -49,7 +49,12 @@ window.Conversation = (() => {
     }
     let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext;
     // Reuse the same presence renderer in the fixed header, freeing conversation space.
-    if(standalone){const presence=$("#conversation-companion"),identity=$("header .identity");if(presence && identity)identity.append(presence);}
+    if(standalone){
+      const presence=$("#conversation-companion"),identity=$("header .identity"),tools=$("header .header-tools"),beacon=$("#conversation-sound-toggle");
+      if(presence && identity)identity.append(presence);
+      if(tools && beacon){tools.insertBefore(beacon,tools.firstChild);beacon.title="Session sound · Beacon";}
+      $("#conversation-sound").append($("#conversation-sound-controls"),$("#conversation-sound-feedback"));
+    }
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
     const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential});
     const presentState=patch=>{companion?.update(patch);sound?.update(patch);};
@@ -83,8 +88,6 @@ window.Conversation = (() => {
       const diagnostics=$("#conversation-diagnostics");
       diagnostics.open=false;
       diagnostics.querySelector?.(".conversation-diagnostics-content")?.prepend($("#conversation-observation"));
-      $("#conversation-message").rows=2;
-      $("#conversation-visual summary").textContent="Add an image";
       timeline.hidden=false;$("#conversation-replies").hidden=false;$("#conversation-sent").hidden=true;
       $("#conversation-inputs-older").textContent="Earlier messages";
       historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));
