@@ -276,11 +276,16 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 body = body.replace('    <script src="assets/app.js" defer></script>',
                     '    <script src="/access-client.js" defer></script>\n    <script src="assets/app.js" defer></script>')
             body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
-        for name in ('app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css'):
+        for name in ('app.js', 'live.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         standalone_entry = (request.query_params.get('view') == 'conversation'
                             and request.query_params.get('client') == 'standalone')
+        if standalone_entry:
+            body = body.replace('<title>Sessions · Telecodex</title>', '<title>Daimon Interaction</title>')
+            body = body.replace('</head>', '<link rel="manifest" href="manifest.webmanifest">'
+                '<meta name="theme-color" content="#0b1018">'
+                '<link rel="apple-touch-icon" href="assets/interaction-192.png"></head>')
         if standalone_entry and conversation_appearance == 'authored':
             body = body.replace('<html lang="en"', '<html lang="en" data-style-policy="authored"', 1)
         if appearance and not (standalone_entry and conversation_appearance == 'authored'):
@@ -289,6 +294,41 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             body = body.replace('</head>', '<link rel="stylesheet" data-home-style href="'+base+
                 '/style.css?surface=sessions"><script src="'+base+'/home-style.js" defer></script></head>')
         return HTMLResponse(body)
+
+    @app.get('/manifest.webmanifest')
+    def interaction_manifest():
+        entry = home_auth.entry if home_auth.enabled else prefix + '/'
+        return JSONResponse({'id': entry, 'name': 'Daimon Interaction', 'short_name': 'Daimon',
+            'start_url': entry + '?view=conversation&client=standalone', 'scope': entry,
+            'display': 'standalone', 'background_color': '#0b1018', 'theme_color': '#0b1018',
+            'icons': [{'src':entry + 'assets/interaction-' + str(size) + '.png',
+                       'sizes':str(size)+'x'+str(size), 'type':'image/png', 'purpose':'any'}
+                      for size in (192,512)]}, media_type='application/manifest+json')
+
+    @app.get('/api/interaction/events')
+    async def interaction_events(request: Request):
+        session = await authorize_async(request)
+        from .live import changes
+        paths = [Path(provider.receiver['db_path'])]
+        if config.get('activity_state_dir'):
+            paths.append(Path(config['activity_state_dir']) / 'topics.json')
+        async def stream():
+            checked = time.monotonic()
+            async for changed in changes(paths):
+                if await request.is_disconnected():
+                    break
+                try:
+                    if time.monotonic() - checked >= 15 or time.time() >= session['expires']:
+                        current = await authorize_async(request)
+                        checked = time.monotonic()
+                        if current['human'] != session['human']:
+                            break
+                except HTTPException:
+                    yield 'event: expired\ndata: {}\n\n'
+                    break
+                yield 'data: {}\n\n' if changed else ': keepalive\n\n'
+        return StreamingResponse(stream(), media_type='text/event-stream',
+            headers={'Cache-Control':'no-store', 'X-Accel-Buffering':'no'})
 
     @app.get('/api/interaction/access')
     def shared_access(request: Request):
@@ -305,7 +345,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             computer_health.assert_binding()
             data, media = computer_health.assets[name]
             return Response(data, media_type=media)
-        if name not in ('health-live.js', 'app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]

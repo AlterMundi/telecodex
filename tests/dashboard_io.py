@@ -65,6 +65,32 @@ class DashboardHTTP(unittest.TestCase):
         return self.client.get('/api/state').json()['csrf']
     def stop(self,nonce,csrf):
         return self.client.post('/api/stop',json={'nonce':nonce},headers={**self.headers,'x-dashboard-csrf':csrf})
+    def test_installable_manifest_and_authenticated_event_stream(self):
+        manifest=self.client.get('/manifest.webmanifest')
+        self.assertEqual(manifest.status_code,200)
+        value=manifest.json()
+        self.assertEqual(value['display'],'standalone')
+        self.assertEqual(value['scope'],'/sessions/')
+        self.assertEqual(value['start_url'],'/sessions/?view=conversation&client=standalone')
+        for icon in value['icons']:
+            name=icon['src'].rsplit('/',1)[-1]
+            self.assertTrue(self.client.get('/assets/'+name).content.startswith(b'\x89PNG'))
+        shell=self.client.get('/?view=conversation&client=standalone').text
+        self.assertIn('rel="manifest"',shell)
+        self.assertNotIn('telegram.org/js',shell)
+        self.assertEqual(self.client.get('/api/interaction/events').status_code,401)
+        self.login()
+        self.provider.receiver={'db_path':str(Path(self.tmp.name)/'source.db')}
+        async def events(paths):
+            yield True
+            yield False
+        with patch('dashboard.live.changes',events):
+            response=self.client.get('/api/interaction/events')
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.headers['x-accel-buffering'],'no')
+        self.assertEqual(response.text,'data: {}\n\n: keepalive\n\n')
+        self.assertEqual(self.provider.calls,[])
+
     def test_private_data_and_actions_require_signed_allowed_owner(self):
         self.assertEqual(self.client.get('/api/state').status_code,401)
         self.assertEqual(self.client.post('/api/session',json={'init_data':'101'},headers=self.headers).status_code,403)
