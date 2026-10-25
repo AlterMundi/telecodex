@@ -22,6 +22,24 @@ const CONTROL_NOTICE_SCOPE: &str = r#"(
     ))
 )"#;
 
+const ENTRY_INPUT_SCOPE: &str = r#"(p.kind='entry_input' AND s.force_fresh_thread=0
+    AND EXISTS(SELECT 1 FROM conversation_inputs c WHERE c.id=p.source
+        AND c.session_id=p.session_id AND c.human_id=p.human_id
+        AND c.native_thread=s.codex_thread_id
+        AND (c.local_turn=p.local_turn OR EXISTS(SELECT 1 FROM interaction_instructions i
+            JOIN interaction_sources x ON x.id=i.input_id WHERE json_extract(i.doc,'$.local_turn')=p.local_turn
+            AND x.human_id=p.human_id AND x.channel='conversation' AND x.event_id=c.id))))"#;
+
+// A progress echo is visible only through the original web return binding.
+const ENTRY_PROGRESS_SCOPE: &str = r#"(p.kind='entry_progress' AND s.force_fresh_thread=0
+    AND EXISTS(SELECT 1 FROM interaction_native_messages m
+        JOIN conversation_inputs c ON c.id=m.presentation_input AND c.human_id=p.human_id
+        JOIN sessions w ON w.id=t.session_id AND w.creator_user_id=p.human_id
+        WHERE m.local_turn=p.local_turn AND m.phase='commentary'
+        AND p.source=json_array(m.native_thread,m.native_turn,m.item_id)
+        AND c.session_id=p.session_id AND c.native_thread=s.codex_thread_id
+        AND w.codex_thread_id=m.native_thread AND w.force_fresh_thread=0))"#;
+
 #[derive(Debug)]
 pub struct TopicPublication {
     pub id: i64,
@@ -135,7 +153,62 @@ pub(super) fn native_on(
         "native",
         &json!([thread, turn, item]).to_string(),
         crate::interaction::visible_answer(text),
-    )
+    )?;
+    let entry: Option<(i64, i64, String)> = conn
+        .query_row(
+            "SELECT c.session_id,c.human_id,COALESCE(NULLIF(w.session_title,''),'Session')
+         FROM interaction_native_messages m JOIN conversation_inputs c ON c.id=m.presentation_input
+         JOIN turns t ON t.id=m.local_turn JOIN sessions w ON w.id=t.session_id
+         WHERE m.local_turn=?1 AND m.native_thread=?2 AND m.native_turn=?3 AND m.item_id=?4
+         AND m.phase='commentary' AND c.session_id!=t.session_id AND c.human_id=t.from_user_id
+         AND EXISTS(SELECT 1 FROM bot_state b JOIN sessions e ON e.id=c.session_id
+             WHERE b.key='telegram_entry_projection' AND b.value=json_array(c.human_id,e.chat_id,e.thread_id))",
+            params![local, thread, turn, item],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    if let Some((entry, human, title)) = entry {
+        let body = format!(
+            "#{title} · update\n\n{}",
+            crate::interaction::visible_answer(text)
+        );
+        conn.execute("INSERT OR IGNORE INTO topic_publications(local_turn,session_id,human_id,kind,source,body,phase,instance_id)
+            VALUES(?1,?2,?3,'entry_progress',?4,?5,'ready','')",params![local,entry,human,json!([thread,turn,item]).to_string(),body])?;
+    }
+    Ok(())
+}
+
+fn conversation_echo_on(
+    conn: &Connection,
+    input: &super::conversation_inputs::ConversationInput,
+    local: i64,
+) -> Result<()> {
+    let selected: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM bot_state WHERE key='telegram_entry_projection' AND value=?1)",
+        [json!([input.human, input.entry.chat_id, input.entry.thread_id]).to_string()],
+        |r| r.get(0),
+    )?;
+    if !selected {
+        return Ok(());
+    }
+    let author = if input.voice.is_some() {
+        "Your voice transcript"
+    } else {
+        "You · app"
+    };
+    conn.execute("INSERT OR IGNORE INTO topic_publications(local_turn,session_id,human_id,kind,source,body,phase,instance_id)
+        VALUES(?1,?2,?3,'entry_input',?4,?5,'ready','')",params![local,input.session,input.human,input.id,format!("{author}\n\n{}",input.text)])?;
+    Ok(())
+}
+
+pub(super) fn conversation_accepted_on(
+    conn: &Connection,
+    input: &super::conversation_inputs::ConversationInput,
+) -> Result<()> {
+    if let Some(local) = input.local_turn {
+        conversation_echo_on(conn, input, local)?;
+    }
+    Ok(())
 }
 
 pub(super) fn accepted_on(
@@ -168,10 +241,30 @@ pub(super) fn accepted_on(
     };
     // Original input is source data, including any protocol-looking quotation.
     let body = format!("↪ {author} · via integrator\n\n{}", input.text);
-    enqueue_on(conn, local, "input", &input.id, &body)
+    enqueue_on(conn, local, "input", &input.id, &body)?;
+    if source.channel == "conversation"
+        && let Ok(original) =
+            super::conversation_inputs::read_on(conn, &source.event_id, source.human_id)
+        && original.entry == SessionKey::new(source.origin.chat_id, Some(source.origin.thread_id))
+        && !original.retired
+    {
+        conversation_echo_on(conn, &original, local)?;
+    }
+    Ok(())
 }
 
 impl Store {
+    pub fn topic_projection_entry_selection(
+        &self,
+        config: Option<&crate::interaction::InteractionConfig>,
+    ) -> Result<()> {
+        let selected = config
+            .filter(|c| c.telegram_entry_projection)
+            .map(|c| json!([c.human_id, c.chat_id, c.topic_id]))
+            .unwrap_or(serde_json::Value::Null);
+        self.save_bot_state("telegram_entry_projection", &selected.to_string())
+    }
+
     /// Foreground presentation only: reads retained outcomes, never native input.
     pub fn thread_control_notices(
         &self,
@@ -311,7 +404,7 @@ impl Store {
             return Ok(None);
         }
         loop {
-            let row:Option<(i64,String,bool,String,String,i64,bool)>=tx.query_row(&format!("SELECT p.id,p.body,COALESCE((u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind NOT IN ('artifact','control','task_control') AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR {CONTROL_NOTICE_SCOPE} OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now'))))),0),p.kind,p.source,p.local_turn,(p.kind NOT IN ('control','task_control') AND EXISTS(SELECT 1 FROM direct_topic_turns pt WHERE pt.local_turn=p.local_turn)) FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN turns t ON t.id=p.local_turn JOIN users u ON u.tg_user_id=p.human_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3 AND p.phase='ready' AND (p.kind='artifact')=?4 ORDER BY p.id LIMIT 1"),params![key.chat_id,key.thread_id,human,files],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+            let row:Option<(i64,String,bool,String,String,i64,bool)>=tx.query_row(&format!("SELECT p.id,p.body,COALESCE((u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind NOT IN ('artifact','control','task_control') AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR {CONTROL_NOTICE_SCOPE} OR {ENTRY_PROGRESS_SCOPE} OR {ENTRY_INPUT_SCOPE} OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now'))))),0),p.kind,p.source,p.local_turn,(p.kind NOT IN ('control','task_control','entry_progress','entry_input') AND EXISTS(SELECT 1 FROM direct_topic_turns pt WHERE pt.local_turn=p.local_turn)) FROM topic_publications p JOIN sessions s ON s.id=p.session_id JOIN turns t ON t.id=p.local_turn JOIN users u ON u.tg_user_id=p.human_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND p.human_id=?3 AND p.phase='ready' AND (p.kind='artifact')=?4 ORDER BY p.id LIMIT 1"),params![key.chat_id,key.thread_id,human,files],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
             let Some((id, body, valid, kind, source, local_turn, direct)) = row else {
                 tx.commit()?;
                 return Ok(None);
@@ -404,7 +497,7 @@ impl Store {
     /// Called after Telegram cooldown, immediately before one network attempt.
     pub fn topic_publication_reserve(&self, id: i64, part: i64) -> Result<bool> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        Ok(conn.execute(&format!("UPDATE topic_publication_parts SET phase='sending' WHERE publication=?1 AND part=?2 AND phase='ready' AND EXISTS(SELECT 1 FROM topic_publications p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=p.session_id JOIN users u ON u.tg_user_id=p.human_id WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?3 AND u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind NOT IN ('artifact','control','task_control') AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR {CONTROL_NOTICE_SCOPE} OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now')))))"),params![id,part,&self.instance_id])?==1)
+        Ok(conn.execute(&format!("UPDATE topic_publication_parts SET phase='sending' WHERE publication=?1 AND part=?2 AND phase='ready' AND EXISTS(SELECT 1 FROM topic_publications p JOIN turns t ON t.id=p.local_turn JOIN sessions s ON s.id=p.session_id JOIN users u ON u.tg_user_id=p.human_id WHERE p.id=?1 AND p.phase='publishing' AND p.instance_id=?3 AND u.allowed=1 AND s.creator_user_id=p.human_id AND t.from_user_id=p.human_id AND (((p.kind NOT IN ('artifact','control','task_control') AND s.codex_thread_id=t.native_thread_id AND s.force_fresh_thread=0) OR {CONTROL_NOTICE_SCOPE} OR {ENTRY_PROGRESS_SCOPE} OR {ENTRY_INPUT_SCOPE} OR (p.kind='notice' AND t.native_thread_id IS NULL)) OR (p.kind='artifact' AND EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.id=p.source AND a.source_local=p.local_turn AND a.source_session=p.session_id AND a.human_id=p.human_id AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now')))))"),params![id,part,&self.instance_id])?==1)
     }
 
     pub fn topic_publication_receipt(

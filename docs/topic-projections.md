@@ -58,3 +58,11 @@ destinations, a held mirror with a completed primary return, repeated native
 events/input IDs, same-session direct interaction, bot feedback, restart,
 lost ACK and known rejection. These fixtures do not replace V01/V05 real-session
 and receiving qualification in [interaction-qualification.md](interaction-qualification.md).
+
+## Optional integrating entry surface
+
+When the human selects `telegram_ingress` and `telegram_entry_projection`, the configured integrating topic also projects app text/committed voice transcripts, integrator commentary/answers, captured-scope worker progress and canonical routed results. The original app input identity deduplicates its echo across integrator and multiple worker admissions. Telegram originals already exist in the topic and are not echoed. The same current entry/native binding is used; work-topic ingress stays direct. This selection is recorded from receiver configuration at bootstrap before admitting work, so a disabled entry creates no new secondary entry queue. Enabling it does not backfill old turns or replay uncertain deliveries.
+
+`telegram_entry_projection` defaults to false independently of the existing work-topic projection flag. Existing receivers that use Telegram ingress plus work-topic copies retain their web-only return behavior unless they explicitly select entry copies. Entry copies can also be selected without work-topic copies; input admission remains controlled only by `telegram_ingress`.
+
+If one worker answer incorporates inputs from both app and Telegram in the explicitly shared entry, it produces one entry return covering those inputs, correlated to the latest original. Per-session helper requests retain their separate authorship/correlation. Unselected receivers retain the previous carrier separation.

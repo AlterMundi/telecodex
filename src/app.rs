@@ -346,6 +346,7 @@ impl App {
             &config.startup_admin_ids,
             &session_defaults,
         )?;
+        store.topic_projection_entry_selection(config.interaction.as_ref())?;
         let codex = CodexRunner::new(config.codex.binary.clone())
             .with_shared_app_server(config.codex.shared_app_server);
         let service_user_id = config.startup_admin_ids.first().copied().unwrap_or(0);

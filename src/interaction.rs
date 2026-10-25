@@ -16,6 +16,9 @@ pub struct InteractionConfig {
     /// Secondary work-topic presentation, never routing ingress.
     #[serde(default)]
     pub telegram_projection: bool,
+    /// Optional copies in the integrating entry, independent of work-topic copies.
+    #[serde(default)]
+    pub telegram_entry_projection: bool,
     pub artifact_store: Option<ArtifactConfig>,
     #[serde(default)]
     pub targets: Vec<Target>,
@@ -510,6 +513,7 @@ mod tests {
             topic_id: 1,
             telegram_ingress: false,
             telegram_projection: false,
+            telegram_entry_projection: false,
             artifact_store: None,
             max_active_workers: 2,
             discover_owned_sessions: false,

@@ -5,6 +5,7 @@ Every user, HTTP, SQLite and native/model peer is synthetic.
 import json
 import pathlib
 import sqlite3
+import signal
 import sys
 from creation_io import Creation
 from semantic_routing_io import Semantic
@@ -20,11 +21,19 @@ class Recovery(Creation):
 
     def wait(self,condition,seconds=15):
         try:return super().wait(condition,seconds)
-        except AssertionError:
-            if self.process and self.process.poll() is not None:
+        except AssertionError as failure:
+            # Preserve the actual failed boundary before the fixture is removed.
+            # Stop only this synthetic process; do not retry or relax the assertion.
+            diagnostic={}
+            if self.process:
+                if self.process.poll() is None:self.process.send_signal(signal.SIGINT)
                 _,error=self.process.communicate(timeout=8)
-                raise AssertionError('Synthetic bridge terminated: '+error.replace('synthetic-question-token','[redacted]'))
-            raise
+                self.process=None
+                diagnostic['stderr']=error.replace('synthetic-question-token','[redacted]')
+            with sqlite3.connect(self.root/'state.sqlite') as db:
+                for table in ('incoming_updates','sessions','turns','interaction_creations'):
+                    diagnostic[table]=db.execute('SELECT * FROM '+table+' ORDER BY rowid DESC LIMIT 8').fetchall()
+            raise AssertionError(str(failure)+'; retained synthetic boundary='+json.dumps(diagnostic,default=str)) from failure
 
     def crash(self):
         # This fixture owns the loopback listener and synthetic native peers.

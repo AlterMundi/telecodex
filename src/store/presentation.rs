@@ -741,6 +741,12 @@ mod tests {
     #[test]
     fn worker_progress_keeps_capture_scope_across_direct_switch_and_reobservation() {
         let (_file, store, entry, _, instruction, _) = setup();
+        store
+            .save_bot_state(
+                "telegram_entry_projection",
+                &json!([100, entry.chat_id, entry.thread_id]).to_string(),
+            )
+            .unwrap();
         let binding = store
             .interaction_presentation_list(100, entry, 0, 0)
             .unwrap()["binding"]
@@ -822,6 +828,20 @@ mod tests {
         assert_eq!(progress[0]["preview"], "Progress for the web");
         assert_eq!(progress[0]["target"], json!(SessionKey::new(100, Some(7))));
         assert!(!page.to_string().contains("Direct work stays direct"));
+        let echo = store.topic_publication_claim(entry, 100).unwrap().unwrap();
+        assert_eq!(echo.kind, "entry_progress");
+        assert!(!echo.direct);
+        assert!(echo.body.ends_with("Progress for the web"));
+        let parts = store
+            .topic_publication_parts(echo.id, std::slice::from_ref(&echo.body))
+            .unwrap();
+        assert_eq!(parts.len(), 1);
+        assert!(store.topic_publication_reserve(echo.id, 0).unwrap());
+        store
+            .topic_publication_receipt(echo.id, 0, Some(123), false)
+            .unwrap();
+        store.topic_publication_finish(echo.id).unwrap();
+        assert!(store.topic_publication_claim(entry, 100).unwrap().is_none());
         let conn = store.conn.lock().unwrap();
         let direct: i64 = conn
             .query_row(
