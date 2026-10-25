@@ -42,6 +42,7 @@ function boot(){
  await hinted.click();hinted.click();await until(()=>hinted.received.length===1);
  assert.equal(hinted.uploads[0].headers['X-Reply-Source'],'context:delivery:11111111-1111-1111-1111-111111111111','Device context must not become an explicit destination during voice upload');
  const unified=boot();await unified.click();
+ assert.equal(unified.nodes.get('#conversation-voice-state')['data-attention'],'false','Routine recording status belongs to header, without a second visible line');
  assert(unified.button().hidden,'Recording hides the redundant microphone/send control');
  const send=unified.nodes.get('#conversation-send');assert.equal(send.type,'button');assert.equal(send['aria-label'],'Send voice message');assert(!send.disabled);
  assert.equal(unified.nodes.get('#conversation-voice-discard').textContent,'×');assert(!unified.nodes.get('#conversation-voice-discard').hidden);
@@ -85,7 +86,7 @@ function boot(){
  assert.equal(focused.uploads[0].headers['X-Reply-Revision'],reference.revision);
  assert.deepEqual(focused.uploads[0].headers,focused.uploads[1].headers,'Permission delays, duration review and retries must retain the original reply focus');
  const missingVisual=boot();missingVisual.failVisual();await missingVisual.click();
- assert.equal(missingVisual.mediaRequests(),0,'Unready visual context cannot silently acquire a microphone');assert.equal(missingVisual.uploads.length,0);assert.match(missingVisual.state(),/Selected image unavailable/);
+ assert.equal(missingVisual.mediaRequests(),0,'Unready visual context cannot silently acquire a microphone');assert.equal(missingVisual.uploads.length,0);assert.match(missingVisual.state(),/Selected image unavailable/);assert.equal(missingVisual.nodes.get('#conversation-voice-state')['data-attention'],'true','Actionable errors remain readable');
  const oldVisual={source_id:'original-view',point:{x:20,y:30}},newVisual={source_id:'later-view',point:{x:80,y:40}};
  const refused=boot();refused.visual(oldVisual);refused.mode('visual-refusal');await refused.click();refused.click();await until(()=>refused.state().startsWith('This attempt did not submit'));
  refused.visual(newVisual);await refused.click();await until(()=>refused.received.length===1);
