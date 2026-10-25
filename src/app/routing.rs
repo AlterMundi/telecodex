@@ -148,7 +148,7 @@ pub(super) fn label(shared: &AppShared, key: SessionKey) -> String {
     if name == fallback
         && cfg.as_ref().is_some_and(|c| {
             c.chat_id == key.chat_id
-                && shared.store.session_creator(key).ok().flatten() == Some(c.human_id)
+                && shared.store.session_creator(key).ok() == Some(c.human_id)
         })
         && let Ok(Some(session)) = shared.store.get_session(key)
         && let Some(title) = session.session_title
