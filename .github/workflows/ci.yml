@@ -137,14 +137,17 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ steps.text-rust-cache.outputs.cache-primary-key }}
+      - name: Qualify the optional shared integrating entry
+        run: python3 -B tests/entry_projection_io.py target/release/telecodex
       - name: Ensure voice decoding prerequisite
         run: |
           if ! command -v ffmpeg >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg
+            # Reuse the runner's package index; refresh only after a known install failure.
+            sudo apt-get install -y --no-install-recommends ffmpeg || {
+              sudo apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+              sudo apt-get install -y --no-install-recommends ffmpeg
+            }
           fi
-      - name: Qualify the optional shared integrating entry
-        run: python3 -B tests/entry_projection_io.py target/release/telecodex
       # Exercise this new slice before the longer unchanged compatibility group.
       - name: Qualify live controller retirement and expression choices
         run: |
