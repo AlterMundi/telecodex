@@ -833,7 +833,7 @@ mod tests {
         assert!(!echo.direct);
         assert!(echo.body.ends_with("Progress for the web"));
         let parts = store
-            .topic_publication_parts(echo.id, &[echo.body.clone()])
+            .topic_publication_parts(echo.id, std::slice::from_ref(&echo.body))
             .unwrap();
         assert_eq!(parts.len(), 1);
         assert!(store.topic_publication_reserve(echo.id, 0).unwrap());

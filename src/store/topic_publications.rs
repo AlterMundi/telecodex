@@ -245,12 +245,10 @@ pub(super) fn accepted_on(
     if source.channel == "conversation"
         && let Ok(original) =
             super::conversation_inputs::read_on(conn, &source.event_id, source.human_id)
+        && original.entry == SessionKey::new(source.origin.chat_id, Some(source.origin.thread_id))
+        && !original.retired
     {
-        if original.entry == SessionKey::new(source.origin.chat_id, Some(source.origin.thread_id))
-            && !original.retired
-        {
-            conversation_echo_on(conn, &original, local)?;
-        }
+        conversation_echo_on(conn, &original, local)?;
     }
     Ok(())
 }
