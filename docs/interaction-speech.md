@@ -1,7 +1,7 @@
 # Speech rendering component
 
 `scripts/speech_render.py` renders exact selected text to a private WAV using an
-owner-configured NVIDIA Magpie endpoint. This is a provider component for #118
+owner-configured NVIDIA Magpie or Qwen TTS endpoint. This is a provider component for #118
 and AlterMundi/daimon-matrix#313. The receiving presentation API below connects it
 to canonical results; device buttons and client playback remain separate work.
 The helper itself does not authenticate a human or authorize access to a conversation. Do not expose this CLI as a public
@@ -36,6 +36,33 @@ override is owner configuration; HTTPS is required except for loopback fixtures.
 Redirects are disabled. No credential is accepted in CLI arguments, request JSON,
 query strings or the cache identity.
 
+For Qwen, select `provider: "qwen-tts"`, an explicit `model` such as
+`qwen-audio-3.0-tts-plus`, and its compatible `voice` (for example
+`longanlingxin`). Replace `env_file` with `credential_file`: the existing
+owner-only plain-token file used by the selected Codex Qwen profile. Do not copy
+the key into a new store. Set `endpoint` to that profile's provider base host plus
+`/api/v1/services/audio/tts/SpeechSynthesizer`, without `/compatible-mode/v1`.
+Keep Token Plan credentials paired with the Token Plan endpoint; this does not
+change the language model or other sessions' providers.
+
+Optional Qwen `instruction` (up to 500 characters), `rate` and `pitch` (0.5–2.0)
+control delivery. Model, instruction and tuning are part of render identity.
+Qwen returns a temporary object URL; HTTP URLs are upgraded to HTTPS on the same
+validated host. The helper downloads it without an
+Authorization header, accepts only Alibaba Cloud object hosts, disables redirects
+and applies the same audio bounds and private retention. The URL is not persisted.
+Qwen WAV is mono 16-bit PCM at 24,000 Hz; NVIDIA remains at 22,050 Hz.
+After a complete bounded HTTP transfer, the exact known Qwen streaming WAV length
+sentinels are replaced with actual lengths; ordinary truncated WAVs remain invalid.
+
+Custom voices are not local checkpoint imports. Voice Lab may create a selected
+reference recording; Qwen's cloud voice-enrollment API creates a model-bound voice
+ID from that sample, where supported by the account and region. Cloud voice design
+can alternatively use a description. Enrollment availability is separate from a
+successful Token Plan synthesis call. See the maintained
+[voice cloning guide](https://www.alibabacloud.com/help/en/model-studio/voice-cloning-user-guide)
+and [voice design guide](https://www.alibabacloud.com/help/en/model-studio/voice-design-user-guide).
+
 Run the helper with `--binding /absolute/private/route.json` and one JSON object
 on stdin:
 
@@ -56,7 +83,7 @@ work, another device or previously published text.
 The owner-only cache key includes receiving scope, exact text, provider endpoint,
 voice, language and format. A per-render lock prevents concurrent requests for
 the same identity. An intent is atomically persisted and fsynced before the
-external request. Complete mono 16-bit PCM WAV at 22,050 Hz is bounded to 8 MiB
+external request. Complete mono 16-bit PCM WAV at the provider's supported rate is bounded to 8 MiB
 and 120 seconds, validated before publication, then retained with a hash.
 
 A completed render is checked again on reuse, including after process restart.
