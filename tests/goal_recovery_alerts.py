@@ -33,6 +33,13 @@ class GoalAlerts(unittest.TestCase):
                 if old is not None and old != value:
                     self.send_error(409)
                     return
+                previous = next((p for (incident, _), p in accepted.items()
+                                 if incident == value['incident_id']), None)
+                provenance = ('producer_id','incident_id','operation_id','receiving_scope',
+                              'source_at','phase','resource_ref')
+                if previous is not None and any(previous[k] != value[k] for k in provenance):
+                    self.send_error(409)
+                    return
                 accepted[key] = value
                 result = {'schema':'daimon-alerts/v1','producer_id':value['producer_id'],
                           'incident_id':value['incident_id'],'revision':value['revision'],
@@ -64,7 +71,7 @@ class GoalAlerts(unittest.TestCase):
                 with self.assertRaises(ValueError):publish(config,foreign)
                 self.assertEqual(len(calls),2,'Binding rejection must happen before HTTP')
                 private=root/'producer.json';private.write_text(json.dumps(config));private.chmod(0o600)
-                resolved={**copy.deepcopy(projection),'revision':2,'processing_state':'resolved','phase':'goal_recovery_returned'}
+                resolved={**copy.deepcopy(projection),'revision':2,'processing_state':'resolved'}
                 script=Path(__file__).resolve().parents[1]/'scripts/goal_recovery_alerts.py'
                 result=subprocess.run([sys.executable,str(script),'--config',str(private)],input=json.dumps(resolved),capture_output=True,text=True,timeout=8)
                 self.assertEqual(result.returncode,0,result.stderr)

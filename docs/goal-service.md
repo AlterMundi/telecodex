@@ -190,7 +190,11 @@ adoption follow Daimon Alerts' maintained operator runbook.
 
 Each failure episode retains one immutable open projection and, after matched
 native completion or explicit retirement, a separate resolution revision. No
-objective, transcript, raw provider error or native ID is published. Unknown
+objective, transcript, raw provider error or native ID is published. Alerts treats
+`phase`, `source_at` and the incident/resource/operation/scope identifiers as
+immutable provenance across revisions. Resolution preserves them and changes
+`processing_state`, summary/action and update time; runtime retry progress stays
+in the separate recovery projection. Unknown
 native effects remain open. Retirement explicitly does not declare provider
 health. A recurrence after actual return uses a new episode. The backend's
 SQLite outbox commits exact content before HTTP, preserves service acceptance
@@ -222,16 +226,35 @@ Codex patch, global Stop or change to another daimon's installation is authorize
 
 ## Current evidence and receiving adoption
 
-Head `40a7a59` passed CI40318325090: 379 text-only Rust tests and 380 all-features
-tests (one ignored in each), Clippy, builds and the controller/native-wire journeys.
-The delegated resume/self-pause journey used no Telegram API or fabricated ingress
-during its tested runtime, preserving accounting and revocation. Its native peer
-is synthetic; fixture enrollment used earlier synthetic Telegram sessions. The
-additional scheduler/receipt/source slice is not covered by that earlier head.
-Its focused source review passed after four admission/restart corrections.
-CI40327583976 then exposed two Clippy layout/type-complexity failures before
-tests ran; both are corrected. The Alerts/status additions and final-head
-checks still require qualification.
+Coherent head `bf62084` passed all jobs in CI40372232887, including text/audio
+Rust checks, durable scheduler/delegation native-wire journeys, dashboard and
+activity tests. Those deterministic capacity failures use a synthetic native
+peer; they do not claim a real provider outage. The later exact-accepted,
+completed-lifetime pending-input correction passed focused independent review.
+Missing ACK and open/transferred/boundary collectors remain fenced.
+
+Receiving-native qualification used Codex0.163.0 and Luna low with Telegram
+fully disabled and no Telegram credential in the tested backend. An actual live
+execution lease prepared/executed the attributed automatic-origin continuation;
+the matched native turn returned useful output and completed the same goal,
+preserving objective, budget, creation identity and cumulative accounting, with
+no fabricated ingress. The test driver exercised that real lease; this does not
+claim that the model independently selected the operation. The verified binary
+source tree was bf62084. Its native writer is unchanged by the later pending-input
+and Alerts provenance corrections.
+
+A separate old-to-new real-native listener handoff passed: the existing writer
+survived disconnect, exact collector attachment created no duplicate turn, and
+the original result returned once with goal accounting retained. Both journeys
+used only isolated fictional enrollment, not existing human work. Fixture
+preparation failures were retained and corrected without reseeding the target
+goal or replaying a submitted continuation.
+
+The actual scoped Alerts core accepted an open qualification projection and
+its resolution after preserving immutable provenance. That check exposed and
+corrected the earlier changing-phase resolution bug; the HTTP fixture now
+checks the same provenance invariant. Final-head checks and receiving runtime
+adoption remain separate from these retained results.
 
 A real human-selected blocked Realtime conversation is deliberately retained for
 later rescue acceptance. It is not resumed as a deployment or test convenience.

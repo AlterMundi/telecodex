@@ -64,17 +64,18 @@ impl Store {
                 serde_json::from_str::<Value>(&raw)?
             } else {
                 json!({"schema":"daimon-alerts/v1","producer_id":settings.producer_id,"incident_id":chain,"operation_id":chain,
-                    "revision":1,"receiving_scope":settings.receiving_scope,"phase":"goal_recovery_pending","resource_ref":settings.resource_ref,
+                    "revision":1,"receiving_scope":settings.receiving_scope,"phase":"goal_recovery","resource_ref":settings.resource_ref,
                     "severity":"warning","problem_code":"provider_error","summary":"A native goal remains blocked or its capacity-recovery outcome remains uncertain.",
                     "action":"Inspect the retained goal recovery state. Preserve uncertain effects and deliberate pauses; notification acknowledgment does not resume work.",
                     "source_at":source,"updated_at":now,"processing_state":"open","work_preserved":true})
             };
             if resolved {
+                // Alerts phase is immutable provenance, not recovery progress.
+                // Retain it (including older projections) across resolution.
                 payload["revision"] = json!(2);
                 payload["processing_state"] = json!("resolved");
                 payload["updated_at"] = json!(now);
                 if matches!(phase.as_str(), "returned" | "native_completed") {
-                    payload["phase"] = json!("goal_recovery_returned");
                     payload["summary"] = json!(
                         "The matched native continuation completed. Goal completion and human receipt remain separate."
                     );
@@ -82,7 +83,6 @@ impl Store {
                         "Inspect the retained native result and current goal. No additional work was started by this notice."
                     );
                 } else {
-                    payload["phase"] = json!("goal_recovery_retired");
                     payload["summary"] = json!(
                         "The recovery attempt was retired or interrupted; this does not declare provider recovery."
                     );
@@ -192,7 +192,20 @@ mod tests {
         assert_eq!(resolved["revision"], 2);
         assert_eq!(resolved["processing_state"], "resolved");
         assert_eq!(resolved["source_at"], open["source_at"]);
-        assert_eq!(resolved["phase"], "goal_recovery_returned");
+        for field in [
+            "producer_id",
+            "incident_id",
+            "operation_id",
+            "receiving_scope",
+            "source_at",
+            "phase",
+            "resource_ref",
+        ] {
+            assert_eq!(
+                resolved[field], open[field],
+                "Immutable Alerts provenance: {field}"
+            );
+        }
         let mut wrong = receipt.clone();
         wrong["revision"] = json!(3);
         assert!(
