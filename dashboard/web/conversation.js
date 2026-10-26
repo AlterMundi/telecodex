@@ -56,7 +56,7 @@ window.Conversation = (() => {
       $("#conversation-sound").append($("#conversation-sound-controls"),$("#conversation-sound-feedback"));
       const compose = $("#conversation-compose"), playback = $("#conversation-audio-tools");
       const dock = node("div"); dock.id = "conversation-dock";
-      compose.before(dock); dock.append(compose, playback);
+      compose.before(dock); dock.append(playback, compose);
     }
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
     if(standalone){

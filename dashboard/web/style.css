@@ -835,9 +835,10 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation main > #conversation { grid-template-rows:auto minmax(0,1fr) auto 44px; }
 .standalone-conversation #conversation:has(#conversation-diagnostics[open]),.standalone-conversation #conversation:has(.task-card[data-expanded="true"]) { grid-template-rows:auto minmax(220px,50dvh) auto auto; }
 .standalone-conversation #conversation-dock { grid-row:3; display:grid; grid-template-columns:minmax(0,1fr); align-items:end; gap:8px; min-width:0; }
-.standalone-conversation #conversation-dock:is(:has(#conversation-player:not([hidden])),:has(#conversation-voice-replies:checked)) { grid-template-columns:minmax(0,1fr) 96px; }
+.standalone-conversation #conversation-dock:has(#conversation-player:not([hidden])) { grid-template-columns:96px minmax(0,1fr); }
 .standalone-conversation #conversation-dock #conversation-compose { grid-row:1; grid-column:1; min-width:0; }
-.standalone-conversation #conversation-dock #conversation-audio-tools { grid-row:1; grid-column:2; min-width:0; width:96px; }
+.standalone-conversation #conversation-dock:has(#conversation-player:not([hidden])) #conversation-compose { grid-column:2; }
+.standalone-conversation #conversation-dock #conversation-audio-tools { grid-row:1; grid-column:1; min-width:0; width:96px; }
 .standalone-conversation #conversation-audio-tools #conversation-player:not([hidden]) { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; width:100%; padding:0; }
 .standalone-conversation #conversation-player #conversation-playing { grid-column:1 / -1; grid-row:1; min-width:0; font-size:12px; overflow-wrap:anywhere; }
 .standalone-conversation #conversation-player #conversation-play { grid-column:1; grid-row:2; }
@@ -846,10 +847,10 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-player #conversation-audio-state { grid-column:1 / -1; grid-row:3; font-size:11px; line-height:15px; overflow-wrap:anywhere; }
 .standalone-conversation #conversation-diagnostics { grid-row:4; }
 @media(max-width:380px) {
- .standalone-conversation #conversation-dock:is(:has(#conversation-player:not([hidden])),:has(#conversation-voice-replies:checked)) #conversation-voice-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+ .standalone-conversation #conversation-dock:has(#conversation-player:not([hidden])) #conversation-voice-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 }
 @media(max-width:380px) {
- .standalone-conversation #conversation-dock:is(:has(#conversation-player:not([hidden])),:has(#conversation-voice-replies:checked)) #conversation-compose { padding:6px; }
- .standalone-conversation #conversation-dock:is(:has(#conversation-player:not([hidden])),:has(#conversation-voice-replies:checked)) .composer-actions { grid-template-columns:44px minmax(0,1fr) 56px; gap:2px; }
- .standalone-conversation #conversation-dock:is(:has(#conversation-player:not([hidden])),:has(#conversation-voice-replies:checked)) #conversation-send { width:56px; min-width:56px; }
+ .standalone-conversation #conversation-dock #conversation-compose { padding:6px; }
+ .standalone-conversation #conversation-dock .composer-actions { grid-template-columns:44px minmax(0,1fr) 56px; gap:2px; }
+ .standalone-conversation #conversation-dock #conversation-send { width:56px; min-width:56px; }
 }
