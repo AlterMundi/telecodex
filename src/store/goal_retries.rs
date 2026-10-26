@@ -179,10 +179,33 @@ pub(super) fn pending_on(
     own: Option<i64>,
 ) -> Result<()> {
     // A failed local collector leaves its original `undetermined`, even after
-    // exact native acceptance. Only a matching retained terminal failure makes
-    // that original settled for admission (never replayable). Match every such
+    // exact native acceptance. A matching retained terminal failure or completed
+    // native lifetime settles admission only (never replay). Match every such
     // historical original, since subsequent continuations have different turns.
-    let busy:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM turns WHERE session_id=?1 AND status='running' AND completed_at IS NULL AND (?2 IS NULL OR id!=?2)) OR EXISTS(SELECT 1 FROM conversation_inputs WHERE session_id=?1 AND retired=0 AND phase IN ('retained','retained_unsent','preparing','preparation_unconfirmed','queued','sending','steering','uncertain','awaiting_target')) OR EXISTS(SELECT 1 FROM incoming_updates i WHERE status IN ('received','processing','queued','steering','uncertain','undetermined') AND json_extract(payload_json,'$.message.chat.id')=?3 AND COALESCE(json_extract(payload_json,'$.message.message_thread_id'),0)=?4 AND NOT (i.status='undetermined' AND EXISTS(SELECT 1 FROM native_input_receipts r JOIN goal_failure_observations f ON f.native_thread=r.native_thread AND f.native_turn=r.native_turn JOIN sessions s ON s.id=f.session_id AND s.creator_user_id=f.human_id AND s.codex_thread_id=f.native_thread WHERE r.update_id=i.update_id AND f.session_id=?1 AND f.human_id=json_extract(i.payload_json,'$.message.from.id') AND f.terminal_error IS NOT NULL))) OR EXISTS(SELECT 1 FROM human_interactions WHERE session_id=?1 AND state IN ('pending','answering','unknown') AND kind='native')",params![session,own,target.chat_id,target.thread_id],|r|r.get(0))?;
+    let busy:bool=conn.query_row(r#"
+      SELECT EXISTS(SELECT 1 FROM turns WHERE session_id=?1 AND status='running'
+          AND completed_at IS NULL AND (?2 IS NULL OR id!=?2))
+      OR EXISTS(SELECT 1 FROM conversation_inputs WHERE session_id=?1 AND retired=0
+          AND phase IN ('retained','retained_unsent','preparing','preparation_unconfirmed','queued','sending','steering','uncertain','awaiting_target'))
+      OR EXISTS(SELECT 1 FROM incoming_updates i
+          WHERE status IN ('received','processing','queued','steering','uncertain','undetermined')
+          AND json_extract(payload_json,'$.message.chat.id')=?3
+          AND COALESCE(json_extract(payload_json,'$.message.message_thread_id'),0)=?4
+          AND NOT (i.status='undetermined' AND EXISTS(
+              SELECT 1 FROM native_input_receipts r JOIN sessions s
+                ON s.id=?1 AND s.codex_thread_id=r.native_thread
+              WHERE r.update_id=i.update_id
+                AND s.creator_user_id=json_extract(i.payload_json,'$.message.from.id')
+                AND (EXISTS(SELECT 1 FROM goal_failure_observations f
+                      WHERE f.native_thread=r.native_thread AND f.native_turn=r.native_turn
+                        AND f.session_id=s.id AND f.human_id=s.creator_user_id AND f.terminal_error IS NOT NULL)
+                  OR EXISTS(SELECT 1 FROM native_collections n JOIN turns t ON t.id=n.local_turn
+                      WHERE t.id=i.turn_id AND t.session_id=s.id AND t.from_user_id=s.creator_user_id
+                        AND t.native_thread_id=s.codex_thread_id AND n.phase='complete'
+                        AND r.native_turn IN (n.first_turn,n.anchor))))))
+      OR EXISTS(SELECT 1 FROM human_interactions WHERE session_id=?1
+          AND state IN ('pending','answering','unknown') AND kind='native')
+      "#,params![session,own,target.chat_id,target.thread_id],|r|r.get(0))?;
     if busy {
         bail!("Current/pending work or human interaction takes precedence over capacity recovery");
     }
@@ -899,6 +922,24 @@ mod tests {
             pending_on(&conn, key, session, None).is_err(),
             "A separate pending original must win"
         );
+        conn.execute("DELETE FROM incoming_updates WHERE update_id=2", [])
+            .unwrap();
+        conn.execute("DELETE FROM goal_failure_observations", [])
+            .unwrap();
+        assert!(
+            pending_on(&conn, key, session, None).is_err(),
+            "Acceptance alone is not terminal proof"
+        );
+        conn.execute("INSERT INTO native_collections(local_turn,anchor,first_turn,phase) VALUES(?1,'original-failed','original-failed','complete')",[local]).unwrap();
+        pending_on(&conn, key, session, None).unwrap();
+        for phase in ["open", "transferred", "boundary"] {
+            conn.execute("UPDATE native_collections SET phase=?1", [phase])
+                .unwrap();
+            assert!(
+                pending_on(&conn, key, session, None).is_err(),
+                "{phase} is not proof of a terminal native lifetime"
+            );
+        }
     }
 
     #[test]
