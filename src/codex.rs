@@ -2176,7 +2176,7 @@ fn bounded_handoff_entry(header: &str, texts: &[String], limit: usize) -> Option
     }
     let mut recent = Vec::new();
     for text in texts.iter().rev() {
-        if text.len() + 1 <= remaining {
+        if text.len() < remaining {
             remaining -= text.len() + 1;
             recent.push(text.clone());
         } else {
