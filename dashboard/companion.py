@@ -27,6 +27,8 @@ def permitted(method, path, scope='interaction_only', artifact_access=False):
     if scope != 'interaction_only':
         return False
     if method == 'GET':
+        if path == '/api/interaction/telegram-inputs' or re.fullmatch(r'/api/interaction/inputs/telegram:[0-9]+(?:/trace(?:/(?:original|[a-f0-9-]{36}))?|/image)', path):
+            return True
         return re.fullmatch(r'/api/interaction(?:/(?:part|sonic|events|goals(?:/[a-f0-9-]{36})?|inputs(?:/[a-f0-9-]{36}(?:/image|/trace(?:/(?:original|[a-f0-9-]{36}))?)?)?|tasks(?:/[a-f0-9]{32})?|requests(?:/[a-f0-9]{32}(?:/receipt)?)?))?', path) is not None
     if method == 'POST':
         return path in ('/api/interaction/inputs', '/api/interaction/voice', '/api/interaction/visual', '/api/interaction/audio') or re.fullmatch(r'/api/interaction/inputs/[a-f0-9-]{36}/(?:route|retry)', path) is not None or re.fullmatch(r'/api/interaction/tasks/[a-f0-9]{32}', path) is not None

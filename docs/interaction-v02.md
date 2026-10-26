@@ -358,3 +358,9 @@ of a visible checkbox and status label. The compact player retains accessible
 status announcements without helper copy below its centered playback icons.
 Attachment choices and recording use authored stroke vectors, avoiding
 platform-dependent emoji appearance. Input and speech state machines are unchanged.
+
+Shared-login and interaction-device grants permit read-only Telegram originals
+and their existing trace/image routes, with the same receiving human and entry
+binding as the app inputs. A denied optional Telegram observation must not clear
+the conversation, draft or recording; it is not evidence that the whole browser
+session expired. Authentication expiry still follows the existing reconnect path.

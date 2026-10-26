@@ -516,7 +516,7 @@ window.Conversation = (() => {
           if(owned===inputGeneration)await telegramPage(0,"before",false);
         }
         if(owned===inputGeneration)$("#conversation-telegram-state").textContent="Telegram and app/device inputs share the retained capture order. Historical inputs without that order are labelled separately.";
-      }catch(e){if(owned===inputGeneration)$("#conversation-telegram-state").textContent="Telegram observation unavailable. Saved app/device inputs remain visible; nothing was resent.";if([401,403].includes(e.status))failed(e);}
+      }catch(e){if(owned===inputGeneration)$("#conversation-telegram-state").textContent="Telegram observation unavailable. Saved app/device inputs remain visible; nothing was resent.";if(e.status===401)failed(e);}
       finally{telegramReading=false;}
     }
     $("#conversation-sent").addEventListener("toggle",()=>refreshTelegram());
