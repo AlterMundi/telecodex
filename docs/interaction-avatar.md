@@ -5,7 +5,8 @@ ordinary readable operational evidence. The installed Source fallback is an
 original abstract interval field, inspired by the orb/hub and character-built
 vocabulary inspected in Ani and Oliva's ASCII-Interfaces for Nexus (revision
 `4e7d6c0092fb1bf4c6d8909ff1026a1642b35646`, MIT). No private case, media,
-renderer or existing portrait was copied. The field and finite gestures live in
+existing portrait or application logic was copied. The Source renderer adapts
+the upstream per-character palette technique to inert DOM spans. The field and finite gestures live in
 `dashboard/web/companion.js`; they do not define Source's identity or another
 being's required form.
 
@@ -35,7 +36,7 @@ instead of assuming a fixed vocabulary.
 
 Without a selected pack the fallback accepts `wave`, `nod` or `none` and its
 finite resting names. Its reply gesture lasts 850 ms; the interval field also
-plays a three-frame 720 ms authored glyph transition on a meaningful local pose
+plays a twelve-frame 960 ms authored glyph transition on a meaningful local pose
 change, then settles to its selected frame. Stable repeated evidence does not
 restart that sequence. Repeated metadata, historical
 loading, older answers and progress do not restart a reply gesture. Hidden pages
@@ -95,3 +96,10 @@ unchanged observations preserve phase. Stale source state returns to the baselin
 rhythm without claiming continued work. The existing chat refresh reads the same
 bounded observer metadata even when sound is off; it does not start audio,
 native work, inference or another polling loop.
+
+The Source field uses counter-rotating character orbits, inward listening marks,
+travelling speaking waves and a per-glyph cyan/lilac/gold palette. Geometry changes
+through twelve locally computed frames rather than replacing dots in one fixed
+picture. These colors and shapes belong to Source's fallback; selected per-being
+packs keep their own authored text. Rendering creates inert text nodes and spans,
+never HTML from a model. The same reduced-motion and hidden-page controls apply.

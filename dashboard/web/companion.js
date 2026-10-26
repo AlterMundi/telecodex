@@ -6,14 +6,35 @@ window.ConversationCompanion = (() => {
   // Source's interval field: an abstract presence, not a generic human face.
   // Variations are authored locally; no inference is spent rendering a frame.
   function portrait(pose,frame=0) {
-    const centres={calm:" . : . ",curious:" . ? . ",focused:" > : < ",
-      listening:"(  :  )",speaking:"~ .:. ~",delighted:"+  *  +",uncertain:" .   . "};
-    const centre=pose==="speaking"?["~ .:. ~","< ::: >","~ :.: ~"][frame%3]:centres[pose]||centres.calm;
-    const rows=["         . : .", "      .:'     ':.", "    .:   .---.   :.",
-      "   :   .'     '.   :", ` --:--( ${centre} )--:--`,
-      "   :   '.     .'   :", "    ':.  '---'  .:'", "       ':.   .:'", "          ':'"];
-    const halo=frame===1?"*":frame===2?"+":".";
-    return rows.map(row=>row.replaceAll(".",halo).padEnd(26)).join("\n");
+    const phase=frame*Math.PI/6, grid=Array.from({length:9},()=>Array(26).fill(' '));
+    const put=(x,y,glyph)=>{x=Math.round(x);y=Math.round(y);if(x>=0&&x<26&&y>=0&&y<9)grid[y][x]=glyph;};
+    const speaking=pose==='speaking', listening=pose==='listening';
+    const radius=8+(speaking?Math.sin(phase)*1.8:Math.sin(phase)*.5);
+    // Two counter-rotating fields couple without turning into a generic face.
+    for(let i=0;i<30;i++){
+      const angle=i*Math.PI/15, tilt=Math.sin(phase)*.32;
+      put(12.5+Math.cos(angle)*radius,4+Math.sin(angle+tilt)*3.6,i%3===0?':':'.');
+    }
+    for(let i=0;i<14;i++){
+      const angle=i*Math.PI/7-phase*(listening?-.5:.5);
+      put(12.5+Math.cos(angle)*4.5,4+Math.sin(angle)*2, i%2?'*':'+');
+    }
+    for(let side of [-1,1])for(let i=0;i<5;i++){
+      const x=12.5+side*(5+i*1.8),wave=Math.sin(phase-side*i*.7);
+      put(x,4+wave*(speaking?1.7:.65),speaking?'~':listening?side<0?'>':'<':'-');
+    }
+    const centres={calm:':',curious:'?',focused:'=',listening:':',speaking:'*',delighted:'@',uncertain:'.'};
+    put(12,4,centres[pose]||':');put(13,4,centres[pose]||':');
+    if(pose==='delighted')for(let i=0;i<6;i++){const a=phase+i*Math.PI/3;put(12.5+Math.cos(a)*11,4+Math.sin(a)*4,'+');}
+    return grid.map(row=>row.join('')).join('\n');
+  }
+  function paint(face,art,colored){
+    if(face.textContent===art)return;
+    if(!colored || !face.style || !document.createDocumentFragment){face.textContent=art;return;}
+    const colors={'.':'#67789c',':':'#b2a5eb','*':'#8cdef0','+':'#e6bf72','~':'#86dfc8','>':'#a7dbeb','<':'#a7dbeb','@':'#f1cf8f','?':'#d7b9ef','=':'#e6bf72','-':'#627d98'};
+    const fragment=document.createDocumentFragment();let last,color,run;
+    for(const glyph of art){color=colors[glyph]||'#778ca5';if(color!==last){run=document.createElement('span');run.style.color=color;fragment.append(run);last=color;}run.append(document.createTextNode(glyph));}
+    face.replaceChildren(fragment);
   }
   function mount({now=()=>Date.now()}={}) {
     const box=document.querySelector("#conversation-companion");
@@ -99,7 +120,7 @@ window.ConversationCompanion = (() => {
       }
       return {entry,frames:[entry.alt],frame_ms:0,fallback:true};
     }
-    function framesFor(expression){return pack?selection(expression):{frames:[0,1,2].map(frame=>portrait(expression,frame)),frame_ms:240};}
+    function framesFor(expression){return pack?selection(expression):{frames:Array.from({length:12},(_,frame)=>portrait(expression,frame)),frame_ms:80};}
     function playFrames(expression){
       stopFrames();if(document.hidden || motion?.matches)return;
       const selected=framesFor(expression);if(selected.frames.length<2)return;
@@ -142,7 +163,7 @@ window.ConversationCompanion = (() => {
       const art=frames.frames[frameExpression===expression?Math.min(frameIndex,frames.frames.length-1):ambientIndex%frames.frames.length];
       if(selected){face.setAttribute("aria-hidden","false");face.setAttribute("role","img");face.setAttribute("aria-label",selected.entry.alt);face.title=pack.authorship;face.dataset.fallback=String(!!selected.fallback);}
       else {face.setAttribute("aria-hidden","true");face.setAttribute("aria-label","Companion portrait");face.dataset.fallback="false";}
-      if(face.textContent!==art)face.textContent=art;
+      paint(face,art,!pack);
       box.dataset.pose=expression;
       const caption=!state.connected?(state.connected===false?"Let’s reconnect.":"Ready when you are."):state.question?"Your turn, whenever you’re ready.":
         state.capture==="recording"?"I’m listening.":rows.length?"You can keep talking or writing.":"Where shall we go next?";

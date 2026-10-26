@@ -104,8 +104,8 @@ assert.equal(busyExpression.box.dataset.pose,"delighted","capture settles back i
 
 const transition=boot();transition.companion.observe({schema:'telecodex.interaction-activity/v1',sources:[]});
 transition.companion.update({capture:'recording'});const listeningFrame=transition.face.textContent;
-transition.elapse(240);assert.notEqual(transition.face.textContent,listeningFrame,'listening must have a visible authored glyph transition');
-transition.elapse(240);transition.elapse(240);
+transition.elapse(80);assert.notEqual(transition.face.textContent,listeningFrame,'listening must have a visible authored glyph transition');
+for(let i=1;i<12;i++)transition.elapse(80);
 assert.equal(transition.face.textContent,listeningFrame,'finite transition settles back to its selected frame');
 const remaining=transition.timers.size;transition.companion.update({capture:'recording'});
 assert.equal(transition.timers.size,remaining,'unchanged state cannot restart a cosmetic sequence');
@@ -117,7 +117,7 @@ transition.document.hidden=true;transition.handlers.visibilitychange();assert.eq
 // Continuous ambient expression is separate from finite response gestures.
 const speech=boot();speech.companion.observe({schema:'telecodex.interaction-activity/v1',sources:[]});
 speech.companion.update({playback:'playing'});
-speech.elapse(240);speech.elapse(240);speech.elapse(240);
+for(let i=0;i<12;i++)speech.elapse(80);
 const spokenFrame=speech.face.textContent;speech.elapse(160);assert.notEqual(speech.face.textContent,spokenFrame,'Speaking must continue changing glyphs after the finite introduction');
 const runningTimers=speech.timers.size;speech.companion.update({playback:'playing'});assert.equal(speech.timers.size,runningTimers,'Unchanged observations preserve the running ambient phase');
 speech.companion.update({playback:undefined});assert.equal(speech.box.dataset.cycle,'1200');
