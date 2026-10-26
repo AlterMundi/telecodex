@@ -14,6 +14,13 @@ pub(super) async fn process_turn(
     prepared_worker_lease: Option<super::attention::WorkerLease>,
 ) -> Result<()> {
     let shared = app.shared.clone();
+    let recovering = queued
+        .goal
+        .as_ref()
+        .and_then(|g| g.conditional.as_ref())
+        .and_then(|c| c.scope.as_ref())
+        .is_some_and(|scope| scope.recovery);
+    let capacity_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let _goal_execution =
         super::goal_controls::GoalExecutionGuard::new(shared.clone(), queued.goal.as_ref());
     let initial_binding = if queued.request.review_mode.is_none()
@@ -355,7 +362,10 @@ pub(super) async fn process_turn(
             .store
             .goal_delegation_allows_actor(queued.request.from_user_id, session.key, native)
             .unwrap_or(false)
-    });
+    }) || queued
+        .goal
+        .as_ref()
+        .is_some_and(|g| g.conditional.is_some());
     if queued.request.review_mode.is_none()
         && shared.store.topic_publication_owner(session.key)? == Some(queued.request.from_user_id)
     {
@@ -461,6 +471,7 @@ pub(super) async fn process_turn(
     let routed =
         execution_root.is_some() || queued.conversation_input.is_some() || canonical_return;
     let sink = if routed
+        || recovering
         || shared.store.topic_projection_active(turn_id)?
         || !shared.config.telegram.show_unfinished_messages
     {
@@ -690,7 +701,10 @@ pub(super) async fn process_turn(
             .store
             .goal_delegation_allows_actor(runtime_request.from_user_id, session.key, native)
             .unwrap_or(false)
-    });
+    }) || queued
+        .goal
+        .as_ref()
+        .is_some_and(|g| g.conditional.is_some());
     if controller_selected && let Some(hint) = controller_hint {
         runtime_request
             .runtime_instructions
@@ -703,6 +717,7 @@ pub(super) async fn process_turn(
                 let sink = sink.clone();
                 let shared = shared.clone();
                 let approval_cancel = cancel.clone();
+                let capacity_failure=capacity_failure.clone();
                 let requester_user_id = queued.request.from_user_id;
                 let session_key = session.key;
                 let voice_update = queued.update_id;
@@ -723,6 +738,7 @@ pub(super) async fn process_turn(
                 move |event| {
                     let initial_binding=initial_binding.clone();
                     let sink = sink.clone();
+                    let capacity_failure=capacity_failure.clone();
                     let shared = shared.clone();
                     let cancel = approval_cancel.clone();
                     let attach_native=attach_native.clone();
@@ -896,15 +912,24 @@ pub(super) async fn process_turn(
                                 if shared.store.goal_recovery_block_observed(session_key,requester_user_id,&goal.thread_id,&native_turn,&goal).is_err() {
                                     tracing::warn!("Native goal-block evidence could not be retained; no recovery authorized");
                                 }
+                                shared.goal_recovery_wakeup.notify_one();
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnFailure { thread_id: native, id: native_turn, error } => {
+                                if recovering && error["codexErrorInfo"]=="serverOverloaded" && shared.store.goal_retry_quiet_capacity(turn_id).unwrap_or(false) {
+                                    capacity_failure.store(true,std::sync::atomic::Ordering::Release);
+                                }
                                 if shared.store.goal_recovery_failure_observed(session_key,requester_user_id,&native,&native_turn,&error).is_err() {
                                     tracing::warn!("Native terminal-failure evidence could not be retained; no recovery authorized");
                                 }
+                                shared.goal_recovery_wakeup.notify_one();
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnTerminal {id:native_id,status} => {
+                                if let Ok(native)=shared.store.controller_native_turn(turn_id,session_key,requester_user_id) {
+                                    let _=shared.store.goal_retry_native_terminal(requester_user_id,session_key,&native,&native_id,&status);
+                                }
+                                shared.goal_recovery_wakeup.notify_one();
                                 if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,&format!("resume_turn_{status}"),Some(turn_id),Some(&native_id))?;}
 
                                 shared.store.merge_terminal(turn_id,&native_id,&status)?;
@@ -1129,7 +1154,7 @@ pub(super) async fn process_turn(
                 shared.store.set_session_busy(session.key, false)?;
                 let recovery_note = saved_thread_is_unavailable(&error).then(||
                     "The saved native thread is unavailable. Its binding and your input are preserved. Recover the native context or explicitly clear this topic to start a new context.".to_string());
-                finish_failed_turn(&shared.store, turn_id, &sink, status, &error, recovery_note)
+                finish_failed_turn(&shared.store, turn_id, &sink, status, &error, recovery_note, capacity_failure.load(std::sync::atomic::Ordering::Acquire))
                     .await?;
                 Err(error)
             }
@@ -1358,8 +1383,15 @@ async fn finish_failed_turn(
     status: &str,
     error: &anyhow::Error,
     recovery_note: Option<String>,
+    quiet_capacity_retry: bool,
 ) -> Result<()> {
     store.record_turn_finished(turn_id, status, None)?;
+    if quiet_capacity_retry {
+        // Structured native failure and scheduler state remain retained. A
+        // routine retry does not add another Turn failed message to the chat.
+        sink.lock().await.finish(None).await?;
+        return Ok(());
+    }
     let mut message = format!("Turn {status}: {error:#}");
     if let Some(note) = recovery_note {
         message.push_str("\n\n");

@@ -41,6 +41,10 @@ pub(super) fn capabilities(value: &mut Value) {
 /// The existing owner socket supplies authentication and the human scope.
 /// Client JSON cannot name another human or act as a live daimon execution.
 pub(super) async fn owner_command(app: &App, human: i64, args: &str) -> Result<Value> {
+    if let Some(json) = args.strip_prefix("recovery set ") {
+        let update: crate::store::GoalRecoveryPolicy = serde_json::from_str(json)?;
+        return app.shared.store.goal_recovery_policy(human, &update);
+    }
     if args == "delegation" {
         return app.shared.store.goal_delegation_read(human);
     }
@@ -291,7 +295,7 @@ fn mutation_origin(value: &Value) -> crate::codex::GoalMutationOrigin {
     }
 }
 
-async fn activate_control(
+pub(super) async fn activate_control(
     app: &App,
     human: i64,
     entry: SessionKey,
@@ -343,6 +347,7 @@ async fn activate_control(
         receipt: slot.clone(),
         context: None,
         scope: Some(crate::codex::GoalControlScope {
+            recovery: value["intent"]["recovery"].is_object(),
             human,
             entry,
             id: id.to_owned(),

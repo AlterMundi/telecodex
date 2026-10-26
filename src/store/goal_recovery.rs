@@ -13,20 +13,15 @@ fn capacity_error(error: &Value) -> bool {
 
 impl Store {
     pub(super) fn init_goal_recovery(&self) -> Result<()> {
-        self.conn
-            .lock()
-            .expect("store mutex poisoned")
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS goal_failure_observations(
-                session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                human_id INTEGER NOT NULL,
-                native_thread TEXT NOT NULL,
-                native_turn TEXT NOT NULL,
-                blocked_goal TEXT,
-                terminal_error TEXT,
-                observed_at TEXT NOT NULL,
-                PRIMARY KEY(human_id,session_id,native_thread,native_turn));",
-            )?;
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS goal_failure_observations(
+            session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            human_id INTEGER NOT NULL,native_thread TEXT NOT NULL,native_turn TEXT NOT NULL,
+            blocked_goal TEXT,terminal_error TEXT,observed_at TEXT NOT NULL,
+            PRIMARY KEY(human_id,session_id,native_thread,native_turn));",
+        )?;
+        add_column_if_missing(&conn, "goal_failure_observations", "block_context", "TEXT")?;
         Ok(())
     }
 
@@ -80,6 +75,22 @@ impl Store {
         if bound != native {
             bail!("Failure evidence belongs to a different native binding");
         }
+        let block_context = if goal.is_some() {
+            let barrier: i64 = tx.query_row(
+                "SELECT COALESCE(MAX(id),0) FROM original_ingress_order",
+                [],
+                |r| r.get(0),
+            )?;
+            Some(
+                json!({"binding":super::goal_controls::binding_on(&tx,human,key)?,
+                "command_generation":super::goal_controls::command_generation_on(&tx,key)?,
+                "delegation":super::goal_delegations::grant_on(&tx,human,key,true).ok(),
+                "policy":super::goal_retries::policy_on(&tx,human,key)?,"original_barrier":barrier})
+                .to_string(),
+            )
+        } else {
+            None
+        };
         let goal = goal.map(serde_json::to_string).transpose()?;
         let error = error.map(Value::to_string);
         let retained: Option<(Option<String>, Option<String>)> = tx
@@ -102,13 +113,15 @@ impl Store {
         }
         tx.execute(
             "INSERT INTO goal_failure_observations
-             (session_id,native_thread,native_turn,blocked_goal,terminal_error,observed_at,human_id)
-             VALUES(?1,?2,?3,?4,?5,?6,?7)
+             (session_id,native_thread,native_turn,blocked_goal,terminal_error,observed_at,human_id,block_context)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
              ON CONFLICT(human_id,session_id,native_thread,native_turn) DO UPDATE SET
              blocked_goal=COALESCE(goal_failure_observations.blocked_goal,excluded.blocked_goal),
-             terminal_error=COALESCE(goal_failure_observations.terminal_error,excluded.terminal_error)",
-            params![session,native,turn,goal,error,now_string(),human],
+             terminal_error=COALESCE(goal_failure_observations.terminal_error,excluded.terminal_error),
+             block_context=COALESCE(goal_failure_observations.block_context,excluded.block_context)",
+            params![session,native,turn,goal,error,now_string(),human,block_context],
         )?;
+        super::goal_retries::enqueue_on(&tx, human, key, session, native, turn)?;
         tx.commit()?;
         Ok(())
     }
@@ -137,7 +150,7 @@ impl Store {
             .transpose()?;
         Ok(
             json!({"schema":"telecodex.goal-failure-summary/v1","target":key,"native_thread":native,
-            "latest":latest,"historical":true,"read_only":true,"execution_enabled":false}),
+            "latest":latest,"historical":true,"read_only":true,"recovery":super::goal_retries::view_on(&conn,human,key,session,&native)?}),
         )
     }
 
@@ -194,13 +207,13 @@ impl Store {
                 "observed_at":observed,"linked_capacity_failure":linked_capacity,
                 "cause":if linked_capacity {"server_overloaded"}else{"unqualified"},
                 "current_goal_revision":null,"delegation":null,"next_attempt_at":null,
-                "execution_enabled":false}),
+                "historical":true}),
                 )
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(
             json!({"schema":"telecodex.goal-failure-evidence/v1","target":key,"native_thread":native,"items":items,
-            "more":rows.len()>16,"read_only":true,"execution_enabled":false,
+            "more":rows.len()>16,"read_only":true,"recovery":super::goal_retries::view_on(&conn,human,key,session,&native)?,
             "meaning":"Historical native evidence, not current goal state or permission to resume. Matching turn identities qualify the cause only; delegation, fresh revision, budgets, later intent, fences and admission remain required."}),
         )
     }
@@ -297,7 +310,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|v| v["linked_capacity_failure"] == true && v["execution_enabled"] == false)
+                .all(|v| v["linked_capacity_failure"] == true && v["historical"] == true)
         );
         assert_eq!(joined["items"][0]["goal_at_failure"]["tokensUsed"], 42);
         drop(store);

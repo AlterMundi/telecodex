@@ -8,6 +8,8 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub goal_recovery: GoalRecoveryConfig,
     pub voice: Option<crate::voice::VoiceConfig>,
     pub telegram: TelegramConfig,
     pub codex: CodexConfig,
@@ -29,6 +31,23 @@ pub struct Config {
     pub nexus: Option<crate::nexus::NexusConfig>,
     pub session_control: Option<SessionControlConfig>,
     pub interaction: Option<crate::interaction::InteractionConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GoalRecoveryConfig {
+    pub enabled: bool,
+    pub interval_seconds: u64,
+    pub batch_size: usize,
+}
+impl Default for GoalRecoveryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_seconds: 60,
+            batch_size: 4,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -227,6 +246,11 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
+        if !(5..=3600).contains(&self.goal_recovery.interval_seconds)
+            || !(1..=16).contains(&self.goal_recovery.batch_size)
+        {
+            bail!("Goal recovery interval must be 5..=3600 seconds and batch_size 1..=16");
+        }
         let mut profile_keys = std::collections::HashSet::new();
         for profile in &self.codex.session_profiles {
             profile.validate()?;

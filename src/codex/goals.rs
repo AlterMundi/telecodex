@@ -287,6 +287,7 @@ mod snapshot_tests {
 
 #[derive(Debug, Clone)]
 pub struct GoalControlScope {
+    pub recovery: bool,
     pub human: i64,
     pub entry: crate::models::SessionKey,
     pub id: String,
@@ -692,4 +693,29 @@ pub(super) async fn conditional_activation(
         settled(phase, &receipt)?;
     }
     result.context("Context-aware goal activation timed out; inspect retained control, never replay automatically")?
+}
+
+impl CodexRunner {
+    /// Bounded read-only preflight; never resumes/loads a replacement harness or
+    /// invents a revision/turn association from the goal's blocked status.
+    pub async fn goal_recovery_head(&self, thread: &str) -> Result<(NativeGoalSnapshot, Value)> {
+        tokio::time::timeout(Duration::from_secs(10),async {
+            let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
+            process.initialize().await?;
+            let id=process.send_request("thread/read",json!({"threadId":thread,"includeTurns":false})).await?;
+            let observed=process.await_response(id).await?;
+            if observed["thread"]["id"]!=thread || !matches!(observed["thread"]["status"]["type"].as_str(),Some("idle"|"systemError"|"notLoaded")) {
+                bail!("Native writer is active or its readiness is unknown");
+            }
+            let id=process.send_request("thread/goal/snapshot",json!({"threadId":thread})).await?;
+            let snapshot=parse_goal_snapshot(&process.await_response(id).await?,thread)?;
+            let id=process.send_request("thread/turns/list",json!({"threadId":thread,"limit":1,"sortDirection":"desc","itemsView":"notLoaded"})).await?;
+            let page=process.await_response(id).await?;
+            let turn=page["data"].as_array().and_then(|rows|rows.first()).context("Latest native turn unavailable")?;
+            if turn["id"].as_str().is_none_or(|v|v.is_empty()) || turn["status"].as_str().is_none() {bail!("Latest native turn identity unavailable");}
+            let latest=json!({"id":turn["id"],"status":turn["status"]});
+            let _=process.shutdown().await;
+            Ok((snapshot,latest))
+        }).await.context("Goal recovery observation timed out; no continuation submitted")?
+    }
 }

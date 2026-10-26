@@ -246,6 +246,7 @@ impl Drop for CodexHomeGuard {
 
 fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
     Config {
+        goal_recovery: crate::config::GoalRecoveryConfig::default(),
         voice: None,
         interaction: None,
         nexus: None,
@@ -351,6 +352,7 @@ fn sample_app() -> (App, NamedTempFile) {
     let config = sample_config(db.path().to_path_buf(), sample_workspace());
     let store = Store::open(db.path(), &[100], &sample_defaults()).unwrap();
     let shared = Arc::new(AppShared {
+        goal_recovery_wakeup: tokio::sync::Notify::new(),
         config,
         store,
         telegram: TelegramClient::new(
@@ -2174,6 +2176,7 @@ fn rebinds_stale_session_to_latest_active_thread_for_same_cwd() {
     let config = sample_config(db.path().to_path_buf(), workspace.clone());
     let store = Store::open(db.path(), &[100], &sample_defaults()).unwrap();
     let shared = Arc::new(AppShared {
+        goal_recovery_wakeup: tokio::sync::Notify::new(),
         config,
         store,
         telegram: TelegramClient::new(
@@ -2302,6 +2305,7 @@ fn keeps_truly_archived_session_unbound_when_no_active_replacement_exists() {
     let config = sample_config(db.path().to_path_buf(), workspace.clone());
     let store = Store::open(db.path(), &[100], &sample_defaults()).unwrap();
     let shared = Arc::new(AppShared {
+        goal_recovery_wakeup: tokio::sync::Notify::new(),
         config,
         store,
         telegram: TelegramClient::new(

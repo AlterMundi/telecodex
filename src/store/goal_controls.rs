@@ -96,7 +96,7 @@ pub(super) fn unclaimed_on(conn: &Connection, human: i64, kind: &str, event: &st
     Ok(())
 }
 
-fn binding_on(conn: &Connection, human: i64, key: SessionKey) -> Result<Value> {
+pub(super) fn binding_on(conn: &Connection, human: i64, key: SessionKey) -> Result<Value> {
     let (session, native) = super::presentation::entry_on(conn, human, key)?;
     Ok(json!([
         super::presentation::entry_binding(conn, human, key, session)?,
@@ -105,7 +105,7 @@ fn binding_on(conn: &Connection, human: i64, key: SessionKey) -> Result<Value> {
         super::stopping::admission_epoch_on(conn, key)?
     ]))
 }
-fn read_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Result<Value> {
+pub(super) fn read_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Result<Value> {
     super::presentation::entry_on(conn, human, entry)?;
     let (raw,phase,result):(String,String,Option<String>)=conn.query_row(
         "SELECT doc,phase,result FROM interaction_goal_controls WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4",
@@ -129,7 +129,10 @@ fn control_view_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -
         "proposal":doc["proposal"],"plan":doc["plan"],"reason":doc["reason"],"result":value["result"]}))
 }
 
-fn command_generation_on(conn: &Connection, target: SessionKey) -> Result<Option<String>> {
+pub(super) fn command_generation_on(
+    conn: &Connection,
+    target: SessionKey,
+) -> Result<Option<String>> {
     conn.query_row(
         "SELECT value FROM bot_state WHERE key=?",
         [format!(
@@ -147,6 +150,9 @@ fn eligible_on(conn: &Connection, human: i64, entry: SessionKey, value: &Value) 
     if d["delegation"].is_object() {
         super::goal_delegations::validate_on(conn, human, target, &d["delegation"])?;
     }
+    if d["recovery"].is_object() {
+        super::goal_retries::validate_control_on(conn, human, target, d)?;
+    }
     let generation = serde_json::to_value(command_generation_on(conn, target)?)?;
     let expected_generation = if d["ever_claimed"] == true
         || matches!(value["phase"].as_str(), Some("claimed" | "submitted"))
@@ -160,9 +166,10 @@ fn eligible_on(conn: &Connection, human: i64, entry: SessionKey, value: &Value) 
     }
     if binding_on(conn, human, entry)? != d["entry_binding"]
         || binding_on(conn, human, target)? != d["target_binding"]
-        || d["expires_at"]
-            .as_i64()
-            .is_none_or(|t| t <= Utc::now().timestamp())
+        || (!d["recovery"].is_object()
+            && d["expires_at"]
+                .as_i64()
+                .is_none_or(|t| t <= Utc::now().timestamp()))
         || super::stopping::fenced_on(conn, entry)?
         || super::stopping::fenced_on(conn, target)?
         || super::maintenance_writer_held_on(conn, entry)?
@@ -234,10 +241,102 @@ fn validate_claimed_on(
     eligible_on(conn, human, entry, &value)
 }
 
+pub(super) fn record_attempt_on(
+    conn: &Connection,
+    id: &str,
+    outcome: &Value,
+    actor: &Value,
+) -> Result<()> {
+    let (Some(attempt), Some(phase)) = (outcome["attempt"].as_str(), outcome["phase"].as_str())
+    else {
+        return Ok(());
+    };
+    let result = outcome["result"].to_string();
+    conn.execute("INSERT OR IGNORE INTO goal_control_attempt_receipts(control_id,attempt,phase,result,actor,recorded_at) VALUES(?1,?2,?3,?4,?5,?6)",params![id,attempt,phase,result,actor.to_string(),now_string()])?;
+    let retained:String=conn.query_row("SELECT result FROM goal_control_attempt_receipts WHERE control_id=?1 AND attempt=?2 AND phase=?3",params![id,attempt,phase],|r|r.get(0))?;
+    if serde_json::from_str::<Value>(&retained)? != outcome["result"] {
+        bail!("Retained goal attempt receipt is immutable");
+    }
+    Ok(())
+}
+
+pub(super) fn claim_on(
+    conn: &Connection,
+    instance: &str,
+    human: i64,
+    entry: SessionKey,
+    id: &str,
+    execution_actor: Value,
+) -> Result<(Value, bool)> {
+    let value = read_on(conn, human, entry, id)?;
+    if !matches!(
+        value["phase"].as_str(),
+        Some("prepared" | "known_unsent" | "retained_unsent")
+    ) {
+        return Ok((value, false));
+    }
+    eligible_on(conn, human, entry, &value)?;
+    let d = &value["intent"];
+    let newer:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_controls WHERE human_id=?1 AND target_chat=?2 AND target_topic=?3 AND id!=?4 AND json_extract(doc,'$.authorization_order')>?5)",params![human,d["target"]["chat_id"].as_i64(),d["target"]["thread_id"].as_i64(),id,d["authorization_order"].as_i64()],|r|r.get(0))?;
+    if newer {
+        conn.execute(
+            "UPDATE interaction_goal_controls SET phase='superseded' WHERE id=?1",
+            [id],
+        )?;
+        let value = read_on(conn, human, entry, id)?;
+        return Ok((value, false));
+    }
+    let conflict:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_controls WHERE human_id=?1 AND target_chat=?2 AND target_topic=?3 AND phase IN ('submitted','uncertain','partial'))",params![human,d["target"]["chat_id"].as_i64(),d["target"]["thread_id"].as_i64()],|r|r.get(0))?;
+    if conflict {
+        bail!("Target has an unconfirmed goal-control outcome; inspect it before another mutation");
+    }
+    let mut claimed = d.clone();
+    if value["result"].is_object() {
+        let previous = json!({"attempt":d["attempt"],"phase":value["phase"],"result":value["result"],"worker_execution":d["worker_execution"]});
+        if !claimed["previous_outcomes"].is_array() {
+            claimed["previous_outcomes"] = json!([]);
+        }
+        claimed["previous_outcomes"]
+            .as_array_mut()
+            .expect("array")
+            .push(previous);
+        let retained = claimed["previous_outcomes"].as_array_mut().expect("array");
+        for outcome in retained.iter() {
+            record_attempt_on(
+                conn,
+                id,
+                outcome,
+                &json!({"source":"retained_previous_outcome","worker_execution":outcome["worker_execution"]}),
+            )?;
+        }
+        if retained.len() > 16 {
+            retained.drain(..retained.len() - 16);
+        }
+        claimed["previous_outcomes_count"] = json!(
+            d["previous_outcomes_count"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_add(1)
+        );
+    }
+    claimed["worker_execution"] = Value::Null;
+    claimed["execution_actor"] = execution_actor;
+    claimed["ever_claimed"] = json!(true);
+    claimed["attempt"] = json!(Uuid::now_v7().to_string());
+    let target: SessionKey = serde_json::from_value(d["target"].clone())?;
+    conn.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![format!("goal_intent:{}:{}",target.chat_id,target.thread_id),id])?;
+    conn.execute(
+            "UPDATE interaction_goal_controls SET phase='claimed',instance_id=?2,doc=?3,result=NULL WHERE id=?1",
+            params![id, instance,claimed.to_string()],
+        )?;
+    Ok((read_on(conn, human, entry, id)?, true))
+}
+
 impl Store {
     pub(super) fn init_goal_controls(&self) -> Result<()> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch("CREATE TABLE IF NOT EXISTS interaction_goal_controls(id TEXT PRIMARY KEY,human_id INTEGER NOT NULL,entry_chat INTEGER NOT NULL,entry_topic INTEGER NOT NULL,target_chat INTEGER NOT NULL,target_topic INTEGER NOT NULL,phase TEXT NOT NULL,doc TEXT NOT NULL,result TEXT,instance_id TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS goal_control_attempt_receipts(control_id TEXT NOT NULL REFERENCES interaction_goal_controls(id),attempt TEXT NOT NULL,phase TEXT NOT NULL,result TEXT NOT NULL,actor TEXT NOT NULL,recorded_at TEXT NOT NULL,PRIMARY KEY(control_id,attempt,phase));
         CREATE TABLE IF NOT EXISTS interaction_goal_inputs(human_id INTEGER NOT NULL,source_kind TEXT NOT NULL,source_event TEXT NOT NULL,control_id TEXT NOT NULL REFERENCES interaction_goal_controls(id),PRIMARY KEY(human_id,source_kind,source_event));")?;
         let tx = conn.transaction()?;
         let interrupted = {
@@ -248,6 +347,10 @@ impl Store {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
+        // Retain the actual prior attempt/actor before another claim replaces
+        // them. A restart before the durable write marker is known unsent;
+        // after that marker the effect stays uncertain, never replayable.
+        tx.execute("UPDATE interaction_goal_controls SET result=json_object('restart_reconciliation',json('true'),'native_write_started',json(CASE WHEN phase='submitted' THEN 'true' ELSE 'false' END),'outcome',CASE WHEN phase='submitted' THEN 'uncertain' ELSE 'known_unsent' END) WHERE instance_id!=?1 AND phase IN ('claimed','submitted') AND json_extract(doc,'$.attempt') IS NOT NULL AND result IS NULL",[&self.instance_id])?;
         tx.execute("UPDATE interaction_goal_controls SET phase=CASE WHEN phase='submitted' THEN 'uncertain' ELSE 'retained_unsent' END WHERE instance_id!=?1 AND phase IN ('prepared','claimed','submitted')",[&self.instance_id])?;
         for (id, phase) in interrupted {
             super::topic_publications::goal_control_on(&tx, &id, &phase)?;
@@ -494,59 +597,24 @@ impl Store {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         super::live_tasks::actor_on(&tx, actor, closed)?;
-        let value = read_on(&tx, actor.human, actor.key, id)?;
-        if !matches!(
-            value["phase"].as_str(),
-            Some("prepared" | "known_unsent" | "retained_unsent")
-        ) {
-            return Ok((value, false));
-        }
-        eligible_on(&tx, actor.human, actor.key, &value)?;
-        let d = &value["intent"];
-        let newer:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_controls WHERE human_id=?1 AND target_chat=?2 AND target_topic=?3 AND id!=?4 AND json_extract(doc,'$.authorization_order')>?5)",params![actor.human,d["target"]["chat_id"].as_i64(),d["target"]["thread_id"].as_i64(),id,d["authorization_order"].as_i64()],|r|r.get(0))?;
-        if newer {
-            tx.execute(
-                "UPDATE interaction_goal_controls SET phase='superseded' WHERE id=?1",
-                [id],
-            )?;
-            let value = read_on(&tx, actor.human, actor.key, id)?;
-            tx.commit()?;
-            return Ok((value, false));
-        }
-        let conflict:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM interaction_goal_controls WHERE human_id=?1 AND target_chat=?2 AND target_topic=?3 AND phase IN ('submitted','uncertain','partial'))",params![actor.human,d["target"]["chat_id"].as_i64(),d["target"]["thread_id"].as_i64()],|r|r.get(0))?;
-        if conflict {
+        if read_on(&tx, actor.human, actor.key, id)?["intent"]["recovery"].is_object() {
             bail!(
-                "Target has an unconfirmed goal-control outcome; inspect it before another mutation"
+                "Recovery attempts belong to the backend scheduler; prepare a separately attributed delegated action instead"
             );
         }
-        let mut claimed = d.clone();
-        if value["result"].is_object() {
-            let previous = json!({"attempt":d["attempt"],"phase":value["phase"],"result":value["result"],"worker_execution":d["worker_execution"]});
-            if !claimed["previous_outcomes"].is_array() {
-                claimed["previous_outcomes"] = json!([]);
-            }
-            claimed["previous_outcomes"]
-                .as_array_mut()
-                .expect("array")
-                .push(previous);
-        }
-        claimed["worker_execution"] = Value::Null;
-        claimed["execution_actor"] =
-            json!({"native":actor.native,"physical":actor.physical,"local":actor.local});
-        claimed["ever_claimed"] = json!(true);
-        claimed["attempt"] = json!(Uuid::now_v7().to_string());
-        let target: SessionKey = serde_json::from_value(d["target"].clone())?;
-        tx.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![format!("goal_intent:{}:{}",target.chat_id,target.thread_id),id])?;
-        tx.execute(
-            "UPDATE interaction_goal_controls SET phase='claimed',instance_id=?2,doc=?3,result=NULL WHERE id=?1",
-            params![id, self.instance_id,claimed.to_string()],
+        let result = claim_on(
+            &tx,
+            &self.instance_id,
+            actor.human,
+            actor.key,
+            id,
+            json!({"native":actor.native,"physical":actor.physical,"local":actor.local}),
         )?;
         if closed.is_cancelled() {
             bail!("Goal controller expired before submission claim");
         }
-        let value = read_on(&tx, actor.human, actor.key, id)?;
         tx.commit()?;
-        Ok((value, true))
+        Ok(result)
     }
     /// Revalidate the already claimed attempt immediately before the native write.
     pub fn goal_control_validate_submission(
@@ -584,7 +652,26 @@ impl Store {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         validate_claimed_on(&tx, &self.instance_id, human, entry, id, attempt)?;
+        let value = read_on(&tx, human, entry, id)?;
+        let doc = &value["intent"];
+        if doc["recovery"].is_object() {
+            let target: SessionKey = serde_json::from_value(doc["target"].clone())?;
+            super::goal_retries::pending_on(
+                &tx,
+                target,
+                doc["target_binding"][1]
+                    .as_i64()
+                    .context("Recovery target missing")?,
+                doc["worker_execution"]["local"].as_i64(),
+            )?;
+        }
         tx.execute("UPDATE interaction_goal_controls SET phase='submitted' WHERE id=?1 AND phase='claimed' AND instance_id=?2",params![id,self.instance_id])?;
+        if doc["recovery"].is_object() {
+            tx.execute(
+                "UPDATE goal_retries SET phase='submitted' WHERE control_id=?1 AND phase='claimed'",
+                [id],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }

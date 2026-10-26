@@ -28,6 +28,7 @@ mod creation;
 mod dialogue;
 mod forum;
 mod goal_controls;
+mod goal_recovery;
 mod goals;
 mod icons;
 mod interactions;
@@ -94,6 +95,7 @@ pub struct App {
 }
 
 struct AppShared {
+    goal_recovery_wakeup: tokio::sync::Notify,
     config: Config,
     store: Store,
     telegram: TelegramClient,
@@ -341,6 +343,16 @@ impl App {
             &config.startup_admin_ids,
             &session_defaults,
         )?;
+        store.save_bot_state(
+            "goal_recovery_backend",
+            &serde_json::json!({
+                "enabled":config.goal_recovery.enabled,
+                "interval_seconds":config.goal_recovery.interval_seconds,
+                "batch_size":config.goal_recovery.batch_size,
+                "meaning":"Configured backend settings, not a native execution or delivery receipt"
+            })
+            .to_string(),
+        )?;
         let (telegram, me) = if config.telegram.enabled {
             let token = config.telegram.resolve_token()?;
             let client = TelegramClient::new(token, config.telegram.api_base.clone())
@@ -406,6 +418,7 @@ impl App {
         );
         Ok(Self {
             shared: Arc::new(AppShared {
+                goal_recovery_wakeup: tokio::sync::Notify::new(),
                 config,
                 store,
                 telegram,
@@ -469,6 +482,10 @@ impl App {
             .await;
 
         stopping::start_control_socket(self.clone()).await?;
+        let recovery_app = self.clone();
+        tokio::spawn(async move {
+            goal_recovery::run(recovery_app).await;
+        });
         let restart_app = self.clone();
         tokio::spawn(async move {
             if stopping::recover_restart(restart_app).await.is_err() {

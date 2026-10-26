@@ -30,13 +30,12 @@ The existing authenticated presentation result includes one compact
 `more` flag, bounded goal/error previews and full evidence retained privately.
 Aggregate presentation never multiplies full objectives/provider details across
 targets. Current revision, delegation and next attempt remain unknown;
-`execution_enabled=false`. Unavailable is not idle or recovered. These reads have
+a separate `recovery` projection distinguishes retained authority, configured settings and current scheduler phase. Unavailable is not idle or recovered. These reads have
 no native mutation, inference, Telegram request or lifecycle effect.
 
 The current implementation also extends retained controls with revocable owner-
 installed human delegation and receiver-attributed daimon execution. That extension
-is undergoing qualification; it is not deployed. Automatic scheduling, retry
-settings, Alerts and native recovery acceptance remain unfinished. No existing
+is undergoing qualification; it is not deployed. The next source slice adds automatic scheduling and retry settings, still under qualification. Alerts and real receiving-native acceptance remain unfinished. No existing
 pause, blocked goal or receiving installation has changed.
 
 ## Retained delegation and shared client contract
@@ -67,8 +66,7 @@ changed arguments are rejected. Retrying an earlier grant after revocation retur
 its historical receipt and current grant, never reactivating the older revision.
 Turning `agents`/`recovery` off revokes that principal. Grant storage survives
 restart and stays isolated by authorizing human and current session ownership.
-The recovery flag is retained authorization only: the scheduler is not yet
-implemented or activated by this checkpoint.
+The recovery flag is retained authorization; backend settings and per-session policy also constrain execution. Publication of this draft has not activated any receiving installation.
 
 An effective agent grant exposes only `goal_inspect`, `goal_prepare`,
 `goal_execute` and `goal_status` through the existing live native controller.
@@ -112,56 +110,69 @@ backend startup/owner socket, zero manufactured inputs and a disabled client
 that rejects all operations. Passing these tests is not yet the end-to-end
 native goal recovery journey required below.
 
-## Shared execution contract for the next slice
+## Model-free recovery implementation (under qualification)
 
-Extend the retained `interaction_goal_controls` and existing conditional native
-operations; do not manufacture a Telegram update or introduce a parallel goal
-writer. Realtime, the current independent app, Sessions and Telegram use one
-backend service. Reuse the authenticated owner-control gateway and controller
-facade; client code does not decide whether a retry is eligible.
+Recovery shares the same control-intent ledger, single-flight claim, native
+conditional activation, invocation context, write-boundary retention and actual
+collector settlement as delegated controls. It does not create a second goal
+engine or replay the failed input/tools. A generic agent cannot claim a
+backend-owned recovery intent and impersonate that worker.
 
-A human delegation must be durable and revocable, retaining its actual source,
-authorizing human, permitted daimon/recovery principal, target scope, revision and
-supported actions. The receiving backend resolves actual actor identity. Tool
-arguments and peer context cannot invent or broaden a delegation. Retain the
-actual controller native execution or recovery-worker identity on every intent.
-Use native `origin=automatic` for delegated/recovery controls; native `origin=user`
-remains reserved for an actual human instruction. Budget expansion/reset and
-destructive clear/replace require their separate explicit authority.
+A blocked notification captures its actual physical turn, current delegation,
+owned session/native binding, Stop epoch, command generation, per-session policy
+and capture barrier. Only a later/equal matching terminal `serverOverloaded`
+observation creates one durable job in the same transaction. Either receipt order
+works. A grant installed after an earlier block does not backfill or revive it. Native
+block timestamps have second precision; equal-second ordering cannot prove prior
+delegation, so those delayed observations remain ineligible.
+Missing causal block context remains unqualified; periodic terminal-history reads
+cannot invent the missed association.
 
-Agent tool and authenticated client operations must share inspect, prepare,
-execute/status and supported pause/edit/continue behavior. Preserve existing
-proposal confirmation when no applicable delegation exists. Freeze native
-revision, binding, plan, authorization revision and idempotency key at preparation.
-The service rejects stale conditions rather than silently refreshing a plan.
-Native acknowledgment is not completed work or receipt by the human.
+`[goal_recovery]` defaults to `enabled=true`, `interval_seconds=60`, `batch_size=4`.
+Those defaults create no human authority: effective retained `recovery=true`
+delegation is required. The loop starts with the backend, reconciles at startup
+and periodically, and receives event wakeups independently of Telegram and model
+availability. A backend settings disable or an owner-installed per-session policy
+can stop automatic attempts. `goal recovery set JSON` accepts `request_id`,
+`target`, `expected_revision` and `enabled`; target ownership and policy CAS are
+checked. The per-session setting and backend settings are inspectable in recovery
+state; source defaults never override a retained receiver opt-out.
 
-Recovery runs without a model and independently of Telegram ingress. Subscribe
-to terminal/goal observations and reconcile retained pending state at startup and
-periodically (proposed initial interval:60 seconds). A missed goal-turn association
-stays unknown; do not infer it from proximity. Qualification must establish how
-missed native events are reconciled before claiming full startup coverage.
+Initial fallback delay is thirty seconds. Consecutive capacity failures caused by
+the acknowledged recovery continuation retain the same episode and exponentially
+increase delay to a thirty-minute base, with stable ±10% jitter. Restarts and
+duplicates preserve timing. A completed/returned continuation or later independent
+control resets the episode. There is no arbitrary retry-count lockout. The native
+terminal error currently supplies no Retry-After value; none is invented.
 
-Retain one retry record with session binding, goal revision/incarnation, failed
-turn, cause, attempt count, next eligible time and native admission outcome.
-Respect provider retry timing only when actually present. Otherwise use capped
-exponential backoff with jitter, without an arbitrary retry-count lockout for a
-temporary outage. Initial automatic eligibility is structured `serverOverloaded`;
-other transports/rate limits need explicit classification and tests.
+Before preparing a conditional control, the backend observes the actual native
+snapshot/revision, readiness and latest terminal turn. It requires the same
+blocked definition and causal failed turn, with budget remaining. The opaque
+native revision is frozen in the existing plan; a subsequent revision change
+rejects admission instead of refreshing the plan. Usage/accounting timestamps are
+not treated as new goal definitions. At claim and the native write boundary,
+recheck current ownership/binding/delegation, latest goal generation, later
+captured human input, active/pending work and native questions, per-session policy,
+Stop epoch and maintenance. Explicit pauses, clears, edits, replacements,
+completion and exhausted budgets take precedence. Read-only `/status` does not
+become another goal command. A later direct `/stop` supersedes recovery.
 
-Immediately before admission recheck current goal/revision, usage/budget, binding,
-delegation, newer goal intent, active/pending input, Stop epoch and maintenance
-fences. A later pause, edit, clear, replacement, completion or Stop wins. Default
-recovery is enabled only within the retained authorized deployment scope; retain
-inspectable disable controls and explicit per-session overrides. Configuration
-defaults cannot create human delegation.
+The durable job distinguishes waiting, claimed, submitted, acknowledged,
+returned/native-completed, failed-again, superseded, rejected, partial and
+uncertain outcomes. The exact matched native control receipt updates it in the
+same transaction. A queued/claimed attempt interrupted before its write boundary
+can wait and retry its frozen plan; submitted/unknown effects are never replayed.
+Native return observations remain distinct from native acceptance, goal completion
+and human receipt. Routine capacity retries do not produce one control/failure
+message each; their structured evidence and actual output remain retained.
 
-Single-flight claims, write-boundary retention and native conditional admission
-must handle duplicate events, concurrent workers, process restart and lost ACK.
-Never replay uncertain native work, input or tools to repair observation. Link
-retries to the existing goal-control outcome. Preserve partially committed effects
-and reconcile them before another attempt. Acknowledged continuation and useful
-provider recovery remain distinct outcomes.
+Attempt receipts are retained separately, while the inline previous-outcome view
+is bounded to sixteen records. Duplicated receipts do not shift retry deadlines.
+The per-target shared presentation and owned topic inventory project recovery
+state and the next eligible check; this is not a guarantee that admission will
+occur then. Receiving UI rendering and sustained Alerts delivery still require
+qualification. Existing goals, active work and deliberate pauses have not been
+changed by source development.
 
 ## Client projection and qualification still required
 
@@ -180,3 +191,25 @@ Then qualify the Telegram adapter against the same service. Preserve deliberate
 receiver overrides and publish/update the maintained skill and receiving records.
 Do not claim installed/adopted receivers from a source publication alone. No new
 Codex patch, global Stop or change to another daimon's installation is authorized.
+
+## Current evidence and receiving adoption
+
+Head `40a7a59` passed CI40318325090: 379 text-only Rust tests and 380 all-features
+tests (one ignored in each), Clippy, builds and the controller/native-wire journeys.
+The delegated resume/self-pause journey used no Telegram API or fabricated ingress
+during its tested runtime, preserving accounting and revocation. Its native peer
+is synthetic; fixture enrollment used earlier synthetic Telegram sessions. The
+additional scheduler/receipt/source slice is not covered by that earlier head.
+Its final-head CI and focused review remain required.
+
+A real human-selected blocked Realtime conversation is deliberately retained for
+later rescue acceptance. It is not resumed as a deployment or test convenience.
+No global Stop was authorized. No Oliva/Eko installation is changed without the
+human's prior consultation. Eko's current host is MEDUSA, not its stopped source
+container; resolve future authorized adoption from the maintained receiving map.
+
+Before capability activation, update the maintained shared skill and context used
+by all affected CompAII sessions; publish through AlterMundi/Skills. Capability
+publication, local installation, receiving adoption and actual use are separate.
+Do not claim that existing sessions or other daimons learned a capability merely
+because this draft describes it.

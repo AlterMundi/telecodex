@@ -5,6 +5,12 @@ edit_debounce_ms = 900
 max_text_chunk = 3500
 tmp_dir = "/absolute/path/to/telecodex/tmp"
 
+# These defaults need a separately retained human delegation before any recovery.
+[goal_recovery]
+enabled = true
+interval_seconds = 60
+batch_size = 4
+
 [telegram]
 # Set false for an independent app/backend without Telegram credentials or API
 # requests. Keep its existing session database and owner-control configuration.
