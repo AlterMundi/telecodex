@@ -885,7 +885,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation header .apps-return::before { content:"▦"; font-size:22px; }
 
 @media(max-width:480px) {
- .standalone-conversation header { gap:6px; padding-block:0; }
+ .standalone-conversation header { gap:6px; padding-block:0; height:88px; min-height:88px; }
  .standalone-conversation header #conversation-companion { gap:6px; }
  .standalone-conversation header #conversation-companion pre { font-size:6px; }
  .standalone-conversation header .header-tools { display:grid; grid-template-columns:44px 44px; width:88px; max-width:88px; gap:0; padding-top:0; }
