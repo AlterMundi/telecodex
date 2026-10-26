@@ -50,6 +50,18 @@ const elapsed = (n) =>
     : n < 60
       ? `${n}s`
       : `${Math.floor(n / 60)}m ${n % 60}s`;
+function recoveryLabel(value) {
+  if (!value) return "";
+  const labels = {waiting:"Waiting to retry",claimed:"Preparing continuation",submitted:"Native submission unconfirmed",
+    acknowledged:"Continuation accepted",uncertain:"Outcome unknown; automatic replay held",partial:"Partial outcome; automatic replay held",
+    returned:"Native result retained",native_completed:"Native continuation completed",failed_again:"Provider failure observed",
+    superseded:"Retired by later direction or authority",disabled:"Disabled",interrupted:"Interrupted",rejected:"Native control rejected"};
+  const label = labels[value.state];
+  if (!label) return "";
+  const next = value.state === "waiting" && Number.isSafeInteger(value.next_attempt_at)
+    ? ` · next check in ${elapsed(Math.max(0, Math.ceil(value.next_attempt_at-Date.now()/1000)))}` : "";
+  return `Goal recovery · ${label}${next}`;
+}
 function authorizationHeaders() {
   if(deviceMode){
     if(sharedConversationConnected)return {};
@@ -222,6 +234,8 @@ function sessions() {
     );
     head.title = s.title;
     if (s.goal) head.append(el("span", `Goal · ${s.goal.status}`, "goal-chip"));
+    if (s.goal_recovery && ["waiting","claimed","submitted","uncertain","partial"].includes(s.goal_recovery.state))
+      head.append(el("span", "Recovery pending", "goal-chip"));
     const activeChildren = s.children.filter(
       (child) => child.status === "active",
     ).length;
@@ -241,6 +255,7 @@ function sessions() {
       );
     } else if (s.goal_state === "unavailable")
       card.append(el("p", "Goal metadata unavailable", "session-meta"));
+    if (recoveryLabel(s.goal_recovery)) card.append(el("p", recoveryLabel(s.goal_recovery), "session-meta"));
     if (s.children.length) {
       const detail = el("details");
       detail.dataset.session = `${s.id}:children`;

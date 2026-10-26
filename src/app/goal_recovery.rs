@@ -19,7 +19,63 @@ pub(super) async fn run(app: App) {
                 "Shared goal recovery observation remains pending; no uncertain work replayed"
             );
         }
+        if let Some(settings) = &settings.alerts {
+            if publish_alerts(&app, settings).await.is_err() {
+                tracing::warn!(
+                    "Goal recovery Alerts acceptance unavailable; immutable projection retained"
+                );
+            }
+        }
     }
+}
+
+async fn publish_alerts(app: &App, settings: &crate::config::GoalRecoveryAlerts) -> Result<()> {
+    use std::process::Stdio;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    app.shared.store.goal_recovery_alerts_prepare(settings)?;
+    for payload in app.shared.store.goal_recovery_alerts_due(settings)? {
+        if app.shared.shutdown.is_cancelled() {
+            return Ok(());
+        }
+        let input = serde_json::to_vec(&payload)?;
+        anyhow::ensure!(input.len() <= 16384, "Safe alert projection exceeded bound");
+        let mut child = tokio::process::Command::new(&settings.command[0])
+            .args(&settings.command[1..])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("Alert adapter input unavailable")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("Alert adapter output unavailable")?;
+        let observed: Result<serde_json::Value> =
+            tokio::time::timeout(Duration::from_secs(8), async {
+                stdin.write_all(&input).await?;
+                drop(stdin);
+                let mut raw = Vec::new();
+                stdout.take(32769).read_to_end(&mut raw).await?;
+                anyhow::ensure!(raw.len() <= 32768, "Alert adapter response exceeded bound");
+                anyhow::ensure!(
+                    child.wait().await?.success(),
+                    "Alert adapter acceptance unavailable"
+                );
+                Ok(serde_json::from_slice(&raw)?)
+            })
+            .await
+            .context("Alert adapter deadline exceeded")?;
+        // One deadline includes stdin, response and process exit. Upserts may replay exact content;
+        // native goal writes and Telegram delivery claims never use this path.
+        app.shared
+            .store
+            .goal_recovery_alert_accepted(&payload, &observed?)?;
+    }
+    Ok(())
 }
 
 async fn tick(app: &App, batch: usize) -> Result<()> {

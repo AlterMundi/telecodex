@@ -160,6 +160,7 @@ jobs:
           python3 -B tests/goal_activation_io.py target/release/telecodex
           python3 -B tests/goal_delegation_io.py target/release/telecodex
           python3 -B tests/goal_recovery_io.py target/release/telecodex
+          python3 -B tests/goal_recovery_alerts.py
           python3 -B tests/goal_inspection_io.py target/release/telecodex
           python3 -B tests/live_tasks_io.py target/release/telecodex
           python3 -B tests/warm_controller_io.py target/release/telecodex

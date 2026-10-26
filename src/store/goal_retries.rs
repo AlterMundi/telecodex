@@ -435,7 +435,8 @@ pub(super) fn view_on(
         .optional()?
         .map(|s| serde_json::from_str(&s))
         .transpose()?;
-    let row:Option<(String,String,i64,u32,Option<String>,Option<String>)>=conn.query_row("SELECT id,phase,next_at,attempts,control_id,detail FROM goal_retries WHERE human_id=?1 AND session_id=?2 AND native_thread=?3 ORDER BY rowid DESC LIMIT 1",params![human,session,native],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+    type RetryStatus = (String, String, i64, u32, Option<String>, Option<String>);
+    let row:Option<RetryStatus>=conn.query_row("SELECT id,phase,next_at,attempts,control_id,detail FROM goal_retries WHERE human_id=?1 AND session_id=?2 AND native_thread=?3 ORDER BY rowid DESC LIMIT 1",params![human,session,native],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
     let latest=row.map(|(id,phase,due,attempts,control,detail)|json!({"id":id,"state":phase,"next_attempt_at":if phase=="waiting" {json!(due)}else{Value::Null},"attempts":attempts,"control":control,"detail":detail,"principal":"telecodex.goal-recovery"}));
     Ok(
         json!({"schema":"telecodex.goal-recovery-state/v1","authorized":grant.is_some(),"delegation_revision":grant.as_ref().map(|g|&g["revision"]),"policy":policy,"backend":backend,"effective_enabled":backend.as_ref().map(|b|b["enabled"]==true && grant.is_some() && policy.as_ref().is_none_or(|p|p["enabled"]!=false)),"enabled_by_scope":grant.is_some() && policy.as_ref().is_none_or(|p|p["enabled"]!=false),"latest":latest,"meaning":"Authorization and retained scheduler state; acknowledged continuation is separate from useful native recovery."}),
@@ -467,6 +468,30 @@ impl Store {
         conn.execute("UPDATE goal_retries SET phase=?5,detail=?6 WHERE human_id=?1 AND session_id=?2 AND native_thread=?3 AND phase='acknowledged' AND EXISTS(SELECT 1 FROM interaction_goal_controls c WHERE c.id=goal_retries.control_id AND json_extract(c.result,'$.native_receipt.activation.turnId')=?4)",params![human,session,native,turn,phase,format!("Observed native turn {status}; final answer retained: {output}. This does not declare the goal complete or prove human receipt.")])?;
         Ok(())
     }
+}
+
+impl Store {
+    pub fn goal_retry_quiet_capacity(&self, local: i64) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let id:Option<String>=conn.query_row("SELECT j.id FROM goal_retries j JOIN interaction_goal_controls c ON c.id=j.control_id WHERE json_extract(c.doc,'$.worker_execution.local')=?1 ORDER BY j.rowid DESC LIMIT 1",[local],|r|r.get(0)).optional()?;
+        let Some(id) = id else {
+            return Ok(false);
+        };
+        Ok(authority_on(&conn, &retained_on(&conn, &id)?).is_ok())
+    }
+}
+
+pub(super) fn compact_view_on(
+    conn: &Connection,
+    human: i64,
+    key: SessionKey,
+    session: i64,
+    native: &str,
+) -> Result<Value> {
+    let view = view_on(conn, human, key, session, native)?;
+    Ok(
+        json!({"enabled":view["effective_enabled"],"state":view["latest"]["state"],"next_attempt_at":view["latest"]["next_attempt_at"],"attempts":view["latest"]["attempts"]}),
+    )
 }
 
 #[cfg(test)]
@@ -900,28 +925,4 @@ mod tests {
         );
         assert_eq!(serde_json::from_str::<Value>(&executor).unwrap(), actor);
     }
-}
-
-impl Store {
-    pub fn goal_retry_quiet_capacity(&self, local: i64) -> Result<bool> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
-        let id:Option<String>=conn.query_row("SELECT j.id FROM goal_retries j JOIN interaction_goal_controls c ON c.id=j.control_id WHERE json_extract(c.doc,'$.worker_execution.local')=?1 ORDER BY j.rowid DESC LIMIT 1",[local],|r|r.get(0)).optional()?;
-        let Some(id) = id else {
-            return Ok(false);
-        };
-        Ok(authority_on(&conn, &retained_on(&conn, &id)?).is_ok())
-    }
-}
-
-pub(super) fn compact_view_on(
-    conn: &Connection,
-    human: i64,
-    key: SessionKey,
-    session: i64,
-    native: &str,
-) -> Result<Value> {
-    let view = view_on(conn, human, key, session, native)?;
-    Ok(
-        json!({"enabled":view["effective_enabled"],"state":view["latest"]["state"],"next_attempt_at":view["latest"]["next_attempt_at"],"attempts":view["latest"]["attempts"]}),
-    )
 }

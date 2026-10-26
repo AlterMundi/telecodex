@@ -29,14 +29,15 @@ The existing authenticated presentation result includes one compact
 `telecodex.goal-failure-evidence/v1`: at most sixteen observations, an explicit
 `more` flag, bounded goal/error previews and full evidence retained privately.
 Aggregate presentation never multiplies full objectives/provider details across
-targets. Current revision, delegation and next attempt remain unknown;
-a separate `recovery` projection distinguishes retained authority, configured settings and current scheduler phase. Unavailable is not idle or recovered. These reads have
+targets. A separate `recovery` projection distinguishes retained authority,
+configured settings and current scheduler phase; historical failure evidence
+does not stand in for a current native revision. Unavailable is not idle or recovered. These reads have
 no native mutation, inference, Telegram request or lifecycle effect.
 
-The current implementation also extends retained controls with revocable owner-
-installed human delegation and receiver-attributed daimon execution. That extension
-is undergoing qualification; it is not deployed. The next source slice adds automatic scheduling and retry settings, still under qualification. Alerts and real receiving-native acceptance remain unfinished. No existing
-pause, blocked goal or receiving installation has changed.
+The implementation extends retained controls with revocable owner-installed
+human delegation and receiver-attributed daimon execution, plus a model-free
+scheduler, safe sustained-incident outbox and receiving status. Qualification
+and deployment are separate; existing deliberate pauses remain untouched.
 
 ## Retained delegation and shared client contract
 
@@ -170,9 +171,36 @@ Attempt receipts are retained separately, while the inline previous-outcome view
 is bounded to sixteen records. Duplicated receipts do not shift retry deadlines.
 The per-target shared presentation and owned topic inventory project recovery
 state and the next eligible check; this is not a guarantee that admission will
-occur then. Receiving UI rendering and sustained Alerts delivery still require
-qualification. Existing goals, active work and deliberate pauses have not been
+occur then. Sessions, Telegram status and the activity companion render the retained state
+and relative next check. These labels do not infer recovery from acknowledgment. Existing goals, active work and deliberate pauses have not been
 changed by source development.
+
+## Sustained incidents through existing Alerts
+
+The optional `[goal_recovery.alerts]` selects one human, producer, receiving scope
+and opaque resource reference plus an operator-owned argv adapter. Its default
+threshold is 600 seconds. There is no separate service, model, Telegram consumer
+or notification per retry. `scripts/goal_recovery_alerts.py --config PRIVATE_JSON`
+reuses the maintained loopback Alerts client and closed v1 schema. Private JSON
+contains `base_url`, `token_file`, `producer_id`, `receiving_scope`, `resource_ref`.
+The token file and config must be regular owner-only files; symlinks are refused.
+Provision a dedicated publish-only producer grant for the selected scope; do not
+borrow HMK, traffic or another daimon's credential. Core installation and producer
+adoption follow Daimon Alerts' maintained operator runbook.
+
+Each failure episode retains one immutable open projection and, after matched
+native completion or explicit retirement, a separate resolution revision. No
+objective, transcript, raw provider error or native ID is published. Unknown
+native effects remain open. Retirement explicitly does not declare provider
+health. A recurrence after actual return uses a new episode. The backend's
+SQLite outbox commits exact content before HTTP, preserves service acceptance
+and its uncertainty across restart, and prevents resolution overtaking an
+unconfirmed open upsert. The finite helper has one eight-second deadline and
+bounded input/output. Repeating identical incident upserts is supported; that
+rule never authorizes a repeated Telegram delivery claim or native execution.
+Alerts reads, delivery and acknowledgment do not resume goals or paid work.
+Receiving delivery uses the existing supervised bot adapter with the app closed.
+A missing/unavailable Alerts producer does not block native recovery.
 
 ## Client projection and qualification still required
 
@@ -200,7 +228,10 @@ The delegated resume/self-pause journey used no Telegram API or fabricated ingre
 during its tested runtime, preserving accounting and revocation. Its native peer
 is synthetic; fixture enrollment used earlier synthetic Telegram sessions. The
 additional scheduler/receipt/source slice is not covered by that earlier head.
-Its final-head CI and focused review remain required.
+Its focused source review passed after four admission/restart corrections.
+CI40327583976 then exposed two Clippy layout/type-complexity failures before
+tests ran; both are corrected. The Alerts/status additions and final-head
+checks still require qualification.
 
 A real human-selected blocked Realtime conversation is deliberately retained for
 later rescue acceptance. It is not resumed as a deployment or test convenience.

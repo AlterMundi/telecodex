@@ -1503,6 +1503,28 @@ impl App {
                             .store
                             .uncertain_update_ids(user.tg_user_id, session_key)?;
                         let mut text = format_session_status(&session, &message.chat);
+                        if session.codex_thread_id.is_some() {
+                            let recovery = self
+                                .shared
+                                .store
+                                .goal_recovery_summary(user.tg_user_id, session_key)?;
+                            let latest = &recovery["recovery"]["latest"];
+                            if let Some(state) = latest["state"].as_str() {
+                                text.push_str(&format!(
+                                    "\n- goal recovery: `{state}` · {} attempt(s)",
+                                    latest["attempts"].as_u64().unwrap_or(0)
+                                ));
+                                if state == "waiting"
+                                    && let Some(due) = latest["next_attempt_at"].as_i64()
+                                {
+                                    text.push_str(&format!(
+                                        " · next check in {}s",
+                                        (due - Utc::now().timestamp()).max(0)
+                                    ));
+                                }
+                                text.push_str(" (native acknowledgment is separate from useful recovered work)");
+                            }
+                        }
                         text.push_str(
                             &self
                                 .shared

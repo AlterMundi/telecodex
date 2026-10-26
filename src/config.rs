@@ -39,6 +39,7 @@ pub struct GoalRecoveryConfig {
     pub enabled: bool,
     pub interval_seconds: u64,
     pub batch_size: usize,
+    pub alerts: Option<GoalRecoveryAlerts>,
 }
 impl Default for GoalRecoveryConfig {
     fn default() -> Self {
@@ -46,8 +47,25 @@ impl Default for GoalRecoveryConfig {
             enabled: true,
             interval_seconds: 60,
             batch_size: 4,
+            alerts: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalRecoveryAlerts {
+    /// Trusted operator argv; credentials belong in its private config file.
+    pub command: Vec<String>,
+    pub human_id: i64,
+    pub producer_id: String,
+    pub receiving_scope: String,
+    pub resource_ref: String,
+    #[serde(default = "default_goal_alert_after")]
+    pub after_seconds: i64,
+}
+fn default_goal_alert_after() -> i64 {
+    600
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -250,6 +268,28 @@ impl Config {
             || !(1..=16).contains(&self.goal_recovery.batch_size)
         {
             bail!("Goal recovery interval must be 5..=3600 seconds and batch_size 1..=16");
+        }
+        if let Some(alerts) = &self.goal_recovery.alerts {
+            let safe = |s: &str| {
+                !s.is_empty()
+                    && s.len() <= 128
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            };
+            if alerts.command.is_empty()
+                || alerts.command.len() > 16
+                || alerts
+                    .command
+                    .iter()
+                    .any(|s| s.is_empty() || s.len() > 4096 || s.contains('\0'))
+                || alerts.human_id <= 0
+                || !(60..=86400).contains(&alerts.after_seconds)
+                || !safe(&alerts.producer_id)
+                || !safe(&alerts.receiving_scope)
+                || !safe(&alerts.resource_ref)
+            {
+                bail!("Invalid scoped goal-recovery Alerts configuration");
+            }
         }
         let mut profile_keys = std::collections::HashSet::new();
         for profile in &self.codex.session_profiles {
