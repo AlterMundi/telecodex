@@ -814,7 +814,8 @@ window.Conversation = (() => {
       if(mediaSession)try{mediaSession.playbackState="paused";}catch{}
       generation++;
       if (!active) return;
-      requestAbort?.abort(); requestAbort = undefined;
+      if(!active.streaming)requestAbort?.abort();
+      requestAbort = undefined;
       active.generation = generation;
       active.auto = false;
       audio.pause(); audio.muted = true;
