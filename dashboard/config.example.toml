@@ -77,3 +77,10 @@ Development = "/your-development-mount"
 # endpoint = "wss://your-workspace.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus"
 # credential_file = "/private/existing-provider-key"
 # cache_root = "/private/receiving/streaming-transcripts"
+
+# Optional shorter first spoken segment and one-ahead browser preparation.
+# Requires the ordinary selected speech binding; default is false.
+# [speech]
+# binding = "/private/existing-speech-route.json"
+# timeout_seconds = 60
+# incremental_segments = false

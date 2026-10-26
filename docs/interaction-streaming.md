@@ -131,3 +131,26 @@ paid provider calls for unchanged code.
 Primary protocol sources:
 [Qwen Audio client events](https://www.alibabacloud.com/help/en/model-studio/fun-audiochat-client-events),
 [Qwen Audio guide](https://www.alibabacloud.com/help/en/model-studio/qwen-audio-realtime-user-guides).
+
+## Incremental spoken segments (optional output preparation)
+
+The ordinary speech binding may opt into `incremental_segments = true`. The
+server then synthesizes an exact canonical prefix: up to240 Unicode characters
+for the first segment, up to640 for continuations, preferring a sentence or word
+boundary. Source labels are still spoken once; native questions retain their
+existing label/offset contract. The default remains the existing full-part path.
+The server revalidates the full source and current actor after synthesis, then
+returns the prefix end offset, text digest and existing WAV digest.
+
+Before unmuting, the browser checks that prefix against the current canonical
+reader. Follow uses the segment actually played. While it plays, at most one
+next segment is prepared; continuation consumes that same retained success or
+failure. An ambiguous failed preparation is never automatically repeated. Pause
+retains the owned preparation; Stop releases/aborts it and prevents late playback.
+No subsequent worker response is synthesized speculatively.
+
+This reduces the amount of committed text required for the first audio and
+allows the next segment to prepare during playback. It is not token-level native
+LLM output streaming, a measured latency result, or completion of foreground
+separation/barge-in. The option remains receiving-disabled until qualified with
+the actual selected voice and browser; no conversational model changes with it.
