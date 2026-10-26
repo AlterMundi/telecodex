@@ -2237,7 +2237,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeModelConfigured { .. }|CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -4089,7 +4089,7 @@ model = "ignored-tui-field"
             &mut on_event,
         )
         .await;
-        assert!(result.unwrap_err().is::<NativeInputNotSubmitted>());
+        assert!(result.err().unwrap().is::<NativeInputNotSubmitted>());
         let methods = server.await.unwrap();
         assert!(methods.iter().any(|m| m == "thread/resume"));
     }
