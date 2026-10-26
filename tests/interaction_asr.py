@@ -2,6 +2,10 @@
 """Durable transcript/disposable preparation contracts; no provider or sensor."""
 import importlib.util
 import json
+import io
+import uuid
+import wave
+import hashlib
 import os
 import stat
 from pathlib import Path
@@ -55,6 +59,49 @@ class Retention(unittest.TestCase):
     def calls(self):
         path=self.helper.with_suffix('.calls');return len(path.read_text().splitlines()) if path.exists() else 0
     def run_asr(self):return asr.process(self.source,self.binding)
+    def streaming_fixture(self):
+        self.source=self.root/str(uuid.uuid4())
+        pcm=b'\0\0'*1600
+        buffer=io.BytesIO()
+        with wave.open(buffer,'wb') as audio:
+            audio.setnchannels(1);audio.setsampwidth(2);audio.setframerate(16000);audio.writeframes(pcm)
+        self.source.write_bytes(buffer.getvalue())
+        root=self.root/'streamed';root.mkdir(mode=0o700)
+        self.cfg['streaming_cache_root']=str(root);self.write_config()
+        value={'schema':'telecodex.streaming-transcript/v1','capture_id':self.source.name,
+            'binding':'b'*64,'source_sha256':hashlib.sha256(self.source.read_bytes()).hexdigest(),
+            'pcm_sha256':hashlib.sha256(pcm).hexdigest(),'audio_millis':100,
+            'model':'qwen-audio-3.0-realtime-plus','text':'Live final words','final':True}
+        record=root/(self.source.name+'.json');record.write_text(json.dumps(value))
+        return record,value
+    def test_exact_completed_stream_skips_file_provider_and_retains_recovery(self):
+        record,_=self.streaming_fixture()
+        result=asr.process(self.source,self.binding,include_retention=True)
+        self.assertEqual(result,{'text':'Live final words','final':True,'preparation_audio_deleted':True})
+        self.assertEqual(self.calls(),0)
+        record.unlink()
+        self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Live final words')
+        self.assertEqual(self.calls(),0)
+    def test_stream_receipt_cannot_substitute_another_original(self):
+        record,value=self.streaming_fixture();value['source_sha256']='a'*64;record.write_text(json.dumps(value))
+        with self.assertRaisesRegex(asr.RenderError,'invalid-completed-streaming-transcript'):
+            self.run_asr()
+        self.assertEqual(self.calls(),0)
+    def test_stream_receipt_pcm_integrity_and_identity(self):
+        record,value=self.streaming_fixture();value['pcm_sha256']='a'*64;record.write_text(json.dumps(value))
+        with self.assertRaisesRegex(asr.RenderError,'streaming-audio-original-changed'):
+            self.run_asr()
+        self.assertEqual(self.calls(),0)
+    def test_uncertain_file_asr_is_not_overridden_by_later_live_text(self):
+        record,value=self.streaming_fixture();record.unlink()
+        self.helper.write_text(HELPER.replace("if source.read_bytes()==b'failed operation'",'if source.exists()'))
+        with self.assertRaisesRegex(asr.RenderError,'asr-unconfirmed'):
+            self.run_asr()
+        record.write_text(json.dumps(value))
+        with self.assertRaisesRegex(asr.RenderError,'retained-asr-outcome-no-automatic-retry'):
+            self.run_asr()
+        self.assertEqual(self.calls(),1)
+
     def test_completed_text_reused_after_media_disposal_without_paid_replay(self):
         first=self.run_asr();self.assertEqual(first,{'text':'Final words','final':True})
         self.assertEqual(self.calls(),1);self.assertTrue(self.source.exists())

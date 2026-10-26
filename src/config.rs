@@ -8,6 +8,8 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub goal_recovery: GoalRecoveryConfig,
     pub voice: Option<crate::voice::VoiceConfig>,
     pub telegram: TelegramConfig,
     pub codex: CodexConfig,
@@ -29,6 +31,41 @@ pub struct Config {
     pub nexus: Option<crate::nexus::NexusConfig>,
     pub session_control: Option<SessionControlConfig>,
     pub interaction: Option<crate::interaction::InteractionConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GoalRecoveryConfig {
+    pub enabled: bool,
+    pub interval_seconds: u64,
+    pub batch_size: usize,
+    pub alerts: Option<GoalRecoveryAlerts>,
+}
+impl Default for GoalRecoveryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_seconds: 60,
+            batch_size: 4,
+            alerts: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalRecoveryAlerts {
+    /// Trusted operator argv; credentials belong in its private config file.
+    pub command: Vec<String>,
+    pub human_id: i64,
+    pub producer_id: String,
+    pub receiving_scope: String,
+    pub resource_ref: String,
+    #[serde(default = "default_goal_alert_after")]
+    pub after_seconds: i64,
+}
+fn default_goal_alert_after() -> i64 {
+    600
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -79,6 +116,9 @@ pub enum HumanRequestLanguage {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TelegramConfig {
+    /// Optional transport; the shared backend and owner controls remain available.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     pub bot_token: Option<String>,
     pub bot_token_env: Option<String>,
     pub bot_token_file: Option<PathBuf>,
@@ -224,6 +264,33 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
+        if !(5..=3600).contains(&self.goal_recovery.interval_seconds)
+            || !(1..=16).contains(&self.goal_recovery.batch_size)
+        {
+            bail!("Goal recovery interval must be 5..=3600 seconds and batch_size 1..=16");
+        }
+        if let Some(alerts) = &self.goal_recovery.alerts {
+            let safe = |s: &str| {
+                !s.is_empty()
+                    && s.len() <= 128
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            };
+            if alerts.command.is_empty()
+                || alerts.command.len() > 16
+                || alerts
+                    .command
+                    .iter()
+                    .any(|s| s.is_empty() || s.len() > 4096 || s.contains('\0'))
+                || alerts.human_id <= 0
+                || !(60..=86400).contains(&alerts.after_seconds)
+                || !safe(&alerts.producer_id)
+                || !safe(&alerts.receiving_scope)
+                || !safe(&alerts.resource_ref)
+            {
+                bail!("Invalid scoped goal-recovery Alerts configuration");
+            }
+        }
         let mut profile_keys = std::collections::HashSet::new();
         for profile in &self.codex.session_profiles {
             profile.validate()?;
@@ -342,9 +409,11 @@ impl Config {
             );
         }
 
-        let token = self.telegram.resolve_token()?;
-        if token.trim().is_empty() {
-            bail!("telegram bot token is empty");
+        if self.telegram.enabled {
+            let token = self.telegram.resolve_token()?;
+            if token.trim().is_empty() {
+                bail!("telegram bot token is empty");
+            }
         }
         if let Some(days) = self.telegram.stale_topic_days {
             if days < 1 {
@@ -607,6 +676,23 @@ fn find_vendored_codex_exe(wrapper_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_configuration_loads_without_resolving_telegram_secrets() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = std::env::current_exe().unwrap();
+        let raw = format!(
+            "[telegram]\nenabled = false\nbot_token_file = {}\n[codex]\nbinary = {}\ndefault_cwd = {}\n",
+            serde_json::to_string(&root.path().join("absent-secret")).unwrap(),
+            serde_json::to_string(&binary).unwrap(),
+            serde_json::to_string(&root.path()).unwrap(),
+        );
+        let path = root.path().join("backend.toml");
+        fs::write(&path, &raw).unwrap();
+        assert!(!Config::load(path.clone()).unwrap().telegram.enabled);
+        fs::write(&path, raw.replace("enabled = false", "enabled = true")).unwrap();
+        assert!(Config::load(path).is_err());
+    }
 
     #[test]
     fn portable_defaults_require_explicit_auxiliary_opt_in() {

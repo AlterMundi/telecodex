@@ -28,6 +28,7 @@ mod creation;
 mod dialogue;
 mod forum;
 mod goal_controls;
+mod goal_recovery;
 mod goals;
 mod icons;
 mod interactions;
@@ -94,6 +95,7 @@ pub struct App {
 }
 
 struct AppShared {
+    goal_recovery_wakeup: tokio::sync::Notify,
     config: Config,
     store: Store,
     telegram: TelegramClient,
@@ -334,11 +336,6 @@ impl App {
     const HISTORY_PAGE_CACHE_TTL_SECONDS: u64 = 300;
 
     pub async fn bootstrap(config: Config) -> Result<Self> {
-        let token = config.telegram.resolve_token()?;
-        let telegram = TelegramClient::new(token, config.telegram.api_base.clone())
-            .with_reaction_capture(config.telegram.capture_message_reactions)
-            .with_local_file_root(config.telegram.local_file_root.clone())?;
-        let me = telegram.get_me().await.context("telegram getMe failed")?;
         let handy_model_dir = detect_handy_parakeet_model_dir();
         let session_defaults = SessionDefaults::from(&config.codex);
         let store = Store::open(
@@ -346,6 +343,31 @@ impl App {
             &config.startup_admin_ids,
             &session_defaults,
         )?;
+        store.save_bot_state(
+            "goal_recovery_backend",
+            &serde_json::json!({
+                "enabled":config.goal_recovery.enabled,
+                "interval_seconds":config.goal_recovery.interval_seconds,
+                "batch_size":config.goal_recovery.batch_size,
+                "meaning":"Configured backend settings, not a native execution or delivery receipt"
+            })
+            .to_string(),
+        )?;
+        let (telegram, me) = if config.telegram.enabled {
+            let token = config.telegram.resolve_token()?;
+            let client = TelegramClient::new(token, config.telegram.api_base.clone())
+                .with_reaction_capture(config.telegram.capture_message_reactions)
+                .with_local_file_root(config.telegram.local_file_root.clone())?;
+            let me = client.get_me().await.context("telegram getMe failed")?;
+            store.save_bot_state("telegram_identity", &serde_json::to_string(&me)?)?;
+            (client, Some(me))
+        } else {
+            let retained: Option<crate::telegram::User> = store
+                .bot_state_value("telegram_identity")?
+                .map(|value| serde_json::from_str(&value))
+                .transpose()?;
+            (TelegramClient::disabled(), retained)
+        };
         store.topic_projection_entry_selection(config.interaction.as_ref())?;
         let codex = CodexRunner::new(config.codex.binary.clone())
             .with_shared_app_server(config.codex.shared_app_server)
@@ -396,13 +418,18 @@ impl App {
         );
         Ok(Self {
             shared: Arc::new(AppShared {
+                goal_recovery_wakeup: tokio::sync::Notify::new(),
                 config,
                 store,
                 telegram,
                 codex,
-                bot_username: me.username,
-                bot_id: me.id,
-                bot_has_topics: me.has_topics_enabled.unwrap_or(false),
+                bot_username: me.as_ref().and_then(|m| m.username.clone()),
+                // Zero denotes absent transport identity, never an actual bot.
+                bot_id: me.as_ref().map_or(0, |m| m.id),
+                bot_has_topics: me
+                    .as_ref()
+                    .and_then(|m| m.has_topics_enabled)
+                    .unwrap_or(false),
                 service_user_id,
                 handy_model_dir,
                 voice_preparations: Arc::new(tokio::sync::Semaphore::new(2)),
@@ -429,7 +456,9 @@ impl App {
     }
 
     pub async fn run(self) -> Result<()> {
-        topic_publications::recover(self.shared.clone())?;
+        if self.shared.config.telegram.enabled {
+            topic_publications::recover(self.shared.clone())?;
+        }
         artifact_outputs::recover(self.shared.clone())?;
         tribu::start(self.clone()).await?;
         nexus::start(self.clone()).await?;
@@ -441,16 +470,22 @@ impl App {
                     .into(),
             });
         }
-        self.shared
-            .telegram
-            .set_my_commands(&menu)
-            .await
-            .context("failed to register bot commands")?;
+        if self.shared.config.telegram.enabled {
+            self.shared
+                .telegram
+                .set_my_commands(&menu)
+                .await
+                .context("failed to register bot commands")?;
+        }
 
         self.notify_primary_user(&format!("🟢 Telecodex {} started", app_version_label()))
             .await;
 
         stopping::start_control_socket(self.clone()).await?;
+        let recovery_app = self.clone();
+        tokio::spawn(async move {
+            goal_recovery::run(recovery_app).await;
+        });
         let restart_app = self.clone();
         tokio::spawn(async move {
             if stopping::recover_restart(restart_app).await.is_err() {
@@ -469,6 +504,12 @@ impl App {
                     tracing::error!("background maintenance loop failed: {error:#}");
                 }
             });
+        }
+
+        if !self.shared.config.telegram.enabled {
+            tracing::info!("Shared backend started with Telegram adapter disabled");
+            shutdown_signal(self.shared.shutdown.clone()).await;
+            return Ok(());
         }
 
         // Polling must not wait for native steering, uploads or outbound rate limits.
@@ -577,7 +618,9 @@ impl App {
                     self.shared.shutdown.cancel();
                     return;
                 }
-            } else if topic_publications::recover(self.shared.clone()).is_err() {
+            } else if self.shared.config.telegram.enabled
+                && topic_publications::recover(self.shared.clone()).is_err()
+            {
                 tracing::warn!("Retained topic publication recovery unconfirmed");
             }
             if !self.shared.shutdown.is_cancelled()
@@ -595,7 +638,9 @@ impl App {
     }
 
     async fn notify_primary_user(&self, text: &str) {
-        if !self.shared.config.telegram.lifecycle_notifications {
+        if !self.shared.config.telegram.enabled
+            || !self.shared.config.telegram.lifecycle_notifications
+        {
             return;
         }
         let Some(user_id) = self.shared.config.startup_admin_ids.first().copied() else {
@@ -1458,6 +1503,35 @@ impl App {
                             .store
                             .uncertain_update_ids(user.tg_user_id, session_key)?;
                         let mut text = format_session_status(&session, &message.chat);
+                        if let Some(recovery) = self
+                            .shared
+                            .store
+                            .goal_recovery_summary_if_owned(user.tg_user_id, session_key)?
+                        {
+                            let latest = &recovery["recovery"]["latest"];
+                            if let Some(state) = latest["state"].as_str() {
+                                let enabled = recovery["recovery"]["effective_enabled"].as_bool();
+                                let availability = match enabled {
+                                    Some(true) => "enabled",
+                                    Some(false) => "disabled",
+                                    None => "availability unknown",
+                                };
+                                text.push_str(&format!(
+                                    "\n- goal recovery: {availability} · retained `{state}` · {} attempt(s)",
+                                    latest["attempts"].as_u64().unwrap_or(0)
+                                ));
+                                if state == "waiting"
+                                    && enabled == Some(true)
+                                    && let Some(due) = latest["next_attempt_at"].as_i64()
+                                {
+                                    text.push_str(&format!(
+                                        " · next check in {}s",
+                                        (due - Utc::now().timestamp()).max(0)
+                                    ));
+                                }
+                                text.push_str(" (native acknowledgment is separate from useful recovered work)");
+                            }
+                        }
                         text.push_str(
                             &self
                                 .shared

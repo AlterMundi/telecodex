@@ -12,14 +12,18 @@ impl Drop for Lease {
 }
 
 pub(super) fn enabled(shared: &AppShared, key: SessionKey, human: i64) -> bool {
-    shared.config.interaction.as_ref().is_some_and(|c| {
-        c.human_id == human
-            && ((c.telegram_projection && super::routing::enrolled(shared, key))
-                || (c.telegram_entry_projection && c.entry() == key))
-    })
+    shared.config.telegram.enabled
+        && shared.config.interaction.as_ref().is_some_and(|c| {
+            c.human_id == human
+                && ((c.telegram_projection && super::routing::enrolled(shared, key))
+                    || (c.telegram_entry_projection && c.entry() == key))
+        })
 }
 
 pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
+    if !shared.config.telegram.enabled {
+        return Ok(());
+    }
     for key in shared.store.topic_publication_targets()? {
         wake(shared.clone(), key);
     }
@@ -27,6 +31,9 @@ pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
 }
 
 pub(super) fn wake(shared: Arc<AppShared>, key: SessionKey) {
+    if !shared.config.telegram.enabled {
+        return;
+    }
     let Ok(Some(human)) = shared.store.topic_publication_owner(key) else {
         return;
     };

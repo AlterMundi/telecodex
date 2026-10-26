@@ -122,7 +122,8 @@ impl Store {
                 "title_summary":summary,"telegram":observed,"lifecycle":observed.as_ref().map(|v|&v["lifecycle"]["value"]).unwrap_or(&Value::Null),
                 "bridge_busy":busy,"last_bridge_conversation_at":last,"activity_days":days,
                 "recent_bridge_conversation":last.as_ref().and_then(|s|chrono::DateTime::parse_from_rfc3339(s).ok()).is_some_and(|t|t>=Utc::now()-Duration::days(days)),
-                "native_execution":"unobserved","goal_state":"unobserved"}));
+                "native_execution":"unobserved","goal_state":"unobserved",
+                "goal_recovery":if !fresh {native.as_ref().map(|id|super::goal_retries::compact_view_on(&conn,human,SessionKey::new(*chat,Some(*topic)),*session,id)).transpose()?}else{None}}));
         }
         Ok(
             json!({"schema":"telecodex.topic-inventory/v1","observed_at":Utc::now().to_rfc3339(),"items":items,"truncated":rows.len()>512,

@@ -255,6 +255,9 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             return await run_in_threadpool(authorize, request)
         return authorize(request)
 
+    from .live_transcription import install as install_live_transcription
+    can_stream_transcribe = install_live_transcription(app,config,provider,authorize_async,[origin,*additional_origins])
+
     public = Path(__file__).parent / 'web'
 
     @app.get('/')
@@ -349,7 +352,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             computer_health.assert_binding()
             data, media = computer_health.assets[name]
             return Response(data, media_type=media)
-        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'voice-stream.js', 'voice-pcm.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -435,7 +438,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 'presentation_profile':dict(session).get('presentation_profile', companions.default_profile),
                 'can_listen':speech is not None,
                 'can_download_files':can_files,'artifacts':files,
-                'can_speak':bool(getattr(provider, 'receiver', {}).get('voice'))}
+                'can_speak':bool(getattr(provider, 'receiver', {}).get('voice')),
+                'can_stream_transcribe':can_stream_transcribe and bool(getattr(provider,'receiver',{}).get('voice')) and dict(session).get('scope') != 'monitor_readonly'}
 
     @app.get('/api/interaction/inputs')
     async def conversation_inputs(request: Request, before: int = 0, direction: str = 'before'):

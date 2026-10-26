@@ -11,6 +11,7 @@ from goal_inspection_io import Inspection
 
 
 class Controls(Inspection):
+    expected_origin = 'user'
     def __init__(self, binary):
         self.revisions = {}
         self.lose_receipt = False
@@ -45,7 +46,7 @@ class Controls(Inspection):
             elif params['expectedRevision'] != revision:
                 send({'id': message['id'], 'error': {'code': -32600, 'message': 'Selected goal definition changed'}})
             else:
-                assert params['origin'] == 'user'
+                assert params['origin'] == self.expected_origin
                 self.revisions[thread] = int(revision) + 1
                 if method.endswith('Clear'):
                     cleared = self.goals.pop(thread, None) is not None

@@ -793,7 +793,14 @@ pub(super) async fn inspect(
             json!({"kind":"clarification_required","selector":args.selector,"candidates":targets,"read_only":true}),
         );
     }
-    let target = targets[0];
+    inspect_target(app, human, targets[0]).await
+}
+
+pub(super) async fn inspect_target(
+    app: &App,
+    human: i64,
+    target: SessionKey,
+) -> Result<serde_json::Value> {
     let binding = app
         .shared
         .store
@@ -845,6 +852,10 @@ pub(super) async fn inspect(
         "stop_held":app.shared.store.stop_fenced(target)?,"maintenance_held":app.shared.store.maintenance_writer_held(target)?,
         "observation_started_at":began,"observation_finished_at":Utc::now().to_rfc3339(),"read_only":true,
         "meaning":"Goal definition, native activity and receiver bookkeeping are separate observations. Blocked status alone does not establish its cause. No goal change, resume, attachment or new turn was requested."});
+    result["historical_failure_evidence"] =
+        app.shared
+            .store
+            .goal_recovery_evidence(human, target, Some(native))?;
     match snapshot {
         Ok(snapshot) => {
             let snapshot: crate::codex::NativeGoalSnapshot = snapshot;

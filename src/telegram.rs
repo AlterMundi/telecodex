@@ -15,6 +15,7 @@ use tokio::time::sleep;
 
 #[derive(Clone)]
 pub struct TelegramClient {
+    enabled: bool,
     http: reqwest::Client,
     token: String,
     api_base: String,
@@ -119,7 +120,15 @@ impl TelegramClient {
         self
     }
 
+    fn check_adapter(&self) -> Result<()> {
+        if !self.enabled {
+            bail!("Telegram adapter disabled; no API operation was attempted");
+        }
+        Ok(())
+    }
+
     fn check_publication(&self) -> Result<()> {
+        self.check_adapter()?;
         if let Some(guard) = &self.publication_guard
             && !guard()?
         {
@@ -130,6 +139,7 @@ impl TelegramClient {
 
     pub fn new(token: String, api_base: String) -> Self {
         Self {
+            enabled: true,
             http: reqwest::Client::new(),
             token,
             api_base: api_base.trim_end_matches('/').to_string(),
@@ -138,6 +148,14 @@ impl TelegramClient {
             publication_guard: None,
             capture_message_reactions: false,
         }
+    }
+
+    /// No credentials or routable network destination, even if a new call site
+    /// forgets the normal publication check. Never synthesize a Telegram ACK.
+    pub fn disabled() -> Self {
+        let mut client = Self::new(String::new(), "disabled://telegram".into());
+        client.enabled = false;
+        client
     }
 
     pub fn with_reaction_capture(mut self, enabled: bool) -> Self {
@@ -217,6 +235,7 @@ impl TelegramClient {
     where
         F: FnOnce() -> Result<Option<(SendMessage, C)>>,
     {
+        self.check_adapter()?;
         self.outbound.wait(chat).await;
         let Some((message, context)) = prepare()? else {
             return Ok(None);
@@ -396,6 +415,7 @@ impl TelegramClient {
     where
         F: FnOnce() -> Result<()>,
     {
+        self.check_adapter()?;
         #[derive(Serialize)]
         struct Payload<'a> {
             chat_id: i64,
@@ -575,6 +595,7 @@ impl TelegramClient {
         timeout: Duration,
         max_bytes: Option<u64>,
     ) -> Result<()> {
+        self.check_adapter()?;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         if max_bytes.is_some_and(|limit| expected_size.is_some_and(|size| size > limit)) {
             bail!("Telegram attachment exceeds transfer limit");
@@ -835,6 +856,7 @@ impl TelegramClient {
     where
         F: FnOnce() -> Result<bool>,
     {
+        self.check_adapter()?;
         let method = match field {
             "photo" => "sendPhoto",
             "audio" => "sendAudio",
@@ -2053,5 +2075,59 @@ pub(crate) mod tests {
             Some("telecodex_bot")
         ));
         assert!(!is_foreign_bot_command("/status", Some("telecodex_bot")));
+    }
+}
+
+#[cfg(test)]
+mod disabled_adapter_tests {
+    use super::*;
+    #[tokio::test]
+    async fn disabled_transport_cannot_be_reenabled_by_a_publication_guard() {
+        let client = TelegramClient::disabled().with_publication_guard(|| Ok(true));
+        let error = client.get_me().await.unwrap_err();
+        assert!(error.to_string().contains("Telegram adapter disabled"));
+        let error = client
+            .send_message(SendMessage::html(100, None, "No fabricated receipt".into()))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Telegram adapter disabled"));
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("input.dat");
+        assert!(
+            client
+                .download_file("file.dat", &target, None)
+                .await
+                .is_err()
+        );
+        assert!(!target.exists());
+        // No reservation callback may run: zero network operations means known
+        // unsent, not an uncertain attempt or consumed publication receipt.
+        assert!(
+            client
+                .send_message_checked::<_, ()>(100, || panic!("reserved disabled message"))
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .create_forum_topic_checked(100, "Disabled", || panic!("reserved disabled topic"))
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .send_file_bytes_checked(
+                    100,
+                    None,
+                    "document",
+                    vec![],
+                    "file",
+                    None,
+                    None,
+                    || panic!("reserved disabled file")
+                )
+                .await
+                .is_err()
+        );
     }
 }

@@ -78,6 +78,41 @@ pub(super) fn tool_call(
     mut request: crate::codex::DynamicToolRequest,
     closed: CancellationToken,
 ) -> oneshot::Receiver<Value> {
+    if request.tool == "interaction_controller"
+        && request.arguments.to_string().len() <= 16000
+        && let Ok(args) = serde_json::from_value::<ControllerArgs>(request.arguments.clone())
+        && app
+            .shared
+            .store
+            .goal_delegation_allows_actor(human, key, &request.thread_id)
+            .unwrap_or(false)
+    {
+        let integrating = app
+            .shared
+            .config
+            .interaction
+            .as_ref()
+            .is_some_and(|c| c.human_id == human && c.entry() == key);
+        let local_capabilities = args.operation == "capabilities"
+            && !integrating
+            && !super::routing::enrolled(&app.shared, key);
+        if local_capabilities
+            || matches!(
+                args.operation.as_str(),
+                "goal_inspect" | "goal_prepare" | "goal_status" | "goal_execute"
+            )
+        {
+            return super::goal_controls::delegated_call(
+                app,
+                key,
+                human,
+                request,
+                args.operation,
+                args.arguments,
+                closed,
+            );
+        }
+    }
     if request.tool == "interaction_controller" && super::routing::enrolled(&app.shared, key) {
         return super::session_requests::tool_call(app, key, human, request, closed);
     }
@@ -177,6 +212,10 @@ pub(super) fn tool_call(
                 let refs=shared.store.interaction_entry_references(key,human,&request.thread_id)?;
                 let mut inputs=vec![];
                 for reference in refs {
+                    if reference.update().is_some() && shared.bot_id==0 {
+                        inputs.push(json!({"input_ref":reference,"availability":"unknown_telegram_identity","detail":"Original retained; no verified bot identity is available to attribute this Telegram source."}));
+                        continue;
+                    }
                     let (source,_)=shared.store.interaction_entry_original(key,human,&request.thread_id,&reference,&format!("telegram:{}",shared.bot_id))?;
                     let conversation_context = match &reference {
                         InputReference::Conversation(id) => shared.store.conversation_input_read(human,key,id)?.reply,
@@ -270,7 +309,7 @@ pub(super) fn tool_call(
             }
             Ok(json!({"kind":"integrator_routing_outcomes","input_ref":args.input_ref,"original_ingress_update":args.input_ref.update(),"original_human":human,"results":results}))
         }.await;
-        let result=match outcome {Ok(value)=>crate::codex::dynamic_tool_result(true,value.to_string()),Err(_)=>crate::codex::dynamic_tool_result(false,"Routing unavailable for this original input, binding, generation or selection. No uncertain operation was retried. Inspect any retained per-target outcomes before recovery.".into())};
+        let result=match outcome {Ok(value)=>crate::codex::dynamic_tool_result(true,value.to_string()),Err(error)=>crate::codex::dynamic_tool_result(false,super::creation::rejection(&error).map(|value|value.to_string()).unwrap_or_else(||"Routing unavailable for this original input, binding, generation or selection. No uncertain operation was retried. Inspect any retained per-target outcomes before recovery.".into()))};
         let _ = send.send(result);
     });
     recv

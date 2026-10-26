@@ -622,6 +622,18 @@ The existing Telegram topic adapter waits for outbound capacity, revalidates
 original ownership, native binding and ingress generation, and marks the one
 mutation immediately before HTTP. A failed pre-send check is known unsent. A
 lost or invalid topic receipt is uncertain and is never retried automatically.
+Creation `name` is the human-visible Telegram/native title, including ordinary
+spaces (1-64 UTF-8 bytes, no surrounding whitespace, control/markup characters
+or reserved `tID` titles). A multiword title enrolls under the returned stable
+`tID` selector; it is never silently renamed into a single-token title. Existing
+single-token labels retain their selector. The store reserves the title across
+creation intents, including uncertain effects, to prevent duplicate creation.
+Fixed pre-admission title/argument failures return `creation_rejected` with a
+specific code and `stage=before_intent`; private error chains remain hidden.
+Inspect `creation_status` before correcting the same original's arguments:
+absence describes one read, not permission to replay a concurrent operation.
+Changing from dynamic tools to scoped CLI does not bypass the same controller.
+
 `creation_status` takes the original `input_update` reference to inspect the
 retained operation even when the original tool response was lost. A confirmed
 topic is retained if later initialization or admission fails; inspection is not

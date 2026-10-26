@@ -21,6 +21,9 @@ pub(super) async fn command(
     args: &str,
     nonce: Option<String>,
 ) -> Result<Value> {
+    if let Some(selected) = args.strip_prefix("goal ") {
+        return goal_controls::owner_command(app, human, selected).await;
+    }
     if let Some(selected) = args.strip_prefix("controller ") {
         return controller::command(app, human, selected).await;
     }

@@ -287,6 +287,7 @@ mod snapshot_tests {
 
 #[derive(Debug, Clone)]
 pub struct GoalControlScope {
+    pub recovery: bool,
     pub human: i64,
     pub entry: crate::models::SessionKey,
     pub id: String,
@@ -295,9 +296,19 @@ pub struct GoalControlScope {
 
 pub type GoalSettlement = Arc<dyn Fn(&str, &Value) -> Result<()> + Send + Sync>;
 
+/// Native provenance is selected by the receiver from the retained authority,
+/// never by model-supplied tool arguments.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalMutationOrigin {
+    User,
+    Automatic,
+}
+
 /// A current worker processes metadata controls on its own subscribed connection.
 #[derive(Clone)]
 pub struct GoalMetadataControl {
+    pub origin: GoalMutationOrigin,
     pub plan: crate::store::GoalPlan,
     pub admission: SteerAdmissionCheck,
     pub receipt: Arc<std::sync::Mutex<Option<(String, Value)>>>,
@@ -319,6 +330,7 @@ pub(super) async fn conditional_metadata(
     thread: &str,
     plan: &crate::store::GoalPlan,
     admission: &SteerAdmissionCheck,
+    origin: GoalMutationOrigin,
 ) -> (String, Value) {
     use crate::store::GoalAction;
     let mut sent = false;
@@ -337,7 +349,7 @@ pub(super) async fn conditional_metadata(
             bail!("Active goal changes require the owning continuation collector");
         }
         let mut args =
-            json!({"threadId":thread,"expectedRevision":plan.expected.revision,"origin":"user"});
+            json!({"threadId":thread,"expectedRevision":plan.expected.revision,"origin":origin});
         let method = if matches!(plan.action, GoalAction::Clear) {
             "thread/goal/conditionalClear"
         } else {
@@ -401,6 +413,7 @@ impl CodexRunner {
         thread: &str,
         plan: &crate::store::GoalPlan,
         admission: &SteerAdmissionCheck,
+        origin: GoalMutationOrigin,
     ) -> (String, Value) {
         let connection = tokio::time::timeout(Duration::from_secs(8), async {
             let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
@@ -417,7 +430,7 @@ impl CodexRunner {
                 );
             }
         };
-        let result = conditional_metadata(&mut process, thread, plan, admission).await;
+        let result = conditional_metadata(&mut process, thread, plan, admission, origin).await;
         // Never lose the matched receipt while closing an owned proxy.
         let _ = tokio::time::timeout(Duration::from_secs(2), process.shutdown()).await;
         result
@@ -473,8 +486,14 @@ pub(super) async fn conditional_continuation(
     {
         bail!("Current invocation context required before metadata continuation");
     }
-    let (metadata_phase, metadata) =
-        conditional_metadata(process, thread, &control.plan, &control.admission).await;
+    let (metadata_phase, metadata) = conditional_metadata(
+        process,
+        thread,
+        &control.plan,
+        &control.admission,
+        control.origin,
+    )
+    .await;
     if metadata_phase != "acknowledged" {
         *control
             .receipt
@@ -607,14 +626,14 @@ pub(super) async fn conditional_activation(
         if matches!(control.plan.action, GoalAction::Replace) {
             (control.admission)()?;
             sent = true;
-            let id = process.send_request("thread/goal/conditionalClear", json!({"threadId":thread,"expectedRevision":revision,"origin":"user"})).await?;
+            let id = process.send_request("thread/goal/conditionalClear", json!({"threadId":thread,"expectedRevision":revision,"origin":control.origin})).await?;
             let response = process.await_response(id).await?;
             // A matched clear is already an effect even if its revision is malformed.
             cleared = Some(response.clone());
             if response["cleared"] != true { bail!("Conditional replacement clear was not confirmed"); }
             revision = response["revision"].as_str().filter(|v|!v.is_empty()).context("Conditional replacement clear has no revision")?.to_owned();
         }
-        let mut args = json!({"threadId":thread,"expectedRevision":revision,"origin":"user","additionalContext":context});
+        let mut args = json!({"threadId":thread,"expectedRevision":revision,"origin":control.origin,"additionalContext":context});
         if let Some(objective) = &control.plan.objective { args["objective"] = json!(objective); }
         if let Some(budget) = control.plan.token_budget { args["tokenBudget"] = json!(budget); }
         (control.admission)()?;
@@ -674,4 +693,29 @@ pub(super) async fn conditional_activation(
         settled(phase, &receipt)?;
     }
     result.context("Context-aware goal activation timed out; inspect retained control, never replay automatically")?
+}
+
+impl CodexRunner {
+    /// Bounded read-only preflight; never resumes/loads a replacement harness or
+    /// invents a revision/turn association from the goal's blocked status.
+    pub async fn goal_recovery_head(&self, thread: &str) -> Result<(NativeGoalSnapshot, Value)> {
+        tokio::time::timeout(Duration::from_secs(10),async {
+            let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
+            process.initialize().await?;
+            let id=process.send_request("thread/read",json!({"threadId":thread,"includeTurns":false})).await?;
+            let observed=process.await_response(id).await?;
+            if observed["thread"]["id"]!=thread || !matches!(observed["thread"]["status"]["type"].as_str(),Some("idle"|"systemError"|"notLoaded")) {
+                bail!("Native writer is active or its readiness is unknown");
+            }
+            let id=process.send_request("thread/goal/snapshot",json!({"threadId":thread})).await?;
+            let snapshot=parse_goal_snapshot(&process.await_response(id).await?,thread)?;
+            let id=process.send_request("thread/turns/list",json!({"threadId":thread,"limit":1,"sortDirection":"desc","itemsView":"notLoaded"})).await?;
+            let page=process.await_response(id).await?;
+            let turn=page["data"].as_array().and_then(|rows|rows.first()).context("Latest native turn unavailable")?;
+            if turn["id"].as_str().is_none_or(|v|v.is_empty()) || turn["status"].as_str().is_none() {bail!("Latest native turn identity unavailable");}
+            let latest=json!({"id":turn["id"],"status":turn["status"]});
+            let _=process.shutdown().await;
+            Ok((snapshot,latest))
+        }).await.context("Goal recovery observation timed out; no continuation submitted")?
+    }
 }

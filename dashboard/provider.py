@@ -15,7 +15,7 @@ import threading
 import time
 import tomllib
 
-from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp, read_topic_inventory, topic_activity_inventory, pending_requests
+from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp, read_topic_inventory, topic_activity_inventory, pending_requests, goal_recovery_state
 from scripts.speech_render import sync_directory
 
 
@@ -792,6 +792,8 @@ class Provider:
             started = time.monotonic()
             self.refresh_started = started
             sessions = []
+            with closing(readonly(self.receiver['db_path'])) as backend:
+                recoveries = {row['id']: goal_recovery_state(backend, self.human, row['chat_id'], row['thread_id'], row['codex_thread_id']) for row in rows}
             native_db = readonly(self.native_home / 'state_5.sqlite')
             try:
                 if self.native is None:
@@ -803,6 +805,7 @@ class Provider:
                 node = {'id': self.identity(row), 'title': row['session_title'] or 'Untitled session',
                         'status': 'unknown', 'bridge_busy': bool(row['busy']), 'goal_state': 'unavailable',
                         'children': [], 'children_state': 'unavailable', 'elapsed_seconds': None}
+                node['goal_recovery'] = recoveries.get(row['id'])
                 if row['chat_id'] == self.human and row['thread_id'] > 0:
                     username = self.config.get('bot_username')
                     if username:

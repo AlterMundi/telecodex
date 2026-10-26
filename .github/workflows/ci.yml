@@ -44,7 +44,7 @@ jobs:
           previous = subprocess.check_output(['git','show',base+':.github/workflows/ci.yml'], text=True) if base and set(base) != {'0'} else ''
           header_changed = current.split('jobs:',1)[0] != previous.split('jobs:',1)[0]
           text_ci_changed = header_changed or workflow_job(current,'text') != workflow_job(previous,'text')
-          text = common or text_ci_changed or any(p.startswith('src/') or p.startswith('tests/') and not p.startswith(('tests/activity','tests/dashboard','tests/conversation_ui.js','tests/companion_ui.js','tests/conversation_requests_ui.js','tests/microphone_ui.js','tests/visual_ui.js','tests/routing_graph_ui.js','tests/bot_traffic_io.py','tests/routing_eval.py','tests/speech_render.py','tests/interaction_asr.py','tests/presentation_io.py','tests/matrix_execution.py','tests/fixtures/routing-eval-')) for p in files)
+          text = common or text_ci_changed or any(p.startswith('src/') or p.startswith('tests/') and not p.startswith(('tests/activity','tests/dashboard','tests/conversation_ui.js','tests/companion_ui.js','tests/conversation_requests_ui.js','tests/microphone_ui.js','tests/voice_stream_ui.js','tests/visual_ui.js','tests/routing_graph_ui.js','tests/bot_traffic_io.py','tests/routing_eval.py','tests/speech_render.py','tests/interaction_asr.py','tests/presentation_io.py','tests/matrix_execution.py','tests/fixtures/routing-eval-')) for p in files)
           audio = common or header_changed or workflow_job(current,'audio') != workflow_job(previous,'audio') or any('audio' in p or 'transcrib' in p or 'voice' in p for p in files)
           activity = common or header_changed or workflow_job(current,'activity') != workflow_job(previous,'activity') or any(p.startswith(('activity/','tests/activity','scripts/activity_indicator.py')) for p in files)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
@@ -131,6 +131,21 @@ jobs:
       - run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
       - run: cargo test --locked --no-default-features
       - run: cargo build --locked --release --no-default-features
+      # Build retention is separate from subsequent journey qualification.
+      - name: Record built receiving executable
+        run: |
+          git rev-parse HEAD > target/release/telecodex-source.txt
+          (cd target/release && sha256sum telecodex > telecodex.sha256)
+      - name: Retain built receiving executable
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: telecodex-text-linux
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            target/release/telecodex
+            target/release/telecodex-source.txt
+            target/release/telecodex.sha256
       # Retain successful compilation even if a later process fixture fails.
       # Cached artifacts never skip fmt, clippy, Rust tests or the build command.
       - name: Save qualified text Rust build cache
@@ -144,23 +159,53 @@ jobs:
           key: ${{ steps.text-rust-cache.outputs.cache-primary-key }}
       - name: Qualify the optional shared integrating entry
         run: python3 -B tests/entry_projection_io.py target/release/telecodex
-      - name: Ensure voice decoding prerequisite
-        run: |
-          if ! command -v ffmpeg >/dev/null; then
-            # Reuse the runner's package index; refresh only after a known install failure.
-            sudo apt-get install -y --no-install-recommends ffmpeg || {
-              sudo apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
-              sudo apt-get install -y --no-install-recommends ffmpeg
-            }
-          fi
       # Exercise this new slice before the longer unchanged compatibility group.
       - name: Qualify live controller retirement and expression choices
         run: |
           python3 -B tests/goal_controls_io.py target/release/telecodex
           python3 -B tests/goal_activation_io.py target/release/telecodex
+          python3 -B tests/goal_delegation_io.py target/release/telecodex
+          python3 -B tests/goal_recovery_io.py target/release/telecodex
+          python3 -B tests/goal_recovery_alerts.py
           python3 -B tests/goal_inspection_io.py target/release/telecodex
           python3 -B tests/live_tasks_io.py target/release/telecodex
           python3 -B tests/warm_controller_io.py target/release/telecodex
+      # Native-question HTTP journeys also decode voice; provision after goals,
+      # before the first voice-capable compatibility group.
+      - name: Select voice dependency cache
+        id: voice-image
+        run: echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Restore voice dependency packages
+        id: voice-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/telecodex-ffmpeg-apt
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.voice-image.outputs.image }}-ffmpeg-apt-v1
+      - name: Ensure voice decoding prerequisite
+        timeout-minutes: 5
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            # CI40379212762 spent 16m24s fetching 62.8MB from the Azure mirror,
+            # exhausting the job before required native journeys could finish.
+            # Keep Ubuntu signature verification and every qualification gate.
+            for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list /etc/apt/apt-mirrors*.txt; do
+              if [ -f "$source" ]; then
+                sudo sed -i -E 's|https?://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
+              fi
+            done
+            mkdir -p "$HOME/.cache/telecodex-ffmpeg-apt/partial"
+            apt_options=(-o Dir::Cache::archives="$HOME/.cache/telecodex-ffmpeg-apt" -o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::http::Dl-Limit=0 -o Acquire::https::Dl-Limit=0)
+            timeout 90s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends ffmpeg || {
+              timeout 60s sudo apt-get "${apt_options[@]}" update
+              timeout 90s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends ffmpeg
+            }
+          fi
+      - name: Save voice dependency packages
+        if: steps.voice-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/telecodex-ffmpeg-apt
+          key: ${{ steps.voice-cache.outputs.cache-primary-key }}
       - name: Qualify independent foreground ingress and native-question journeys
         run: |
           python3 - <<'PYTHON'
@@ -250,20 +295,6 @@ jobs:
                   failed |= result.returncode != 0
           sys.exit(1 if failed else 0)
           PYTHON
-      - name: Record qualified receiving executable
-        run: |
-          git rev-parse HEAD > target/release/telecodex-source.txt
-          (cd target/release && sha256sum telecodex > telecodex.sha256)
-      - name: Retain qualified receiving executable
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
-        with:
-          name: telecodex-text-linux
-          retention-days: 7
-          if-no-files-found: error
-          path: |
-            target/release/telecodex
-            target/release/telecodex-source.txt
-            target/release/telecodex.sha256
   audio:
     needs: scope
     if: needs.scope.outputs.audio == 'true'
@@ -308,6 +339,7 @@ jobs:
       - run: python -B tests/dashboard_companion_io.py
       - run: python -B tests/dashboard_live.py
       - run: python -B tests/dashboard_transcription.py
+      - run: python -B tests/dashboard_live_transcription.py
       - run: node tests/dashboard_live_ui.js
       - run: python -B tests/dashboard_sonic.py
       - run: python -B tests/presentation_io.py
@@ -326,4 +358,5 @@ jobs:
       - run: node tests/conversation_ui.js
       - run: node tests/conversation_requests_ui.js
       - run: node tests/microphone_ui.js
+      - run: node tests/voice_stream_ui.js
       - run: node tests/visual_ui.js
