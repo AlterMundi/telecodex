@@ -112,19 +112,32 @@ def lock(path):
 def route(path):
     value = json.loads(private_bytes(path, 16384))
     allowed = {'schema', 'provider', 'cache_root', 'env_file', 'voice', 'language',
-               'endpoint', 'timeout_seconds', 'audio_retention_seconds', 'audio_cache_max_bytes'}
+               'endpoint', 'timeout_seconds', 'audio_retention_seconds', 'audio_cache_max_bytes',
+               'credential_file', 'model', 'instruction', 'rate', 'pitch'}
     if (not isinstance(value, dict) or set(value) - allowed or value.get('schema') != SCHEMA
-            or value.get('provider') != 'nvidia-magpie'
+            or value.get('provider') not in ('nvidia-magpie', 'qwen-tts')
             or not isinstance(value.get('cache_root'), str)
             or not Path(value['cache_root']).is_absolute()
-            or not isinstance(value.get('env_file'), str)
-            or not Path(value['env_file']).is_absolute()
             or not isinstance(value.get('voice'), str)
-            or not re.fullmatch(r'Magpie-Multilingual\.[A-Za-z0-9.-]{1,96}', value['voice'])
+            or not re.fullmatch(r'[A-Za-z0-9_.-]{1,160}', value['voice'])
             or not isinstance(value.get('language'), str)
             or not re.fullmatch(r'[a-z]{2}-[A-Z]{2}', value['language'])):
         raise RenderError('invalid-speech-route')
-    endpoint = value.get('endpoint', ENDPOINT)
+    credential_key = 'credential_file' if value['provider'] == 'qwen-tts' else 'env_file'
+    if not isinstance(value.get(credential_key), str) or not Path(value[credential_key]).is_absolute():
+        raise RenderError('invalid-speech-route')
+    if value['provider'] == 'nvidia-magpie':
+        if (not re.fullmatch(r'Magpie-Multilingual\.[A-Za-z0-9.-]{1,96}', value['voice'])
+                or set(value) & {'credential_file', 'model', 'instruction', 'rate', 'pitch'}):
+            raise RenderError('invalid-speech-route')
+    elif (not isinstance(value.get('model'), str)
+          or not re.fullmatch(r'qwen-[A-Za-z0-9_.-]{1,96}', value['model'])
+          or not isinstance(value.get('instruction', ''), str)
+          or len(value.get('instruction', '')) > 500
+          or any(type(value.get(k, 1.0)) not in (int, float)
+                 or not 0.5 <= value.get(k, 1.0) <= 2 for k in ('rate', 'pitch'))):
+        raise RenderError('invalid-speech-route')
+    endpoint = value.get('endpoint', ENDPOINT if value['provider'] == 'nvidia-magpie' else None)
     if not isinstance(endpoint, str):
         raise RenderError('invalid-synthesis-endpoint')
     parsed = urlsplit(endpoint)
@@ -259,11 +272,13 @@ def audio_info(data):
     try:
         with wave.open(io.BytesIO(data), 'rb') as source:
             frames = source.getnframes()
-            if (source.getnchannels(), source.getsampwidth(), source.getframerate(), source.getcomptype()) != (1, 2, 22050, 'NONE'):
+            rate = source.getframerate()
+            if ((source.getnchannels(), source.getsampwidth(), source.getcomptype()) != (1, 2, 'NONE')
+                    or rate not in (22050, 24000)):
                 raise RenderError('unexpected-synthesized-format')
-            if not 0 < frames <= 120 * 22050 or len(source.readframes(frames + 1)) != frames * 2:
+            if not 0 < frames <= 120 * rate or len(source.readframes(frames + 1)) != frames * 2:
                 raise RenderError('incomplete-synthesized-audio')
-            return {'sample_rate_hz': 22050, 'channels': 1, 'audio_millis': frames * 1000 // 22050}
+            return {'sample_rate_hz': rate, 'channels': 1, 'audio_millis': frames * 1000 // rate}
     except (wave.Error, EOFError):
         raise RenderError('invalid-synthesized-audio') from None
 
@@ -277,6 +292,21 @@ def multipart(fields):
     return boundary, body + f'--{boundary}--\r\n'.encode()
 
 
+def qwen_wav(data):
+    # Qwen can return a finite HTTP body with its streaming WAV length sentinels.
+    # Normalize only this exact mono PCM header, after the HTTP transfer completed;
+    # ordinary truncated WAVs still fail audio_info rather than being repaired.
+    import struct
+    if (len(data) >= 44 and data[:8] == b'RIFF\xbf\xff\xff\x7f'
+            and data[8:20] == b'WAVEfmt \x10\x00\x00\x00'
+            and data[20:36] == struct.pack('<HHIIHH', 1, 1, 24000, 48000, 2, 16)
+            and data[36:44] == b'data\x9b\xff\xff\x7f'
+            and (len(data) - 44) % 2 == 0):
+        data = data[:4] + struct.pack('<I', len(data) - 8) + data[8:40] + struct.pack('<I', len(data) - 44) + data[44:]
+    audio_info(data)
+    return data
+
+
 def render(binding, request):
     if (not isinstance(request, dict) or set(request) != {'scope', 'text'}
             or not isinstance(request['scope'], str) or not 1 <= len(request['scope']) <= 128
@@ -288,6 +318,13 @@ def render(binding, request):
               'encoding': 'LINEAR_PCM', 'sample_rate_hz': '22050'}
     identity = {'schema': 'telecodex.speech-render/v1', 'scope': request['scope'],
                 'provider': config['provider'], 'endpoint': config['endpoint'], 'fields': fields}
+    if config['provider'] == 'qwen-tts':
+        fields = {'model': config['model'], 'input': {
+            'text': request['text'], 'voice': config['voice'], 'format': 'wav', 'sample_rate': 24000,
+            'language_hints': [config['language'].split('-')[0]],
+            'rate': config.get('rate', 1.0), 'pitch': config.get('pitch', 1.0),
+            'instruction': config.get('instruction', '')}}
+        identity['fields'] = fields
     ident = sha(canonical(identity))
     job = directory(directory(config['cache_root']) / ident)
     prune_audio(config, exclude=ident)
@@ -322,21 +359,42 @@ def render(binding, request):
             raise RenderError('orphan-render-no-automatic-retry')
         prune_audio({**config, 'audio_cache_max_bytes':
                      config.get('audio_cache_max_bytes', 256 * 1024 * 1024) - MAX_AUDIO}, exclude=ident)
-        token = credential(config['env_file'])
+        if config['provider'] == 'qwen-tts':
+            token = private_bytes(config['credential_file'], 16384).decode().strip()
+            if not token or any(c.isspace() for c in token):
+                raise RenderError('synthesis-credential-unavailable')
+        else:
+            token = credential(config['env_file'])
         state = {'schema': 'telecodex.speech-render/v1', 'identity_sha256': ident,
                  'phase': 'intent', 'provider': config['provider'], 'voice': config['voice'],
                  'language': config['language'], 'text_sha256': sha(request['text'].encode()),
                  'created_at': time.time(), 'last_used_at': time.time(), 'generation': generation}
-        reserve_audio(config, state_file, state)
-        boundary, body = multipart(fields)
         # No retry or redirect may resend a credential/request to another endpoint.
-        http = Request(config['endpoint'], data=body, headers={
-            'Authorization': 'Bearer ' + token, 'Content-Type': 'multipart/form-data; boundary=' + boundary})
+        if config['provider'] == 'qwen-tts':
+            http = Request(config['endpoint'], data=canonical(fields), headers={
+                'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+        else:
+            boundary, body = multipart(fields)
+            http = Request(config['endpoint'], data=body, headers={
+                'Authorization': 'Bearer ' + token, 'Content-Type': 'multipart/form-data; boundary=' + boundary})
+        reserve_audio(config, state_file, state)
         started = time.monotonic()
         try:
             # A redirect handler is disabled below; ordinary urlopen follows 307/308
             # differently across versions and must not define credential authority.
-            data = fetch(http, config['timeout_seconds'])
+            if config['provider'] == 'qwen-tts':
+                reply = json.loads(fetch(http, config['timeout_seconds'], json_response=True))
+                url = reply.get('output', {}).get('audio', {}).get('url')
+                parsed = urlsplit(url) if isinstance(url, str) else None
+                if (parsed is None or parsed.scheme not in ('http', 'https') or parsed.username or parsed.password
+                        or parsed.port not in (None, 443) or not parsed.hostname
+                        or not parsed.hostname.endswith('.aliyuncs.com') or parsed.fragment):
+                    raise RenderError('invalid-synthesis-audio-url')
+                # The signed, expiring object URL receives no API credential.
+                url = parsed._replace(scheme='https').geturl()
+                data = qwen_wav(fetch(Request(url), config['timeout_seconds']))
+            else:
+                data = fetch(http, config['timeout_seconds'])
             info = audio_info(data)
             atomic(audio_file, data)
             state.update(phase='rendered', audio_sha256=sha(data), audio_bytes=len(data),
@@ -354,7 +412,7 @@ def render(binding, request):
         return result(state, audio_file, False)
 
 
-def fetch(request, timeout):
+def fetch(request, timeout, *, json_response=False):
     from urllib.request import HTTPRedirectHandler, build_opener
 
     class NoRedirect(HTTPRedirectHandler):
@@ -362,13 +420,15 @@ def fetch(request, timeout):
             return None
 
     with build_opener(NoRedirect).open(request, timeout=timeout) as response:
-        if response.headers.get_content_type() not in ('audio/wav', 'audio/x-wav', 'application/octet-stream'):
+        types = ('application/json',) if json_response else ('audio/wav', 'audio/x-wav', 'application/octet-stream')
+        limit = 65536 if json_response else MAX_AUDIO
+        if response.headers.get_content_type() not in types:
             raise RenderError('unexpected-synthesis-content-type')
         length = response.headers.get('Content-Length')
-        if length is not None and (not length.isdecimal() or int(length) > MAX_AUDIO):
+        if length is not None and (not length.isdecimal() or int(length) > limit):
             raise RenderError('synthesized-audio-bound')
-        data = response.read(MAX_AUDIO + 1)
-        if len(data) > MAX_AUDIO or length is not None and len(data) != int(length):
+        data = response.read(limit + 1)
+        if len(data) > limit or length is not None and len(data) != int(length):
             raise RenderError('incomplete-synthesis-transfer')
         return data
 

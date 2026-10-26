@@ -93,6 +93,72 @@ class Render(unittest.TestCase):
     def render(self, request=None):
         return speech.render(self.binding, self.request if request is None else request)
 
+    def qwen_route(self):
+        self.environment.write_text('synthetic-qwen-key\n')
+        self.config.update(provider='qwen-tts', model='qwen-audio-3.0-tts-plus',
+                           voice='longanlingxin', credential_file=str(self.environment),
+                           instruction='Warm and natural; preserve Spanish and English.')
+        del self.config['env_file']
+        self.binding.write_text(json.dumps(self.config))
+
+    def test_qwen_http_identity_download_and_cache(self):
+        self.qwen_route()
+        url = 'https://speech.oss-ap-southeast-1.aliyuncs.com/sample.wav?signature=fake'
+        self.content_type = 'application/json'
+        self.data = json.dumps({'output': {'audio': {'url': url.replace('https:', 'http:')}}}).encode()
+        original = speech.fetch
+        downloads = []
+        audio = io.BytesIO()
+        with wave.open(audio, 'wb') as w:
+            w.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
+            w.writeframes(b'\x01\x00' * 2400)
+        def fetch(request, timeout, **kw):
+            if request.full_url == url:
+                downloads.append(request)
+                return audio.getvalue()
+            return original(request, timeout, **kw)
+        with mock.patch.object(speech, 'fetch', side_effect=fetch):
+            first = self.render()
+            self.assertTrue(self.render()['cache_hit'])
+            self.assertEqual(first['format']['sample_rate_hz'], 24000)
+            self.assertEqual(len(self.calls), 1)
+            self.assertEqual(self.calls[0][1], 'Bearer synthetic-qwen-key')
+            body = json.loads(self.calls[0][2])
+            self.assertEqual(body['input']['text'], self.request['text'])
+            self.assertEqual(body['model'], self.config['model'])
+            self.assertIsNone(downloads[0].get_header('Authorization'))
+            self.config['instruction'] = 'A different style'
+            self.binding.write_text(json.dumps(self.config))
+            self.assertNotEqual(self.render()['render_id'], first['render_id'])
+
+    def test_qwen_rejects_untrusted_download_and_preserves_uncertainty(self):
+        self.qwen_route()
+        self.content_type = 'application/json'
+        self.data = json.dumps({'output': {'audio': {'url': 'http://127.0.0.1/private'}}}).encode()
+        with self.assertRaisesRegex(speech.RenderError, 'unconfirmed'):
+            self.render()
+        with self.assertRaisesRegex(speech.RenderError, 'retained-render-outcome'):
+            self.render()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_qwen_requires_explicit_endpoint_and_normalizes_only_known_stream_header(self):
+        self.qwen_route()
+        del self.config['endpoint']
+        self.binding.write_text(json.dumps(self.config))
+        with self.assertRaisesRegex(speech.RenderError, 'endpoint'):
+            self.render()
+        self.assertEqual(len(self.calls), 0)
+        import struct
+        data = (b'RIFF\xbf\xff\xff\x7fWAVEfmt \x10\x00\x00\x00'
+                + struct.pack('<HHIIHH', 1, 1, 24000, 48000, 2, 16)
+                + b'data\x9b\xff\xff\x7f' + b'\x00\x00' * 2400)
+        self.assertEqual(speech.audio_info(speech.qwen_wav(data))['audio_millis'], 100)
+        with self.assertRaises(speech.RenderError):
+            speech.qwen_wav(data[:-1])
+        corrupt = data[:40] + struct.pack('<I', 5000) + data[44:]
+        with self.assertRaises(speech.RenderError):
+            speech.qwen_wav(corrupt)
+
     def age_audio(self, result, seconds):
         path=Path(result['audio_path']).parent/'state.json'
         state=json.loads(path.read_text());state['last_used_at']=time.time()-seconds
