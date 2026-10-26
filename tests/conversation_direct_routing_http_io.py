@@ -231,8 +231,10 @@ def telegram_monitor(binary):
         grant_file=j.root/'monitor-device.json';Grants(config,Provider(config)).enroll('Monitor read scope',grant_file,60,scope='monitor_readonly')
         credential=json.loads(grant_file.read_text())
         device={'origin':config['origin'],'authorization':credential['authorization']}
-        assert client.get(base,headers=device).status_code==403
-        assert client.get(url,headers=device).status_code==403
+        assert client.get(base,headers=device).status_code==200
+        assert client.get(url,headers=device).status_code==200
+        assert client.post('/api/interaction/inputs',headers=device,json={}).status_code==403
+        assert client.get('/api/interaction/requests',headers=device).status_code==403
         assert j.calls()==calls==[digest] and j.row('SELECT count(*) FROM turns')==before
         assert len(j.instructions(7))==2 and len(j.instructions(8))==1
         print('PASS Telegram monitor: actual HTTP/owner/SQLite/native text and committed voice, two routes and exact selector stripping, pending/retired/legacy originals, bounded cursor paging, owner/entry/device isolation; reads cause no ASR, model or native dispatch.')
