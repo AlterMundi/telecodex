@@ -337,8 +337,9 @@ share that exact source/revision text rather than scrolling a hidden duplicate.
 Pause, Voice off, Stop, hidden pages and the open inspector suspend movement.
 Resuming keeps the current segment and position; replaced sources stop playback
 and following. Unknown media duration never invents progress. Wheel/touch reading,
-scrollbar dragging and reading keys release Follow and remember that choice;
-checking it again resumes at the current position. Reduced motion uses instant
+scrollbar dragging and reading keys release Follow in the current view; checking
+it again resumes at the current position. Only explicit checkbox changes persist
+the preference across reloads. Reduced motion uses instant
 positioning. Ordinary incoming replies do not pull the reader to the bottom while
 spoken following owns the reading window.
 

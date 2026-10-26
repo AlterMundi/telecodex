@@ -597,7 +597,7 @@ window.Conversation = (() => {
       follow.title="Follow spoken progress; position within each audio segment is approximate";
       try{follow.checked=window.localStorage?.getItem("interaction-follow-audio")!=="false";}catch{}
       follow.addEventListener("change",()=>{saveFollow();if(follow.checked)followPlayback(true);});
-      const readManually=()=>{if(follow.checked && voiceEnabled && active){follow.checked=false;saveFollow();}};
+      const readManually=()=>{if(follow.checked && voiceEnabled && active)follow.checked=false;};
       timeline.addEventListener("wheel",readManually,{passive:true});
       timeline.addEventListener("touchmove",readManually,{passive:true});
       timeline.addEventListener("pointerdown",event=>{

@@ -136,7 +136,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
-  const context = vm.createContext({window:{addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
+  const context = vm.createContext({window:{localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
     URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
     fetch:(_route, options) => {
@@ -429,7 +429,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(updateScrolls,1,'Follow targets the visible Update from card for the exact spoken source');updatesFollow.ui.stop();
 
   {
-  const tracked=boot(false,true,{clock:true});tracked.audio(true);
+  const followPreference=new Map(),tracked=boot(false,true,{clock:true,followStorage:followPreference});tracked.audio(true);
   const longText='🙂'.repeat(3200);
   tracked.replyTexts.set('native:8',longText);
   tracked.overrideSource(8,{preview:longText.slice(0,40),text_characters:3200});
@@ -474,7 +474,8 @@ function boot(readOnly=false,standalone=false,options={}) {
   tracked.reducedMotion(true);tracked.nodes.get('#conversation-follow').handlers.change();trackPlayer.handlers.timeupdate();
   await until(()=>ranges.at(-1)>3200);
   assert.equal(trackingScrolls.at(-1).behavior,'instant','Reduced motion never introduces animated following');
-  trackLane.handlers.wheel();assert.equal(tracked.nodes.get('#conversation-follow').checked,false,'Manual reading explicitly releases Follow');
+  const preferenceBefore=followPreference.get('interaction-follow-audio');
+  trackLane.handlers.wheel();assert.equal(followPreference.get('interaction-follow-audio'),preferenceBefore,'Manual reading does not overwrite the explicit Follow preference');assert.equal(tracked.nodes.get('#conversation-follow').checked,false,'Manual reading explicitly releases Follow');
   const manualScrolls=trackingScrolls.length;trackPlayer.currentTime=95;trackPlayer.handlers.timeupdate();
   assert.equal(trackingScrolls.length,manualScrolls,'Following never fights a manual reader');
   tracked.nodes.get('#conversation-follow').checked=true;tracked.nodes.get('#conversation-follow').handlers.change();
