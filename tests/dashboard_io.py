@@ -101,6 +101,18 @@ class DashboardHTTP(unittest.TestCase):
         self.assertEqual(self.client.get('/api/state').status_code,401)
         self.assertEqual(self.stop('action-123456789012',csrf).status_code,401)
         self.assertEqual(self.provider.calls,[])
+    def test_conversation_header_names_are_presentation_and_escaped(self):
+        app = create_app({**self.config, 'daimon_name':'CompAII <source>'}, self.provider, lambda raw,bot:int(raw))
+        with TestClient(app, base_url='https://example.test') as client:
+            text=client.get('/?view=conversation&client=standalone').text
+            self.assertIn('id="conversation-daimon">CompAII &lt;source&gt;</span>',text)
+            self.assertNotIn('DAIMON <span',text)
+            self.assertEqual(text.count('id="conversation-account"'),1)
+            self.assertIn('id="conversation-account" hidden',text)
+        for value in ('', 'x'*81, 'name\nother', 123):
+            with self.assertRaises(ValueError):
+                create_app({**self.config,'daimon_name':value},self.provider)
+
     def test_origin_body_bounds_no_path_override_and_public_shell(self):
         self.assertEqual(self.client.get('/').status_code,200)
         self.assertEqual(self.client.get('/assets/app.js').status_code,200)

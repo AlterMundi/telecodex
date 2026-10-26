@@ -136,24 +136,30 @@ work for a subjective review.
 
 ## Current experience acceptance
 
-The human finds routing usable and useful, but the current interface is a draft;
-no avatar changes or Beacon state sound were perceived. #213 and #221 remain
-unaccepted. Verify the independent web app entry, without a Telegram launch or
-WebView. Its product direction includes a child using only this app, with a future
-native/badge client; shared Matrix authentication remains the existing access path.
+On 2026-10-26 the human accepted the independent app and integrating channel as a
+solid, reasonably reliable and versatile functional base. The immutable tag is
+`interaction-functional-baseline-2026-10-26`. Compact controls and the click-free
+revision-6 Beacon have specific human acceptance. Preserve those results while
+qualifying the remaining #213/#221 refinements and the complete v0.2 campaign;
+this does not claim universal aesthetic, background-phone or multi-user acceptance.
+Shared Matrix authentication remains the existing access path, without a Telegram
+launch requirement. The product direction includes a future native/badge client.
 
-For the next UI delivery, inspect the actual served revision on desktop and phone:
-chat/composer first; readable collapsed-at-bottom inspection; long histories;
-live questions and intermediate results; no nested scroll slivers; actual visible
-expression changes and restful pose; shared appearance and reduced motion.
-A fixture screenshot does not establish the delivered phone experience.
+For each changed UI journey, inspect the actual served revision on desktop and
+phone: chat/composer first; the initially closed header inspector opens into a
+readable scrolling overlay and closes without losing the underlying draft,
+recording or selected image. Exercise long histories, live questions, intermediate
+results, perceptible expression/rest changes and reduced motion. Interaction uses
+the explicitly selected authored appearance; Sessions keeps its existing consumer.
+The header shows the selected daimon and authenticated human on two lines, with no
+second name under the inspector. A fixture screenshot is not phone acceptance.
 
-For sound, exercise explicit activation and distinguish browser suspension,
-quiet/passive evidence, unavailable observation and synthesis failure. Measure
-nonzero generated audio and bounded mix/transitions device-free, including voice
-arbitration and mute. Then assess the actual Beacon-derived humming/purring/rhythm
-and session chord by listening. Do not treat a mock oscillator or interval mapping
-as proof that the user heard the intended composition.
+For remaining sound checks, distinguish browser suspension, quiet/passive
+evidence, unavailable observation and synthesis failure. Preserve the accepted
+40.4 Hz sine composition and smooth continuous carriers. Measure changes to
+mix/transitions device-free, including 18% reply ducking, recording arbitration
+and mute; physical listening remains a separate observation. Reuse the existing
+click-free phone acceptance instead of treating it as unheard again.
 
 ## Execution method
 
@@ -222,7 +228,7 @@ Combine rows in a few reusable journeys wherever practical.
 | Q14 | Reach the configured execution budget with many retained contexts | Inputs remain visible and recoverable; direct work is responsive; bounded actual execution and waiting are truthful. Record context count separately from running workers | A, selected N |
 | Q15 | Speak mixed Spanish/English; queue several speech chunks/results; start speaking during output | Understandable transcription, natural spacing, no overlapping playback, clear capture state and cancelable queued speech. Judge actual sound, not just the `ended` event | A, N, H |
 | Q16 | Complete transcription, fail transcription, render speech, then exercise expiry/size limits | Durable text is retained; successful source audio is removed; failed/uncertain audio is bounded and identifiable. TTS pruning matches its documented cache policy, without pretending immediate playback deletion | A |
-| Q17 | Use a narrow screen, large text and keyboard; open read-only diagnostics during parallel work | Main text/voice interaction remains readable and reachable, including a short viewport with the software keyboard. The single bottom diagnostics panel starts collapsed, opens without covering the composer and keeps read-only routing evidence accessible. Live questions remain outside that panel. Truthful compact activity is understandable. No overlap or inaccessible clarification | A browser, H |
+| Q17 | Use a narrow screen, large text and keyboard; open read-only diagnostics during parallel work | Main text/voice interaction remains readable and reachable, including a short viewport with the software keyboard. The header inspector starts closed, opens into a readable scrolling overlay, and closes without losing drafts, recording or attachments. Its close control remains reachable. Read-only routing evidence is accessible; live questions remain in the main conversation. Truthful compact activity is understandable. No overlap or inaccessible clarification | A browser, H |
 | Q18 | Use a simple/advanced presentation and an independently read-only monitor credential | Read-only inspection stays accessible; presentation does not grant destructive authority. Exercise the selected simple/advanced configuration and allowed/denied goal, question, approval and artifact operations. Existing credentials retain their audience and grants; profiles cannot be deferred as planned for this milestone | A, H |
 | Q19 | Select an immutable image/reference; later change the live scene | Work uses the selected capture/revision and coordinates; uncertainty prompts clarification; no claim to see a changed scene | A, selected N/H |
 | Q20 | Interview completed and busy source sessions through an explicitly selected observer finding | Exact fork only where supported; derived/pinned context otherwise labeled. Interview does not mutate source work; publication is a separate selected act | A, N, H |
