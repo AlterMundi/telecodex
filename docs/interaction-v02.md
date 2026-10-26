@@ -1,5 +1,8 @@
 # Daimon Interaction v0.2 — coherent single-chat experience
 
+Full horizon and next selected delivery: [maintained roadmap](interaction-roadmap.md).
+This document owns the remaining v0.2 obligations; continuous voice is milestone9.
+
 Status: the human accepted the current independent app and integrating channel as a solid, reasonably reliable and versatile functional base on 2026-10-26. The immutable tag is `interaction-functional-baseline-2026-10-26`. Preserve that working experience while completing the remaining milestone 8 / Project 14 / #208 requirements. The human rejected Qwen as the conversational/integrating LLM. All owned conversations and receiving defaults now select gpt-6.1-sol / openai / medium, with same-thread native verification; Qwen API TTS and separate STT experiments remain independent. Do not restore the earlier Qwen LLM choice from PR 288 / #285. The header identifies the selected daimon and authenticated human on two lines; remaining #213/#221 refinements stay in scope. General functional acceptance does not invent specific physical or aesthetic judgments. Parent: AlterMundi/daimon-matrix#313.
 
 ## Outcome and scope
