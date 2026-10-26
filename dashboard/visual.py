@@ -91,7 +91,7 @@ def _check_reference(value, fresh=False):
     if value is None:return
     keys={'source_kind','source_id','image_sha256','width','height','captured_at','selected_at','selected_revision','state','point'}
     if not isinstance(value,dict) or set(value)!=keys or len(json.dumps(value))>4096:
-        raise ValueError('Select one point in a retained image')
+        raise ValueError('Select a retained image')
 
     import re
     import uuid
@@ -101,11 +101,13 @@ def _check_reference(value, fresh=False):
             or not isinstance(value['image_sha256'],str) or not re.fullmatch('[a-f0-9]{64}',value['image_sha256'])
             or value['selected_revision']!=value['image_sha256'] or value['state']!='selected'
             or type(value['width']) is not int or type(value['height']) is not int
-            or not 0<value['width']<=4096 or not 0<value['height']<=4096 or value['width']*value['height']>4194304
-            or not isinstance(value['point'],dict) or set(value['point'])!={'x','y'}
-            or any(type(value['point'][k]) is not int for k in ('x','y'))
-            or not 0<=value['point']['x']<value['width'] or not 0<=value['point']['y']<value['height']):
-        raise ValueError('Visual reference missing, changed or ambiguous. Select one point again.')
+            or not 0<value['width']<=4096 or not 0<value['height']<=4096 or value['width']*value['height']>4194304):
+        raise ValueError('Visual reference missing, changed or ambiguous. Select the image again.')
+    point=value['point']
+    if point is not None and (not isinstance(point,dict) or set(point)!={'x','y'}
+            or any(type(point[k]) is not int for k in ('x','y'))
+            or not 0<=point['x']<value['width'] or not 0<=point['y']<value['height']):
+        raise ValueError('Selected point is outside the captured image.')
     try:
         captured=datetime.fromisoformat(value['captured_at'].replace('Z','+00:00'))
         selected=datetime.fromisoformat(value['selected_at'].replace('Z','+00:00'))

@@ -44,7 +44,7 @@ def qualify(binary):
         assert b.client.get('/api/state',headers=b.device_headers).status_code==403
         assert r.json()['work_admitted']is False and not j.packets
         assert j.row('SELECT count(*) FROM conversation_inputs')==[(0,)]
-        for bad in ({**ref,'point':None},{**ref,'point':{'x':160,'y':0}},
+        for bad in ({**ref,'point':{'x':True,'y':0}},{**ref,'point':{'x':160,'y':0}},
                     {**ref,'selected_revision':'b'*64},{**ref,'state':'disconnected'},
                     {**ref,'state':'ambiguous'},{**ref,'width':159},{**ref,'state':'view_changed'},
                     {**ref,'image_sha256':'0'*64,'selected_revision':'0'*64}):
@@ -59,13 +59,16 @@ def qualify(binary):
         original,r=submit('Describe this selected object in Alpha.',ref);assert r.status_code==200,r.text
         assert j.new_native_seen.wait(timeout=5),'Synthetic initial binding was not observed'
         during=png(flip=True);assert upload(during).status_code==200
-        prepared,r=submit('Discuss this independent newer view.',reference(during));assert r.status_code==200,r.text
+        whole={**reference(during),'point':None}
+        prepared,r=submit('Discuss this independent newer view.',whole);assert r.status_code==200,r.text
         j.hold_new_native=False;j.new_native_release.set()
         j.wait(lambda:b.status(original)['phase']=='accepted'and b.status(prepared)['phase']=='accepted')
         path=j.root/'state.sqlite.visual'/sha
         def selected_image(packet,expected=path):return any(v.get('type')=='localImage'and v.get('path')==str(expected)for v in packet['input'])
         assert selected_image(j.packets[-1][1]) and original in str(j.packets[-1])
         assert selected_image(j.packets[-1][1],j.root/'state.sqlite.visual'/hashlib.sha256(during).hexdigest()),'Preparation coalescing lost the later image'
+        assert b.status(prepared)['visual']==whole
+        assert 'the whole captured image' in str(j.packets[-1])
         assert path.read_bytes()==data and path.stat().st_mode&0o077==0
         got=b.client.get('/api/interaction/inputs/'+original+'/image',headers=b.device_headers)
         assert got.status_code==200 and got.content==data
@@ -92,14 +95,14 @@ def qualify(binary):
         assert selected_image(j.worker_packets['native-topic-7'][-1])
         # Hold ASR while a newer image arrives; voice keeps its original image cut.
         (j.root/'hold-asr').touch();clip=audio();spoken=str(uuid.uuid4())
-        h={**b.headers,'content-type':'audio/wav','x-input-id':spoken,'x-input-binding':b.binding,'x-audio-sha256':hashlib.sha256(clip).hexdigest(),'x-visual-reference':json.dumps(ref)}
+        h={**b.headers,'content-type':'audio/wav','x-input-id':spoken,'x-input-binding':b.binding,'x-audio-sha256':hashlib.sha256(clip).hexdigest(),'x-visual-reference':json.dumps({**ref,'point':None})}
         r=b.client.post('/api/interaction/voice',content=clip,headers=h);assert r.status_code==200,r.text
         assert b.status(spoken)['phase']=='preparing'
         newer=png(flip=True);assert upload(newer).status_code==200
         latest,r=submit('Discuss the newer captured view.',reference(newer));assert r.status_code==200,r.text
         j.wait(lambda:b.status(latest)['phase']=='accepted')
         (j.root/'release-asr').touch();j.wait(lambda:b.status(spoken)['phase']=='accepted')
-        assert b.status(spoken)['visual']==ref
+        assert b.status(spoken)['visual']=={**ref,'point':None}
         j.call('route-visual-voice','dispatch',{'input_ref':spoken,'destinations':[{'selector':'Alpha','relation':'amends','requests':requests}]})
         j.wait(lambda:len(j.instructions(7))==3 and j.instructions(7)[-1][1]=='accepted')
         assert selected_image(j.worker_packets['native-topic-7'][-1])

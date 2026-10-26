@@ -81,9 +81,9 @@
           <details id="conversation-visual">
             <summary aria-label="Attach an image" title="Attach an image"><svg class="attachment-icon" aria-hidden="true" focusable="false" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-8.5 8.5a6 6 0 0 1-8.5-8.5L13 2.5a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8L15 6.3"/></svg></summary>
             <div id="conversation-attachment-sheet">
-            <p class="note">Choose an image, then point to what you mean. Only this captured image is sent; this does not share a live view.</p>
+            <p class="note">Choose an image. Marking a point is optional. Only this captured image is sent; this does not share a live view.</p>
             <div class="image-choices"><label class="image-choice" for="conversation-image">🖼 Gallery<input id="conversation-image" type="file" accept="image/*"></label><label class="image-choice" for="conversation-camera">📷 Camera<input id="conversation-camera" type="file" accept="image/*" capture="environment"></label></div>
-            <div class="visual-preview"><canvas id="conversation-image-view" tabindex="0" role="img" aria-label="Selected image. Click a point, use arrow keys, or enter X and Y below." hidden></canvas></div>
+            <div class="visual-preview"><canvas id="conversation-image-view" tabindex="0" role="img" aria-label="Selected image. Optionally click a point, use arrow keys, or enter X and Y below." hidden></canvas></div>
             <div id="conversation-image-coordinates" class="conversation-tools" hidden><label>X <input id="conversation-image-x" type="number" min="0" step="1" disabled></label><label>Y <input id="conversation-image-y" type="number" min="0" step="1" disabled></label></div><button id="conversation-image-clear" type="button" hidden>Remove image</button>
             <p id="conversation-image-state" class="note" role="status" aria-live="polite"></p>
             </div>
