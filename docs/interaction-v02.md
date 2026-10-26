@@ -261,7 +261,7 @@ Standalone chat startup preserves the authored paperclip and one-row text field.
 
 A selected image uses the same immutable attachment for the next text or voice submission. There is no separate image-with-voice switch; Voice on controls spoken replies. Successful consumption clears that selection.
 
-The conversational caption uses a full-width presence row below the fixed header. Shared-login success shows only the human name in the small header account slot; it no longer occupies that row with a connected label.
+The conversational caption uses a full-width presence row below the fixed header. The header shows `daimon: <configured name>` and `human: <authenticated name>` on two adjacent lines. The account name no longer sits under the inspector or occupies the full-width caption row with a connected label. `daimon_name` is escaped display configuration, not native identity or authority.
 
 The presence caption keeps one fixed-height row. Overflow scrolls at18CSSpx/second with pauses and reverses smoothly; fitting text stays still. Reduced-motion preference keeps it static, with the full caption available as text/title.
 
