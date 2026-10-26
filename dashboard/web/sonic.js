@@ -57,14 +57,19 @@ window.ConversationSound = (() => {
       node.linearRampToValueAtTime(target,at+seconds);
       return {from,target,start:at,end:at+seconds};
     }
-    const halt=tone=>{clearTimeout(tone.timer);tone.oscillator.stop();tone.oscillator.disconnect();tone.level.disconnect();tone.pulse?.stop();tone.pulse?.disconnect();tone.pulseDepth?.disconnect();tone.breath?.disconnect();};
+    const halt=tone=>{tone.oscillator.stop();tone.oscillator.disconnect();tone.level.disconnect();tone.pulse?.stop();tone.pulse?.disconnect();tone.pulseDepth?.disconnect();tone.breath?.disconnect();};
     function stop(){
       const old=context;if(!old)return;
       const owned=[...tones.values()];tones.clear();
       const nodes=[master,breath,lfo,modulation];
-      masterEnvelope=ramp(master.gain,masterEnvelope,0,old.currentTime,0.12);
+      masterEnvelope=ramp(master.gain,masterEnvelope,0,old.currentTime,0.35);
+      const fadeEnd=old.currentTime+0.37;
       // Finish the fade before disconnect/close, even when a new context starts meanwhile.
-      setTimeout(()=>{for(const tone of owned)halt(tone);for(const node of nodes){try{node?.stop?.();}catch{}try{node?.disconnect();}catch{}}old.close().catch(()=>{});},150);
+      const finish=()=>{
+        // A delayed/interrupted mobile audio clock must not be cut mid-envelope.
+        if(old.state==="running" && old.currentTime<fadeEnd){setTimeout(finish,Math.max(20,(fadeEnd-old.currentTime)*1000));return;}
+        for(const tone of owned)halt(tone);for(const node of nodes){try{node?.stop?.();}catch{}try{node?.disconnect();}catch{}}old.close().catch(()=>{});
+      };setTimeout(finish,370);
       context=master=breath=lfo=modulation=masterEnvelope=undefined;pulseKey=signature=undefined;changed(false);
     }
     function level(){if(master && context)masterEnvelope=ramp(master.gain,masterEnvelope,quiet?0:volume*(catalog?.peak_gain||0),context.currentTime,0.12);}
@@ -96,18 +101,17 @@ window.ConversationSound = (() => {
           tone.breath.gain.setTargetAtTime(1-depth,at,0.04);tone.pulseDepth.gain.setTargetAtTime(depth,at,0.04);
           tone.pulse.frequency.setValueAtTime(v.pulse_mode==="harmonic"?v.pulse_hz*hz/v.fundamental_hz:0,at);
         }
-        clearTimeout(tone.timer);tone.timer=undefined;
-        tone.envelope=ramp(tone.level.gain,tone.envelope,weight,at,seconds,true);
+        tone.envelope=ramp(tone.level.gain,tone.envelope,weight,at,seconds);
       }
       for(const [hz,tone] of tones)if(!weights.has(hz)){
-        clearTimeout(tone.timer);
-        tone.envelope=ramp(tone.level.gain,tone.envelope,0,at,seconds,true);
-        tone.timer=setTimeout(()=>{if(tones.get(hz)===tone){halt(tone);tones.delete(hz);}},seconds*1000+20);
+        // Keep the six carriers phase-continuous at zero gain. Wall-clock
+        // retirement can run before the audio clock finishes its fade on phones.
+        tone.envelope=ramp(tone.level.gain,tone.envelope,0,at,seconds);
       }
       return {voices,dropped:composition.voices.length-voices.length,running:true};
     }
     return {async start(){if(!Context)throw Error("State sound is unavailable in this browser");
-        const owned=context || (context=new Context());
+        const owned=context || (context=new Context({latencyHint:"playback"}));
         if(!master){master=owned.createGain();master.gain.value=0;breath=owned.createGain();lfo=owned.createOscillator();modulation=owned.createGain();
           breath.gain.value=1;modulation.gain.value=0;lfo.type="sine";lfo.frequency.value=0;
           master.connect(breath);breath.connect(owned.destination);lfo.connect(modulation);modulation.connect(breath.gain);lfo.start();}
