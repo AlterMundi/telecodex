@@ -254,7 +254,7 @@ Ordinary camera/gallery originals up to20MiB are accepted by the client. The cli
 
 Standalone Interaction can use `conversation_appearance = "authored"` to omit the automatic Homemaker stylesheet/script while Sessions continues to inherit its configured appearance. This is an explicit product choice; shared login and permissions remain unchanged. Its compact header, conversation area and composer remain separate, with recording status inside the composer and a paperclip-only attachment trigger.
 
-With Voice on, standalone Interaction permits verified reply playback, continuation gaps and incoming-reply live updates while the document is hidden. Returning resumes a browser-paused segment after source validation, preserving its position. A human pause, Stop, loss of authorization, offline transition or real page unload still stops automatic playback. Mobile OS/browser suspension can prevent background execution; returning restores the existing opted-in intent, never a human-paused one. Physical phone background acceptance remains a separate check.
+With Voice on, standalone Interaction permits verified reply playback, continuation gaps and incoming-reply live updates while the document is hidden. Returning resumes a browser-paused segment after source validation, preserving its position. A human pause, Stop, loss of authorization or real page unload still stops automatic playback. Transient connection failures and offline transitions preserve opted-in Voice intent and already loaded audio; returning online revalidates a paused segment before resuming. Standalone playback exposes standard OS Media Session play/pause/stop controls where supported. These controls retain explicit human pause/Stop semantics. Mobile OS/browser suspension can prevent background execution; returning restores the existing opted-in intent, never a human-paused one. Physical phone background acceptance remains a separate check.
 
 Presentation resolves fallback `t<ID>` labels from the current authorized owner's session title without changing routing selectors, source IDs, revisions or explicit route aliases. A renamed session needs no route recreation.
 
@@ -375,3 +375,5 @@ local date tooltip. Missing or invalid timestamps stay hidden; refresh/status
 updates never fabricate a send time. Assessment of coherent application-wide
 internationalization is tracked separately in #295; this slice introduces no
 language selector or partial translated UI.
+
+Human correction (2026-10-26): Follow remains enabled during manual scrolling. A held pointer/touch owns the reading viewport; release resumes the spoken position. Wheel and keyboard scrolling have a short settle interval. Only the explicit Follow checkbox changes its preference. Background Voice must preserve opted-in intent across transient network errors, with OS media controls where supported; phone screen-lock playback remains a separate actual-device acceptance item.

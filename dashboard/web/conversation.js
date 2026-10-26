@@ -604,6 +604,9 @@ window.Conversation = (() => {
     };
     playLabel("Play audio");
     const follow = $("#conversation-follow");
+    const followPointers=new Set();let followTouch=false,followSettle;
+    const followHeld=()=>followPointers.size>0 || followTouch || !!followSettle;
+    const resumeFollow=()=>{if(!followHeld())followPlayback(true);};
     const saveFollow=()=>{try{window.localStorage?.setItem("interaction-follow-audio",String(follow.checked));}catch{}};
     if(standalone && follow){
       $("#conversation-follow-control").hidden=false;
@@ -611,19 +614,23 @@ window.Conversation = (() => {
       follow.title="Follow spoken progress; position within each audio segment is approximate";
       try{follow.checked=window.localStorage?.getItem("interaction-follow-audio")!=="false";}catch{}
       follow.addEventListener("change",()=>{saveFollow();if(follow.checked)followPlayback(true);});
-      const readManually=()=>{if(follow.checked && voiceEnabled && active)follow.checked=false;};
-      timeline.addEventListener("wheel",readManually,{passive:true});
-      timeline.addEventListener("touchmove",readManually,{passive:true});
-      timeline.addEventListener("pointerdown",event=>{
-        if(event.target===timeline && event.clientX>=timeline.getBoundingClientRect().right-16)readManually();
-      });
+      const settleFollow=()=>{clearTimeout(followSettle);followSettle=setTimeout(()=>{followSettle=undefined;resumeFollow();},180);};
+      timeline.addEventListener("wheel",settleFollow,{passive:true});
+      timeline.addEventListener("pointerdown",event=>{followPointers.add(event.pointerId);});
+      const releasePointer=event=>{followPointers.delete(event.pointerId);resumeFollow();};
+      window.addEventListener("pointerup",releasePointer);
+      window.addEventListener("pointercancel",releasePointer);
+      timeline.addEventListener("touchstart",()=>{followTouch=true;},{passive:true});
+      const releaseTouch=event=>{followTouch=!!event.touches?.length;resumeFollow();};
+      window.addEventListener("touchend",releaseTouch,{passive:true});
+      window.addEventListener("touchcancel",releaseTouch,{passive:true});
       timeline.addEventListener("keydown",event=>{
         if(["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(event.key)
-          && !["INPUT","TEXTAREA","BUTTON","SELECT"].includes(event.target?.tagName))readManually();
+          && !["INPUT","TEXTAREA","BUTTON","SELECT"].includes(event.target?.tagName))settleFollow();
       });
     }
     function followingSpeech(){
-      return standalone && follow?.checked && voiceEnabled && !voiceSuspended && !document.hidden
+      return standalone && follow?.checked && !followHeld() && voiceEnabled && !voiceSuspended && !document.hidden
         && active?.auto && !active.verifying && !audio.paused && !audio.muted;
     }
     function followCard(){
@@ -645,6 +652,7 @@ window.Conversation = (() => {
         await readCard(card);
         if(card.body.textContent===before || card.offset===null)break;
       }
+      if(active===selected && !followingSpeech())selected.followTextRequested=false;
       if(active===selected)followPlayback();
     }
     function followPlayback(force=false){
@@ -786,6 +794,7 @@ window.Conversation = (() => {
       if (blobUrl) URL.revokeObjectURL(blobUrl);
       blobUrl = undefined;
       toggle.disabled = true;
+      if(mediaSession)try{mediaSession.playbackState="none";}catch{}
       audioState(text);
       $("#conversation-player").hidden = true;
     }
@@ -793,6 +802,7 @@ window.Conversation = (() => {
       presentState({playback:undefined});
       cancelSpeechWait();voiceBusy=false;voiceQueue.length=0;
       voiceSuspended=true;voiceStatus();
+      if(mediaSession)try{mediaSession.playbackState="paused";}catch{}
       generation++;
       if (!active) return;
       requestAbort?.abort(); requestAbort = undefined;
@@ -820,6 +830,7 @@ window.Conversation = (() => {
       if (!enabled) {pause(); sound?.reset(); microphone?.deactivate();}
       modeChanged(enabled, initial);
     }
+    const transientConnectionError=error=>error.name==="TypeError" || error.status>=500;
     function failed(error) {
       presentState({connected:false});
       if (error.status === 401 || error.status === 403) {
@@ -828,7 +839,7 @@ window.Conversation = (() => {
         pause();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
-      } else pause();
+      } else if(!(standalone && voiceEnabled && !voiceSuspended && transientConnectionError(error)))pause();
       $("#conversation-state").textContent = error.name === "TypeError" ? "Connection unavailable. Refresh to reconnect."
         : error.message || "Replies are unavailable. Refresh to continue.";
     }
@@ -966,9 +977,11 @@ window.Conversation = (() => {
         if (active && enabled && playbackAllowed()) {
           const selected = active, owned = generation;
           try { await part(selected.source, selected.offset); }
-          catch (_) {
-            if (active === selected && generation === owned)
-              stop("This reply is no longer current. Refresh before listening.");
+          catch (error) {
+            if (active === selected && generation === owned){
+              if(error.status===401 || error.status===403)failed(error);
+              else if(!transientConnectionError(error))stop("This reply is no longer current. Refresh before listening.");
+            }
           }
         }
         $("#conversation-state").textContent = cards.size ? `${cards.size} ${cards.size===1?"reply":"replies"} available.`
@@ -1037,6 +1050,10 @@ window.Conversation = (() => {
         playLabel("Pause audio");
         audioState("Playing this reply.");
         presentState({playback:"playing"});
+        if(mediaSession)try{
+          if(window.MediaMetadata)mediaSession.metadata=new window.MediaMetadata({title:selected.source.label||"Conversation reply",artist:"Daimon Interaction"});
+          mediaSession.playbackState="playing";
+        }catch{}
         followPlayback();
       } catch (e) {
         if (active !== selected || generation !== owned) return;
@@ -1045,6 +1062,9 @@ window.Conversation = (() => {
         if (e.name === "NotAllowedError") {
           toggle.disabled = false; playLabel("Play audio");
           audioState("Audio ready. Press Play audio to listen.");
+        } else if(standalone && voiceEnabled && !voiceSuspended && transientConnectionError(e)){
+          selected.auto=true;playLabel("Play audio");toggle.disabled=false;
+          audioState("Connection unavailable. Playback will resume after reconnection.");
         } else {
           stop("This reply changed or is unavailable. Refresh before listening.");
           return {failed:true,generation};
@@ -1172,9 +1192,23 @@ window.Conversation = (() => {
     });
     window.addEventListener("offline", () => {
       presentState({connected:false});
-      pause(); $("#conversation-state").textContent = "Offline. Replies already loaded remain readable.";
+      if(!standalone || !voiceEnabled || voiceSuspended)pause();
+      $("#conversation-state").textContent = "Offline. Replies already loaded remain readable.";
     });
-    window.addEventListener("online", () => { if (enabled && ready && !document.hidden) refresh(true); });
+    window.addEventListener("online", () => {
+      if (enabled && ready && playbackAllowed()) {
+        if(active?.auto && audio.ended && !active.segmentEnded)audio.dispatchEvent?.(new Event("ended"));
+        else if(active?.auto && audio.paused && !audio.ended && blobUrl && !active.verifying)startPlayback();
+        refresh(true);
+      }
+    });
+    const mediaSession=standalone?window.navigator?.mediaSession:undefined;
+    if(mediaSession){
+      for(const [action,handler] of Object.entries({
+        play:()=>{voiceSuspended=false;voiceStatus();if(active && blobUrl)startPlayback();else {enableVoice();drainVoice();}},
+        pause:()=>pause(),stop:()=>disableVoice()
+      }))try{mediaSession.setActionHandler(action,handler);}catch{}
+    }
     telegram?.onEvent?.("deactivated", pause);
     telegram?.BackButton?.onClick?.(() => setMode(false));
     if(standalone){$("#conversation-back").hidden=true;$("#conversation-telegram-older").hidden=true;}
