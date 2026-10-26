@@ -88,7 +88,13 @@ def reserve(root, job, state, limit):
         for other in root.iterdir():
             if not re.fullmatch('[a-f0-9]{64}', other.name):
                 continue
-            directory(other)
+            # Accounting reads retained jobs. directory() establishes a durable
+            # name and fsyncs its parent even when it already exists; repeating
+            # that barrier for every past note delays the next provider call.
+            info = other.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077):
+                raise RenderError('unsafe-asr-cache-directory')
             actual = payload_bytes(other)
             try:
                 previous = json.loads(private_bytes(other / 'state.json', 2*1024*1024))

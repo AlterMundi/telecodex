@@ -303,6 +303,13 @@ read-only inspection are a design target, not a claim of tested child usability.
 
 ## Measurements and acceptance
 
+ASR cache accounting must inspect retained private jobs without creating them or
+syncing each historical directory. Qualify a populated history: the new intent
+still crosses its file/directory durability barrier before provider execution;
+uncertain reservations, byte limits, ownership and symlink rejection stay intact.
+Removing these history-dependent writes is not proof of streaming transcription
+or a measured end-to-end improvement on a human phone.
+
 Measure the journey by original input: end of speech/commit, transcript ready,
 routing decision, native acceptance, first useful progress, final result and
 playback start/end. Separate queue, preparation, inference and execution time;
