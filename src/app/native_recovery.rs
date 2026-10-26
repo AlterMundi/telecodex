@@ -41,6 +41,11 @@ pub(super) async fn tick(app: &App) -> Result<()> {
                             Some("completed" | "failed" | "interrupted")
                         )
                     }) {
+                        if turn["status"] == "failed"
+                            && let (Some(native_turn), Some(error)) = (turn["id"].as_str(), turn.get("error").filter(|v|v.is_object()))
+                            && app.shared.store.goal_recovery_failure_observed(selected.key,selected.human,&selected.native,native_turn,error).is_err() {
+                            tracing::warn!("Recovered terminal failure evidence could not be retained; no retry authorized");
+                        }
                         let handle = app.workers.lock().await.get(&selected.key).cloned();
                         let active = handle
                             .and_then(|w| w.steer.lock().expect("steer mutex poisoned").clone());

@@ -880,6 +880,18 @@ pub(super) async fn process_turn(
                                 if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Begin{local_turn:turn_id,steer:false})?;}
                                 Ok(CodexEventOutcome::None)
                             }
+                            CodexEvent::NativeGoalBlocked { turn_id: native_turn, goal } => {
+                                if shared.store.goal_recovery_block_observed(session_key,requester_user_id,&goal.thread_id,&native_turn,&goal).is_err() {
+                                    tracing::warn!("Native goal-block evidence could not be retained; no recovery authorized");
+                                }
+                                Ok(CodexEventOutcome::None)
+                            }
+                            CodexEvent::NativeTurnFailure { thread_id: native, id: native_turn, error } => {
+                                if shared.store.goal_recovery_failure_observed(session_key,requester_user_id,&native,&native_turn,&error).is_err() {
+                                    tracing::warn!("Native terminal-failure evidence could not be retained; no recovery authorized");
+                                }
+                                Ok(CodexEventOutcome::None)
+                            }
                             CodexEvent::NativeTurnTerminal {id:native_id,status} => {
                                 if let Some(id)=stop_resume.as_deref(){shared.store.stop_resume_event(id,session_key,&format!("resume_turn_{status}"),Some(turn_id),Some(&native_id))?;}
 
@@ -1620,6 +1632,8 @@ impl LiveTurnSink {
             | CodexEvent::NativeTurnStarted(_)
             | CodexEvent::NativeTurnSubmitting
             | CodexEvent::NativeTurnTerminal { .. }
+            | CodexEvent::NativeGoalBlocked { .. }
+            | CodexEvent::NativeTurnFailure { .. }
             | CodexEvent::UserInputClosed(_)
             | CodexEvent::UserInputAnswered(_) => {}
             CodexEvent::ApprovalRequest(request) => {
