@@ -320,6 +320,33 @@ Telecodex will start `codex login --device-auth`, send a clickable `auth.openai.
 
 ## 🧩 Configuration notes
 
+### Native model profile for one conversation
+
+On harnesses supporting native thread provider/config overrides, select an
+existing `$CODEX_HOME/<profile>.config.toml` for an exact chat/topic key:
+
+```toml
+[[codex.session_profiles]]
+chat_id = 123456789
+topic_id = 12345
+profile = "qwen"
+reasoning_effort = "high"
+```
+
+Only model, provider definitions, model catalog and reasoning effort are imported.
+The bridge retains its tools, instructions, approvals and sandbox. Other
+conversations and the native default profile remain unchanged. New topics/workers
+created from a selected conversation use receiving model/effort defaults rather
+than copying that local selection. Ordinary topic inheritance remains unchanged. Keep credential
+references in the native profile; never copy credentials into bridge config.
+
+An existing native thread keeps its ID and history. Startup attempts metadata-only
+adoption for selected bound threads; every new turn verifies the native returned
+model/provider/effort before submitting input. A busy or subscribed thread may
+retain its current settings: adoption then remains pending and no new input is
+submitted through the mismatched selection. Active turn collectors retain their
+actual model. Separate CLI review mode does not support this selector.
+
 ### Telegram
 
 - `telegram.bot_token` or `telegram.bot_token_env` must be configured.

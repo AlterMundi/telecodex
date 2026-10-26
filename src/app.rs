@@ -348,7 +348,44 @@ impl App {
         )?;
         store.topic_projection_entry_selection(config.interaction.as_ref())?;
         let codex = CodexRunner::new(config.codex.binary.clone())
-            .with_shared_app_server(config.codex.shared_app_server);
+            .with_shared_app_server(config.codex.shared_app_server)
+            .with_session_profiles(config.codex.session_profiles.clone());
+        for profile in &config.codex.session_profiles {
+            let adoption: Result<()> = async {
+                let Some(session) = store.get_session(profile.key())? else {
+                    return Ok(());
+                };
+                let Some(native) = session
+                    .codex_thread_id
+                    .as_deref()
+                    .filter(|_| !session.force_fresh_thread)
+                else {
+                    return Ok(());
+                };
+                let human = store.session_creator(session.key)?;
+                store.validate_owned_binding(session.key, human, native)?;
+                if let Some((native, model, effort)) = tokio::time::timeout(
+                    Duration::from_secs(15),
+                    codex.apply_session_profile(&session),
+                )
+                .await
+                .context("Scoped model adoption is still unconfirmed")??
+                {
+                    store.record_native_model(
+                        session.key,
+                        human,
+                        &native,
+                        &model,
+                        effort.as_deref(),
+                    )?;
+                }
+                Ok(())
+            }
+            .await;
+            if adoption.is_err() {
+                tracing::warn!(profile=%profile.profile, "Scoped native model adoption pending; other conversations remain available");
+            }
+        }
         let service_user_id = config.startup_admin_ids.first().copied().unwrap_or(0);
 
         let worker_budget = attention::WorkerBudget::new(
@@ -2044,9 +2081,25 @@ impl App {
         if destination.busy || destination.codex_thread_id.is_some() {
             anyhow::bail!("Destination already active; existing conversation preserved");
         }
+        let mut inherited = template.clone();
+        if key != template.key
+            && self
+                .shared
+                .config
+                .codex
+                .session_profiles
+                .iter()
+                .any(|p| p.key() == template.key)
+        {
+            // A local profile belongs to its selected conversation, not future
+            // workers. Native history forks use the harness's new-thread config;
+            // independent topics likewise retain the receiving model defaults.
+            inherited.model = self.shared.session_defaults.model.clone();
+            inherited.reasoning_effort = self.shared.session_defaults.reasoning_effort.clone();
+        }
         self.shared
             .store
-            .apply_empty_session_template(key, template, user_id)?;
+            .apply_empty_session_template(key, &inherited, user_id)?;
         Ok(())
     }
 

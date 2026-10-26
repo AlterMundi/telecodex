@@ -877,6 +877,36 @@ impl Store {
         )
     }
 
+    pub fn record_native_model(
+        &self,
+        key: SessionKey,
+        human: i64,
+        native: &str,
+        model: &str,
+        effort: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let changed = conn.execute(
+            "UPDATE sessions SET model=?5, reasoning_effort=?6, updated_at=?7
+             WHERE chat_id=?1 AND thread_id=?2 AND creator_user_id=?3
+             AND codex_thread_id=?4 AND force_fresh_thread=0
+             AND EXISTS(SELECT 1 FROM users WHERE tg_user_id=?3 AND allowed=1)",
+            params![
+                key.chat_id,
+                key.thread_id,
+                human,
+                native,
+                model,
+                effort,
+                now_string()
+            ],
+        )?;
+        if changed != 1 {
+            anyhow::bail!("Native model observation no longer matches the owned session");
+        }
+        Ok(())
+    }
+
     pub fn set_session_reasoning_effort(
         &self,
         key: SessionKey,
@@ -1685,6 +1715,50 @@ mod tests {
                 .as_deref(),
             Some("Keep context")
         );
+    }
+
+    #[test]
+    fn native_model_observation_is_atomic_and_binding_scoped() {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = Store::open(tmp.path(), &[100], &defaults()).unwrap();
+        let selected = SessionKey::new(100, Some(7));
+        let other = SessionKey::new(100, Some(8));
+        for (key, native) in [(selected, "selected-native"), (other, "other-native")] {
+            store.ensure_session(key, 100, &defaults()).unwrap();
+            store.set_session_codex_thread(key, native).unwrap();
+        }
+        assert!(
+            store
+                .record_native_model(selected, 100, "stale-native", "fixture-model", Some("high"))
+                .is_err()
+        );
+        assert!(
+            store
+                .record_native_model(
+                    selected,
+                    999,
+                    "selected-native",
+                    "fixture-model",
+                    Some("high")
+                )
+                .is_err()
+        );
+        store
+            .record_native_model(
+                selected,
+                100,
+                "selected-native",
+                "fixture-model",
+                Some("high"),
+            )
+            .unwrap();
+        let actual = store.get_session(selected).unwrap().unwrap();
+        assert_eq!(actual.model.as_deref(), Some("fixture-model"));
+        assert_eq!(actual.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(actual.codex_thread_id.as_deref(), Some("selected-native"));
+        let untouched = store.get_session(other).unwrap().unwrap();
+        assert_eq!(untouched.model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(untouched.reasoning_effort.as_deref(), Some("medium"));
     }
 
     #[test]

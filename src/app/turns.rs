@@ -727,6 +727,11 @@ pub(super) async fn process_turn(
                     let presentation_tx=presentation_tx.clone();
                     async move {
                         match event {
+                            CodexEvent::NativeModelConfigured {thread_id,model,provider,effort} => {
+                                shared.store.record_native_model(session_key,requester_user_id,&thread_id,&model,effort.as_deref())?;
+                                shared.store.audit(Some(requester_user_id),"native_model_profile_observed",serde_json::json!({"session":session_key,"model":model,"provider":provider,"effort":effort}))?;
+                                Ok(CodexEventOutcome::None)
+                            }
                             CodexEvent::ThreadStarted(thread_id) => {
                                 if conversation_native.as_deref().is_some_and(|native|native!=thread_id) {bail!("Conversation input returned another native binding; original retained");}
                                 if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_validate(requester_user_id,id)?;}
@@ -1606,6 +1611,7 @@ impl LiveTurnSink {
                 tracing::debug!("codex thread started: {thread_id}");
             }
             CodexEvent::NativeMessageCompleted { .. }
+            | CodexEvent::NativeModelConfigured { .. }
             | CodexEvent::UserInputRequest { .. }
             | CodexEvent::DynamicToolRequest { .. }
             | CodexEvent::NativeInputRejected
