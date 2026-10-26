@@ -796,7 +796,7 @@ impl Store {
         let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
         let comparison = if before { "<" } else { ">" };
         let order = if before { "DESC" } else { "ASC" };
-        let mut query=conn.prepare(&format!("SELECT i.update_id,g.id FROM incoming_updates i LEFT JOIN original_ingress_order g ON g.channel='telegram' AND g.event_id=CAST(i.update_id AS TEXT) WHERE json_extract(i.payload_json,'$.message.from.id')=?1 AND json_extract(i.payload_json,'$.message.from.is_bot')=0 AND json_extract(i.payload_json,'$.message.chat.id')=?2 AND COALESCE(json_extract(i.payload_json,'$.message.message_thread_id'),0)=?3 AND (json_type(i.payload_json,'$.message.text')='text' OR json_type(i.payload_json,'$.message.voice')='object') AND i.update_id{comparison}?4 ORDER BY i.update_id {order} LIMIT 9"))?;
+        let mut query=conn.prepare(&format!("SELECT i.update_id,g.id,g.captured_at FROM incoming_updates i LEFT JOIN original_ingress_order g ON g.channel='telegram' AND g.event_id=CAST(i.update_id AS TEXT) WHERE json_extract(i.payload_json,'$.message.from.id')=?1 AND json_extract(i.payload_json,'$.message.from.is_bot')=0 AND json_extract(i.payload_json,'$.message.chat.id')=?2 AND COALESCE(json_extract(i.payload_json,'$.message.message_thread_id'),0)=?3 AND (json_type(i.payload_json,'$.message.text')='text' OR json_type(i.payload_json,'$.message.voice')='object') AND i.update_id{comparison}?4 ORDER BY i.update_id {order} LIMIT 9"))?;
         let rows = query
             .query_map(
                 params![
@@ -809,14 +809,20 @@ impl Store {
                         cursor
                     }
                 ],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Option<i64>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut items = Vec::new();
-        for (update, capture) in rows.iter().take(8) {
+        for (update, capture, received_at) in rows.iter().take(8) {
             let id = format!("telegram:{update}");
             let original = trace_original_on(&conn, human, entry, &id)?;
-            items.push(json!({"id":id,"sequence":update,"capture_order":capture,"ordering_unknown":capture.is_none(),"origin_kind":"telegram","read_only":true,"preview":original["text"].as_str().unwrap_or_default().chars().take(1000).collect::<String>(),"voice":original["voice"],"phase":original["phase"],"retired":original["retired"]}));
+            items.push(json!({"id":id,"sequence":update,"received_at":received_at,"capture_order":capture,"ordering_unknown":capture.is_none(),"origin_kind":"telegram","read_only":true,"preview":original["text"].as_str().unwrap_or_default().chars().take(1000).collect::<String>(),"voice":original["voice"],"phase":original["phase"],"retired":original["retired"]}));
         }
         Ok(
             json!({"schema":"telecodex.telegram-input-list/v1","entry_binding":[human,entry,session,native],"binding":super::presentation::entry_binding(&conn,human,entry,session)?,"items":items,"cursor":rows.iter().take(8).next_back().map(|r|r.0),"newest":rows.iter().take(8).map(|r|r.0).max().unwrap_or(0),"more":rows.len()>8,"read_only":true}),
@@ -2097,6 +2103,22 @@ mod tests {
             )
             .unwrap();
         assert!(!store.admit_update(&update).unwrap());
+        let first_page = store
+            .conversation_telegram_page(100, entry, 0, true)
+            .unwrap();
+        let captured_at = first_page["items"][0]["received_at"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(chrono::DateTime::parse_from_rfc3339(&captured_at).is_ok());
+        assert_eq!(first_page["items"][0]["id"], "telegram:500");
+        assert_eq!(
+            store
+                .conversation_telegram_page(100, entry, 0, true)
+                .unwrap()["items"][0]["received_at"],
+            captured_at
+        );
+
         assert!(
             !store
                 .conversation_input_capture(100, entry, &binding, first, "Captured first")

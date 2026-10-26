@@ -124,14 +124,15 @@ window.Conversation = (() => {
       diagnostics.querySelector?.(".conversation-diagnostics-content")?.prepend($("#conversation-observation"));
       timeline.hidden=false;$("#conversation-replies").hidden=false;$("#conversation-sent").hidden=true;
       $("#conversation-inputs-older").textContent="Earlier messages";
-      historyTools.append($("#conversation-inputs-older"),$("#conversation-older"));
+      historyTools.append($("#conversation-inputs-older"),$("#conversation-older"),$("#conversation-telegram-older"));
       diagnostics.querySelector?.(".conversation-diagnostics-content")?.append(historyTools);
     }
     function atTimelineEnd() {return !!timeline && timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;}
     function placeInTimeline(box, key, timestamp, nearEnd=atTimelineEnd()) {
       if(!timeline)return;
       box.dataset.timelineKey=key;
-      box.dataset.timelineTime=String(Date.parse(timestamp)||Number(box.dataset.timelineTime)||Date.now());
+      const parsedTime=Date.parse(timestamp);
+      box.dataset.timelineTime=String(Number.isFinite(parsedTime)?parsedTime:Number(box.dataset.timelineTime)||Date.now());
       const following=[...timeline.children].find(item=>item!==box &&
         (Number(item.dataset.timelineTime)>Number(box.dataset.timelineTime) ||
         (item.dataset.timelineTime===box.dataset.timelineTime && item.dataset.timelineKey>key)));
@@ -221,7 +222,7 @@ window.Conversation = (() => {
     let replyFocus, focusVersion = 0, routingChoices = [], presentationProfile;
     let posting = false, inputCursor = 0, inputNewest = 0, inputBinding, inputGeneration = 0, inputObservation = 0, latestComposerId;
     let telegramCursor=0,telegramNewest=0,telegramLoaded=false,telegramReading=false;
-    const phaseText = value => value.origin_kind==="telegram" ? `Telegram input retained (${value.phase}). Inspect its routing path for delivery evidence.${value.ordering_unknown?" Historical capture order unavailable.":""}` : value.retired ? "Saved from an earlier conversation binding."
+    const phaseText = value => value.origin_kind==="telegram" ? `Telegram input retained (${value.phase}). Inspect its routing path for delivery evidence.${value.ordering_unknown?" Historical capture order unavailable.":""}${!value.received_at?" Historical capture time unavailable.":""}` : value.retired ? "Saved from an earlier conversation binding."
       : value.routing ? routeText(value.routing) : ({awaiting_target:"Choose the session for this saved message.",preparing:"Recording saved; preparing its automatic transcript.", preparation_unconfirmed:"Recording saved; transcription unconfirmed. No work was submitted automatically.", retained:"Saved; waiting to send.", queued:"Saved; waiting to send.",
           sending:"Sending to your conversation…", steering:"Sending to your conversation…",
           accepted:"Sent to your conversation. Work may continue.", matrix_requested:"Saved for the selected daimon; awaiting its authorized execution and reply.",
@@ -470,7 +471,7 @@ window.Conversation = (() => {
       const container = $("#conversation-inputs");
       const following = [...container.children].find(item => item !== card.box
         && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
-      if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at,followingLive);
+      if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at || (card.value.origin_kind==="telegram"?"1970-01-01T00:00:00Z":undefined),followingLive);
       else container.insertBefore(card.box, following || null);
       graph?.input(card.value);
       inputActivity();
@@ -505,13 +506,13 @@ window.Conversation = (() => {
       return result;
     }
     async function refreshTelegram() {
-      if(standalone || telegramReading || !enabled || !ready || !$("#conversation-sent").open)return;
+      if(telegramReading || !enabled || !ready || (!standalone && !$("#conversation-sent").open))return;
       const owned=inputGeneration;telegramReading=true;
       try {
         if(!telegramLoaded)await telegramPage();
         else {
           let more=true;
-          for(let n=0;n<4 && more;n++){const page=await telegramPage(telegramNewest,"after",false);more=!!page?.more;}
+          for(let n=0;n<4 && more;n++){const page=await telegramPage(telegramNewest,"after",false);more=!!page?.more;if(n===3 && more)refreshAgain=true;}
           if(owned===inputGeneration)await telegramPage(0,"before",false);
         }
         if(owned===inputGeneration)$("#conversation-telegram-state").textContent="Telegram and app/device inputs share the retained capture order. Historical inputs without that order are labelled separately.";
@@ -594,7 +595,8 @@ window.Conversation = (() => {
     }
     function followPlayback(force=false){
       if(!standalone || !follow?.checked || !voiceEnabled || voiceSuspended || document.hidden || !active || !force && active.offset!==0)return;
-      const card=cards.get(active.source.id);
+      const original=cards.get(active.source.id);
+      const card=timeline?.contains?.(original?.box)?original:[...progressCards.values()].find(value=>value.source===active.source.id);
       if(!card || !timeline?.contains?.(card.box) || !force && active.followed)return;
       const top=timeline.scrollTop+card.box.getBoundingClientRect().top-timeline.getBoundingClientRect().top;
       timeline.scrollTo({top:Math.max(0,top),behavior:window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches?"instant":"smooth"});
