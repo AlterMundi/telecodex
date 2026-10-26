@@ -54,6 +54,9 @@ window.Conversation = (() => {
       if(presence && identity)identity.append(presence);
       if(tools && beacon){tools.insertBefore(beacon,tools.firstChild);beacon.title="Session sound · Beacon";}
       $("#conversation-sound").append($("#conversation-sound-controls"),$("#conversation-sound-feedback"));
+      const compose = $("#conversation-compose"), playback = $("#conversation-audio-tools");
+      const dock = node("div"); dock.id = "conversation-dock";
+      compose.before(dock); dock.append(compose, playback);
     }
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
     if(standalone){
