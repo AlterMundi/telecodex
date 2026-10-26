@@ -361,3 +361,14 @@ and their existing trace/image routes, with the same receiving human and entry
 binding as the app inputs. A denied optional Telegram observation must not clear
 the conversation, draft or recording; it is not evidence that the whole browser
 session expired. Authentication expiry still follows the existing reconnect path.
+
+### Chat message time labels
+
+Human originals, integrating replies and visible session updates show a small
+bottom-right day and 24-hour time label, such as `mon 23:40`. Use retained receive
+or observation time in the device local timezone, matching the current English
+UI. The semantic time element retains the full ISO timestamp and a readable full
+local date tooltip. Missing or invalid timestamps stay hidden; refresh/status
+updates never fabricate a send time. Assessment of coherent application-wide
+internationalization is tracked separately in #295; this slice introduces no
+language selector or partial translated UI.

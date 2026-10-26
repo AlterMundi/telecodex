@@ -7,6 +7,16 @@ window.Conversation = (() => {
     if (cls) value.className = cls;
     return value;
   };
+  function messageTime(element, timestamp) {
+    const date = new Date(timestamp);
+    element.hidden = !timestamp || !Number.isFinite(date.getTime());
+    if(element.hidden)return;
+    const locale="en"; // Match the current English UI; full localization is tracked separately.
+    const weekday=new Intl.DateTimeFormat(locale,{weekday:"short"}).format(date).replace(/\.$/,"").toLocaleLowerCase(locale);
+    element.textContent=`${weekday} ${String(date.getHours()).padStart(2,"0")}:${String(date.getMinutes()).padStart(2,"0")}`;
+    element.dateTime=date.toISOString();
+    element.title=date.toLocaleString(locale,{dateStyle:"full",timeStyle:"long",hour12:false});
+  }
   function mount({api, headers, setCsrf, modeChanged, telegram, readOnly=false, standalone=false, onUnauthorized}) {
     let canFiles=false,filesConnected=true;
     const files=new Map(),fileDownloads=new Map(),fileStatus=new Map();let fileJobs=[];
@@ -153,12 +163,14 @@ window.Conversation = (() => {
       let card=previous;
       if(!card){
         const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),inspect=node("button","Inspect update");
-        inspect.type="button";box.append(title,body,inspect);card={box,title,body,inspect};progressCards.set(key,card);
+        const time=node("time",undefined,"message-time");
+        inspect.type="button";box.append(title,body,inspect,time);card={box,title,body,inspect,time};progressCards.set(key,card);
         inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
       }
       card.source=source.id;card.revision=source.revision;card.stamp=stamp;card.title.textContent=`Update from ${source.label}`;
       const original=cards.get(source.id);
       card.body.textContent=original?.expanded && original.source.revision===source.revision?original.body.textContent:source.preview;
+      messageTime(card.time,source.observed_at);
       placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
     }
 
@@ -392,8 +404,9 @@ window.Conversation = (() => {
         const trace=node("details",undefined,"routing-trace"),traceSummary=node("summary","Show routing path"),traceState=node("p","","note"),traceContent=node("div"),traceRefresh=node("button","Refresh route");
         traceRefresh.type="button";traceState.setAttribute("role","status");trace.append(traceSummary,traceState,traceContent,traceRefresh);
         if(timeline){box.classList.add?.("human-message");box.append(node("h3","You"));}
-        box.append(text,status,actions,routeBox,imageButton,imageView,trace);
-        card = {box, text, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote,trace,traceState,traceContent,traceRefresh,traceText:new Map()};
+        const time=node("time",undefined,"message-time");
+        box.append(text,status,actions,routeBox,imageButton,imageView,trace,time);
+        card = {box, text,time, imageButton,imageView,status, check, retry, value, observed,continueButton,routeBox,select,routeButton,routeNote,trace,traceState,traceContent,traceRefresh,traceText:new Map()};
         trace.addEventListener("toggle",()=>trace.open&&readTrace(card));
         traceRefresh.addEventListener("click",()=>readTrace(card));
         continueButton.addEventListener("click",()=>card.value.continuation&&selectFocus(card.value.continuation,`#${card.value.routing?.label||"session"}`));
@@ -464,6 +477,7 @@ window.Conversation = (() => {
       if (!card.value.phase && value.phase && draft.value === card.value.text) draft.value = "";
       // Preserve full original text after reading it, and an unknown POST's text.
       card.value = {...card.value, ...value};
+      messageTime(card.time,card.value.received_at);
       card.imageButton.hidden=!card.value.visual;
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
@@ -836,11 +850,12 @@ window.Conversation = (() => {
         const listen = node("button", "Listen"); listen.type = "button";
         const error = node("p", "", "reply-error"); error.setAttribute("role", "status");
         const reply=node("button","Reply to this session");reply.type="button";reply.hidden=readOnly || !["worker_result","matrix_result"].includes(source.kind);
-        actions.append(read, listen,reply); box.append(title, status, body, actions, error);
+        const time=node("time",undefined,"message-time");
+        actions.append(read, listen,reply); box.append(title, status, body, actions, error,time);
         box.dataset.sequence = String(source.sequence);
         const following = [...container.children].find((item) => Number(item.dataset.sequence) < source.sequence);
         if(!timeline || source.kind==="worker_progress")container.insertBefore(box, following || null);
-        card = {source, box, title, status, body, read, listen, error, offset:0, expanded:false};
+        card = {source, box, title, status, body, read, listen, error,time, offset:0, expanded:false};
         cards.set(source.id, card);
         reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
         read.addEventListener("click",()=>readCard(card));
@@ -860,6 +875,7 @@ window.Conversation = (() => {
       if(!card.expanded && Number.isSafeInteger(source.text_characters) && source.text_characters===Array.from(source.preview).length)card.read.hidden=true;
       for(const file of source.artifacts||[])files.set(file.id,file);
       renderFiles(card);
+      messageTime(card.time,source.observed_at);card.box.append(card.time);
       const integrator=source.kind.startsWith("integrator_");
       const progress=source.kind.endsWith("_progress");
       card.title.textContent = integrator ? "Conversation" : source.label;

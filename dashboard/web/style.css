@@ -430,6 +430,8 @@ main > #conversation { display:flex;flex:1;flex-direction:column;min-height:0; }
 .reply[data-pending="true"] { border-inline-start:3px solid var(--warn); }
 .reply-text { white-space:pre-wrap;font-size:16px;line-height:1.55; }
 .reply-actions { display:flex;gap:8px;flex-wrap:wrap;margin-top:12px; }
+.message-time { display:block; margin-top:6px; text-align:right; font-size:11px; line-height:1.4; opacity:.65; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.message-time[hidden] { display:none; }
 .reply-error { font-size:14px;color:var(--warn); }
 #conversation-player { flex-shrink:0;border-top:2px solid var(--accent);padding:10px 0 0; }
 #conversation-player strong { overflow-wrap:anywhere;min-width:0; }

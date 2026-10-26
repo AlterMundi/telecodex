@@ -26,7 +26,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
       addEventListener(name, fn) { this.handlers[name] = fn; },
-      append(...children) { this.children.push(...children); },
+      append(...children) { for(const child of children){const at=this.children.indexOf(child);if(at>=0)this.children.splice(at,1);this.children.push(child);} },
       replaceChildren(...children) { this.children = children; },
       insertBefore(child, before) {
         const previous = this.children.indexOf(child);
@@ -39,7 +39,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     };
   }
   const document = {
-    hidden: false, body: element(), addEventListener(name,fn) {subscribe(documentEvents,name,fn);}, createElement: element,
+    documentElement:{lang:options.language||"en"}, hidden: false, body: element(), addEventListener(name,fn) {subscribe(documentEvents,name,fn);}, createElement: element,
     querySelector(selector) {
       if (!nodes.has(selector)) nodes.set(selector, element());
       return nodes.get(selector);
@@ -226,6 +226,19 @@ function boot(readOnly=false,standalone=false,options={}) {
 }
 
 (async () => {
+  for(const [language,day] of [["en","mon"]]) {
+    const localized=boot(false,true,{language});
+    const stamp=new Date(2026,9,26,23,40).toISOString();
+    localized.overrideSource(8,{observed_at:stamp});
+    await localized.ui.refresh();
+    const message=localized.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');
+    const time=message.children.find(c=>c.className==='message-time');
+    assert.equal(time.textContent,`${day} 23:40`);
+    assert.equal(time.dateTime,stamp);
+    localized.overrideSource(8,{observed_at:'unavailable'});
+    await localized.ui.refresh();assert.equal(time.hidden,true,'Unknown dates do not invent timestamps');
+    localized.ui.stop();
+  }
   const automatic=boot(false,true,{autoText:true});
   const bodies=new Map([['native:8','A complete answer. '.repeat(200)],['native:7','A second topic. '.repeat(200)],['native:6','A third topic. '.repeat(200)]]);
   const holds=new Map();
