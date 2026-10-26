@@ -11,6 +11,8 @@ prefix = "/sessions"
 bot_id = 123456
 bot_username = "YourBot"
 label = "This receiving bot"
+# Presentation only; native identity and permissions remain in their existing bindings.
+daimon_name = "Your daimon"
 # Optional public pair appearance from the existing shared Homemaker consumer.
 # Resolves no viewer identity and grants no private preference/session access.
 # appearance_origin = "https://your-receiving-home"

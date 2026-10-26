@@ -1,6 +1,6 @@
 # Daimon Interaction v0.2 — coherent single-chat experience
 
-Status: the human finds the routed text/voice workflow usable and useful, with latency still needing improvement. The visual and Beacon-derived sonic experience is NOT accepted. Current delivery focus is the complete standalone UI and perceptible visual/sonic expression under #213 and #221, not further unrelated infrastructure. Parent: AlterMundi/daimon-matrix#313; milestone 8; Daimon Interaction Project 14.
+Status: the human accepted the current independent app and integrating channel as a solid, reasonably reliable and versatile functional base on 2026-10-26. The immutable tag is `interaction-functional-baseline-2026-10-26`. Preserve that working experience while completing the remaining milestone 8 / Project 14 / #208 requirements. Qwen is receiving-verified only for the integrating conversation under PR 288 / #285; worker/observer models and global defaults remain unchanged. The header identifies the selected daimon and authenticated human on two lines; remaining #213/#221 refinements stay in scope. General functional acceptance does not invent specific physical or aesthetic judgments. Parent: AlterMundi/daimon-matrix#313.
 
 ## Outcome and scope
 
@@ -31,8 +31,8 @@ The next delivery must be assessed as one experience:
   obvious text/voice interaction. Useful intermediate communication and live
   questions remain understandable and reachable.
 - Monitoring, raw worker output, test-session material, graph and operational
-  detail live below the conversation, collapsed by default. Inspection is readable
-  when expanded, without tiny nested scroll panes. Do not hide the only copy of a
+  detail live in the initially closed header inspector overlay. Inspection has
+  readable space and its own scrolling, without tiny nested scroll panes. Do not hide the only copy of a
   useful worker answer merely because it lacks an integrator paraphrase.
 - Simple presentation is the default; read-only exploration remains discoverable.
   Advanced presentation never grants otherwise unavailable permissions.
@@ -55,22 +55,7 @@ and separates authored response poses
 from background work indicators so concurrent work cannot suppress expression.
 Beacon activation/status stays visible in the main app, including errors,
 suspension, quiet arbitration and mute. Browser-generated signal and muted zero
-output are measured separately from physical listening. These are implementation
-increments. Source Beacon revision 4 implements the confirmed additive 40.4 Hz
-series using only gently pulsing sine waves. It replaces the rejected 65 Hz
-revision-2 composition. See sonic-expression.md and #221 for the current receiving
-selection and qualification; digital measurements remain separate from human acceptance.
-Offline browser measurements verify its spectrum, bounded transitions and exact
-mute/voice-priority silence. These measurements do not establish recognition or
-comfort on a phone; the complete human experience remains unaccepted.
-
-The human did not perceive avatar changes or hear state sound during use. Existing
-renderers, mappings and technical fixtures do not resolve those observations.
-#213 owns the complete UI/expression delivery; #221 owns diagnosing silent output
-and delivering the audible composition. Both stay open. Qualify actual served
-assets and real entry, long conversation, phone/keyboard layout, questions,
-playback, diagnostics, motion settings and produced audio. Human aesthetic/hearing
-acceptance remains separate from automated evidence.
+output are measured separately from physical listening. Source Beacon revision 6 is the current accepted click-free phone baseline: additive 40.4 Hz sine components, independent proportional LFOs and continuous carriers with smooth transitions. Reply playback/preparation ducks to 18%; recording may fade to silence. The compact controls and functional application have human acceptance. The shipped Source portrait has 12 authored colored frames and state-driven speaking/ambient motion, with separate per-being packs and reduced motion. Preserve these deliveries. Remaining specific sonic, aesthetic, background-phone and real-session qualification stays explicit in #213/#221 and the current qualification protocol; automation alone does not establish human perception.
 
 ## Existing basis and corrections
 
@@ -82,7 +67,7 @@ Detailed basis: docs/interaction-qualification.md and docs/integrator-controls.m
 
 ## Delivery slices and dependencies
 
-1. **Conversation surface and ASCII companion.** Build on the existing standalone conversation client. This receiving Interaction app currently selects authored appearance; automatic Homemaker inheritance is disabled for it while Sessions retains its configured consumer. Future opt-in inheritance remains supported by configuration. Default to a readable text/voice stream and one obvious voice action. Collapse diagnostics/graph/history below it; native questions and confirmed control proposals remain in the main interaction. Keep graph history and read-only detail accessible, including original inputs and exact routes. Add an operator-selected simple/advanced presentation using existing actor/grant checks; hiding controls is not permission. This is child-friendly visual design, not a claim of new child accounts or tested child usability.
+1. **Conversation surface and ASCII companion.** Build on the existing standalone conversation client. This receiving Interaction app currently selects authored appearance; automatic Homemaker inheritance is disabled for it while Sessions retains its configured consumer. Future opt-in inheritance remains supported by configuration. Default to a readable text/voice stream and one obvious voice action. Keep diagnostics/graph/history in the initially closed header inspector; native questions and confirmed control proposals remain in the main interaction. Keep graph history and read-only detail accessible, including original inputs and exact routes. Add an operator-selected simple/advanced presentation using existing actor/grant checks; hiding controls is not permission. This is child-friendly visual design, not a claim of new child accounts or tested child usability.
 
    Adapt original glyph motifs/rendering from Ani and Oliva's MIT ASCII-Interfaces, as already integrated in Nexus, preserving attribution and license when copying code/art. Inspect actual sources and prototype first; do not import private research cases/media or a full map engine when a compact companion suffices. Use a stable lightweight glyph portrait with a restrained procedural setting, keeping chat/composer visible with the keyboard open. Honor existing style roles, light/dark choices and local fallback. Critical information remains readable HTML with accessible labels, never ASCII alone.
 

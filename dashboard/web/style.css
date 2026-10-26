@@ -557,7 +557,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-companion pre[data-fallback="true"] { white-space:normal; overflow-wrap:anywhere; max-width:100%; }
 #conversation-companion > div { min-width:0; flex:1 1 140px; }
 .companion-name { display:block; color:var(--muted); font-size:11px; letter-spacing:.18em; font-weight:600; }
-.companion-name > span { color:var(--accent); padding-inline:4px; }
+.companion-name > span { color:var(--accent); }
 .companion-caption { font-size:20px; font-weight:500; line-height:1.25; margin:8px 0; }
 .companion-phases { display:flex; flex-wrap:wrap; gap:6px; }
 .companion-phases > span { display:inline-flex; align-items:center; gap:5px; font-size:14px; color:var(--muted); }
@@ -746,7 +746,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation header #conversation-companion { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:10px; width:100%; min-width:0; padding:0; border:0; border-radius:0; background:none; }
 .standalone-conversation header #conversation-companion pre { font-size:7px; line-height:1.05; white-space:pre; }
 .standalone-conversation header #conversation-companion > div { min-width:0; }
-.standalone-conversation header .companion-name { font-size:10px; letter-spacing:.08em; }
+.standalone-conversation header .companion-name { font-size:14px; line-height:20px; letter-spacing:0; }
 .standalone-conversation header .companion-caption { font-size:14px; line-height:1.2; margin:4px 0; }
 .standalone-conversation header .companion-phases { gap:3px 8px; max-height:32px; overflow:auto; }
 .standalone-conversation header .companion-phases > span { font-size:12px; }
@@ -819,7 +819,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-presence { flex-shrink:0; height:24px; min-height:24px; overflow:hidden; }
 .standalone-conversation #conversation-presence > .companion-caption { margin:0; font-size:16px; line-height:24px; white-space:nowrap; width:max-content; max-width:none; }
 .standalone-conversation header .header-tools { flex-wrap:wrap; justify-content:flex-end; max-width:150px; }
-.standalone-conversation #conversation-account { flex-basis:100%; text-align:right; color:var(--muted); font-size:11px; line-height:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.standalone-conversation #conversation-account { display:block; text-align:left; color:var(--muted); font-size:14px; line-height:20px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 #conversation-compose #conversation-voice-discard { position:relative; display:grid; place-items:center; font-size:0; border-radius:14px; border-width:1px; background:color-mix(in srgb,#bd4949 12%,var(--panel)); color:#ffb5b5; }
 #conversation-compose #conversation-voice-discard::before,#conversation-compose #conversation-voice-discard::after { content:""; position:absolute; left:50%; top:50%; width:16px; height:2px; border-radius:2px; background:currentColor; transform:translate(-50%,-50%) rotate(45deg); }
@@ -883,3 +883,14 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation header .header-tools { gap:4px; }
 .standalone-conversation header .apps-return { display:grid; place-items:center; width:44px; height:44px; padding:4px; font-size:0; }
 .standalone-conversation header .apps-return::before { content:"▦"; font-size:22px; }
+
+@media(max-width:480px) {
+ .standalone-conversation header { gap:6px; padding-block:0; }
+ .standalone-conversation header #conversation-companion { gap:6px; }
+ .standalone-conversation header #conversation-companion pre { font-size:6px; }
+ .standalone-conversation header .header-tools { display:grid; grid-template-columns:44px 44px; width:88px; max-width:88px; gap:0; padding-top:0; }
+}
+
+@media(max-width:380px) {
+ .standalone-conversation header #conversation-companion pre { font-size:5px; }
+}

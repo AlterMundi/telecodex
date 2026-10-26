@@ -83,6 +83,9 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         parsed = urlparse(candidate)
         if parsed.scheme != 'https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
             raise ValueError('Exact HTTPS launcher origin required')
+    daimon_name = config.get('daimon_name', 'Daimon')
+    if not isinstance(daimon_name, str) or not 1 <= len(daimon_name) <= 80 or any(ord(c) < 32 for c in daimon_name):
+        raise ValueError('daimon_name must be a display name of 1 to 80 characters')
     conversation_appearance = config.get('conversation_appearance', 'inherit')
     if conversation_appearance not in ('inherit', 'authored'):
         raise ValueError('conversation_appearance must be inherit or authored')
@@ -261,6 +264,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             computer_health.assert_binding()
             return HTMLResponse(computer_health.shell)
         body = (public / 'index.html').read_text()
+        body = body.replace('id="conversation-daimon">Daimon</span>', 'id="conversation-daimon">' + html.escape(daimon_name) + '</span>')
         shared_entry = home_auth.enabled and (request.query_params.get('view') == 'conversation'
             or request.headers.get('x-forwarded-prefix') == home_auth.entry.rstrip('/'))
         if shared_entry and (request.headers.get('host') != home_auth.host
