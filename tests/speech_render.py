@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Actual HTTP/filesystem/process contracts; all voices and credentials are fake."""
 import concurrent.futures
+import base64
 import hashlib
 import http.server
 import importlib.util
@@ -40,6 +41,7 @@ class Render(unittest.TestCase):
         self.declared_size = None
         self.data = wav()
         self.hold = False
+        self.stream_hold = False
         self.synced = []
         self.synced_on_request = []
         self.entered, self.release = threading.Event(), threading.Event()
@@ -60,7 +62,13 @@ class Render(unittest.TestCase):
                     self.send_header('Location', '/must-not-follow')
                 self.end_headers()
                 try:
-                    self.wfile.write(owner.data)
+                    if owner.stream_hold:
+                        boundary=owner.data.index(b'\n\n')+2
+                        self.wfile.write(owner.data[:boundary]);self.wfile.flush()
+                        owner.release.wait(timeout=5)
+                        self.wfile.write(owner.data[boundary:])
+                    else:
+                        self.wfile.write(owner.data)
                 except (ConnectionError, OSError):
                     pass
 
@@ -375,6 +383,51 @@ class Render(unittest.TestCase):
             self.render()
         self.assertEqual(len(self.calls), 1)
         self.assertFalse(list((self.root / 'cache').rglob('audio.wav')))
+
+    def stream_data(self, *, terminal=True):
+        raw=b'ID3synthetic encoded audio'
+        frames=[{'output':{'audio':{'data':base64.b64encode(raw).decode()}}}]
+        if terminal:frames.append({'output':{'finish_reason':'stop'}})
+        return b''.join(b'data: '+json.dumps(v).encode()+b'\n\n' for v in frames)
+
+    def test_stream_intent_cache_integrity_and_retention(self):
+        self.qwen_route();self.content_type='text/event-stream';self.data=self.stream_data();frames=[]
+        speech.stream_render(self.binding,self.request,frames.append)
+        self.assertEqual([v['type'] for v in frames],['audio','end'])
+        self.assertEqual(frames[0]['sequence'],0)
+        self.assertEqual(len(self.calls),1)
+        audio=next((self.root/'cache').glob('*/audio.mp3'))
+        self.assertEqual(speech.audio_occupancy(audio.parent.parent),audio.stat().st_size)
+        again=[];speech.stream_render(self.binding,self.request,again.append)
+        self.assertEqual(again,frames);self.assertEqual(len(self.calls),1)
+        result=speech.prune_audio(speech.route(self.binding),now=time.time()+4000)
+        self.assertGreater(result['removed_audio_bytes'],0);self.assertFalse(audio.exists())
+        speech.stream_render(self.binding,self.request,lambda frame:None)
+        self.assertEqual(len(self.calls),2,'Known expired media may be explicitly synthesized again')
+        audio.write_bytes(b'changed')
+        with self.assertRaisesRegex(speech.RenderError,'integrity'):
+            speech.stream_render(self.binding,self.request,lambda frame:None)
+        self.assertEqual(len(self.calls),2)
+
+    def test_stream_uncertainty_and_disconnected_reader_never_retry(self):
+        self.qwen_route();self.content_type='text/event-stream';self.data=self.stream_data(terminal=False)
+        with self.assertRaisesRegex(speech.RenderError,'unconfirmed'):
+            speech.stream_render(self.binding,self.request,lambda frame:None)
+        with self.assertRaisesRegex(speech.RenderError,'no-automatic-retry'):
+            speech.stream_render(self.binding,self.request,lambda frame:None)
+        self.assertEqual(len(self.calls),1)
+        self.data=self.stream_data()
+        def disconnected(frame):raise BrokenPipeError()
+        with self.assertRaisesRegex(speech.RenderError,'unconfirmed'):
+            speech.stream_render(self.binding,{**self.request,'scope':'another-explicit-source'},disconnected)
+        self.assertEqual(len(self.calls),2)
+
+    def test_stream_parser_multiline_bounds_and_terminal(self):
+        raw=self.stream_data().replace(b'data: {"output":',b'data: {\ndata: "output":')
+        self.assertEqual(list(speech.sse_audio(io.BytesIO(raw))),[b'ID3synthetic encoded audio'])
+        for data in (b'data: '+b'x'*(1024*1024+1),self.stream_data(terminal=False),b'data: {"output":{"audio":{"data":"!!"}}}\n\n'):
+            with self.assertRaises((ValueError,speech.RenderError)):
+                list(speech.sse_audio(io.BytesIO(data)))
 
 
 if __name__ == '__main__':

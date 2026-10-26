@@ -902,3 +902,41 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(viewer.originals.size,1);
   console.log("Conversation UI: paced/cancelable speech, question priority/expiry, TTS recovery, reconnect silence, history/routing, stale evidence, original-input recovery and native requests passed (zero model calls).");
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Progressive media transport: prove first append precedes completion, and that
+// corruption/Stop cannot append later bytes. No browser/audio device is opened.
+(async()=>{
+  const crypto=require('node:crypto').webcrypto;
+  const until=async fn=>{for(let n=0;n<200;n++){if(fn())return;await new Promise(r=>setTimeout(r,5));}throw Error('Stream fixture state not ready');};
+  const hash=async raw=>Buffer.from(await crypto.subtle.digest('SHA-256',raw)).toString('hex');
+  async function setup(){
+    let latest,revoked=0;
+    class Events{constructor(){this.events=new Map();}addEventListener(name,fn){this.events.set(name,fn);}fire(name){this.events.get(name)?.();}}
+    class Media extends Events{
+      static isTypeSupported(value){return value==='audio/mpeg';}
+      constructor(){super();this.readyState='closed';this.appended=[];latest=this;}
+      addSourceBuffer(){const buffer=new Events();buffer.updating=false;buffer.appendBuffer=raw=>{buffer.updating=true;this.appended.push(raw);queueMicrotask(()=>{buffer.updating=false;buffer.fire('updateend');});};buffer.abort=()=>{};return buffer;}
+      endOfStream(){this.readyState='ended';}
+      open(){this.readyState='open';this.fire('sourceopen');}
+    }
+    const window={MediaSource:Media},context={window,URL:{createObjectURL:()=> 'blob:synthetic-stream',revokeObjectURL(){revoked++;}},crypto,Uint8Array,TextDecoder,setTimeout,clearTimeout,atob,Error,Promise};
+    vm.runInNewContext(fs.readFileSync('dashboard/web/speech-stream.js','utf8'),context);
+    let controller;const response=new Response(new ReadableStream({start(value){controller=value;}}));
+    const abort=new AbortController(),stream=window.SpeechStream.open(response,abort.signal);latest.open();
+    const send=value=>controller.enqueue(new TextEncoder().encode(JSON.stringify(value)+'\n'));
+    return {stream,media:latest,send,abort,close:()=>controller.close(),revoked:()=>revoked};
+  }
+  const raw=new TextEncoder().encode('synthetic encoded audio');
+  const audio={type:'audio',sequence:0,data:Buffer.from(raw).toString('base64'),sha256:await hash(raw)};
+  const end={type:'end',audio_bytes:raw.length,audio_sha256:await hash(raw)};
+  const first=await setup();first.send(audio);await until(()=>first.media.appended.length===1);
+  assert.equal(first.media.readyState,'open','First audio appended before terminal result');
+  first.send(end);first.close();assert.equal((await first.stream.done).complete,true);await until(()=>first.media.readyState==='ended');
+  const bad=await setup();bad.send({...audio,sha256:'0'.repeat(64)});const failure=await bad.stream.done;
+  assert.equal(failure.complete,false);assert.equal(bad.media.appended.length,0,'Corrupt audio is never appended');
+  const stopped=await setup();stopped.send(audio);stopped.abort.abort();await stopped.stream.done;
+  assert.equal(stopped.media.appended.length,0,'Stop owns late hash/decode completion');assert.equal(stopped.revoked(),1);
+  const broken=await setup();broken.send(audio);broken.close();assert.equal((await broken.stream.done).complete,false,'EOF without terminal result stays incomplete');
+  first.stream.cancel();assert.equal(first.revoked(),1);
+  console.log('Progressive speech transport: first append, exact framing/integrity, terminal completion, cancellation and incomplete EOF passed.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

@@ -84,3 +84,6 @@ Development = "/your-development-mount"
 # binding = "/private/existing-speech-route.json"
 # timeout_seconds = 60
 # incremental_segments = false
+# Optional Qwen SSE/MP3 output through the existing media element; default off.
+# Unsupported MediaSource clients and native questions retain the WAV reader.
+# streaming_output = false

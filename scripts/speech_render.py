@@ -8,6 +8,7 @@ The HTTP timeout bounds socket operations. The caller must also enforce an
 overall process-group deadline and bounded stdout, including on cancellation.
 """
 import argparse
+import base64
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -182,7 +183,8 @@ def _prune_audio(config, *, exclude=None, now=None):
                 if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
                     continue
                 state = json.loads(private_bytes(job / 'state.json', 32768))
-                audio = (job / 'audio.wav').lstat()
+                audio_path = cached_audio(job, state)
+                audio = audio_path.lstat()
                 used = state.get('last_used_at', state.get('created_at'))
                 if (state.get('schema') != 'telecodex.speech-render/v1'
                         or state.get('identity_sha256') != job.name
@@ -204,7 +206,7 @@ def _prune_audio(config, *, exclude=None, now=None):
                     latest = state.get('last_used_at', state.get('created_at'))
                     if latest != used or state.get('phase') not in ('rendered', 'audio_expired'):
                         continue
-                    audio = job / 'audio.wav'
+                    audio = cached_audio(job, state)
                     data = private_bytes(audio, MAX_AUDIO)
                     if sha(data) != state['audio_sha256']:
                         continue  # Changed/uncertain media is never disposable cache.
@@ -220,12 +222,23 @@ def _prune_audio(config, *, exclude=None, now=None):
             'receipts_preserved': True, 'provider_calls': 0}
 
 
+def cached_audio(job, state):
+    name = state.get('audio_filename', 'audio.wav')
+    if name not in ('audio.wav', 'audio.mp3'):
+        raise RenderError('invalid-cached-audio-name')
+    return job / name
+
+
 def audio_occupancy(root):
     used = 0
     for job in root.iterdir():
         if not re.fullmatch(r'[a-f0-9]{64}', job.name) or job.is_symlink() or not job.is_dir():
             continue
-        audio = job / 'audio.wav'
+        try:
+            prior = json.loads(private_bytes(job / 'state.json', 32768))
+        except FileNotFoundError:
+            prior = {}
+        audio = cached_audio(job, prior)
         if audio.exists() or audio.is_symlink():
             info = audio.lstat()
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -412,6 +425,110 @@ def render(binding, request):
         return result(state, audio_file, False)
 
 
+
+def sse_audio(response):
+    """Bounded ordered provider SSE; URL fields and provider errors never escape."""
+    event = []; event_size = total = audio_size = 0; finished = False
+    for raw in iter(lambda: response.readline(1024 * 1024 + 1), b''):
+        total += len(raw)
+        if len(raw) > 1024 * 1024 or total > 16 * 1024 * 1024:
+            raise RenderError('streamed-speech-bound')
+        line = raw.decode('utf-8').rstrip('\r\n')
+        if line.startswith('data:'):
+            event.append(line[5:].lstrip()); event_size += len(raw)
+            if event_size > 1024 * 1024:
+                raise RenderError('streamed-speech-event-bound')
+        elif not line and event:
+            value = json.loads('\n'.join(event)); event = []; event_size = 0
+            output = value.get('output', {})
+            encoded = output.get('audio', {}).get('data')
+            if encoded:
+                data = base64.b64decode(encoded, validate=True); audio_size += len(data)
+                if audio_size > MAX_AUDIO:
+                    raise RenderError('streamed-speech-audio-bound')
+                # Keep downstream frames small, with no dependence on provider framing.
+                for offset in range(0, len(data), 32768):
+                    yield data[offset:offset+32768]
+            if output.get('finish_reason') == 'stop':
+                finished = True; break
+    if not finished or not audio_size:
+        raise RenderError('streamed-speech-incomplete')
+
+
+def stream_render(binding, request, emit):
+    """One durable SSE attempt, cache reuse and bounded encoded output; no playback."""
+    if (not isinstance(request, dict) or set(request) != {'scope', 'text'}
+            or not isinstance(request['scope'], str) or not 1 <= len(request['scope']) <= 128
+            or not isinstance(request['text'], str) or not request['text'].strip()
+            or len(request['text']) > 1800 or '\0' in request['text']):
+        raise RenderError('invalid-speech-request')
+    config = route(binding)
+    if config['provider'] != 'qwen-tts':
+        raise RenderError('streaming-provider-unavailable')
+    fields = {'model': config['model'], 'input': {
+        'text': request['text'], 'voice': config['voice'], 'format': 'mp3', 'sample_rate': 24000,
+        'language_hints': [config['language'].split('-')[0]], 'rate': config.get('rate', 1.0),
+        'pitch': config.get('pitch', 1.0), 'instruction': config.get('instruction', '')}}
+    ident = sha(canonical({'mode':'sse-mp3-v1', 'scope':request['scope'],
+        'endpoint':config['endpoint'], 'fields':fields}))
+    job = directory(directory(config['cache_root']) / ident)
+    state_file = job / 'state.json'; audio_file = job / 'audio.mp3'
+    sequence = 0; accumulated = bytearray()
+    def send(data):
+        nonlocal sequence
+        accumulated.extend(data)
+        if len(accumulated) > MAX_AUDIO:
+            raise RenderError('streamed-speech-audio-bound')
+        emit({'type':'audio', 'sequence':sequence, 'data':base64.b64encode(data).decode(), 'sha256':sha(data)})
+        sequence += 1
+    with lock(job / '.lock'):
+        previous = json.loads(private_bytes(state_file,32768)) if state_file.exists() or state_file.is_symlink() else None
+        if previous and previous.get('phase')=='audio_expired':
+            if (previous.get('schema')!='telecodex.speech-render/v1' or previous.get('identity_sha256')!=ident
+                    or previous.get('audio_filename')!='audio.mp3' or audio_file.exists() or audio_file.is_symlink()):
+                raise RenderError('expired-stream-integrity-failed')
+        if previous and previous.get('phase')!='audio_expired':
+            state = previous
+            if (state.get('schema') != 'telecodex.speech-render/v1'
+                    or state.get('identity_sha256') != ident or state.get('phase') != 'rendered'
+                    or state.get('audio_filename') != 'audio.mp3'):
+                raise RenderError('retained-stream-outcome-no-automatic-retry')
+            data = private_bytes(audio_file, MAX_AUDIO)
+            if not data or sha(data) != state.get('audio_sha256'):
+                raise RenderError('retained-stream-integrity-failed')
+            state['last_used_at'] = time.time(); atomic(state_file, canonical(state))
+            for offset in range(0,len(data),32768):send(data[offset:offset+32768])
+        else:
+            if audio_file.exists() or audio_file.is_symlink():
+                raise RenderError('orphan-stream-no-automatic-retry')
+            token = private_bytes(config['credential_file'],16384).decode().strip()
+            if not token or any(c.isspace() for c in token):
+                raise RenderError('synthesis-credential-unavailable')
+            state = {'schema':'telecodex.speech-render/v1', 'identity_sha256':ident,
+                'phase':'intent', 'provider':config['provider'], 'voice':config['voice'],
+                'language':config['language'], 'text_sha256':sha(request['text'].encode()),
+                'audio_filename':'audio.mp3', 'created_at':time.time(), 'last_used_at':time.time()}
+            prune_audio(config, exclude=ident); reserve_audio(config,state_file,state)
+            from urllib.request import HTTPRedirectHandler, build_opener
+            class NoRedirect(HTTPRedirectHandler):
+                def redirect_request(self,*args):return None
+            http = Request(config['endpoint'],data=canonical(fields),headers={
+                'Authorization':'Bearer '+token, 'Content-Type':'application/json', 'X-DashScope-SSE':'enable'})
+            try:
+                with build_opener(NoRedirect).open(http,timeout=config['timeout_seconds']) as response:
+                    if response.headers.get_content_type() != 'text/event-stream':
+                        raise RenderError('unexpected-stream-content-type')
+                    for data in sse_audio(response):send(data)
+                atomic(audio_file, bytes(accumulated))
+                state.update(phase='rendered',audio_bytes=len(accumulated),audio_sha256=sha(accumulated),
+                             format={'encoding':'mp3','sample_rate_hz':24000,'channels':1})
+                atomic(state_file,canonical(state))
+            except Exception:
+                state['phase']='unconfirmed';atomic(state_file,canonical(state))
+                raise RenderError('streamed-speech-unconfirmed-no-automatic-retry') from None
+        emit({'type':'end', 'audio_bytes':len(accumulated), 'audio_sha256':sha(accumulated)})
+
+
 def fetch(request, timeout, *, json_response=False):
     from urllib.request import HTTPRedirectHandler, build_opener
 
@@ -444,6 +561,7 @@ def result(state, audio_file, cached):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binding', type=Path, required=True)
+    parser.add_argument('--stream', action='store_true', help='Emit bounded encoded audio frames from one durable SSE attempt')
     parser.add_argument('--prune', action='store_true', help='Expire completed cached audio without provider calls')
     args = parser.parse_args()
     os.umask(0o077)
@@ -454,6 +572,9 @@ def main():
         raw = sys.stdin.buffer.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise RenderError('speech-request-bound')
+        if args.stream:
+            stream_render(args.binding,json.loads(raw),lambda value: print(json.dumps(value,separators=(',',':')),flush=True))
+            return 0
         value = render(args.binding, json.loads(raw))
         print(json.dumps(value))
         return 0

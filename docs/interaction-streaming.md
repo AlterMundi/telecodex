@@ -191,3 +191,39 @@ output, one owned provider attempt, cancellation without native-job cancellation
 played/remaining position, explicit Voice controls and existing batch fallback.
 Do not repeat synthesis to repair an uncertain observation, send credentials to
 the browser, or count this transport probe as delivered continuous voice.
+
+
+### Progressive encoded output
+
+The additional optional `[speech] streaming_output = true` setting advertises
+source-bound progressive output. A compatible client requests `stream: true`
+on the existing authenticated audio endpoint. Qwen uses its existing private
+route/voice with SSE enabled and mono24kHz MP3; ordinary clients and native
+questions keep the existing WAV path. No credential or provider URL reaches
+the browser. The option defaults off until receiving qualification/adoption.
+
+A durable request intent precedes the single provider call. Ordered bounded
+frames carry sequence and per-chunk digest, followed by a confirmed whole-audio
+byte count/digest. Incomplete or disconnected attempts remain uncertain, never
+automatically replayed. Completed MP3 media shares the existing private quota,
+retention and hash-checked cache; expired known media may be explicitly prepared
+again. The server revalidates the current actor, source/revision and receiving
+binding before each outgoing frame. Closing the HTTP reader releases only its
+owned renderer process, without touching native work.
+
+MediaSource appends verified MP3 chunks to the existing HTML audio element.
+This keeps Pause/Play/Stop, one-ahead preparation, source validation before
+unmuting, Media Session and current Beacon integration on the same player.
+Unsupported clients choose batch output before requesting synthesis; a failed
+stream never silently triggers another provider call. Follow holds at the
+segment start while duration is unknown, then uses actual finite media duration;
+no total duration or word timestamps are guessed.
+
+Qualification includes actual loopback HTTP delivery of the first frame while
+the provider's terminal response is deliberately held, cache/revocation/source
+replacement tests, client corruption/cancellation/EOF tests and real Chromium
+muted decoding before stream completion. One distinct actual Qwen MP3 request
+returned first bytes at1.57s and completed at3.73s. Those server observations and
+muted browser decoding are not phone sound latency, background execution or
+human hearing acceptance. Full foreground separation, heard/remaining attention
+and streaming input quality remain unfinished under milestone9.

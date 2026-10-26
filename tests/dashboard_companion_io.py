@@ -456,6 +456,70 @@ class Companion(unittest.TestCase):
         self.assertFalse(self.record.exists())
 
 
+    def test_source_bound_streamed_audio_and_cache(self):
+        self.speech.qwen_route();self.speech.content_type='text/event-stream';self.speech.data=self.speech.stream_data()
+        self.config['speech']['streaming_output']=True
+        self.client.close();self.client=self.client_for()
+        result=self.client.post('/api/interaction/audio',json={**self.body,'stream':True},headers=self.headers)
+        self.assertEqual(result.status_code,200,result.text)
+        frames=[json.loads(line) for line in result.text.splitlines()]
+        self.assertEqual([f['type'] for f in frames],['audio','end'])
+        self.assertEqual(result.headers['x-audio-encoding'],'mp3')
+        self.assertEqual(result.headers['x-presentation-source'],self.body['source'])
+        self.assertEqual(result.headers['x-presentation-offset'],'0')
+        self.assertNotIn('synthetic-qwen-key',result.text)
+        again=self.client.post('/api/interaction/audio',json={**self.body,'stream':True},headers=self.headers)
+        self.assertEqual(again.text,result.text);self.assertEqual(len(self.speech.calls),1)
+        denied=self.client.post('/api/interaction/audio',json={**self.body,'stream':True},headers={**self.headers,'x-dashboard-csrf':'wrong'})
+        self.assertEqual(denied.status_code,403);self.assertEqual(len(self.speech.calls),1)
+
+    def test_actual_http_stream_delivers_before_provider_completion(self):
+        import socket
+        import uvicorn
+        self.speech.qwen_route();self.speech.content_type='text/event-stream';self.speech.data=self.speech.stream_data();self.speech.stream_hold=True
+        self.config['speech']['streaming_output']=True
+        app=create_app(self.config,self.provider,lambda raw,bot:int(raw))
+        sock=socket.socket();sock.bind(('127.0.0.1',0));sock.listen(128)
+        server=uvicorn.Server(uvicorn.Config(app,log_level='critical',lifespan='off'))
+        thread=threading.Thread(target=server.run,kwargs={'sockets':[sock]},daemon=True);thread.start()
+        try:
+            for _ in range(100):
+                if server.started:break
+                time.sleep(.01)
+            self.assertTrue(server.started)
+            with httpx.Client() as client,client.stream('POST',f'http://127.0.0.1:{sock.getsockname()[1]}/api/interaction/audio',
+                    json={**self.body,'stream':True},headers=self.headers,timeout=5) as response:
+                self.assertEqual(response.status_code,200)
+                lines=response.iter_lines();first=json.loads(next(lines));self.assertEqual(first['type'],'audio')
+                self.assertFalse(self.speech.release.is_set(),'First frame arrived while provider completion was held')
+                self.speech.release.set();last=json.loads(next(lines));self.assertEqual(last['type'],'end')
+            self.assertEqual(len(self.speech.calls),1)
+        finally:
+            self.speech.release.set();server.should_exit=True;thread.join(timeout=5);sock.close()
+            self.assertFalse(thread.is_alive())
+
+    def test_stream_revocation_or_source_change_stops_late_frames(self):
+        self.config['speech']['streaming_output']=True
+        self.client.close();self.client=self.client_for()
+        original_grant=read_json(self.record)
+        for failure in ('revoked','source_changed'):
+            calls=[]
+            async def changed(_speech,_source):
+                yield {'type':'audio','sequence':0,'data':'eA==','sha256':hashlib.sha256(b'x').hexdigest()}
+                if failure=='revoked':
+                    self.grants.revoke(self.receipt['grant_id'])
+                else:
+                    self.provider.source['revision']='e'*64
+                calls.append('late');yield {'type':'audio','sequence':1,'data':'eQ==','sha256':hashlib.sha256(b'y').hexdigest()}
+            with patch('dashboard.speech.Speech.stream',changed):
+                result=self.client.post('/api/interaction/audio',json={**self.body,'stream':True},headers=self.headers)
+            frames=[json.loads(line) for line in result.text.splitlines()]
+            self.assertEqual([f['type'] for f in frames],['audio','error'])
+            if failure=='revoked':
+                write_json(self.record,original_grant)
+            self.assertEqual(len(self.speech.calls),0)
+
+
 class CaptureRetention(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

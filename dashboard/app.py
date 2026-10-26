@@ -1,5 +1,5 @@
 """Private Telegram Mini App shell and explicit receiving-owner controls."""
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import aclosing, asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import html
@@ -283,7 +283,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 body = body.replace('    <script src="assets/app.js" defer></script>',
                     '    <script src="/access-client.js" defer></script>\n    <script src="assets/app.js" defer></script>')
             body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
-        for name in ('app.js', 'live.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css'):
+        for name in ('app.js', 'live.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         standalone_entry = (request.query_params.get('view') == 'conversation'
@@ -352,7 +352,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             computer_health.assert_binding()
             data, media = computer_health.assets[name]
             return Response(data, media_type=media)
-        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'voice-stream.js', 'voice-pcm.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'voice-stream.js', 'voice-pcm.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'conversation.js', 'style.css', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -437,6 +437,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         return {**result, 'csrf':session['csrf'],
                 'presentation_profile':dict(session).get('presentation_profile', companions.default_profile),
                 'can_listen':speech is not None,
+                'can_stream_speech':bool(speech and speech.streaming),
                 'can_download_files':can_files,'artifacts':files,
                 'can_speak':bool(getattr(provider, 'receiver', {}).get('voice')),
                 'can_stream_transcribe':can_stream_transcribe and bool(getattr(provider,'receiver',{}).get('voice')) and dict(session).get('scope') != 'monitor_readonly'}
@@ -820,7 +821,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(503, 'Speech output is not configured')
         try:
             body = await request.json()
-            if not isinstance(body, dict) or set(body) != {'source', 'revision', 'offset'}:
+            if (not isinstance(body, dict) or set(body) not in ({'source','revision','offset'},{'source','revision','offset','stream'})
+                    or type(body.get('stream',False)) is not bool):
                 raise ValueError()
             from starlette.concurrency import run_in_threadpool
             canonical = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
@@ -828,6 +830,28 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         except (ProviderUnavailable, OSError, ValueError, KeyError):
             raise HTTPException(409, 'Selected result changed or is unavailable; refresh the conversation') from None
         await authorize_async(request)
+        if body.get('stream'):
+            if not speech.streaming or selected.get('kind')=='native_question':
+                raise HTTPException(409,'Streaming speech unavailable; use the ordinary reader')
+            async def audio_frames():
+                try:
+                    async with aclosing(speech.stream(selected)) as frames:
+                        async for frame in frames:
+                            await authorize_async(request)
+                            latest=await run_in_threadpool(provider.presentation_part,body['source'],body['revision'],body['offset'])
+                            if latest!=canonical:
+                                raise SpeechUnavailable('Presentation source changed')
+                            yield json.dumps(frame,separators=(',',':'))+'\n'
+                except (SpeechUnavailable,RenderError,ProviderUnavailable,OSError,ValueError,KeyError,TimeoutError,HTTPException):
+                    yield json.dumps({'type':'error','message':'Speech stopped. Text remains available; no automatic retry.'})+'\n'
+            return StreamingResponse(audio_frames(),media_type='application/x-ndjson',headers={
+                'Cache-Control':'no-store','X-Accel-Buffering':'no',
+                'X-Presentation-Source':body['source'],'X-Presentation-Revision':body['revision'],
+                'X-Presentation-Offset':str(body['offset']),
+                'X-Presentation-Next-Offset':str(selected['next_offset']) if selected['next_offset'] is not None else '',
+                'X-Presentation-End-Offset':str(body['offset']+len(selected['text'])),
+                'X-Presentation-Text-Sha256':hashlib.sha256(selected['text'].encode()).hexdigest(),
+                'X-Presentation-Prefetch':'true','X-Audio-Encoding':'mp3','X-Playback-Observation':'not_observed'})
         try:
             data, rendered = await speech.render(selected)
             # Retained text, bindings and correction state are rechecked after synthesis.
