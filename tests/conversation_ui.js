@@ -413,6 +413,28 @@ function boot(readOnly=false,standalone=false,options={}) {
   await listenButton(spokenCard(7)).handlers.click();followSwitch.handlers.change();
   assert.equal(scrolls.length,2,'Turning Voice off also prevents subsequent Follow movement');followed.ui.stop();
 
+  const updatesFollow=boot(false,true);updatesFollow.audio();
+  updatesFollow.overrideSource(8,{kind:'worker_progress',target:{chat_id:100,thread_id:77},label:'Alpha'});
+  await updatesFollow.ui.refresh();updatesFollow.nodes.get('#conversation-voice-replies').handlers.click();
+  const updateLane=updatesFollow.nodes.get('#conversation-timeline');let updateScrolls=0;
+  updateLane.contains=card=>updateLane.children.includes(card);updateLane.getBoundingClientRect=()=>({top:100});updateLane.scrollTop=0;
+  updateLane.scrollTo=()=>{updateScrolls++;};
+  const updateCard=updateLane.children.find(card=>card.children[0]?.textContent==='Update from Alpha');assert(updateCard);
+  updateCard.getBoundingClientRect=()=>({top:350});
+  const hiddenUpdate=updatesFollow.nodes.get('#conversation-results').children.find(card=>card.dataset.sourceId==='native:8');
+  await hiddenUpdate.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen').handlers.click();
+  assert.equal(updateScrolls,1,'Follow targets the visible Update from card for the exact spoken source');updatesFollow.ui.stop();
+
+  const telegramChat=boot(false,true);
+  telegramChat.telegramOriginals.set('telegram:42',{id:'telegram:42',preview:'A human Telegram message',phase:'completed',sequence:42,capture_order:500,received_at:'2024-01-01T00:00:05.500Z',origin_kind:'telegram',read_only:true});
+  await telegramChat.ui.refresh();
+  const telegramLane=telegramChat.nodes.get('#conversation-timeline'),telegramBubble=telegramLane.children.find(card=>card.dataset.timelineKey==='input:telegram:42');
+  assert(telegramBubble,'Standalone chat includes Telegram input without opening diagnostics');
+  assert.equal(telegramBubble.children[0].textContent,'You');
+  assert.equal(telegramBubble.dataset.timelineTime,String(Date.parse('2024-01-01T00:00:05.500Z')));
+  const telegramCount=telegramLane.children.length;await telegramChat.ui.refresh();assert.equal(telegramLane.children.length,telegramCount,'Refresh does not duplicate Telegram originals');
+  assert(telegramChat.requests.filter(r=>r.telegram).every(r=>r.body===undefined),'Cross-surface observation never resubmits an original');telegramChat.ui.stop();
+
   const noPlayer=boot(false,false,{clock:true});noPlayer.audio();await noPlayer.ui.refresh();
   noPlayer.nodes.get('#conversation-voice-replies').handlers.click();noPlayer.failAudio();noPlayer.addReplies(2);await noPlayer.ui.refresh();
   await until(()=>noPlayer.clock.pending().includes(450));

@@ -345,3 +345,10 @@ only while Voice on is enabled and not paused, and only within the conversation
 scroll area to the beginning of the verified spoken answer. Turning off Voice on
 or Follow preserves the reading position. Continuous within-answer tracking is a
 later increment; this control does not claim word-level synchronization.
+
+Telegram entry originals appear as human bubbles in the independent chat through
+the existing read-only ingress endpoint, without dispatch or replay. New Telegram
+capture timestamps are retained atomically in the shared ingress-order ledger.
+Older missing timestamps stay explicitly unknown instead of being backfilled
+with refresh time. Follow resolves the visible Update from card for the exact
+spoken progress source; it never scrolls to its hidden diagnostic duplicate.

@@ -297,8 +297,8 @@ impl Store {
             params![update.update_id, payload, self.instance_id, now_string()],
         )?;
         tx.execute(
-            "INSERT INTO original_ingress_order(channel,event_id) VALUES('telegram',?1)",
-            [update.update_id.to_string()],
+            "INSERT INTO original_ingress_order(channel,event_id,captured_at) VALUES('telegram',?1,?2)",
+            params![update.update_id.to_string(), now_string()],
         )?;
         // Capture ownership epoch with journal admission, before attachment/network work.
         tx.execute("INSERT INTO bot_state(key,value) SELECT ?,COALESCE(b.value,'initial') FROM (SELECT COALESCE((SELECT creator_user_id FROM sessions WHERE chat_id=COALESCE(json_extract(?,'$.message.chat.id'),json_extract(?,'$.callback_query.message.chat.id')) AND thread_id=COALESCE(json_extract(?,'$.message.message_thread_id'),json_extract(?,'$.callback_query.message.message_thread_id'),0)),COALESCE(json_extract(?,'$.message.from.id'),json_extract(?,'$.callback_query.from.id'))) AS human) s LEFT JOIN bot_state b ON b.key='stop_admission_epoch:'||s.human",params![format!("stop_input_epoch:{}",update.update_id),payload,payload,payload,payload,payload,payload])?;
@@ -1378,6 +1378,7 @@ impl Store {
             ",
         )?;
         add_column_if_missing(&conn, "turns", "native_thread_id", "TEXT")?;
+        add_column_if_missing(&conn, "original_ingress_order", "captured_at", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "session_title", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "reasoning_effort", "TEXT")?;
         add_column_if_missing(&conn, "sessions", "service_tier", "TEXT")?;
