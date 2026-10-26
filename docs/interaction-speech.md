@@ -13,6 +13,12 @@ state, then derive an opaque receiving scope. Reuse that scope on reconnect.
 The scope separates caches; knowing it grants no authority. Rendering a result
 must never rerun worker work or delay the canonical text response.
 
+Native providers may omit the optional agent-message phase. The current owned
+integrating entry still presents those retained completed items through the same
+canonical read/part API; a missing phase must not hide text that Telegram already
+received. This compatibility does not enroll another work topic, invent request
+coverage, or regenerate a response. Explicit commentary keeps its progress kind.
+
 ## Owner-local configuration
 
 Create a private route JSON file, mode `0600`, using absolute local paths:

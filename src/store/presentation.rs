@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 // Worker progress is visible only through the return selection retained when
 // this native item was first observed. Later direct input never widens its scope.
 const NATIVE_VISIBILITY: &str = "t.from_user_id=?3 AND s.creator_user_id=?3 AND
-    ((t.session_id=?2 AND m.native_thread=?4 AND m.phase IN ('commentary','final_answer'))
+    ((t.session_id=?2 AND m.native_thread=?4 AND (m.phase IN ('commentary','final_answer') OR m.phase IS NULL))
       OR (EXISTS(SELECT 1 FROM conversation_inputs c
           WHERE c.id=m.presentation_input AND c.human_id=?3 AND c.session_id=?2)
           AND (m.phase='commentary' OR (m.phase='final_answer' AND EXISTS(
@@ -415,7 +415,8 @@ pub(super) fn source_on(
              JOIN sessions s ON s.id=t.session_id WHERE m.rowid=?1 AND {NATIVE_VISIBILITY}"),
              params![row,entry_session,human,entry_native],|r| {
                 let is_entry:bool=r.get(5)?;
-                let phase:String=r.get(3)?;
+                let phase:Option<String>=r.get(3)?;
+                let phase=phase.as_deref().unwrap_or("final_answer");
                 Ok(json!({"id":id,"kind":if !is_entry {if phase=="commentary" {"worker_progress"} else {"worker_result"}} else if phase=="commentary" {"integrator_progress"} else {"integrator_answer"},
                     "text":r.get::<_,String>(0)?,"native_turn":r.get::<_,String>(1)?,"native_item":r.get::<_,String>(2)?,"observed_at":r.get::<_,String>(4)?,
                     "target":if is_entry {Value::Null} else {json!(SessionKey::new(r.get(6)?,Some(r.get(7)?)))},
@@ -1012,7 +1013,7 @@ mod tests {
                 "entry-native",
                 "entry-turn",
                 "answer",
-                Some("final_answer"),
+                None,
                 original,
             )
             .unwrap();
