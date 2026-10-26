@@ -2111,7 +2111,7 @@ impl App {
         message: &Message,
         title: Option<String>,
     ) -> Result<()> {
-        if message.chat.is_forum.unwrap_or(false) && message.message_thread_id.is_none() {
+        if message.chat.is_forum.unwrap_or(false) && message.message_thread_id.unwrap_or(0) == 0 {
             self.send_status(
                 message.chat.id,
                 message.message_thread_id,
@@ -2121,17 +2121,25 @@ impl App {
             return Ok(());
         }
 
+        let title = match title.as_deref().map(rename::validate_title).transpose() {
+            Ok(title) => title,
+            Err(error) => {
+                return self
+                    .send_status(
+                        message.chat.id,
+                        message.message_thread_id,
+                        &error.to_string(),
+                    )
+                    .await;
+            }
+        };
         let session_key = SessionKey::new(message.chat.id, message.message_thread_id);
         let session = self.ensure_session(session_key, user.tg_user_id)?;
         self.shared.store.clear_session_conversation(session_key)?;
-        if let Some(title) = title
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            self.shared
-                .store
-                .set_explicit_session_title(session_key, title)?;
+        if let Some(title) = title {
+            // Reuse /rename for both surfaces after clearing only this binding.
+            // An unbound native session receives its saved title at first start.
+            return self.rename_session(user, message, title, true).await;
         }
         self.send_status(
             message.chat.id,

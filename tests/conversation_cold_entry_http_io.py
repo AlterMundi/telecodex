@@ -85,7 +85,10 @@ class Browser:
 def first_text(binary):
     j=ColdEntry(binary);b=None
     try:
-        j.prepare();b=Browser(j);binding=b.binding
+        j.prepare()
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("INSERT INTO bot_state(key,value) VALUES('session_title_owner:100:1','Cold conversation')")
+        b=Browser(j);binding=b.binding
         initial=j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=1');assert initial==[(None,)]
         assert b.get('/api/interaction')['binding']==binding and not j.packets
         original,_=b.text('#Alpha Start requirement13 without waking the front conversation.')
@@ -104,6 +107,8 @@ def first_text(binary):
         correction,_=b.text('A later written correction must reach this first turn.')
         j.new_native_release.set()
         j.wait(lambda:b.status(front)['phase']=='accepted' and b.status(correction)['phase']=='accepted')
+        native=j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=1')[0][0]
+        j.wait(lambda:any(r.get('method')=='thread/name/set' and r.get('params')=={'threadId':native,'name':'Cold conversation'} for r in j.rpc))
         assert len(j.packets)==1 and 'later written correction' in str(j.packets[0])
         assert b.get('/api/interaction')['binding']==binding
         assert b.status(clip)['phase']=='preparing' and not b.status(clip)['retired']

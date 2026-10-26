@@ -777,11 +777,11 @@ pub(super) async fn process_turn(
                                 if let Some(id)=admission.as_deref() {shared.store.tribu_native_thread(session_key,id,&thread_id)?;}
                                 shared.store.record_turn_native_thread(turn_id, &thread_id)?;
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_select_native_return(id,requester_user_id,&thread_id)?;}
-                                if preserve_thread_binding && attach_native.is_none() && conversation_input.is_none() {
-                                    if !voice_bound && !initial_bound {
+                                if preserve_thread_binding && attach_native.is_none() {
+                                    if conversation_input.is_none() && !voice_bound && !initial_bound {
                                         shared.store.set_session_codex_thread(session_key, &thread_id)?;
                                     }
-                                    if !routed && super::rename::sync_native_title(&shared, session_key).await.is_err() {
+                                    if super::rename::sync_native_title(&shared, session_key).await.is_err() {
                                         let _ = send_markdown_message(
                                             &super::presentation::turn_telegram(&shared, Some(turn_id)),
                                             session_key.chat_id,
