@@ -493,3 +493,19 @@ No S case passes merely because a sound name, score, mock event, planned rendere
 or favorable code review exists. Unimplemented synthesis and subjective claims
 remain explicitly unproven. Default silence and read-only visual inspection stay
 available. Existing Q/V requirements and direct-topic independence still apply.
+
+## Continuous-voice extension — milestone9
+
+The maintained [full roadmap and v0.3 execution plan](interaction-roadmap.md)
+extends this protocol; existing evidence remains valid for unchanged behavior.
+Qualification must cover partial captions during capture, one committed original
+on Send, discard without dispatch, revision/correction order, reconnect without
+uncertain replay, useful incremental output, speech interruption independent of
+job cancellation, and coherent concurrent question/progress/final returns.
+Measure first partial, ASR finalization, final intended speech to first intelligible
+sound, segment gaps and interruption-to-silence separately. Exercise Spanish with
+English names/commands, long pauses and self-corrections. Keep deterministic
+transport/state fixtures separate from actual provider and physical-phone hearing
+evidence. Reuse the accepted base and do not recreate its obsolete generic
+human-testing request.
+
