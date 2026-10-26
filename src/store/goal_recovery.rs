@@ -19,12 +19,13 @@ impl Store {
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS goal_failure_observations(
                 session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                human_id INTEGER NOT NULL,
                 native_thread TEXT NOT NULL,
                 native_turn TEXT NOT NULL,
                 blocked_goal TEXT,
                 terminal_error TEXT,
                 observed_at TEXT NOT NULL,
-                PRIMARY KEY(session_id,native_thread,native_turn));",
+                PRIMARY KEY(human_id,session_id,native_thread,native_turn));",
             )?;
         Ok(())
     }
@@ -84,8 +85,8 @@ impl Store {
         let retained: Option<(Option<String>, Option<String>)> = tx
             .query_row(
                 "SELECT blocked_goal,terminal_error FROM goal_failure_observations
-             WHERE session_id=?1 AND native_thread=?2 AND native_turn=?3",
-                params![session, native, turn],
+             WHERE session_id=?1 AND native_thread=?2 AND native_turn=?3 AND human_id=?4",
+                params![session, native, turn, human],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
@@ -101,12 +102,12 @@ impl Store {
         }
         tx.execute(
             "INSERT INTO goal_failure_observations
-             (session_id,native_thread,native_turn,blocked_goal,terminal_error,observed_at)
-             VALUES(?1,?2,?3,?4,?5,?6)
-             ON CONFLICT(session_id,native_thread,native_turn) DO UPDATE SET
+             (session_id,native_thread,native_turn,blocked_goal,terminal_error,observed_at,human_id)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT(human_id,session_id,native_thread,native_turn) DO UPDATE SET
              blocked_goal=COALESCE(goal_failure_observations.blocked_goal,excluded.blocked_goal),
              terminal_error=COALESCE(goal_failure_observations.terminal_error,excluded.terminal_error)",
-            params![session,native,turn,goal,error,now_string()],
+            params![session,native,turn,goal,error,now_string(),human],
         )?;
         tx.commit()?;
         Ok(())
@@ -114,16 +115,24 @@ impl Store {
 
     /// Same current owner/binding as other presentation reads. No native RPC,
     /// inference, Telegram operation, scheduling or lifecycle control occurs.
-    pub fn goal_recovery_evidence(&self, human: i64, key: SessionKey) -> Result<Value> {
+    pub fn goal_recovery_evidence(
+        &self,
+        human: i64,
+        key: SessionKey,
+        expected_native: Option<&str>,
+    ) -> Result<Value> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let (session, native) = super::presentation::entry_on(&conn, human, key)?;
+        if expected_native.is_some_and(|expected| expected != native) {
+            bail!("Native failure-evidence binding changed during inspection");
+        }
         let mut query = conn.prepare(
             "SELECT native_turn,blocked_goal,terminal_error,observed_at
-             FROM goal_failure_observations WHERE session_id=?1 AND native_thread=?2
+             FROM goal_failure_observations WHERE session_id=?1 AND native_thread=?2 AND human_id=?3
              ORDER BY rowid DESC LIMIT 17",
         )?;
         let rows = query
-            .query_map(params![session, native], |row| {
+            .query_map(params![session, native, human], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
@@ -162,7 +171,7 @@ impl Store {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(
-            json!({"schema":"telecodex.goal-failure-evidence/v1","items":items,
+            json!({"schema":"telecodex.goal-failure-evidence/v1","target":key,"native_thread":native,"items":items,
             "more":rows.len()>16,"read_only":true,"execution_enabled":false,
             "meaning":"Historical native evidence, not current goal state or permission to resume. Matching turn identities qualify the cause only; delegation, fresh revision, budgets, later intent, fences and admission remain required."}),
         )
@@ -237,7 +246,7 @@ mod tests {
         store
             .goal_recovery_block_observed(key, 100, "native", "failed-b", &goal())
             .unwrap();
-        let first = store.goal_recovery_evidence(100, key).unwrap();
+        let first = store.goal_recovery_evidence(100, key, None).unwrap();
         assert!(
             first["items"]
                 .as_array()
@@ -253,7 +262,7 @@ mod tests {
                 .goal_recovery_failure_observed(key, 100, "native", "failed-b", &error)
                 .unwrap();
         }
-        let joined = store.goal_recovery_evidence(100, key).unwrap();
+        let joined = store.goal_recovery_evidence(100, key, None).unwrap();
         assert_eq!(joined["items"].as_array().unwrap().len(), 2);
         assert!(
             joined["items"]
@@ -265,7 +274,10 @@ mod tests {
         assert_eq!(joined["items"][0]["goal_at_failure"]["tokensUsed"], 42);
         drop(store);
         let store = Store::open(file.path(), &[100], &defaults()).unwrap();
-        assert_eq!(store.goal_recovery_evidence(100, key).unwrap(), joined);
+        assert_eq!(
+            store.goal_recovery_evidence(100, key, None).unwrap(),
+            joined
+        );
     }
     #[test]
     fn wrong_owner_rebinding_and_conflicting_evidence_never_authorize() {
@@ -295,6 +307,15 @@ mod tests {
         store.set_session_codex_thread(key, "new-native").unwrap();
         assert!(
             store
+                .goal_recovery_evidence(100, key, Some("native"))
+                .is_err()
+        );
+        assert_eq!(
+            store.goal_recovery_evidence(100, key, None).unwrap()["native_thread"],
+            "new-native"
+        );
+        assert!(
+            store
                 .goal_recovery_failure_observed(
                     key,
                     100,
@@ -305,9 +326,49 @@ mod tests {
                 .is_err()
         );
         assert_eq!(
-            store.goal_recovery_evidence(100, key).unwrap()["items"],
+            store.goal_recovery_evidence(100, key, None).unwrap()["items"],
             json!([])
         );
+    }
+
+    #[test]
+    fn ownership_change_does_not_transfer_or_join_former_humans_evidence() {
+        let file = NamedTempFile::new().unwrap();
+        let store = Store::open(file.path(), &[100, 200], &defaults()).unwrap();
+        let key = owned(&store);
+        store
+            .goal_recovery_block_observed(key, 100, "native", "failed", &goal())
+            .unwrap();
+        assert!(store.goal_recovery_evidence(200, key, None).is_err());
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET creator_user_id=200 WHERE chat_id=?1 AND thread_id=?2",
+                params![key.chat_id, key.thread_id],
+            )
+            .unwrap();
+        assert!(store.goal_recovery_evidence(100, key, None).is_err());
+        assert_eq!(
+            store.goal_recovery_evidence(200, key, None).unwrap()["items"],
+            json!([])
+        );
+        store
+            .goal_recovery_failure_observed(
+                key,
+                200,
+                "native",
+                "failed",
+                &json!({"codexErrorInfo":"serverOverloaded"}),
+            )
+            .unwrap();
+        let new_owner = store
+            .goal_recovery_evidence(200, key, Some("native"))
+            .unwrap();
+        assert_eq!(new_owner["items"][0]["goal_at_failure"], Value::Null);
+        assert_eq!(new_owner["items"][0]["linked_capacity_failure"], false);
+        assert!(!new_owner.to_string().contains("Preserve this task"));
     }
 
     #[test]
@@ -327,7 +388,7 @@ mod tests {
                 .goal_recovery_failure_observed(key, 100, "native", &turn, &error)
                 .unwrap();
         }
-        let projection = store.goal_recovery_evidence(100, key).unwrap();
+        let projection = store.goal_recovery_evidence(100, key, None).unwrap();
         assert_eq!(projection["items"].as_array().unwrap().len(), 16);
         assert_eq!(projection["more"], true);
         assert_eq!(

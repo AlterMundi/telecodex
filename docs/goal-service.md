@@ -9,10 +9,12 @@ not a Telegram command handler, UI-owned timer or second native goal engine.
 The first implementation slice retains native failure evidence in the existing
 backend SQLite store. `thread/goal/updated` supplies the blocked goal and its
 actual causal `turnId`; a terminal `turn/completed` failure supplies its structured
-`error.codexErrorInfo`. Receipt order may vary. Only the same current owned
+`error.codexErrorInfo`. Receipt order may vary. Only the same observing human, current owned
 session, native thread and physical turn join. Duplicate observations retain the
 same record; conflicting evidence is rejected. Rebinding hides old evidence from
-the current receiver, preserving it as history. No goal or native history is
+the current receiver, preserving it as history. A new session owner never
+inherits or joins the previous human's goal/error evidence. Reads include their
+actual native binding; goal inspection requires its already-observed binding. No goal or native history is
 rewritten. Existing read-only collection can recover the terminal-error half.
 
 `serverOverloaded` is the initial classified capacity cause. Matching words in a
