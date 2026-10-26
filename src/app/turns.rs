@@ -781,7 +781,7 @@ pub(super) async fn process_turn(
                                     if !voice_bound && !initial_bound {
                                         shared.store.set_session_codex_thread(session_key, &thread_id)?;
                                     }
-                                    if !routed && super::rename::sync_native_title(&shared, session_key).await.is_err() {
+                                    if super::rename::sync_native_title(&shared, session_key).await.is_err() {
                                         let _ = send_markdown_message(
                                             &super::presentation::turn_telegram(&shared, Some(turn_id)),
                                             session_key.chat_id,

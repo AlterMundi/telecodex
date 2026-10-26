@@ -605,6 +605,46 @@ fn independent_topics_preserve_native_bindings_across_restart_without_history_im
 }
 
 #[tokio::test]
+async fn named_new_reuses_topic_rename_and_preserves_old_native_history() {
+    let reply = serde_json::json!({"ok":true,"result":{"message_id":20,"chat":{"id":100,"type":"private"}}});
+    let (api, server) = crate::telegram::tests::serve_api(vec![
+        (200, serde_json::json!({"ok":true,"result":true})),
+        (200, reply),
+    ]);
+    let (mut app, _db) = sample_app();
+    Arc::get_mut(&mut app.shared).unwrap().telegram = TelegramClient::new("synthetic".into(), api);
+    let key = SessionKey::new(100, Some(12));
+    app.ensure_session(key, 100).unwrap();
+    app.shared
+        .store
+        .set_session_codex_thread(key, "retained-old-native")
+        .unwrap();
+    app.shared
+        .store
+        .set_explicit_session_title(key, "Old title")
+        .unwrap();
+    let user = app.shared.store.get_user(100).unwrap().unwrap();
+    let message:Message=serde_json::from_value(serde_json::json!({"message_id":3,"message_thread_id":12,"chat":{"id":100,"type":"private"},"text":"/new Chosen title"})).unwrap();
+    app.handle_new_session(&user, &message, Some("Chosen title".into()))
+        .await
+        .unwrap();
+    let after = app.shared.store.get_session(key).unwrap().unwrap();
+    assert!(after.codex_thread_id.is_none() && after.force_fresh_thread);
+    assert_eq!(
+        app.shared
+            .store
+            .explicit_session_title(key)
+            .unwrap()
+            .as_deref(),
+        Some("Chosen title")
+    );
+    let calls = server.join().unwrap();
+    assert!(calls[0].0.contains("editForumTopic"));
+    assert_eq!(calls[0].1["name"], "Chosen title");
+    assert!(calls[1].0.contains("sendMessage"));
+}
+
+#[tokio::test]
 async fn private_topic_creation_uses_real_api_and_starts_an_isolated_session() {
     let message: Message = serde_json::from_value(serde_json::json!({
         "message_id": 3, "message_thread_id": 12,

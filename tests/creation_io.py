@@ -120,6 +120,7 @@ def created_destination(binary,name="Gamma"):
         j.wait(lambda:len(j.instructions(77))==2 and j.instructions(77)[1][1]=='accepted')
         assert j.row('SELECT session_title FROM sessions WHERE thread_id=77')==[(name,)]
         native=j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=77')[0][0]
+        j.wait(lambda:any(r.get('method')=='thread/name/set' and r.get('params')=={'threadId':native,'name':name} for r in j.rpc))
         rows=j.instructions(77)
         requests=sorted({r for _,_,doc in rows for r in json.loads(doc)['requests']})
         claim={'requests':requests,'covered':[r[0] for r in rows],'completed':requests}
@@ -127,10 +128,15 @@ def created_destination(binary,name="Gamma"):
         j.broadcast(native,'turn/completed',{'turn':{'id':j.runs[native],'status':'completed'}})
         j.wait(lambda:j.has('Gamma incorporated 17.',1))
         j.idle()
+        j.command('/new','Fresh Codex session armed',topic=77)
+        assert j.row("SELECT value FROM bot_state WHERE key='session_title_owner:100:77'")==[(name,)]
+        assert j.row('SELECT codex_thread_id,force_fresh_thread FROM sessions WHERE thread_id=77')==[(None,1)]
         j.stop();j.start()
         j.admit('#t77 Continue the retained created task.',topic=1)
         j.wait(lambda:len(j.instructions(77))==3 and j.instructions(77)[2][1]=='accepted')
         assert j.topic_calls==1 and j.row('SELECT count(*) FROM interaction_creations')==[(1,)]
+        fresh=j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=77')[0][0]
+        j.wait(lambda:any(r.get('method')=='thread/name/set' and r.get('params')=={'threadId':fresh,'name':name} for r in j.rpc))
         assert j.row('SELECT count(*) FROM interaction_enrollments')==[(1,)]
         print('PASS one durable creation, original input preservation, repeat refusal, status inspection, observer enrollment, live explicit correction, correlated result and restart routing without another topic RPC')
     finally:j.close()
