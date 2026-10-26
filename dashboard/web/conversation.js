@@ -436,6 +436,7 @@ window.Conversation = (() => {
         if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
         card.status.textContent = phaseText(card.value);
         microphone?.observe(card.value,phaseText(card.value));
+      taskControls?.observeInput?.(card.value);
         renderRetry(card);
         if (card.value.id === latestComposerId) inputNotice(card.value);
         renderRoute(card);graph?.input(card.value);inputActivity();return card;

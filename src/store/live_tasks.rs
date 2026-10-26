@@ -66,7 +66,7 @@ fn owner_task_view(
         "kind":"task","state":item.state,"target":key,"title":item.title,
         "preview":item.action.chars().take(240).collect::<String>(),
         "body":if full {json!(item.action)}else{Value::Null},"links":item.source["links"],
-        "withdrawal":item.source["agentWithdrawal"],"can_withdraw":false,"read_only":true})
+        "withdrawal":item.source["agentWithdrawal"],"dismissal":item.source["humanDismissal"],"can_dismiss":item.state=="pending","can_withdraw":false,"read_only":true})
 }
 fn actor_identity(actor: &LiveTaskActor<'_>, selected_revision: &str) -> Value {
     json!({"session":actor.key,"native_thread":actor.native,"task_revision":selected_revision,"physical_turn":actor.physical})
@@ -195,6 +195,76 @@ impl Store {
         )?);
         Ok(result)
     }
+    /// Explicit human dismissal reuses the task ledger; never native approval or work cancellation.
+    pub fn conversation_dismiss_human_task(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        selected_revision: &str,
+    ) -> Result<Value> {
+        if selected_revision.len() != 64
+            || !selected_revision.bytes().all(|c| c.is_ascii_hexdigit())
+        {
+            bail!("Exact selected task revision required");
+        }
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (session, native) = super::presentation::entry_on(&tx, human, entry)?;
+        if super::presentation::entry_binding(&tx, human, entry, session)? != binding {
+            bail!("Conversation changed; select its current task");
+        }
+        let (raw, state, chat, topic): (String, String, i64, i64) = tx
+            .query_row(
+                &scoped_query("h.id=?1"),
+                params![id, human, entry.chat_id, entry.thread_id, true, session],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(3)?, row.get(4)?)),
+            )
+            .context("Task is outside this current owned conversation")?;
+        let mut item: HumanInteraction = serde_json::from_str(&raw)?;
+        item.state = state;
+        let key = SessionKey::new(chat, Some(topic));
+        let previous = &item.source["humanDismissal"];
+        let repeated = item.state == "cancelled"
+            && previous["revision"] == selected_revision
+            && previous["binding"] == binding;
+        if !repeated {
+            if item.state != "pending"
+                || owner_task_view(entry, &native, key, &item, false)["revision"]
+                    != selected_revision
+            {
+                bail!("Task changed, is closed or has an uncertain human receipt");
+            }
+            let disposition = json!({"revision":selected_revision,"binding":binding,
+                "at":now_string(),"human_completion":false,"work_cancelled":false});
+            tx.execute(
+                "UPDATE human_interactions SET state='cancelled',updated_at=?2,
+                payload_json=json_set(payload_json,'$.source.humanDismissal',json(?3))
+                WHERE id=?1 AND state='pending'",
+                params![id, now_string(), disposition.to_string()],
+            )?;
+            tx.execute(
+                "INSERT INTO audit_log(actor_user_id,action,details_json,created_at)
+                VALUES(?1,'human_task_dismissed',?2,?3)",
+                params![
+                    human,
+                    json!({"id":id,"entry":entry,"target":key,"revision":selected_revision,
+                    "human_completion":false,"work_cancelled":false})
+                    .to_string(),
+                    now_string()
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(
+            json!({"schema":"telecodex.conversation-task-dismissal/v1","id":id,
+            "revision":selected_revision,"binding":binding,"entry_binding":[human,entry,session,native],
+            "target":key,"state":"cancelled","dismissed":true,"new_dismissal":!repeated,
+            "human_completion":false,"work_cancelled":false}),
+        )
+    }
+
     pub fn live_human_tasks(
         &self,
         actor: &LiveTaskActor<'_>,

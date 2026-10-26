@@ -204,5 +204,24 @@ function boot(count=1, mayDecide=true) {
     hold=deferred();const h=hold,pending=f.button(card,'Read action').handlers.click();await h.entered;ui.reset();h.release();await pending;
     assert.equal(f.nodes.get('#conversation-task-cards').children.length,0,'A late task read must not revive a reset scope');
   }
+  {
+    const f=boot(),posts=[];let task={id:'c'.repeat(32),binding:'bound',revision:'r1',state:'pending',can_dismiss:true,label:'#Worker',title:'Observe result',preview:'Observation',body:'Read this action',next_offset:null};
+    let lose=false;
+    const ui=f.tasks({api:async(route,body)=>{
+      if(route.startsWith('interaction/tasks?'))return {binding:'bound',items:task.state==='pending'?[clone(task)]:[],cursor:1,more:false};
+      if(body){posts.push(clone(body));assert.equal(body.action,'dismiss');assert.equal(body.revision,task.revision);task={...task,state:'cancelled',can_dismiss:false,dismissal:{revision:body.revision}};if(lose)throw TypeError('Lost acknowledgment');return {id:task.id,binding:'bound',revision:body.revision,dismissed:true};}
+      return {...clone(task),offset:0,next_offset:null};
+    }});
+    await ui.refresh();let card=f.nodes.get('#conversation-task-cards').children[0];
+    assert(!f.button(card,'Dismiss').hidden,'An open human task can be explicitly dismissed');
+    await f.button(card,'Read action').handlers.click();assert(f.button(card,'Collapse action'));
+    ui.observeInput({binding:'bound',id:'human-original',phase:'accepted',reply:{source:'task:'+task.id,revision:'r1',context_only:true}});
+    assert(f.all(card,n=>n.textContent.includes('Your reply reached the conversation')).length);
+    assert.equal(task.state,'pending','Reply feedback is not task completion');
+    task={...task,revision:'r2'};await ui.refresh();assert(f.all(card,n=>n.textContent==='An action for you.').length,'Earlier feedback cannot satisfy a changed action');
+    await f.button(card,'Dismiss').handlers.click();assert.equal(posts.length,1);assert.equal(f.nodes.get('#conversation-task-cards').children.length,0);
+    task={...task,id:'d'.repeat(32),revision:'r3',state:'pending',can_dismiss:true};lose=true;await ui.refresh();card=f.nodes.get('#conversation-task-cards').children[0];
+    await f.button(card,'Dismiss').handlers.click();assert.equal(posts.length,2,'A lost dismissal acknowledgment only reads back; it never repeats the write');assert.equal(f.nodes.get('#conversation-task-cards').children.length,0);
+  }
   console.log('Request UI: full-source gating, source-fenced choices, receipt-only recovery, exact retry, saved drafts, pagination/closure and async scope reset passed; zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

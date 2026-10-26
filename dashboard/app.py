@@ -721,6 +721,22 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         await authorize_async(request)
         return result
 
+    @app.post('/api/interaction/tasks/{ident}')
+    async def conversation_task_dismiss(request: Request, ident: str):
+        session = await authorize_async(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf',''),session['csrf']):
+            raise HTTPException(403,'Action token missing')
+        try:
+            body = await request.json()
+            from starlette.concurrency import run_in_threadpool
+            result = await run_in_threadpool(provider.conversation_task_dismiss,ident,body)
+        except ValueError:
+            raise HTTPException(400,'Select one current action to dismiss') from None
+        except (ProviderUnavailable,OSError):
+            raise HTTPException(409,'Dismissal unconfirmed or action changed; check its current state') from None
+        await authorize_async(request)
+        return result
+
     @app.get('/api/interaction/requests')
     async def conversation_requests(request: Request, after: int = 0):
         session = await authorize_async(request)
