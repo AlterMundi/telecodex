@@ -220,7 +220,15 @@ def telegram_monitor(binary):
         old=client.get(base+'?before='+str(correction),headers=headers).json()['items'][0]
         assert old['id']==item['id'] and old['ordering_unknown'] and old['capture_order'] is None
         assert old['retired'] and client.get(url,headers=headers).json()['text']==trace['text']
-        grant_file=j.root/'monitor-device.json';Grants(config,Provider(config)).enroll('Monitor read scope',grant_file,60)
+        # An interaction grant is another surface of this exact conversation.
+        # A label never turns that grant into a read-only monitor.
+        interaction_file=j.root/'interaction-device.json'
+        Grants(config,Provider(config)).enroll('Interaction read scope',interaction_file,60)
+        interaction_credential=json.loads(interaction_file.read_text())
+        interaction_device={'origin':config['origin'],'authorization':interaction_credential['authorization']}
+        assert client.get(base,headers=interaction_device).status_code==200
+        assert client.get(url,headers=interaction_device).status_code==200
+        grant_file=j.root/'monitor-device.json';Grants(config,Provider(config)).enroll('Monitor read scope',grant_file,60,scope='monitor_readonly')
         credential=json.loads(grant_file.read_text())
         device={'origin':config['origin'],'authorization':credential['authorization']}
         assert client.get(base,headers=device).status_code==403
