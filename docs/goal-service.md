@@ -22,18 +22,16 @@ message, `blocked` alone, quota, authentication errors and unknown classificatio
 are insufficient. A linked cause is historical evidence, not a current goal
 revision or permission to act.
 
-The existing authenticated presentation result includes `goal_failure_evidence`
-for its current entry and enrolled targets. Each view has schema
-`telecodex.goal-failure-evidence/v1`, at most sixteen observations and an explicit
-`more` flag. Each observation preserves native turn, a bounded `goal_at_failure` preview,
-structured error classification and bounded message preview, first-observed time
-and `linked_capacity_failure`. Full evidence remains in the private ledger;
-provider details and unbounded objectives are not copied into every presentation. Current revision,
-delegation and next attempt are explicitly unknown; `execution_enabled=false`.
-The existing `goal_inspect` also includes `historical_failure_evidence` for its
-selected target. An unavailable target is reported as unknown, not idle or
-recovered. This route
-has no native RPC, inference, Telegram request or lifecycle effect.
+The existing authenticated presentation result includes one compact
+`goal_failure_evidence` summary per current entry/enrolled target, schema
+`telecodex.goal-failure-summary/v1`. Detailed inspection uses
+`historical_failure_evidence` in `goal_inspect`, schema
+`telecodex.goal-failure-evidence/v1`: at most sixteen observations, an explicit
+`more` flag, bounded goal/error previews and full evidence retained privately.
+Aggregate presentation never multiplies full objectives/provider details across
+targets. Current revision, delegation and next attempt remain unknown;
+`execution_enabled=false`. Unavailable is not idle or recovered. These reads have
+no native mutation, inference, Telegram request or lifecycle effect.
 
 This slice does **not** implement delegated execution, scheduling, automatic
 resumption, retry settings, Alerts or client recovery controls. It is not a
@@ -42,15 +40,28 @@ Existing explicit pauses, blocked goals and maintenance/Stop fences are unchange
 The old integrator confirmation policy still applies until the retained-delegation
 extension is delivered. No existing goal has been resumed by this work.
 
-## Verified transport gap to remove
+## Optional Telegram transport
 
-`App::bootstrap` currently calls Telegram `getMe`, and `App::run` registers bot
-commands and starts polling. `interaction.telegram_ingress=false` disables only
-the integrating Telegram capture path; it does **not** disable the bot adapter or
-remove startup dependence on Telegram. The next execution slice must separate
-backend startup/identity and observation from this optional adapter. A journey
-using a fake Telegram API, or merely turning off entry routing, is not acceptance
-of the requested Telegram-free Realtime path.
+`[telegram] enabled = false` starts the same backend and authenticated owner
+socket without resolving Telegram secrets, `getMe`, command registration,
+polling, typing, draft/placeholder creation or publication recovery. Native and
+private artifact retention remain independent. The disabled adapter rejects
+operations rather than fabricating delivery receipts. Other explicitly configured
+adapters retain their own settings; turn them off if a deployment needs none.
+
+An identity actually observed by an earlier enabled run can label retained
+Telegram originals; a fresh backend does not invent a bot identity. Conversation
+originals remain usable when historical Telegram provenance is unavailable.
+Existing databases, offsets, native bindings and return selection are preserved.
+Re-enable the adapter to use its existing transport, without replaying uncertain
+inputs. With Telegram enabled, bootstrap still requires actual `getMe` success.
+
+`interaction.telegram_ingress=false` disables only integrating capture. It does
+not disable the whole adapter; use `telegram.enabled=false` for the independent
+app/Realtime qualification. Tests cover credentialless configuration, actual
+backend startup/owner socket, zero manufactured inputs and a disabled client
+that rejects all operations. Passing these tests is not yet the end-to-end
+native goal recovery journey required below.
 
 ## Shared execution contract for the next slice
 

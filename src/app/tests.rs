@@ -252,6 +252,7 @@ fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
         session_control: None,
         tribu: None,
         telegram: crate::config::TelegramConfig {
+            enabled: true,
             capture_message_reactions: false,
             bot_token: Some("test-token".to_string()),
             bot_token_env: None,
@@ -2847,4 +2848,79 @@ async fn topic_catalog_records_actual_api_receipts_without_accepting_false_ack()
         "closed"
     );
     assert_eq!(server.join().unwrap().len(), 3);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn backend_serves_owner_controls_with_no_telegram_credentials_or_api() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("backend.sqlite");
+    let socket = root.path().join("owner.sock");
+    let mut config = sample_config(database.clone(), root.path().into());
+    config.codex.shared_app_server = true;
+    config.telegram.enabled = false;
+    config.telegram.bot_token = None;
+    config.telegram.bot_token_env = None;
+    config.telegram.bot_token_file = None;
+    config.telegram.api_base = "not a usable Telegram URL".into();
+    config.session_control = Some(crate::config::SessionControlConfig {
+        socket_path: socket.clone(),
+        human_id: 100,
+    });
+    let app = App::bootstrap(config).await.unwrap();
+    assert_eq!(app.shared.bot_id, 0);
+    assert!(app.shared.bot_username.is_none());
+    let cancellation = app.shared.shutdown.clone();
+    let running = tokio::spawn(app.run());
+    let mut stream = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match UnixStream::connect(&socket).await {
+                Ok(stream) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    sleep(Duration::from_millis(10)).await
+                }
+                Err(error) => panic!("Backend control connection failed: {error}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    stream
+        .write_all(b"{\"command\":\"topics list 0\"}\n")
+        .await
+        .unwrap();
+    let mut response = String::new();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        BufReader::new(stream).read_line(&mut response),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let reply: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    let evidence = rusqlite::Connection::open_with_flags(
+        &database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    for table in ["turns", "incoming_updates"] {
+        let count = evidence
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "Backend startup manufactured native or Telegram ingress"
+        );
+    }
+    cancellation.cancel();
+    tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }

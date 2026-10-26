@@ -74,6 +74,9 @@ pub(super) fn original_on(
     )?;
     match reference {
         InputReference::Telegram(update) => {
+            if channel == "telegram:0" {
+                bail!("Original Telegram provenance unavailable without a retained bot identity");
+            }
             let original =
                 entry_inputs_query(conn, key, human, native, Some(*update), committed, None)?
                     .pop()

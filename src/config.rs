@@ -79,6 +79,9 @@ pub enum HumanRequestLanguage {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TelegramConfig {
+    /// Optional transport; the shared backend and owner controls remain available.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     pub bot_token: Option<String>,
     pub bot_token_env: Option<String>,
     pub bot_token_file: Option<PathBuf>,
@@ -342,9 +345,11 @@ impl Config {
             );
         }
 
-        let token = self.telegram.resolve_token()?;
-        if token.trim().is_empty() {
-            bail!("telegram bot token is empty");
+        if self.telegram.enabled {
+            let token = self.telegram.resolve_token()?;
+            if token.trim().is_empty() {
+                bail!("telegram bot token is empty");
+            }
         }
         if let Some(days) = self.telegram.stale_topic_days {
             if days < 1 {
@@ -607,6 +612,23 @@ fn find_vendored_codex_exe(wrapper_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_configuration_loads_without_resolving_telegram_secrets() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = std::env::current_exe().unwrap();
+        let raw = format!(
+            "[telegram]\nenabled = false\nbot_token_file = {}\n[codex]\nbinary = {}\ndefault_cwd = {}\n",
+            serde_json::to_string(&root.path().join("absent-secret")).unwrap(),
+            serde_json::to_string(&binary).unwrap(),
+            serde_json::to_string(&root.path()).unwrap(),
+        );
+        let path = root.path().join("backend.toml");
+        fs::write(&path, &raw).unwrap();
+        assert!(!Config::load(path.clone()).unwrap().telegram.enabled);
+        fs::write(&path, raw.replace("enabled = false", "enabled = true")).unwrap();
+        assert!(Config::load(path).is_err());
+    }
 
     #[test]
     fn portable_defaults_require_explicit_auxiliary_opt_in() {

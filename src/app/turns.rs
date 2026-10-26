@@ -426,7 +426,9 @@ pub(super) async fn process_turn(
         })
         .transpose()?
         .unwrap_or(false);
-    let canonical_return = canonical_origin || shared.store.conversation_turn_return(turn_id)?;
+    let canonical_return = !shared.config.telegram.enabled
+        || canonical_origin
+        || shared.store.conversation_turn_return(turn_id)?;
     let mut chat_action_task = if queued.conversation_input.is_some() || canonical_return {
         None
     } else {
@@ -1497,6 +1499,9 @@ struct LiveTurnSink {
 
 impl LiveTurnSink {
     fn canonical(&self) -> Result<bool> {
+        if !self.shared.config.telegram.enabled {
+            return Ok(true);
+        }
         self.turn_id
             .map(|local| self.shared.store.conversation_turn_return(local))
             .transpose()

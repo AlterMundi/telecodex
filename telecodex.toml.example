@@ -6,6 +6,9 @@ max_text_chunk = 3500
 tmp_dir = "/absolute/path/to/telecodex/tmp"
 
 [telegram]
+# Set false for an independent app/backend without Telegram credentials or API
+# requests. Keep its existing session database and owner-control configuration.
+enabled = true
 bot_token_env = "TELEGRAM_BOT_TOKEN"
 api_base = "https://api.telegram.org"
 # Pending/history labels: "en" (default) or "es"; independent of journal payloads.

@@ -113,6 +113,34 @@ impl Store {
         Ok(())
     }
 
+    /// One compact observation per target keeps aggregate presentation inside
+    /// the existing owner socket's response bound. Details use goal inspection.
+    pub fn goal_recovery_summary(&self, human: i64, key: SessionKey) -> Result<Value> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = super::presentation::entry_on(&conn, human, key)?;
+        let row: Option<(String, bool, Option<String>, String)> = conn
+            .query_row(
+                "SELECT native_turn,blocked_goal IS NOT NULL,terminal_error,observed_at
+             FROM goal_failure_observations WHERE human_id=?1 AND session_id=?2 AND native_thread=?3
+             ORDER BY rowid DESC LIMIT 1",
+                params![human, session, native],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?;
+        let latest = row
+            .map(|(turn, blocked, error, observed)| {
+                let error: Option<Value> =
+                    error.as_deref().map(serde_json::from_str).transpose()?;
+                Ok::<_, anyhow::Error>(json!({"native_turn":turn,"observed_at":observed,
+                "linked_capacity_failure":blocked && error.as_ref().is_some_and(capacity_error)}))
+            })
+            .transpose()?;
+        Ok(
+            json!({"schema":"telecodex.goal-failure-summary/v1","target":key,"native_thread":native,
+            "latest":latest,"historical":true,"read_only":true,"execution_enabled":false}),
+        )
+    }
+
     /// Same current owner/binding as other presentation reads. No native RPC,
     /// inference, Telegram operation, scheduling or lifecycle control occurs.
     pub fn goal_recovery_evidence(
@@ -400,6 +428,10 @@ mod tests {
             true
         );
         assert!(!projection.to_string().contains("PRIVATE PROVIDER DETAILS"));
+        let summary = store.goal_recovery_summary(100, key).unwrap();
+        assert_eq!(summary["latest"]["linked_capacity_failure"], true);
+        assert!(summary.to_string().len() < 2048);
+        assert!(!summary.to_string().contains("Long provider explanation"));
         store.delete_session(key).unwrap();
         assert!(store.get_session(key).unwrap().is_none());
         assert_eq!(

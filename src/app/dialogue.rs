@@ -177,6 +177,10 @@ pub(super) fn tool_call(
                 let refs=shared.store.interaction_entry_references(key,human,&request.thread_id)?;
                 let mut inputs=vec![];
                 for reference in refs {
+                    if reference.update().is_some() && shared.bot_id==0 {
+                        inputs.push(json!({"input_ref":reference,"availability":"unknown_telegram_identity","detail":"Original retained; no verified bot identity is available to attribute this Telegram source."}));
+                        continue;
+                    }
                     let (source,_)=shared.store.interaction_entry_original(key,human,&request.thread_id,&reference,&format!("telegram:{}",shared.bot_id))?;
                     let conversation_context = match &reference {
                         InputReference::Conversation(id) => shared.store.conversation_input_read(human,key,id)?.reply,

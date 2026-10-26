@@ -90,10 +90,9 @@ pub(super) fn turn_telegram(shared: &Arc<AppShared>, local: Option<i64>) -> Tele
         return shared.telegram.clone();
     };
     let owner = shared.clone();
-    shared
-        .telegram
-        .clone()
-        .with_publication_guard(move || Ok(!owner.store.conversation_turn_return(local)?))
+    shared.telegram.clone().with_publication_guard(move || {
+        Ok(owner.config.telegram.enabled && !owner.store.conversation_turn_return(local)?)
+    })
 }
 
 /// Read-only receiver presentation; no native/model/Telegram operation.
@@ -190,7 +189,7 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
         result["goal_controls"] = app.shared.store.goal_control_views(human, cfg.entry(), 0)?;
         result["goal_failure_evidence"] = serde_json::Value::Array(
             std::iter::once(cfg.entry()).chain(targets.iter().map(|(key,_)|*key)).map(|target| {
-                match app.shared.store.goal_recovery_evidence(human,target,None) {
+                match app.shared.store.goal_recovery_summary(human,target) {
                     Ok(evidence)=>json!({"target":target,"availability":"observed","evidence":evidence}),
                     Err(_)=>json!({"target":target,"availability":"unknown","execution_enabled":false}),
                 }
