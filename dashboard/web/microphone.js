@@ -4,8 +4,8 @@ window.VoiceInput = (() => {
     const box=document.querySelector('#conversation-voice'), button=document.querySelector('#conversation-talk'),send=document.querySelector('#conversation-send');
     const discard=document.querySelector('#conversation-voice-discard'), check=document.querySelector('#conversation-voice-check');
     const state=document.querySelector('#conversation-voice-state');
-    function notice(text,attention=false){state.textContent=text;state.setAttribute('data-attention',String(attention));}
-    let available=false, generation=0, recorder, stream, parts=[], bytes=0, timer, pending, latestSaved, uploading=false, controller;
+    function notice(text,attention=false){state.removeAttribute?.('data-live-caption');state.setAttribute('aria-live','polite');state.textContent=text;state.setAttribute('data-attention',String(attention));}
+    let available=false, liveAvailable=false, generation=0, recorder, stream, parts=[], bytes=0, timer, pending, latestSaved, uploading=false, controller;
     let phase='idle', commit=false, readySelection;
     const supported=()=>!!(window.isSecureContext && window.MediaRecorder && typeof window.MediaRecorder.isTypeSupported==='function' && window.navigator?.mediaDevices?.getUserMedia && window.crypto?.subtle);
     const ownsSend=()=>['permission','recording','ready','finalizing'].includes(phase) || uploading || !!pending;
@@ -31,7 +31,7 @@ window.VoiceInput = (() => {
     function stopTracks() {if(stream)for(const track of stream.getTracks())track.stop();stream=undefined;clearTimeout(timer);}
     function cancelRecording(message='Recording discarded. Nothing was sent.') {
       generation++;commit=false;latestSaved=undefined;const old=recorder;recorder=undefined;
-      if(old && old.state!=='inactive')old.stop();stopTracks();parts=[];bytes=0;phase='idle';notice(message,!!message && message!=='Recording discarded. Nothing was sent.');controls();
+      if(old?.discard)old.discard();else if(old && old.state!=='inactive')old.stop();stopTracks();parts=[];bytes=0;phase='idle';notice(message,!!message && message!=='Recording discarded. Nothing was sent.');controls();
     }
     function reset() {
       controller?.abort();controller=undefined;pending=undefined;uploading=false;
@@ -41,8 +41,8 @@ window.VoiceInput = (() => {
       if(['permission','recording','ready','finalizing'].includes(phase))cancelRecording('Recording ended while this view was inactive. Nothing was sent.');
       controller?.abort();
     }
-    function configure(value) {
-      available=!!value;
+    function configure(value,live=false) {
+      available=!!value;liveAvailable=!!live;
       if(!available && ['permission','recording','ready','finalizing'].includes(phase))cancelRecording();
       if(available && !supported())notice('Microphone unavailable in this browser. You can keep writing.',true);
       controls();
@@ -102,7 +102,7 @@ window.VoiceInput = (() => {
         const digest=await window.crypto.subtle.digest('SHA-256',await blob.arrayBuffer());
         if(owned!==generation || binding!==getBinding())return;
         const audio_sha256=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
-        pending={id:window.crypto.randomUUID(),binding,audio_sha256,mime,blob,reply:selection?.reference,focusVersion:selection?.version,visual:selection?.visual};phase='idle';await upload();
+        pending={id:selection?.captureId||window.crypto.randomUUID(),binding,audio_sha256,mime,blob,reply:selection?.reference,focusVersion:selection?.version,visual:selection?.visual};phase='idle';await upload();
       } catch(_) {if(owned===generation)cancelRecording('Recording could not be finalized. Nothing was sent.');}
     }
     async function start() {
@@ -114,13 +114,18 @@ window.VoiceInput = (() => {
         try {const candidate=getVisual();selectedVisual=candidate?.then?await candidate:candidate;}
         catch(_){if(owned===generation)cancelRecording('Selected image unavailable. Choose another image or remove it before recording.');return;}
         if(owned!==generation||binding!==getBinding()||document.hidden)return;
-        const frozenSelection={...selection,visual:selectedVisual};
+        const frozenSelection={...selection,visual:selectedVisual,captureId:window.crypto.randomUUID()};
         const media=await window.navigator.mediaDevices.getUserMedia({audio:true,video:false});
         if(owned!==generation || binding!==getBinding() || document.hidden){for(const track of media.getTracks())track.stop();return;}
         stream=media;
-        const mime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4','audio/webm'].find(value=>window.MediaRecorder.isTypeSupported(value));
+        let current;
+        if(liveAvailable&&window.StreamingVoice?.supported()){
+          try{current=await window.StreamingVoice.create(media,{headers,binding,id:frozenSelection.captureId,onPartial:text=>{if(owned===generation&&phase==='recording'){notice(text||'Listening…');state.setAttribute('data-live-caption','true');state.setAttribute('aria-live','off');state.scrollLeft=state.scrollWidth;}}});}catch{}
+        }
+        if(owned!==generation||binding!==getBinding()||document.hidden){current?.discard?.();for(const track of media.getTracks())track.stop();return;}
+        const mime=current?'audio/wav':['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4','audio/webm'].find(value=>window.MediaRecorder.isTypeSupported(value));
         if(!mime)throw Error('No supported recording format');
-        const current=new window.MediaRecorder(media,{mimeType:mime,audioBitsPerSecond:64000});recorder=current;
+        current=current||new window.MediaRecorder(media,{mimeType:mime,audioBitsPerSecond:64000});recorder=current;
         current.addEventListener('dataavailable',event=>{
           if(owned!==generation || !event.data.size)return;
           bytes+=event.data.size;if(bytes>20*1024*1024){cancelRecording('Recording exceeded its size limit. Nothing was sent.');return;}

@@ -919,7 +919,7 @@ window.Conversation = (() => {
       else {filesConnected=true;fileJobs=value.artifacts?.jobs||[];files.clear();for(const card of cards.values())for(const file of card.source.artifacts||[])files.set(file.id,file);for(const file of value.artifacts?.items||[])files.set(file.id,file);}
       refreshFiles();
       await goalControls?.observe(value.goal_controls);
-      microphone?.configure(value.can_speak);
+      microphone?.configure(value.can_speak,value.can_stream_transcribe);
       setCsrf(value.csrf);
       canListen = !readOnly && value.can_listen;
       if(!canListen && (voiceEnabled || active || speechWait))pause();

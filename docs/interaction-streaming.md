@@ -7,10 +7,13 @@ The full horizon remains [the maintained roadmap](interaction-roadmap.md).
 
 ## Current implementation boundary
 
-`dashboard.transcription.TranscriptionStream` is the first provider transport
-slice. It is not yet registered as a public app endpoint, enabled in receiving
-configuration or connected to the microphone. Production still uses final-file
-ASR. Completing this adapter does not complete the continuous-voice milestone.
+The optional app integration now connects `TranscriptionStream` to the existing
+microphone through an authenticated same-origin WebSocket. Its AudioWorklet
+captures mono PCM while the person speaks, shows revisable captions, and prepares
+one server-derived transcript for the exact finalized WAV. It is disabled by
+default and has not yet been enabled in the receiving deployment. Production
+still uses final-file ASR. This input layer does not complete output streaming,
+endpointing, barge-in, foreground separation or the continuous-voice milestone.
 
 The selected experiment uses Qwen Audio3.0's **input transcription only** with
 explicit manual mode. It never sends `response.create`, tools, conversation
@@ -47,20 +50,75 @@ do not silently replace the accepted final transcriber on this evidence alone.
 - `close()` before recognition finish discards preparation without committing.
   Closing output audio or this preparation stream does not cancel native work.
 
-The app integration must retain current authenticated owner/binding checks,
-selected visual/reply context, immutable audio identity and one original on Send.
-It must durably store completed server-derived text before consuming it, retire
-bounded raw preparation audio after verified transcript retention, and retain
-ordinary file-ASR fallback. A browser-supplied caption is not a trusted shortcut
-around native transcription/admission. Those integration requirements are still
-unfinished, alongside output streaming, barge-in and parallel attention.
+## App and native preparation boundary
+
+`/api/interaction/voice/live` accepts only the configured origins and reuses the
+existing browser/shared-login or companion grant, CSRF, actor authorization and
+receiving binding. Read-only grants cannot open preparation. Revocation and
+binding changes are checked again before recognition finish and retained text.
+One active capture per actor and two per receiving server are bounded to140seconds;
+audio itself is at most120seconds. A canceled connection setup closes its late
+provider socket. No provider credential reaches the browser.
+
+The worklet resamples the device rate to16kHz with continuous interpolation across
+blocks and a7400Hz input low-pass filter. Its graph output is muted.100ms chunks
+feed recognition, with bounded socket backpressure. Captions replace rather than
+append and never alter the draft, selected image/reply context or execute a turn.
+
+Only explicit Send uploads the finalized original WAV through the existing
+HTTP voice endpoint, with the capture UUID chosen before recording. The duration
+limit can end recognition for review without submitting work. Its headers,
+source SHA, selection and uncertain-receipt recovery use the existing microphone
+state machine. Discard closes preparation without recognition commit or original
+admission. Socket failure or unavailable/late preparation keeps the complete local
+WAV for ordinary file-ASR; there is no provider reconnect or automatic audio replay.
+
+Completed recognition writes an immutable owner-only text receipt identified by
+capture UUID, binding, PCM SHA, canonical WAV SHA, model and duration. It stores no
+raw preparation audio. The native `interaction_asr.py` helper may consume it only
+for the exact original UUID/WAV, and validates its final state, format, duration,
+model and both hashes. It durably commits its ordinary ASR result before returning
+text. Existing completed or uncertain native preparation always takes precedence;
+a later live receipt cannot replace an uncertain provider operation. Missing live
+receipts retain ordinary file-ASR fallback; mismatched present receipts fail
+visibly. Browser-supplied caption text is never trusted for admission.
+
+## Receiving configuration and rollback
+
+Use the existing optional `[streaming_transcription]` configuration documented in
+`dashboard/config.example.toml`: `enabled`, exact `endpoint`, private
+`credential_file` and `cache_root`. The selected native ASR configuration must
+reference that same absolute directory as `streaming_cache_root`. Keep its existing
+helper, route binding, durable cache and file-ASR provider. Describe the configured
+transcriber honestly as streaming recognition plus the existing file fallback;
+do not keep a file-provider-only label after enabling this path.
+
+The locked receiving dependencies include `wsproto` for the Uvicorn WebSocket
+server, as required by its [installation contract](https://uvicorn.dev/installation/).
+The server advertises `can_stream_transcribe` only when configured and authorized;
+unsupported browsers and unavailable worklet setup keep the current MediaRecorder
+path. No new microphone permission, login, conversational model, or input journal
+format is introduced. Disable streaming to restore ordinary file-ASR for new
+captures; preserve already retained originals, uncertain operations and native
+ASR results. This configuration does not resume/pause goals or cancel work.
+
 
 ## Qualification
 
 `python -B tests/dashboard_transcription.py` exercises partial replacement,
 manual readiness, refusal of generated answers, item identity, malformed/bounded
 input, explicit finish/discard and terminal disconnect without reconnect. It uses
-a synthetic provider, no microphone or native work.
+a synthetic provider, no microphone or native work. `tests/dashboard_live_transcription.py`
+exercises actual authenticated WebSockets, actor/grant revocation before delayed
+captions, immutable prepared text, binding replacement, canceled dial/close slot
+reuse, and disconnect/discard with no dispatch. Its loopback Uvicorn journey
+qualifies the locked WebSocket server and native exact-WAV receipt reader.
+`node tests/voice_stream_ui.js` checks the real worklet at16/44.1/48kHz, block
+continuity, WAV identity against Python's standard wave writer, partials, ordered
+finish, discard, setup cleanup and complete local fallback after network failure.
+The existing microphone suite verifies that live preparation and the ordinary
+original upload retain one capture identity. Native ASR tests verify exact receipt
+matching, durable recovery and precedence of uncertain file transcription.
 
 A separate real-provider adapter journey used one5.76second synthetic Spanish /
 English clip paced at100ms. First provisional text arrived about0.62seconds after

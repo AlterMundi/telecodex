@@ -1,0 +1,70 @@
+// Actual PCM worklet and streaming recorder with synthetic devices/sockets.
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const {execFileSync}=require('node:child_process');
+const uuid='10000000-0000-4000-8000-000000000001',binding='a'.repeat(64);
+const pcm=(...samples)=>{const bytes=new ArrayBuffer(samples.length*2),view=new DataView(bytes);samples.forEach((v,i)=>view.setInt16(i*2,v,true));return bytes;};
+function worklet(rate){
+ let Processor;const messages=[];
+ class Base{constructor(){this.port={postMessage:value=>messages.push(value)};}}
+ vm.runInNewContext(fs.readFileSync('dashboard/web/voice-pcm.js','utf8'),{AudioWorkletProcessor:Base,sampleRate:rate,registerProcessor:(name,type)=>{assert.equal(name,'interaction-pcm');Processor=type;},ArrayBuffer,DataView});
+ return {processor:new Processor(),messages};
+}
+function boot(fail){
+ const contexts=[],sockets=[],worklets=[],timers=[];
+ class Node{constructor(){this.links=[];this.disconnected=false;}connect(to){this.links.push(to);}disconnect(){this.disconnected=true;}}
+ class Context{
+  constructor(){this.destination={};this.closed=false;this.audioWorklet={addModule:async path=>{assert.equal(path,'assets/voice-pcm.js');if(fail==='module')throw Error('Module unavailable');}};contexts.push(this);}
+  createMediaStreamSource(media){assert.equal(media.kind,'synthetic-media');this.source=new Node();return this.source;}
+  createBiquadFilter(){if(fail==='filter')throw Error('Graph unavailable');this.filter=new Node();this.filter.frequency={value:0};return this.filter;}
+  createGain(){this.mute=new Node();this.mute.gain={value:1};return this.mute;}
+  async close(){this.closed=true;}async resume(){this.resumed=true;}
+ }
+ class Worklet extends Node{
+  constructor(context,name){super();assert.equal(name,'interaction-pcm');this.controls=[];this.port={postMessage:value=>this.controls.push(value)};worklets.push(this);}
+  emit(value){this.port.onmessage({data:value});}
+ }
+ class Socket{
+  static OPEN=1;static CLOSED=3;
+  constructor(url){if(fail==='socket')throw Error('Socket unavailable');this.url=url.href;this.readyState=0;this.bufferedAmount=0;this.sent=[];sockets.push(this);}
+  send(data){if(this.failSend)throw Error('Connection lost');assert.equal(this.readyState,1);this.sent.push(data);}
+  open(){this.readyState=1;this.onopen();}
+  message(value){this.onmessage({data:JSON.stringify(value)});}
+  close(){if(this.readyState===3)return;this.readyState=3;queueMicrotask(()=>this.onclose?.());}
+ }
+ const window={AudioWorkletNode:Worklet,AudioContext:Context,WebSocket:Socket,location:{href:'https://example.invalid/interaction/'}};
+ vm.runInNewContext(fs.readFileSync('dashboard/web/voice-stream.js','utf8'),{window,AudioWorkletNode:Worklet,WebSocket:Socket,URL,Blob,EventTarget,Event,ArrayBuffer,DataView,setTimeout:(fn,ms)=>{const t={fn,ms};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
+ const captions=[],events=[];
+ return {window,contexts,sockets,worklets,timers,captions,events,async create(){const recorder=await window.StreamingVoice.create({kind:'synthetic-media'},{id:uuid,binding,headers:()=>({'X-Dashboard-CSRF':'synthetic-csrf',Authorization:'Bearer synthetic-session'}),onPartial:value=>captions.push(value)});recorder.addEventListener('dataavailable',e=>events.push({type:'data',data:e.data}));recorder.addEventListener('stop',()=>events.push({type:'stop'}));return recorder;}};
+}
+(async()=>{
+ // Resampling counts and cross-block continuity at common mobile capture rates.
+ for(const rate of [16000,44100,48000]){
+  const run=step=>{const w=worklet(rate);for(let i=0;i<rate;i+=step){const size=Math.min(step,rate-i),block=Float32Array.from({length:size},(_,j)=>Math.sin((i+j)*2*Math.PI*230/rate));assert.equal(w.processor.process([[block]]),true);}w.processor.port.onmessage({data:'finish'});assert.equal(w.processor.process([[new Float32Array(128)]]),false);assert(w.messages.at(-1).finished);return Buffer.concat(w.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm)));};
+  const small=run(128),large=run(1177);assert.equal(small.length,32000);assert(small.equals(large),`Resampling must not jump at ${rate}Hz chunk boundaries`);
+ }
+ const clamp=worklet(16000);clamp.processor.process([[Float32Array.of(-2,-1,0,1,2)]]);clamp.processor.port.onmessage({data:'finish'});assert.deepEqual([...new Int16Array(clamp.messages[0].pcm)],[-32767,-32767,0,32767,32767]);
+ const canonical=boot(),samples=pcm(0,-32767,15000,32767);
+ const wav=Buffer.from(await canonical.window.StreamingVoice.wav([samples]).arrayBuffer());
+ const expected=execFileSync('python3',['-c',"import sys,io,wave; o=io.BytesIO(); w=wave.open(o,'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(sys.stdin.buffer.read()); w.close(); sys.stdout.buffer.write(o.getvalue())"],{input:Buffer.from(samples)});
+ assert(wav.equals(expected),'Browser WAV bytes must equal the server/native preparation identity');
+ const f=boot(),recorder=await f.create();assert(f.window.StreamingVoice.supported());recorder.start();const socket=f.sockets[0],node=f.worklets[0];socket.open();
+ assert.equal(socket.url,'wss://example.invalid/interaction/api/interaction/voice/live');assert(!socket.url.includes('synthetic-session'));
+ assert.deepEqual(JSON.parse(socket.sent[0]),{id:uuid,binding,csrf:'synthetic-csrf',authorization:'Bearer synthetic-session'});
+ node.emit({pcm:samples});assert.equal(socket.sent.length,1,'Wait for server/provider readiness before sending PCM');
+ socket.message({type:'ready'});assert.equal(socket.sent[1],samples);
+ socket.message({type:'partial',text:'provisional'});socket.message({type:'partial',text:'corrected'});assert.deepEqual(f.captions,['provisional','corrected']);assert.equal(f.events.length,0,'Captions never submit an original');
+ recorder.stop();assert.deepEqual(node.controls,['finish']);assert.equal(f.events.length,0,'Wait for final worklet PCM before admission');node.emit({pcm:pcm(100)});node.emit({finished:true});assert.deepEqual(JSON.parse(socket.sent.at(-1)),{type:'finish'});assert.equal(f.events.length,0,'Preparation final is separate from original submission');
+ socket.message({type:'prepared',id:uuid});assert.deepEqual(f.events.map(e=>e.type),['data','stop']);const captured=Buffer.from(await f.events[0].data.arrayBuffer());assert.equal(captured.length,44+samples.byteLength+2);assert.equal(f.contexts[0].mute.gain.value,0);assert(f.contexts[0].closed);assert.equal(socket.readyState,3);
+ node.emit({finished:true});socket.message({type:'prepared',id:uuid});assert.equal(f.events.length,2,'A late event must not create a second recording');
+ const cancel=boot(),cancelRecorder=await cancel.create();cancelRecorder.start();cancel.sockets[0].open();cancel.sockets[0].message({type:'ready'});cancel.worklets[0].emit({pcm:samples});cancelRecorder.discard();assert.deepEqual(cancel.events.map(e=>e.type),['stop']);assert.deepEqual(JSON.parse(cancel.sockets[0].sent.at(-1)),{type:'discard'});assert(!cancel.sockets[0].sent.some(v=>typeof v==='string'&&JSON.parse(v).type==='finish'));
+ for(const mode of ['disconnect','send-error','backpressure','unavailable','wrong-prepared-id']){
+  const lost=boot(),device=await lost.create(),s=lost.sockets[0],w=lost.worklets[0];device.start();s.open();s.message({type:'ready'});
+  if(mode==='send-error')s.failSend=true;if(mode==='backpressure')s.bufferedAmount=300000;
+  w.emit({pcm:samples});if(mode==='disconnect')s.close();if(mode==='unavailable')s.message({type:'unavailable'});
+  device.stop();w.emit({finished:true});if(mode==='wrong-prepared-id')s.message({type:'prepared',id:'other'});await new Promise(yes=>setImmediate(yes));
+  assert.deepEqual(lost.events.map(e=>e.type),['data','stop'],`${mode} must retain one complete local fallback`);assert(Buffer.from(await lost.events[0].data.arrayBuffer()).equals(wav));assert.equal(lost.sockets.length,1,'Never reconnect/replay provider audio');
+ }
+ const delayed=boot(),delayedDevice=await delayed.create();delayedDevice.start();delayed.worklets[0].emit({pcm:samples});delayedDevice.stop();delayed.worklets[0].emit({finished:true});delayed.timers.find(t=>t.ms===5000&&!t.cleared).fn();assert.equal(delayed.events[0].data.size,wav.length,'A provider that never opens cannot lose finalized audio');
+ for(const failure of ['module','filter','socket']){const setup=boot(failure);await assert.rejects(setup.create());assert(setup.contexts[0].closed,`${failure} must release its owned audio graph`);}
+ console.log('voice stream UI: resampling, exact WAV identity, captions/finish/discard, fallback and cleanup passed');
+})().catch(error=>{console.error(error);process.exitCode=1;});
