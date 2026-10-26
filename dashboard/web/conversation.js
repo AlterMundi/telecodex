@@ -127,7 +127,7 @@ window.Conversation = (() => {
       historyTools.append($("#conversation-inputs-older"),$("#conversation-older"),$("#conversation-telegram-older"));
       diagnostics.querySelector?.(".conversation-diagnostics-content")?.append(historyTools);
     }
-    function atTimelineEnd() {return !!timeline && timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;}
+    function atTimelineEnd() {return !!timeline && !followingSpeech() && timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;}
     function placeInTimeline(box, key, timestamp, nearEnd=atTimelineEnd()) {
       if(!timeline)return;
       box.dataset.timelineKey=key;
@@ -156,7 +156,9 @@ window.Conversation = (() => {
         inspect.type="button";box.append(title,body,inspect);card={box,title,body,inspect};progressCards.set(key,card);
         inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
       }
-      card.source=source.id;card.stamp=stamp;card.title.textContent=`Update from ${source.label}`;card.body.textContent=source.preview;
+      card.source=source.id;card.revision=source.revision;card.stamp=stamp;card.title.textContent=`Update from ${source.label}`;
+      const original=cards.get(source.id);
+      card.body.textContent=original?.expanded && original.source.revision===source.revision?original.body.textContent:source.preview;
       placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
     }
 
@@ -187,6 +189,14 @@ window.Conversation = (() => {
       }
     }
     function clearText(){textQueue.length=0;textObserver?.disconnect();}
+    function appendTextPart(card,result){
+      const following=atTimelineEnd();
+      card.body.textContent=(card.expanded?card.body.textContent:"")+result.text;
+      card.expanded=true;card.offset=result.next_offset;
+      for(const visible of progressCards.values())if(visible.source===card.source.id && visible.revision===card.source.revision)visible.body.textContent=card.body.textContent;
+      card.read.hidden=card.offset===null;card.read.textContent="Continue reading";
+      if(following && timeline)timeline.scrollTop=timeline.scrollHeight;
+    }
     async function readCard(card,automatic=false){
       if(card.textLoading || cards.get(card.source.id)!==card)return;
       const selected=card.source;card.textLoading=true;card.read.disabled=true;card.error.textContent="";
@@ -196,11 +206,7 @@ window.Conversation = (() => {
         do{
           const result=await part(selected,card.offset);
           if(cards.get(selected.id)!==card || card.source.revision!==selected.revision)return;
-          const following=atTimelineEnd();
-          card.body.textContent=(card.expanded?card.body.textContent:"")+result.text;
-          card.expanded=true;card.offset=result.next_offset;
-          card.read.hidden=card.offset===null;card.read.textContent="Continue reading";
-          if(following && timeline)timeline.scrollTop=timeline.scrollHeight;
+          appendTextPart(card,result);
           parts++;
         }while(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && enabled && !document.hidden && card.textVisible);
         if(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && (!enabled || document.hidden || !card.textVisible)){
@@ -584,23 +590,81 @@ window.Conversation = (() => {
     };
     playLabel("Play audio");
     const follow = $("#conversation-follow");
+    const saveFollow=()=>{try{window.localStorage?.setItem("interaction-follow-audio",String(follow.checked));}catch{}};
     if(standalone && follow){
       $("#conversation-follow-control").hidden=false;
       follow.checked=true;
+      follow.title="Follow spoken progress; position within each audio segment is approximate";
       try{follow.checked=window.localStorage?.getItem("interaction-follow-audio")!=="false";}catch{}
-      follow.addEventListener("change",()=>{
-        try{window.localStorage?.setItem("interaction-follow-audio",String(follow.checked));}catch{}
-        if(follow.checked)followPlayback(true);
+      follow.addEventListener("change",()=>{saveFollow();if(follow.checked)followPlayback(true);});
+      const readManually=()=>{if(follow.checked && voiceEnabled && active){follow.checked=false;saveFollow();}};
+      timeline.addEventListener("wheel",readManually,{passive:true});
+      timeline.addEventListener("touchmove",readManually,{passive:true});
+      timeline.addEventListener("pointerdown",event=>{
+        if(event.target===timeline && event.clientX>=timeline.getBoundingClientRect().right-16)readManually();
+      });
+      timeline.addEventListener("keydown",event=>{
+        if(["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(event.key)
+          && !["INPUT","TEXTAREA","BUTTON","SELECT"].includes(event.target?.tagName))readManually();
       });
     }
+    function followingSpeech(){
+      return standalone && follow?.checked && voiceEnabled && !voiceSuspended && !document.hidden
+        && active?.auto && !active.verifying && !audio.paused && !audio.muted;
+    }
+    function followCard(){
+      const original=cards.get(active?.source.id);
+      if(original?.source.revision!==active?.source.revision)return;
+      return timeline?.contains?.(original?.box)?original:[...progressCards.values()]
+        .find(value=>value.source===active.source.id && value.revision===active.source.revision);
+    }
+    async function loadFollowText(selected){
+      const card=cards.get(selected.source.id);
+      if(!card || card.textLoading || selected.followTextRequested)return;
+      selected.followTextRequested=true;
+      if(card.source.revision===selected.source.revision && card.offset===selected.offset)appendTextPart(card,selected.verified);
+      // Reuse the canonical reader, keeping one bounded request chain per segment.
+      for(let n=0;n<12 && active===selected && followingSpeech()
+        && card.source.revision===selected.source.revision
+        && (!card.expanded || Array.from(card.body.textContent).length<selected.textEnd);n++){
+        const before=card.body.textContent;
+        await readCard(card);
+        if(card.body.textContent===before || card.offset===null)break;
+      }
+      if(active===selected)followPlayback();
+    }
     function followPlayback(force=false){
-      if(!standalone || !follow?.checked || !voiceEnabled || voiceSuspended || document.hidden || !active || !force && active.offset!==0)return;
-      const original=cards.get(active.source.id);
-      const card=timeline?.contains?.(original?.box)?original:[...progressCards.values()].find(value=>value.source===active.source.id);
-      if(!card || !timeline?.contains?.(card.box) || !force && active.followed)return;
-      const top=timeline.scrollTop+card.box.getBoundingClientRect().top-timeline.getBoundingClientRect().top;
-      timeline.scrollTo({top:Math.max(0,top),behavior:window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches?"instant":"smooth"});
-      active.followed=true;
+      if(!followingSpeech() || $("#conversation-diagnostics").open)return;
+      const card=followCard();
+      if(!card || !timeline?.contains?.(card.box))return;
+      const selected=active, viewport=timeline.getBoundingClientRect();
+      const scroll=top=>timeline.scrollTo({top:Math.max(0,top),behavior:window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches?"instant":"smooth"});
+      if(!selected.followed && selected.offset===0){
+        scroll(timeline.scrollTop+card.box.getBoundingClientRect().top-viewport.top);
+        selected.followed=true;
+        return;
+      }
+      if(!Number.isSafeInteger(selected.textEnd))return;
+      const original=cards.get(selected.source.id);
+      if(!original.expanded || Array.from(original.body.textContent).length<selected.textEnd){
+        void loadFollowText(selected);return;
+      }
+      if(!card.body.firstChild || !document.createRange)return;
+      // Media progress guides a reading window, not a claimed word alignment.
+      const timed=Number.isFinite(audio.duration) && audio.duration>0 && Number.isFinite(audio.currentTime);
+      if(!timed && selected.followed && !force)return;
+      const fraction=timed?Math.max(0,Math.min(1,audio.currentTime/audio.duration)):0;
+      const characters=Array.from(card.body.textContent);
+      const position=Math.min(characters.length-1,selected.offset+Math.floor(Math.max(0,selected.textEnd-selected.offset-1)*fraction));
+      if(position<0)return;
+      const start=characters.slice(0,position).join("").length;
+      const range=document.createRange();range.setStart(card.body.firstChild,start);
+      range.setEnd(card.body.firstChild,start+characters[position].length);
+      const point=range.getBoundingClientRect();
+      if(!point.height || !viewport.height)return;
+      if(force || point.top<viewport.top || point.bottom>viewport.bottom-24)
+        scroll(timeline.scrollTop+point.top-viewport.top-viewport.height*.25);
+      selected.followed=true;
     }
     let enabled = false, ready = false, reading = false, binding, canListen = false;
     let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
@@ -940,11 +1004,13 @@ window.Conversation = (() => {
       try {
         const started = audio.play();
         const check = part(selected.source, selected.offset);
-        await Promise.all([started, check]);
+        const [,verified]=await Promise.all([started, check]);
         if (active !== selected || generation !== owned) return;
         audio.pause(); audio.currentTime = position;
         selected.verifying = false;
         selected.segmentEnded = false;
+        selected.verified=verified;
+        selected.textEnd=selected.offset+Array.from(verified.text).length;
         selected.auto = true;
         audio.muted = false;
         await audio.play();
@@ -1023,6 +1089,7 @@ window.Conversation = (() => {
       } finally { clearTimeout(deadline); if (requestAbort === controller) requestAbort = undefined; }
     }
     audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort){playLabel("Play audio");presentState({playback:undefined});}});
+    audio.addEventListener("timeupdate",()=>followPlayback());
     audio.addEventListener("playing",()=>{
       if(active && !active.verifying && !audio.muted){playLabel("Pause audio");presentState({playback:"playing"});}
     });

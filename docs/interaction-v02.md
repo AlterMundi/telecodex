@@ -239,9 +239,9 @@ installation, observed transport and human perception are separate findings.
 
 ## Real-use composer feedback — 2026-10-25
 
-The composer groups text, Send and an accessible microphone action in one block, with an explicit checkbox for spoken replies. Camera and gallery are separate image choices feeding the same immutable-image preview/point/upload path. Camera capture is user initiated through the device chooser; desktop/browser fallback may remain a file chooser. No live camera stream or automatic microphone start is added. Voice/draft/selection/retry ownership is unchanged. Beacon revision4 keeps the confirmed40.4Hz sine series while correcting low gain and discontinuous graph updates; see sonic-expression.md and #221.
+The composer groups text, Send and an accessible microphone action in one block, with an accessible speaker toggle for spoken replies. Camera and gallery are separate image choices feeding the same immutable-image preview/point/upload path. Camera capture is user initiated through the device chooser; desktop/browser fallback may remain a file chooser. No live camera stream or automatic microphone start is added. Voice/draft/selection/retry ownership is unchanged. Beacon revision 6 keeps the accepted click-free 40.4 Hz sine composition and reply ducking; see sonic-expression.md and #221.
 
-The real-use follow-up also requires stable composer coordinates across asynchronous conversation/observer updates, and a permanently visible recording/send icon. The audio region reserves its footprint; messages scroll separately. Image decoding falls back to browser Image/HTML canvas when ImageBitmap/OffscreenCanvas is unavailable or rejects the file. An explicit Include this image with voice checkbox lets the person keep a failed image and draft while speaking without it; nothing silently drops a selected attachment. The current backend accepts one selected image per original; multi-image messages remain a separate unimplemented increment, not a claimed fix.
+The real-use follow-up also requires stable composer coordinates across asynchronous conversation/observer updates, and a permanently visible recording/send icon. The compact player appears to the left only while needed; Send and recording retain their right-hand positions. Messages scroll separately. Image decoding falls back to browser Image/HTML canvas when ImageBitmap/OffscreenCanvas is unavailable or rejects the file. The selected image accompanies the next text or voice submission without a separate inclusion checkbox; a failed attachment remains visible rather than being silently dropped. The current backend accepts one selected image per original; multi-image messages remain a separate unimplemented increment, not a claimed fix.
 
 While recording or retaining an unsent recording, the composer has one Send action owned by that recording. It cannot submit the retained text draft. The microphone is hidden during capture and a visible × discards the recording; finishing/discarding restores ordinary text Send without clearing the draft. Voice retries preserve the existing capture identity and uncertainty rules. The attachment affordance is an inline SVG paperclip with an accessible image label, independent of font glyph support.
 
@@ -325,11 +325,22 @@ selection and recording objects, including stale advisory reply context.
 
 ## Spoken-reply following
 
-Follow starts enabled unless the person explicitly disabled it before. It moves
-only while Voice on is enabled and not paused, and only within the conversation
-scroll area to the beginning of the verified spoken answer. Turning off Voice on
-or Follow preserves the reading position. Continuous within-answer tracking is a
-later increment; this control does not claim word-level synchronization.
+Follow starts enabled unless explicitly disabled. With Voice on and verified
+playback running, it first positions at the answer and then advances a reading
+window using real media time/duration within the certified text segment. Segment
+offsets remain exact; positioning within a segment is approximate, not word-level
+alignment or a claim derived from generated tokens. Continuations do not return
+to the beginning. The existing canonical reader reuses the already-validated
+segment and loads missing prefixes only when needed. Visible Update from cards
+share that exact source/revision text rather than scrolling a hidden duplicate.
+
+Pause, Voice off, Stop, hidden pages and the open inspector suspend movement.
+Resuming keeps the current segment and position; replaced sources stop playback
+and following. Unknown media duration never invents progress. Wheel/touch reading,
+scrollbar dragging and reading keys release Follow and remember that choice;
+checking it again resumes at the current position. Reduced motion uses instant
+positioning. Ordinary incoming replies do not pull the reader to the bottom while
+spoken following owns the reading window.
 
 Telegram entry originals appear as human bubbles in the independent chat through
 the existing read-only ingress endpoint, without dispatch or replay. New Telegram

@@ -35,7 +35,7 @@ function boot(readOnly=false,standalone=false,options={}) {
         this.children.splice(at < 0 ? this.children.length : at, 0, child);
       },
       click() {this.clicked=true;},remove() {this.removed=true;},
-      before() {}, pause() { this.paused = true; }, play() {this.paused=false;this.ended=false;return Promise.resolve();}, load() {},
+      before(...nodes) {this.beforeNodes=nodes;}, pause() { this.paused = true; }, play() {this.paused=false;this.ended=false;return Promise.resolve();}, load() {},
     };
   }
   const document = {
@@ -121,7 +121,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       const sourceId=url.searchParams.get('source'),offset=Number(url.searchParams.get('offset'));
       partReads.push({source:sourceId,offset});
       if(replyHolds.has(sourceId)){const hold=replyHolds.get(sourceId);replyHolds.delete(sourceId);hold.started();await hold.promise;}
-      if(replyTexts.has(sourceId)){const text=replyTexts.get(sourceId),end=Math.min(offset+1600,text.length);return {text:text.slice(offset,end),next_offset:end<text.length?end:null};}
+      if(replyTexts.has(sourceId)){const text=Array.from(replyTexts.get(sourceId)),end=Math.min(offset+1600,text.length);return {text:text.slice(offset,end).join(''),next_offset:end<text.length?end:null};}
       return {text:"Selected reply", next_offset:null};
     }
     const direction = url.searchParams.get("direction");
@@ -145,7 +145,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       if(audioFailures){audioFailures--;return Promise.resolve(new Response(JSON.stringify({detail:'Synthetic TTS outage'}),{status:503}));}
       if(renderAudio){
         const selected=JSON.parse(options.body),data=Buffer.from('synthetic audio'),hash=require('node:crypto').createHash('sha256').update(data).digest('hex');
-        return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':multipart&&selected.offset===0?'1500':'','x-audio-sha256':hash}}));
+        return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':multipart&&selected.offset===0?'1600':'','x-audio-sha256':hash}}));
       }
       return new Promise((_resolve, reject) => {
       options.signal.addEventListener("abort", () => reject(new Error("Aborted")), {once:true});
@@ -169,6 +169,8 @@ function boot(readOnly=false,standalone=false,options={}) {
   }
   ui.authenticated();
   return {ui, nodes, requests, originals,replyTexts,partReads,humanTasks,
+    rangeGeometry(fn){context.document.createRange=fn;},
+    reducedMotion(value){context.window.matchMedia=()=>({matches:value});},
     holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
     intersect(id,visible=true){const target=nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);assert(target,JSON.stringify({id,keys:nodes.get("#conversation-timeline").children.map(c=>c.dataset),state:nodes.get("#conversation-state")?.textContent}));intersection([{target,isIntersecting:visible}]);}, telegramOriginals, nativePosts,taskPosts,audioCalls,clock,recoveryPosts,
     profile(value){presentationProfile=value;},
@@ -425,6 +427,61 @@ function boot(readOnly=false,standalone=false,options={}) {
   const hiddenUpdate=updatesFollow.nodes.get('#conversation-results').children.find(card=>card.dataset.sourceId==='native:8');
   await hiddenUpdate.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen').handlers.click();
   assert.equal(updateScrolls,1,'Follow targets the visible Update from card for the exact spoken source');updatesFollow.ui.stop();
+
+  {
+  const tracked=boot(false,true,{clock:true});tracked.audio(true);
+  const longText='🙂'.repeat(3200);
+  tracked.replyTexts.set('native:8',longText);
+  tracked.overrideSource(8,{preview:longText.slice(0,40),text_characters:3200});
+  await tracked.ui.refresh();tracked.nodes.get('#conversation-voice-replies').handlers.click();
+  const trackLane=tracked.nodes.get('#conversation-timeline'),trackPlayer=tracked.nodes.get('#conversation-audio');
+  const trackCard=trackLane.children.find(card=>card.dataset.sourceId==='native:8');
+  const trackBody=trackCard.children.find(child=>child.className==='reply-text');
+  trackBody.firstChild={};
+  trackLane.contains=card=>trackLane.children.includes(card);trackLane.scrollTop=0;
+  trackLane.getBoundingClientRect=()=>({top:100,bottom:300,height:200,right:390});
+  trackCard.getBoundingClientRect=()=>({top:300-trackLane.scrollTop});
+  const trackingScrolls=[],ranges=[];
+  trackLane.scrollTo=value=>{trackingScrolls.push(value);trackLane.scrollTop=value.top;};
+  tracked.rangeGeometry(()=>{
+    let offset;
+    return {setStart(_node,value){offset=value;},setEnd(){},getBoundingClientRect(){
+      ranges.push(offset);const top=400+Math.floor(offset/100)*20-trackLane.scrollTop;
+      return {top,bottom:top+20,height:20};
+    }};
+  });
+  await listenButton(trackCard).handlers.click();
+  trackPlayer.duration=100;trackPlayer.currentTime=80;trackPlayer.handlers.timeupdate();
+  await until(()=>ranges.length>0);
+  assert.equal(tracked.partReads.filter(value=>value.source==='native:8').length,1,'Follow reuses the segment already validated for playback');
+  assert.equal(ranges.at(-1),Math.floor(1599*.8)*2,'Canonical Unicode offsets become actual DOM UTF-16 offsets');
+  assert(trackingScrolls.at(-1).top>200,'Long spoken segments advance the reading window beyond the answer beginning');
+  const stablePosition=trackingScrolls.length;trackPlayer.duration=Infinity;trackPlayer.handlers.timeupdate();
+  assert.equal(trackingScrolls.length,stablePosition,'Unknown duration never invents progress or resets the reader');trackPlayer.duration=100;
+  const readCount=tracked.partReads.length;
+  trackPlayer.handlers.timeupdate();assert.equal(tracked.partReads.length,readCount,'Media ticks reuse loaded immutable text');
+  tracked.ui.pause();const pausedScrolls=trackingScrolls.length;trackPlayer.currentTime=90;trackPlayer.handlers.timeupdate();
+  assert.equal(trackingScrolls.length,pausedScrolls,'Pause stops following as well as audio');
+  await trackPlayer.beforeNodes[0].handlers.click();
+  assert(trackingScrolls.slice(pausedScrolls).every(value=>value.top!==200),'Resume does not jump back to the answer beginning');
+  const beforeHidden=trackingScrolls.length;tracked.hide();trackPlayer.currentTime=95;trackPlayer.handlers.timeupdate();
+  assert.equal(trackingScrolls.length,beforeHidden,'Background playback does not move a hidden conversation');
+  tracked.show();await until(()=>!tracked.nodes.get('#conversation-refresh').disabled);
+  trackPlayer.ended=true;const trackEnded=trackPlayer.handlers.ended();tracked.clock.fire(180);await trackEnded;
+  assert.equal(tracked.audioCalls.at(-1).offset,1600,'Multipart continuation retains its exact canonical offset');
+  assert(trackingScrolls.slice(1).every(value=>value.top!==200),'Later chunks never restart following at the answer beginning');
+  trackPlayer.duration=100;trackPlayer.currentTime=80;
+  tracked.reducedMotion(true);tracked.nodes.get('#conversation-follow').handlers.change();trackPlayer.handlers.timeupdate();
+  await until(()=>ranges.at(-1)>3200);
+  assert.equal(trackingScrolls.at(-1).behavior,'instant','Reduced motion never introduces animated following');
+  trackLane.handlers.wheel();assert.equal(tracked.nodes.get('#conversation-follow').checked,false,'Manual reading explicitly releases Follow');
+  const manualScrolls=trackingScrolls.length;trackPlayer.currentTime=95;trackPlayer.handlers.timeupdate();
+  assert.equal(trackingScrolls.length,manualScrolls,'Following never fights a manual reader');
+  tracked.nodes.get('#conversation-follow').checked=true;tracked.nodes.get('#conversation-follow').handlers.change();
+  const beforeRevision=trackingScrolls.length;
+  tracked.overrideSource(8,{revision:'new-revision',text_sha256:'new-content'});await tracked.ui.refresh();
+  trackPlayer.handlers.timeupdate();assert.equal(trackingScrolls.length,beforeRevision,'A changed source cannot keep driving Follow');tracked.ui.stop();
+  }
 
   const telegramChat=boot(false,true);
   telegramChat.telegramOriginals.set('telegram:42',{id:'telegram:42',preview:'A human Telegram message',phase:'completed',sequence:42,capture_order:500,received_at:'2024-01-01T00:00:05.500Z',origin_kind:'telegram',read_only:true});
