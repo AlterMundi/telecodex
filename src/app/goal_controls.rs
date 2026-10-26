@@ -32,10 +32,35 @@ struct Decision {
 }
 
 pub(super) fn capabilities(value: &mut Value) {
-    value["operations"]["goal_prepare"] = json!({"arguments":{"selector":"one enrolled target","target_binding":"exact goal_inspect target_binding","input_ref":"actual retained explicit human command reference, omitted ONLY for an assistant proposal","plan":{"action":"start|edit|pause|resume|clear|replace","expected":"exact native {goal,revision} from goal_inspect","objective":"optional selected objective","token_budget":"optional expressly requested budget","followup":"optional exact follow-up clause of the human instruction"},"reason":"bounded explanation"},"description":"Retain one immutable goal-control interpretation. A supplied original must actually request this control. Omitted original means assistant proposal requiring later human confirmation. Retention never mutates the goal or starts work. Do not dispatch the same original separately; ordered follow-up belongs to this intent."});
+    value["operations"]["goal_prepare"] = json!({"arguments":{"selector":"one enrolled target","target_binding":"exact goal_inspect target_binding","input_ref":"actual retained explicit human command reference, omit for a daimon action only with effective delegation; otherwise an assistant proposal","plan":{"action":"start|edit|pause|resume|clear|replace","expected":"exact native {goal,revision} from goal_inspect","objective":"optional selected objective","token_budget":"optional expressly requested budget","followup":"optional exact follow-up clause of the human instruction"},"reason":"bounded explanation"},"description":"Retain one immutable goal-control interpretation. A supplied original must actually request this control. Omitted original uses an effective retained delegation for its supported actions, otherwise it is an assistant proposal requiring later human confirmation. Retention never mutates the goal or starts work. Do not dispatch the same original separately; ordered follow-up belongs to this intent."});
     value["operations"]["goal_decide"] = json!({"arguments":{"id":"retained proposal","input_ref":"actual later captured human confirmation/cancellation","execute":"true only when this human input explicitly accepts the exact proposal"},"description":"Single-use proposal decision; actual capture must postdate proposal creation. No native mutation. Stale goal definitions are rejected at execution, never silently refreshed."});
     value["operations"]["goal_status"] = json!({"arguments":{"id":"retained goal-control ID"},"description":"Inspect immutable interpretation and outcome; never replay uncertain work."});
     value["operations"]["goal_execute"] = json!({"arguments":{"id":"prepared explicit or confirmed goal-control ID"},"description":"Execute one frozen explicit or confirmed control. Pause/clear/inactive edits mutate conditional metadata on the owning writer; an exact human follow-up then uses ordinary start/steer on its collector without reactivating the goal. Start/resume/replace/active edits use its native continuation collector with fresh invocation context; there is no artificial kickoff. No implicit interrupt. Inspect retained status after queued admission. A known-unsent outcome may retry this same frozen intent after checking readiness, without another human confirmation. Native acknowledgment is separate from work incorporation. Lost ACK and partial effects are never replayed."});
+}
+
+/// The existing owner socket supplies authentication and the human scope.
+/// Client JSON cannot name another human or act as a live daimon execution.
+pub(super) async fn owner_command(app: &App, human: i64, args: &str) -> Result<Value> {
+    if args == "delegation" {
+        return app.shared.store.goal_delegation_read(human);
+    }
+    if let Some(json) = args.strip_prefix("delegation set ") {
+        let update: crate::store::GoalDelegationUpdate = serde_json::from_str(json)?;
+        return app.shared.store.goal_delegation_update(human, &update);
+    }
+    if let Some(selected) = args.strip_prefix("inspect ") {
+        let fields: Vec<_> = selected.split_whitespace().collect();
+        if fields.len() != 2 {
+            bail!("Expected goal inspect CHAT TOPIC");
+        }
+        return super::goals::inspect_target(
+            app,
+            human,
+            SessionKey::new(fields[0].parse()?, Some(fields[1].parse()?)),
+        )
+        .await;
+    }
+    bail!("Expected goal delegation | delegation set JSON | inspect CHAT TOPIC");
 }
 
 pub(super) async fn tool(
@@ -47,9 +72,19 @@ pub(super) async fn tool(
     args: Value,
     closed: &CancellationToken,
 ) -> Result<Value> {
-    let cfg = super::routing::profile(&app.shared)?;
-    if cfg.human_id != human || cfg.entry() != key {
-        bail!("Goal controls require the owned integrating entry");
+    let integrator = app
+        .shared
+        .config
+        .interaction
+        .as_ref()
+        .is_some_and(|cfg| cfg.human_id == human && cfg.entry() == key);
+    if !integrator
+        && !app
+            .shared
+            .store
+            .goal_delegation_allows_actor(human, key, &request.thread_id)?
+    {
+        bail!("This native execution has no effective goal delegation");
     }
     let local = app
         .workers
@@ -70,7 +105,7 @@ pub(super) async fn tool(
         local,
         native: &request.thread_id,
         physical: &request.turn_id,
-        integrator: true,
+        integrator,
     };
     match operation {
         "goal_prepare" => {
@@ -80,7 +115,13 @@ pub(super) async fn tool(
                 .strip_prefix("/self#")
                 .or_else(|| args.selector.strip_prefix('#'))
                 .unwrap_or(&args.selector);
-            let targets = cfg.resolve(selector);
+            let targets = if integrator {
+                super::routing::profile(&app.shared)?.resolve(selector)
+            } else {
+                app.shared
+                    .store
+                    .goal_delegated_targets(human, key, selector)?
+            };
             if targets.len() != 1 {
                 return Ok(json!({"kind":"clarification_required","candidates":targets}));
             }
@@ -196,7 +237,7 @@ pub(super) async fn tool(
                     local,
                     native: &actor_native,
                     physical: &actor_physical,
-                    integrator: true,
+                    integrator,
                 };
                 owned_app.shared.store.goal_control_validate_submission(
                     &actor,
@@ -208,6 +249,7 @@ pub(super) async fn tool(
             let receipt_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
             let control = crate::codex::GoalControl::ConditionalMetadata(Box::new(
                 crate::codex::GoalMetadataControl {
+                    origin: mutation_origin(&value),
                     plan: plan.clone(),
                     admission: admission.clone(),
                     receipt: receipt_slot.clone(),
@@ -221,7 +263,7 @@ pub(super) async fn tool(
                 Ok(false)=>{
                     if app.workers.lock().await.contains_key(&target) {
                         ("known_unsent".into(),json!({"error":"Selected writer is preparing; no independent goal mutation submitted","automatic_retry":false}))
-                    }else{app.shared.codex.conditional_goal_metadata(native,&plan,&admission).await}
+                    }else{app.shared.codex.conditional_goal_metadata(native,&plan,&admission,mutation_origin(&value)).await}
                 },
                 Err(_)=>("uncertain".into(),json!({"error":"Selected writer goal-control acknowledgment unavailable","automatic_retry":false})),
             };
@@ -232,6 +274,14 @@ pub(super) async fn tool(
             app.shared.store.goal_control_read(human, key, &args.id)
         }
         _ => bail!("Unsupported goal-control operation"),
+    }
+}
+
+fn mutation_origin(value: &Value) -> crate::codex::GoalMutationOrigin {
+    if value["intent"]["delegation"].is_object() {
+        crate::codex::GoalMutationOrigin::Automatic
+    } else {
+        crate::codex::GoalMutationOrigin::User
     }
 }
 
@@ -281,6 +331,7 @@ async fn activate_control(
     });
     let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
     let mut control = crate::codex::GoalMetadataControl {
+        origin: mutation_origin(value),
         plan: plan.clone(),
         admission,
         receipt: slot.clone(),
@@ -408,4 +459,68 @@ impl Drop for GoalExecutionGuard {
             tracing::warn!("Goal retirement notice retained without a publication wake");
         }
     }
+}
+
+/// A narrow facade for an actual native work execution. It does not grant the
+/// routing, Matrix, original-input or global controls of an integrating entry.
+pub(super) fn delegated_call(
+    app: App,
+    key: SessionKey,
+    human: i64,
+    request: crate::codex::DynamicToolRequest,
+    operation: String,
+    args: Value,
+    closed: CancellationToken,
+) -> oneshot::Receiver<Value> {
+    let (send, recv) = oneshot::channel();
+    tokio::spawn(async move {
+        let result:Result<Value>=async {
+            if closed.is_cancelled() || request.namespace.is_some() || args.to_string().len()>16000 ||
+                !app.shared.store.goal_delegation_allows_actor(human,key,&request.thread_id)? {
+                bail!("Goal delegation is unavailable for this execution");
+            }
+            match operation.as_str() {
+                "capabilities" if args==json!({}) => {
+                    let mut view=json!({"schema":"telecodex.delegated-goals/v1","operations":{},"scope":"retained human delegation; current owned native sessions only","native_origin":"automatic"});
+                    delegated_capabilities(&mut view);
+                    Ok(view)
+                }
+                "goal_inspect" => {
+                    #[derive(Deserialize)]
+                    #[serde(deny_unknown_fields)]
+                    struct Inspect { selector:String }
+                    let selected:Inspect=serde_json::from_value(args)?;
+                    let selector=selected.selector.strip_prefix('#').unwrap_or(&selected.selector);
+                    let targets=app.shared.store.goal_delegated_targets(human,key,selector)?;
+                    if targets.len()!=1 {return Ok(json!({"kind":"clarification_required","candidates":targets,"read_only":true}));}
+                    super::goals::inspect_target(&app,human,targets[0]).await
+                }
+                "goal_prepare"|"goal_status"|"goal_execute" => tool(&app,key,human,&request,&operation,args,&closed).await,
+                _=>bail!("Unsupported delegated goal operation"),
+            }
+        }.await;
+        let result = match result {
+            Ok(value) => crate::codex::dynamic_tool_result(true, value.to_string()),
+            Err(error) => crate::codex::dynamic_tool_result(
+                false,
+                format!(
+                    "Goal control was not confirmed: {error}. Inspect retained status before retrying; uncertain work is not replayable."
+                ),
+            ),
+        };
+        let _ = send.send(result);
+    });
+    recv
+}
+
+pub(super) fn delegated_capabilities(view: &mut Value) {
+    capabilities(view);
+    view["operations"]
+        .as_object_mut()
+        .expect("operations")
+        .remove("goal_decide");
+    view["operations"]["goal_inspect"] = json!({"arguments":{"selector":"self, exact owned session title or stable tID; ambiguous matches require clarification"},"description":"Inspect current native goal snapshot/revision and actual target binding without mutation."});
+    view["operations"]["goal_prepare"]["description"] = json!(
+        "Prepare edit objective, pause or resume under the current retained human delegation. Omit input_ref for a daimon action, retain the exact inspected target_binding and native snapshot, and give a bounded reason. Budget changes, destructive actions and invented human follow-up are outside this delegation. The receiver records actual native actor and native origin=automatic. Preparation does not execute; use goal_execute, then inspect status after uncertain admission."
+    );
 }

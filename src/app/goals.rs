@@ -793,7 +793,14 @@ pub(super) async fn inspect(
             json!({"kind":"clarification_required","selector":args.selector,"candidates":targets,"read_only":true}),
         );
     }
-    let target = targets[0];
+    inspect_target(app, human, targets[0]).await
+}
+
+pub(super) async fn inspect_target(
+    app: &App,
+    human: i64,
+    target: SessionKey,
+) -> Result<serde_json::Value> {
     let binding = app
         .shared
         .store

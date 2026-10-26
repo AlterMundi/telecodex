@@ -350,6 +350,11 @@ pub(super) async fn process_turn(
     let controller_possible = shared.config.interaction.as_ref().is_some_and(|c| {
         c.human_id == queued.request.from_user_id
             && (c.entry() == session.key || super::routing::enrolled(&shared, session.key))
+    }) || session.codex_thread_id.as_deref().is_some_and(|native| {
+        shared
+            .store
+            .goal_delegation_allows_actor(queued.request.from_user_id, session.key, native)
+            .unwrap_or(false)
     });
     if queued.request.review_mode.is_none()
         && shared.store.topic_publication_owner(session.key)? == Some(queued.request.from_user_id)
@@ -680,6 +685,11 @@ pub(super) async fn process_turn(
                         .as_ref()
                         .is_some_and(|g| g.conditional.is_some()))
                     && super::routing::enrolled(&shared, session.key)))
+    }) || session.codex_thread_id.as_deref().is_some_and(|native| {
+        shared
+            .store
+            .goal_delegation_allows_actor(runtime_request.from_user_id, session.key, native)
+            .unwrap_or(false)
     });
     if controller_selected && let Some(hint) = controller_hint {
         runtime_request

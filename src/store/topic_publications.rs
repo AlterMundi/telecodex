@@ -78,7 +78,12 @@ pub(super) fn goal_control_on(conn: &Connection, id: &str, phase: &str) -> Resul
         "uncertain" => "Outcome unknown; the action will not be replayed automatically.",
         _ => return Err(anyhow!("Invalid goal publication outcome")),
     };
-    let body = format!("↪ Integrator action · goal {action}\n{outcome}");
+    let author = if doc["delegation"].is_object() {
+        "Daimon action"
+    } else {
+        "Integrator action"
+    };
+    let body = format!("↪ {author} · goal {action}\n{outcome}");
     let source = json!([id, doc["attempt"], phase]).to_string();
     conn.execute("INSERT OR IGNORE INTO topic_publications(local_turn,session_id,human_id,kind,source,body,phase,instance_id)
         VALUES(?1,?2,?3,'control',?4,?5,'ready','')",

@@ -34,8 +34,8 @@ use tokio_util::sync::CancellationToken;
 
 mod goals;
 pub use goals::{
-    GoalActivation, GoalControl, GoalControlScope, GoalMetadataControl, GoalStopSnapshot,
-    NativeGoal, NativeGoalSnapshot,
+    GoalActivation, GoalControl, GoalControlScope, GoalMetadataControl, GoalMutationOrigin,
+    GoalStopSnapshot, NativeGoal, NativeGoalSnapshot,
 };
 
 /// The provider observed cancellation before it attempted the initial native
@@ -1630,7 +1630,7 @@ where
                         continue;
                     }
                     if let Some(GoalControl::ConditionalMetadata(control))=steer.goal.as_ref() {
-                        let result=goals::conditional_metadata(&mut process,&thread_id,&control.plan,&control.admission).await;
+                        let result=goals::conditional_metadata(&mut process,&thread_id,&control.plan,&control.admission,control.origin).await;
                         if result.0=="acknowledged" {
                             if matches!(control.plan.action,crate::store::GoalAction::Pause|crate::store::GoalAction::Clear) {staged_goal=false;}
                             goal_snapshot_request_id=None;

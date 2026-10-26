@@ -235,6 +235,7 @@ impl TelegramClient {
     where
         F: FnOnce() -> Result<Option<(SendMessage, C)>>,
     {
+        self.check_adapter()?;
         self.outbound.wait(chat).await;
         let Some((message, context)) = prepare()? else {
             return Ok(None);
@@ -414,6 +415,7 @@ impl TelegramClient {
     where
         F: FnOnce() -> Result<()>,
     {
+        self.check_adapter()?;
         #[derive(Serialize)]
         struct Payload<'a> {
             chat_id: i64,
@@ -854,6 +856,7 @@ impl TelegramClient {
     where
         F: FnOnce() -> Result<bool>,
     {
+        self.check_adapter()?;
         let method = match field {
             "photo" => "sendPhoto",
             "audio" => "sendAudio",
@@ -2097,5 +2100,34 @@ mod disabled_adapter_tests {
                 .is_err()
         );
         assert!(!target.exists());
+        // No reservation callback may run: zero network operations means known
+        // unsent, not an uncertain attempt or consumed publication receipt.
+        assert!(
+            client
+                .send_message_checked::<_, ()>(100, || panic!("reserved disabled message"))
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .create_forum_topic_checked(100, "Disabled", || panic!("reserved disabled topic"))
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .send_file_bytes_checked(
+                    100,
+                    None,
+                    "document",
+                    vec![],
+                    "file",
+                    None,
+                    None,
+                    || panic!("reserved disabled file")
+                )
+                .await
+                .is_err()
+        );
     }
 }

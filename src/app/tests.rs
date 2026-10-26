@@ -2853,9 +2853,11 @@ async fn topic_catalog_records_actual_api_receipts_without_accepting_false_ack()
 #[cfg(unix)]
 #[tokio::test]
 async fn backend_serves_owner_controls_with_no_telegram_credentials_or_api() {
+    use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
     let root = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let database = root.path().join("backend.sqlite");
     let socket = root.path().join("owner.sock");
     let mut config = sample_config(database.clone(), root.path().into());
@@ -2873,13 +2875,16 @@ async fn backend_serves_owner_controls_with_no_telegram_credentials_or_api() {
     assert_eq!(app.shared.bot_id, 0);
     assert!(app.shared.bot_username.is_none());
     let cancellation = app.shared.shutdown.clone();
-    let running = tokio::spawn(app.run());
+    let mut running = tokio::spawn(app.run());
     let mut stream = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match UnixStream::connect(&socket).await {
                 Ok(stream) => break stream,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    sleep(Duration::from_millis(10)).await
+                    tokio::select! {
+                        ended = &mut running => panic!("Backend exited before owner socket readiness: {ended:?}"),
+                        _ = sleep(Duration::from_millis(10)) => {},
+                    }
                 }
                 Err(error) => panic!("Backend control connection failed: {error}"),
             }
@@ -2888,7 +2893,7 @@ async fn backend_serves_owner_controls_with_no_telegram_credentials_or_api() {
     .await
     .unwrap();
     stream
-        .write_all(b"{\"command\":\"topics list 0\"}\n")
+        .write_all(b"{\"command\":\"topics list 1\"}\n")
         .await
         .unwrap();
     let mut response = String::new();

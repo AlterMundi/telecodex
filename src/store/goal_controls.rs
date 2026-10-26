@@ -137,6 +137,9 @@ fn command_generation_on(conn: &Connection, target: SessionKey) -> Result<Option
 fn eligible_on(conn: &Connection, human: i64, entry: SessionKey, value: &Value) -> Result<()> {
     let d = &value["intent"];
     let target: SessionKey = serde_json::from_value(d["target"].clone())?;
+    if d["delegation"].is_object() {
+        super::goal_delegations::validate_on(conn, human, target, &d["delegation"])?;
+    }
     let generation = serde_json::to_value(command_generation_on(conn, target)?)?;
     let expected_generation = if d["ever_claimed"] == true
         || matches!(value["phase"].as_str(), Some("claimed" | "submitted"))
@@ -302,14 +305,29 @@ impl Store {
         closed: &CancellationToken,
     ) -> Result<(Value, bool)> {
         plan.validate()?;
-        if !actor.integrator || reason.trim().is_empty() || reason.len() > 2000 {
-            bail!("Owned integrating execution and bounded reason required");
+        if reason.trim().is_empty() || reason.len() > 2000 {
+            bail!("Bounded goal-control reason required");
         }
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         super::live_tasks::actor_on(&tx, actor, closed)?;
         let entry_binding = binding_on(&tx, actor.human, actor.key)?;
         let actual_binding = binding_on(&tx, actor.human, target)?;
+        let delegation = if reference.is_none() && super::goal_delegations::delegated_plan(plan) {
+            super::goal_delegations::grant_on(&tx, actor.human, target, false)
+                .ok()
+                .map(|mut grant| {
+                    grant["principal"] = json!("daimon");
+                    grant
+                })
+        } else {
+            None
+        };
+        if !actor.integrator && (delegation.is_none() || reference.is_some()) {
+            bail!(
+                "This execution requires an effective goal delegation for the selected operation"
+            );
+        }
         // Match the inspected public binding format, including incarnation.
         if json!({"binding":actual_binding[0],"entry_binding":[actor.human,target,actual_binding[1],actual_binding[2]]})
             != *target_binding
@@ -378,15 +396,16 @@ impl Store {
             [],
             |r| r.get(0),
         )?;
-        let phase = if source.is_some() {
+        let phase = if source.is_some() || delegation.is_some() {
             "prepared"
         } else {
             "awaiting_confirmation"
         };
         let doc = json!({"entry":actor.key,"entry_binding":entry_binding,"target":target,"target_binding":actual_binding,
-            "goal_command_generation":command_generation_on(&tx,target)?,"plan":plan,"reason":reason,"original":source,"proposal":source.is_none(),"confirmation":null,
-            "proposal_capture_barrier":barrier,"authorization_order":source.as_ref().map(|s|&s["capture_order"]),"expires_at":Utc::now().timestamp()+900,
-            "actor":{"native":actor.native,"physical":actor.physical,"local":actor.local},"created_at":now_string()});
+            "goal_command_generation":command_generation_on(&tx,target)?,"plan":plan,"reason":reason,"original":source,"proposal":source.is_none() && delegation.is_none(),"confirmation":null,
+            "proposal_capture_barrier":barrier,"authorization_order":source.as_ref().map(|s|s["capture_order"].clone()).or_else(||delegation.as_ref().map(|_|json!(barrier))),"expires_at":Utc::now().timestamp()+900,
+            "delegation":delegation,
+            "actor":{"kind":if delegation.is_some(){"daimon"}else{"human_instruction_interpreter"},"native":actor.native,"physical":actor.physical,"local":actor.local},"created_at":now_string()});
         let value = json!({"id":id,"phase":phase,"intent":doc});
         eligible_on(&tx, actor.human, actor.key, &value)?;
         tx.execute("INSERT INTO interaction_goal_controls(id,human_id,entry_chat,entry_topic,target_chat,target_topic,phase,doc,instance_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,actor.human,actor.key.chat_id,actor.key.thread_id,target.chat_id,target.thread_id,phase,doc.to_string(),self.instance_id])?;
@@ -505,6 +524,8 @@ impl Store {
                 .push(previous);
         }
         claimed["worker_execution"] = Value::Null;
+        claimed["execution_actor"] =
+            json!({"native":actor.native,"physical":actor.physical,"local":actor.local});
         claimed["ever_claimed"] = json!(true);
         claimed["attempt"] = json!(Uuid::now_v7().to_string());
         let target: SessionKey = serde_json::from_value(d["target"].clone())?;
@@ -595,12 +616,16 @@ impl Store {
         } else {
             &doc["confirmation"]["original"]
         };
-        let reference: InputReference = serde_json::from_value(selected["input_ref"].clone())?;
-        let source = match reference {
-            InputReference::Conversation(id) => id,
-            InputReference::Telegram(update) => format!("telegram:{update}"),
-        };
-        super::conversation_inputs::select_return_on(&tx, human, native, &source)?;
+        if doc["delegation"].is_null() {
+            let reference: InputReference = serde_json::from_value(selected["input_ref"].clone())?;
+            let source = match reference {
+                InputReference::Conversation(id) => id,
+                InputReference::Telegram(update) => format!("telegram:{update}"),
+            };
+            super::conversation_inputs::select_return_on(&tx, human, native, &source)?;
+        }
+        // Delegated control is an application action. It preserves the latest
+        // actual human-selected return, without inventing another ingress.
         let changed=tx.execute("UPDATE interaction_goal_controls SET doc=?2 WHERE id=?1 AND phase IN ('claimed','submitted') AND instance_id=?3",params![id,doc.to_string(),self.instance_id])?;
         if changed != 1 {
             bail!("Goal submission no longer owned");

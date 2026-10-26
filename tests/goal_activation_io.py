@@ -51,7 +51,7 @@ class Activation(Controls):
             return True
         if method=='thread/goal/conditionalActivate':
             thread=p['threadId'];revision=str(self.revisions.get(thread,0))
-            assert p['additionalContext'] and p['origin']=='user'
+            assert p['additionalContext'] and p['origin']==self.expected_origin
             assert len(p['additionalContext'])<=8 and len(json.dumps(p['additionalContext'],separators=(',',':')).encode())<=32768
             if revision!=p['expectedRevision']:
                 send({'id':message['id'],'error':{'code':-32600,'message':'goal changed'}});return True

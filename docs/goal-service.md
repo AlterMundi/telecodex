@@ -33,12 +33,61 @@ targets. Current revision, delegation and next attempt remain unknown;
 `execution_enabled=false`. Unavailable is not idle or recovered. These reads have
 no native mutation, inference, Telegram request or lifecycle effect.
 
-This slice does **not** implement delegated execution, scheduling, automatic
-resumption, retry settings, Alerts or client recovery controls. It is not a
-claim that #297 acceptance has passed or recovery is deployed/default-enabled.
-Existing explicit pauses, blocked goals and maintenance/Stop fences are unchanged.
-The old integrator confirmation policy still applies until the retained-delegation
-extension is delivered. No existing goal has been resumed by this work.
+The current implementation also extends retained controls with revocable owner-
+installed human delegation and receiver-attributed daimon execution. That extension
+is undergoing qualification; it is not deployed. Automatic scheduling, retry
+settings, Alerts and native recovery acceptance remain unfinished. No existing
+pause, blocked goal or receiving installation has changed.
+
+## Retained delegation and shared client contract
+
+The existing authenticated owner gateway accepts `goal delegation`,
+`goal delegation set JSON` and `goal inspect CHAT TOPIC`. The CLI forwards them
+through `telecodex --control CONFIG goal ...`; it does not start a second backend.
+The authenticated gateway supplies the human scope; JSON cannot select another
+human. A grant records an actual delegation source and the installing owner
+principal, rather than fabricating human speech or a Telegram update.
+
+The bounded update is:
+
+```json
+{
+  "request_id": "a caller-retained UUID",
+  "expected_revision": null,
+  "source": "the actual retained human delegation record",
+  "scope": "owned_sessions",
+  "agents": true,
+  "recovery": true
+}
+```
+
+First installation expects no revision. Later changes require the exact current
+revision. Reuse the request UUID when inspecting/retrying the same update;
+changed arguments are rejected. Retrying an earlier grant after revocation returns
+its historical receipt and current grant, never reactivating the older revision.
+Turning `agents`/`recovery` off revokes that principal. Grant storage survives
+restart and stays isolated by authorizing human and current session ownership.
+The recovery flag is retained authorization only: the scheduler is not yet
+implemented or activated by this checkpoint.
+
+An effective agent grant exposes only `goal_inspect`, `goal_prepare`,
+`goal_execute` and `goal_status` through the existing live native controller.
+It does not grant routing, Matrix, arbitrary original-input access, or global
+Stop. Targets are current owned native sessions, selected by `self`, exact title
+or stable `tID`; ambiguous matches require clarification. The actual current
+native execution must prepare/claim the intent. Intents retain that author,
+executor, target binding, native revision and delegation revision. Revocation,
+rebinding, newer direction, Stop or maintenance invalidate stale admission.
+
+Omit `input_ref` for a daimon action. Delegation supports objective edit, pause
+and resume of an existing goal; budget changes, start/clear/replace and invented
+human follow-up are outside this grant. Unsupported proposals retain the existing
+integrator confirmation route, while ordinary work executions cannot acquire
+that role. Delegated native controls use `origin=automatic`; actual retained
+human commands keep `origin=user`. Linking a delegated continuation preserves the
+latest actual human-selected return surface. It never inserts a dummy original
+or return selection. The receiver still distinguishes metadata/work admission,
+uncertain ACK and useful completed work.
 
 ## Optional Telegram transport
 
