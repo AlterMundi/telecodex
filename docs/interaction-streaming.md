@@ -152,5 +152,42 @@ No subsequent worker response is synthesized speculatively.
 This reduces the amount of committed text required for the first audio and
 allows the next segment to prepare during playback. It is not token-level native
 LLM output streaming, a measured latency result, or completion of foreground
-separation/barge-in. The option remains receiving-disabled until qualified with
-the actual selected voice and browser; no conversational model changes with it.
+separation/barge-in. The option is receiving-enabled in CompAII’s selected app after actual-provider
+and Chromium qualification (PR316). This does not change its conversational model.
+Streaming input recognition remains receiving-disabled.
+
+
+### Receiving qualification and next transport
+
+PR316 passed CI40415564333 and independent review. Real Chromium at phone,
+keyboard-sized phone and desktop dimensions exercised exact prefix validation,
+0→240→880 offset ordering, one-ahead preparation, Pause/Play reuse, Stop and
+composer containment with a synthetic audio element and no audio-device opens.
+Native image-array support from PR300 was selected before these web assets;
+current native source is d6667ba8 and web/scripts source884f884. Active native
+collectors were reattached without replay, kickoff or goal changes. Retain the
+collection-capable reader when rolling back; never restore old input journals.
+
+One synthetic mixed-language text (1,149 characters) on the existing
+qwen-audio-3.0-tts-plus / longanlufeng route took18.74seconds to synthesize in
+full. Its228-character first segment took6.23seconds and produced14.88seconds
+of audio; the following626-character segment took15.63seconds. These are
+single uncached server observations, not a latency distribution or phone/hearing
+acceptance. The next segment can still outlast current playback; a gap remains
+possible. Source-linked batch preparation is useful but insufficient for the
+continuous-voice target.
+
+A separate, single bounded request qualified the same selected model/voice's
+[documented SSE output](https://www.alibabacloud.com/help/en/model-studio/qwen-audio-tts-http-api)
+with `X-DashScope-SSE: enable`, mono24kHz PCM and no URL download. First audio
+bytes arrived at1.58seconds; completion at3.36seconds supplied468,480 bytes
+(9.76seconds of PCM) in23 events. No physical playback or native admission ran.
+This proves the receiving route accepts streaming output; it does not prove
+intelligible sound latency or a working browser streaming player.
+
+The next output slice must connect this stream to a bounded authenticated
+browser player, preserving canonical source/revision checks before audible
+output, one owned provider attempt, cancellation without native-job cancellation,
+played/remaining position, explicit Voice controls and existing batch fallback.
+Do not repeat synthesis to repair an uncertain observation, send credentials to
+the browser, or count this transport probe as delivered continuous voice.
