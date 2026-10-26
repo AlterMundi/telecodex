@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 function boot(readOnly=false,standalone=false,options={}) {
-  const optionsForFixture=options;
+  const optionsForFixture=options;const streamedTransports=[];
   const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
   const recoveryPosts=[],mediaActions=new Map();const mediaSession={setActionHandler:(name,fn)=>mediaActions.set(name,fn)};
   const gaps=new Map(),documentEvents=new Map(),windowEvents=new Map();
@@ -134,7 +134,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", can_listen:true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
+    return {binding:"fixture", csrf:"synthetic", can_listen:true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
@@ -150,7 +150,7 @@ function boot(readOnly=false,standalone=false,options={}) {
         if(optionsForFixture.incremental){
           const chars=Array.from(replyTexts.get(selected.source)||'Selected reply'),end=Math.min(chars.length,selected.offset+(selected.offset===0?120:300));
           const text=chars.slice(selected.offset,end).join(''),sha=require('node:crypto').createHash('sha256').update(text).digest('hex');
-          return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':end<chars.length?String(end):'','x-presentation-end-offset':String(end),'x-presentation-text-sha256':sha,'x-presentation-prefetch':'true','x-audio-sha256':hash}}));
+          return Promise.resolve(new Response(data,{headers:{...(optionsForFixture.progressive?{'content-type':'application/x-ndjson','x-audio-encoding':'mp3'}:{}),'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':end<chars.length?String(end):'','x-presentation-end-offset':String(end),'x-presentation-text-sha256':sha,'x-presentation-prefetch':'true','x-audio-sha256':hash}}));
         }
         return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':multipart&&selected.offset===0?'1600':'','x-audio-sha256':hash}}));
       }
@@ -161,6 +161,9 @@ function boot(readOnly=false,standalone=false,options={}) {
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.()};}};
+  if(options.progressive)context.window.SpeechStream={available:()=>true,open(_response,signal){
+    const value={url:'blob:fixture-stream',signal,cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
+  }};
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   if(options.autoText)context.window.IntersectionObserver=class{
     constructor(callback){intersection=callback;}observe(){}unobserve(){}disconnect(){}
@@ -175,7 +178,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     assert(document.querySelector("#conversation-sound").children.includes(document.querySelector("#conversation-sound-controls")));
   }
   ui.authenticated();
-  return {ui, nodes, requests, originals,replyTexts,partReads,humanTasks,
+  return {ui, nodes, requests, originals,replyTexts,partReads,humanTasks,streamedTransports,
     rangeGeometry(fn){context.document.createRange=fn;},
     reducedMotion(value){context.window.matchMedia=()=>({matches:value});},
     holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
@@ -447,6 +450,16 @@ function boot(readOnly=false,standalone=false,options={}) {
   lane.scrollTo=value=>{scrolls.push(value);lane.scrollTop=value.top;};
   const spokenCard=n=>lane.children.find(card=>card.dataset.sourceId===`native:${n}`);
   const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen');
+  const buffering=boot(false,true,{incremental:true,progressive:true});buffering.audio();await buffering.ui.refresh();
+  const heldBuffer=buffering.holdReplyText('native:8');
+  const bufferingCard=buffering.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:8');
+  const preparing=listenButton(bufferingCard).handlers.click();await heldBuffer.entered;
+  assert.equal(buffering.streamedTransports.length,1);buffering.ui.pause();
+  assert.equal(buffering.streamedTransports[0].signal.aborted,false,'Pause while validating/buffering preserves the one streaming attempt');
+  heldBuffer.release();await preparing;
+  await buffering.nodes.get('#conversation-audio').beforeNodes[0].handlers.click();
+  assert.equal(buffering.audioCalls.length,1,'Play resumes the same buffered stream without another preparation');
+  buffering.ui.stop();assert.equal(buffering.streamedTransports[0].cancelled,true,'Stop still cancels the owned stream');
   spokenCard(8).getBoundingClientRect=()=>({top:300});spokenCard(7).getBoundingClientRect=()=>({top:450});
   assert.equal(followSwitch.checked,true,'Follow is enabled by default');
   await listenButton(spokenCard(8)).handlers.click();followSwitch.handlers.change();
