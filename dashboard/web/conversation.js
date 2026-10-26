@@ -697,7 +697,7 @@ window.Conversation = (() => {
     }
     let enabled = false, ready = false, reading = false, binding, canListen = false;
     let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
-    let initialized = false, active, generation = 0, requestAbort, blobUrl;
+    let initialized = false, active, generation = 0, requestAbort, blobUrl, prefetched;
     const audioState = (text) => { $("#conversation-audio-state").textContent = text; };
     const initialMode = () => readOnly || new URL(location.href).searchParams.get("view") === "conversation"
       || new URLSearchParams(telegram?.initData || "").get("start_param") === "conversation";
@@ -795,6 +795,7 @@ window.Conversation = (() => {
       presentState({playback:undefined});
       cancelSpeechWait();voiceBusy=false;generation++;
       requestAbort?.abort(); requestAbort = undefined;
+      prefetched?.controller.abort();prefetched=undefined;
       active = undefined;
       audio.pause(); audio.muted = true;
       audio.removeAttribute("src"); audio.load();
@@ -1040,8 +1041,17 @@ window.Conversation = (() => {
       try {
         const started = audio.play();
         const check = part(selected.source, selected.offset);
-        const [,verified]=await Promise.all([started, check]);
+        let [,verified]=await Promise.all([started, check]);
         if (active !== selected || generation !== owned) return;
+        if(selected.end!==undefined){
+          const chars=Array.from(verified.text),count=selected.end-selected.offset;
+          if(count>chars.length)throw Error("Audio exceeds its canonical text part");
+          const text=chars.slice(0,count).join("");
+          const hash=[...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(text)))].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+          if(hash!==selected.textHash)throw Error("Audio text prefix changed");
+          if(active!==selected || generation!==owned)return;
+          verified={...verified,text,next_offset:selected.next};
+        }
         audio.pause(); audio.currentTime = position;
         selected.verifying = false;
         selected.segmentEnded = false;
@@ -1062,6 +1072,7 @@ window.Conversation = (() => {
           mediaSession.playbackState="playing";
         }catch{}
         followPlayback();
+        prefetchNext(selected);
       } catch (e) {
         if (active !== selected || generation !== owned) return;
         selected.verifying = false;
@@ -1078,21 +1089,9 @@ window.Conversation = (() => {
         }
       }
     }
-    async function listenTo(source, offset = 0, chain) {
-      if(!chain?.queued)voiceSuspended=false;
-      stop();
-      if(voiceEnabled)voiceBusy=true;
-      const owned = generation;
-      active = {source, offset, generation:owned, auto:false, focusVersion:chain?.focusVersion ?? focusVersion,queued:!!chain?.queued};
-      const selected = active;
-      $("#conversation-player").hidden = false;
-      $("#conversation-playing").textContent = source.kind === "integrator_answer" ? "Conversation reply" : source.label;
-      presentState({playback:"preparing"});
-      audioState("Preparing audio…"); toggle.disabled = true;
-      requestAbort = new AbortController();
-      const controller = requestAbort;
-      const deadline = setTimeout(() => controller.abort(), 145000);
-      try {
+    async function requestAudio(source,offset,controller){
+      const deadline=setTimeout(()=>controller.abort(),145000);
+      try{
         const response = await fetch("api/interaction/audio", {method:"POST",credentials:"same-origin",
           headers:headers(),signal:controller.signal,body:JSON.stringify({source:source.id,revision:source.revision,offset})});
         if (!response.ok) {
@@ -1114,10 +1113,42 @@ window.Conversation = (() => {
         const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()))]
           .map((byte) => byte.toString(16).padStart(2,"0")).join("");
         if (hash !== response.headers.get("x-audio-sha256")) throw new Error("Audio integrity check failed");
-        if (active !== selected || generation !== owned) return;
-        const next = response.headers.get("x-presentation-next-offset");
-        selected.next = next === "" ? null : Number(next);
-        if (selected.next !== null && (!Number.isSafeInteger(selected.next) || selected.next <= offset)) throw new Error("Invalid audio continuation");
+        const nextHeader=response.headers.get("x-presentation-next-offset"),next=nextHeader===""?null:Number(nextHeader);
+        if(next!==null && (!Number.isSafeInteger(next)||next<=offset))throw Error("Invalid audio continuation");
+        const endHeader=response.headers.get("x-presentation-end-offset"),end=endHeader?Number(endHeader):undefined;
+        if(end!==undefined && (!Number.isSafeInteger(end)||end<=offset||end>offset+1600||next!==null&&next!==end))throw Error("Invalid audio segment boundary");
+        return {blob,next,end,textHash:response.headers.get("x-presentation-text-sha256"),prefetch:response.headers.get("x-presentation-prefetch")==="true"};
+      }finally{clearTimeout(deadline);}
+    }
+    function prefetchNext(selected){
+      if(!selected.prefetch || selected.next===null || voiceSuspended || active!==selected || prefetched)return;
+      const controller=new AbortController(),source=selected.source,offset=selected.next;
+      const waiting={controller,source,offset};prefetched=waiting;
+      // Retain the single attempt, including a failed/uncertain outcome. Consuming
+      // it must never silently repeat an ambiguous provider preparation.
+      waiting.result=requestAudio(source,offset,controller).then(value=>({value}),error=>({error}));
+    }
+    async function listenTo(source, offset = 0, chain) {
+      const prepared=prefetched && prefetched.source.id===source.id && prefetched.source.revision===source.revision && prefetched.offset===offset?prefetched:undefined;
+      if(prepared)prefetched=undefined;
+      if(!chain?.queued)voiceSuspended=false;
+      stop();
+      if(voiceEnabled)voiceBusy=true;
+      const owned = generation;
+      active = {source, offset, generation:owned, auto:false, focusVersion:chain?.focusVersion ?? focusVersion,queued:!!chain?.queued};
+      const selected = active;
+      $("#conversation-player").hidden = false;
+      $("#conversation-playing").textContent = source.kind === "integrator_answer" ? "Conversation reply" : source.label;
+      presentState({playback:"preparing"});
+      audioState("Preparing audio…"); toggle.disabled = true;
+      requestAbort = prepared?.controller||new AbortController();
+      const controller = requestAbort;
+      try {
+        const result=prepared?await prepared.result:{value:await requestAudio(source,offset,controller)};
+        if(result.error)throw result.error;
+        const {blob,...metadata}=result.value;
+        if(active!==selected || generation!==owned)return;
+        Object.assign(selected,metadata);
         blobUrl = URL.createObjectURL(blob);
         audio.src = blobUrl;
         toggle.disabled = false;
@@ -1129,7 +1160,7 @@ window.Conversation = (() => {
         $("#conversation-state").textContent = e.name === "AbortError" ? "Audio preparation ended. Your text replies remain available."
           : e.message || "Audio unavailable. Text replies remain available.";
         return {failed:true,generation};
-      } finally { clearTimeout(deadline); if (requestAbort === controller) requestAbort = undefined; }
+      } finally { if (requestAbort === controller) requestAbort = undefined; }
     }
     audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort){playLabel("Play audio");presentState({playback:undefined});}});
     audio.addEventListener("timeupdate",()=>followPlayback());

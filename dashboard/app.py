@@ -26,7 +26,7 @@ from .alerts import Receiver as AlertsReceiver, AlertsUnavailable
 from .traffic import Traffic
 from .menu_attention import attention_projection
 from .operator import sessions_selection
-from .speech import Speech, SpeechUnavailable
+from .speech import Speech, SpeechUnavailable, speech_part
 from .companion import Grants as CompanionGrants, permitted as companion_permitted
 from .home_auth import HomeAuth
 from scripts.speech_render import RenderError
@@ -823,7 +823,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             if not isinstance(body, dict) or set(body) != {'source', 'revision', 'offset'}:
                 raise ValueError()
             from starlette.concurrency import run_in_threadpool
-            selected = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
+            canonical = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
+            selected = speech_part(canonical) if speech.incremental else canonical
         except (ProviderUnavailable, OSError, ValueError, KeyError):
             raise HTTPException(409, 'Selected result changed or is unavailable; refresh the conversation') from None
         await authorize_async(request)
@@ -831,7 +832,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             data, rendered = await speech.render(selected)
             # Retained text, bindings and correction state are rechecked after synthesis.
             latest = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
-            if latest != selected:
+            if latest != canonical:
                 raise SpeechUnavailable('Presentation source changed')
         except (SpeechUnavailable, RenderError, ProviderUnavailable, OSError, ValueError, KeyError, TimeoutError):
             raise HTTPException(409, 'Speech outcome retained; refresh before continuing') from None
@@ -840,7 +841,10 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             'X-Presentation-Source':body['source'], 'X-Presentation-Revision':body['revision'],
             'X-Presentation-Offset':str(body['offset']),
             'X-Presentation-Next-Offset':str(selected['next_offset']) if selected['next_offset'] is not None else '',
-            'X-Audio-Sha256':rendered['audio_sha256'], 'X-Playback-Observation':'not_observed'})
+            'X-Audio-Sha256':rendered['audio_sha256'], 'X-Playback-Observation':'not_observed',
+            'X-Presentation-End-Offset':str(body['offset']+len(selected['text'])) if speech.incremental and selected.get('kind')!='native_question' else '',
+            'X-Presentation-Text-Sha256':hashlib.sha256(selected['text'].encode()).hexdigest() if speech.incremental and selected.get('kind')!='native_question' else '',
+            'X-Presentation-Prefetch':'true' if speech.incremental and selected.get('kind')!='native_question' else 'false'})
 
     @app.post('/api/alerts/attention')
     async def launcher_attention(request: Request):

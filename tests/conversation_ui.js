@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 function boot(readOnly=false,standalone=false,options={}) {
+  const optionsForFixture=options;
   const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
   const recoveryPosts=[],mediaActions=new Map();const mediaSession={setActionHandler:(name,fn)=>mediaActions.set(name,fn)};
   const gaps=new Map(),documentEvents=new Map(),windowEvents=new Map();
@@ -145,7 +146,12 @@ function boot(readOnly=false,standalone=false,options={}) {
       audioCalls.push(JSON.parse(options.body));
       if(audioFailures){audioFailures--;return Promise.resolve(new Response(JSON.stringify({detail:'Synthetic TTS outage'}),{status:503}));}
       if(renderAudio){
-        const selected=JSON.parse(options.body),data=Buffer.from('synthetic audio'),hash=require('node:crypto').createHash('sha256').update(data).digest('hex');
+        const selected=JSON.parse(options.body);if(optionsForFixture.failOffset===selected.offset)return Promise.resolve(new Response(JSON.stringify({detail:'Synthetic future preparation outage'}),{status:503}));const data=Buffer.from('synthetic audio'),hash=require('node:crypto').createHash('sha256').update(data).digest('hex');
+        if(optionsForFixture.incremental){
+          const chars=Array.from(replyTexts.get(selected.source)||'Selected reply'),end=Math.min(chars.length,selected.offset+(selected.offset===0?120:300));
+          const text=chars.slice(selected.offset,end).join(''),sha=require('node:crypto').createHash('sha256').update(text).digest('hex');
+          return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':end<chars.length?String(end):'','x-presentation-end-offset':String(end),'x-presentation-text-sha256':sha,'x-presentation-prefetch':'true','x-audio-sha256':hash}}));
+        }
         return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':multipart&&selected.offset===0?'1600':'','x-audio-sha256':hash}}));
       }
       return new Promise((_resolve, reject) => {
@@ -363,6 +369,20 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(paced.nodes.get('#conversation-requests').hidden,false,'The actionable question remains visible');
   paced.clock.fire(1200);await until(()=>paced.audioCalls.length===3&&!pacedPlayer.paused);
   assert.equal(paced.audioCalls[2].source,'native:10');paced.ui.stop();
+
+  const incremental=boot(false,true,{clock:true,incremental:true});incremental.audio();incremental.replyTexts.set('native:9','A sentence with Unicode 🙂. '.repeat(40));await incremental.ui.refresh();
+  incremental.nodes.get('#conversation-voice-replies').handlers.click();incremental.addReplies(1);await incremental.ui.refresh();
+  const early=incremental.nodes.get('#conversation-audio');await until(()=>incremental.audioCalls.length===2&&!early.paused);
+  assert.deepEqual(incremental.audioCalls.map(x=>x.offset),[0,120],'Exactly one future segment prepares during current playback');
+  incremental.ui.pause();early.beforeNodes[0].handlers.click();await until(()=>!early.paused&&!early.muted);assert.equal(incremental.audioCalls.length,2,'Resume reuses the owned future attempt');
+  early.ended=true;const continuing=early.handlers.ended();incremental.clock.fire(180);await continuing;await until(()=>incremental.audioCalls.length===3&&!early.paused).catch(e=>{throw Error(JSON.stringify({calls:incremental.audioCalls,state:incremental.nodes.get('#conversation-state').textContent,audioState:incremental.nodes.get('#conversation-audio-state').textContent,paused:early.paused,muted:early.muted}));});
+  assert.deepEqual(incremental.audioCalls.map(x=>x.offset),[0,120,420],'Continuation consumes its exact cached attempt and prepares only the next segment');
+  incremental.ui.stop();const stoppedCalls=incremental.audioCalls.length;incremental.clock.fire(180);await new Promise(r=>setImmediate(r));assert.equal(incremental.audioCalls.length,stoppedCalls,'Stop cannot revive prefetched speech');
+  const futureFailure=boot(false,true,{clock:true,incremental:true,failOffset:120});futureFailure.audio();futureFailure.replyTexts.set('native:9','Actual canonical text. '.repeat(40));await futureFailure.ui.refresh();
+  futureFailure.nodes.get('#conversation-voice-replies').handlers.click();futureFailure.addReplies(1);await futureFailure.ui.refresh();
+  const futurePlayer=futureFailure.nodes.get('#conversation-audio');await until(()=>futureFailure.audioCalls.length===2&&!futurePlayer.paused);
+  futurePlayer.ended=true;const futureEnd=futurePlayer.handlers.ended();futureFailure.clock.fire(180);await futureEnd;
+  assert.equal(futureFailure.audioCalls.filter(x=>x.offset===120).length,1,'Consuming a failed/uncertain future preparation never repeats its provider attempt');futureFailure.ui.stop();
 
   const background=boot(false,true,{clock:true});background.audio(true);await background.ui.refresh();
   background.nodes.get('#conversation-voice-replies').handlers.click();background.addReplies(1);await background.ui.refresh();

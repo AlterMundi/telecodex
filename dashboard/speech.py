@@ -16,12 +16,33 @@ class SpeechUnavailable(Exception):
     pass
 
 
+def speech_part(source):
+    """Choose an exact canonical prefix; offsets remain Unicode character counts."""
+    # Question labels and their synthetic prefixes keep the existing reader contract.
+    if source.get('kind') == 'native_question':
+        return source
+    text = source['text']
+    bound = 240 if source['offset'] == 0 else 640
+    if len(text) <= bound:
+        return source
+    window = text[:bound]
+    boundaries = [m.end() for m in re.finditer(r'[.!?](?:\s|$)|\n', window)
+                  if m.end() >= 60]
+    end = boundaries[-1] if boundaries else window.rfind(' ')
+    if end < 60:
+        end = bound
+    return {**source, 'text':text[:end], 'next_offset':source['offset']+end}
+
+
 class Speech:
     def __init__(self, config):
         self.binding = Path(config['binding'])
         self.timeout = config.get('timeout_seconds', 60)
         if not self.binding.is_absolute() or type(self.timeout) is not int or not 1 <= self.timeout <= 120:
             raise ValueError('Absolute owner speech binding and bounded deadline required')
+        self.incremental = config.get('incremental_segments',False)
+        if type(self.incremental) is not bool:
+            raise ValueError('incremental_segments must be a boolean')
         self.capacity = asyncio.Semaphore(2)
 
     async def render(self, source):

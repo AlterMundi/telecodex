@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
+from dashboard.speech import speech_part
 from dashboard.app import create_app
 from dashboard.companion import Grants, authority
 from dashboard.provider import Provider, ProviderUnavailable
@@ -138,6 +139,39 @@ class Companion(unittest.TestCase):
         with patch('dashboard.home_auth.identity_response',side_effect=delayed) as lookup:
             asyncio.run(scenario())
         self.assertEqual(lookup.call_count,2,'Revalidate after I/O without a cross-request identity cache')
+
+    def test_incremental_parts_preserve_full_unicode_text_and_question_contract(self):
+        text=('A sentence with a technical command git status and 🙂. '*70)
+        offset=0;parts=[]
+        while offset<len(text):
+            canonical={**self.provider.source,'text':text[offset:offset+1600],'offset':offset,
+                       'next_offset':offset+1600 if offset+1600<len(text) else None}
+            selected=speech_part(canonical);parts.append(selected['text'])
+            self.assertEqual(selected['text'],text[offset:offset+len(selected['text'])])
+            end=offset+len(selected['text']);self.assertGreater(end,offset)
+            self.assertLessEqual(len(selected['text']),240 if offset==0 else 640)
+            self.assertEqual(selected['next_offset'],end if end<len(text) else None)
+            offset=end
+        self.assertEqual(''.join(parts),text)
+        question={**self.provider.source,'kind':'native_question','text':text[:1500]}
+        self.assertIs(speech_part(question),question,'Synthetic question labels retain their established offsets')
+
+    def test_incremental_audio_is_an_exact_canonical_prefix(self):
+        self.config['speech']['incremental_segments']=True
+        self.provider.source['text']=('A complete sentence with Unicode 🙂 and a command git status. '*30)
+        self.client.close();self.client=self.client_for()
+        response=self.audio();self.assertEqual(response.status_code,200,response.text)
+        end=int(response.headers['x-presentation-end-offset'])
+        self.assertGreaterEqual(end,60);self.assertLessEqual(end,240)
+        prefix=self.provider.source['text'][:end]
+        self.assertEqual(response.headers['x-presentation-next-offset'],str(end))
+        self.assertEqual(response.headers['x-presentation-text-sha256'],hashlib.sha256(prefix.encode()).hexdigest())
+        self.assertEqual(response.headers['x-presentation-prefetch'],'true')
+        spoken=self.speech.calls[0][2]
+        self.assertIn(prefix.encode(),spoken)
+        self.assertNotIn(self.provider.source['text'].encode(),spoken)
+        self.assertEqual(self.audio().content,response.content)
+        self.assertEqual(len(self.speech.calls),1,'Exact prefix replay reads its retained synthesis')
 
     def test_private_enrollment_and_actual_selected_audio_reuse_after_restart(self):
         self.assertEqual(self.output.stat().st_mode & 0o777,0o600)
