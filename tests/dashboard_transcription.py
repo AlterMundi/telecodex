@@ -106,6 +106,17 @@ class StreamingTranscription(unittest.TestCase):
         self.assertEqual([x['text'] for x in results],['old','new'])
         self.assertEqual(self.stream.text,'new')
 
+    def test_silent_receive_interval_preserves_the_same_stream(self):
+        self.ready();self.stream.append(b'\0\0')
+        original=self.socket.recv
+        def timeout():raise TimeoutError('no new words yet')
+        self.socket.recv=timeout
+        self.assertEqual(self.stream.receive(),{'type':'status'})
+        self.assertEqual(self.stream.phase,'ready');self.assertFalse(self.socket.closed)
+        self.socket.recv=original
+        self.assertEqual(self.transcript('continued')['text'],'continued')
+        self.assertEqual(len(self.connections),1)
+
     def test_discard_does_not_commit(self):
         self.ready();self.stream.append(b'\0\0');self.stream.close()
         self.assertNotIn('input_audio_buffer.commit',[x['type'] for x in self.socket.sent])

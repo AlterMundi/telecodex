@@ -35,9 +35,11 @@ class TranscriptionStream:
         token = private_bytes(credential_file, 16384).decode().strip()
         if not token or any(c.isspace() for c in token):
             raise ValueError('Transcription credential unavailable')
+        self._timeout_errors = (TimeoutError,)
         if connect is None:
             import websocket
             connect = websocket.create_connection
+            self._timeout_errors += (websocket.WebSocketTimeoutException,)
         self.model = model
         self.phase = 'opening'
         self.audio_bytes = 0
@@ -55,6 +57,8 @@ class TranscriptionStream:
             # No redirects, auto-reconnect, provider trace or secret in arguments.
             self._socket = connect(endpoint, header=['Authorization: Bearer ' + token],
                                    timeout=10, redirect_limit=0, enable_multithread=True)
+            if hasattr(self._socket,'settimeout'):
+                self._socket.settimeout(1)
             self._send({'type': 'session.update', 'session': {
                 'modalities': ['text'], 'input_audio_format': 'pcm',
                 'turn_detection': None}})
@@ -110,6 +114,10 @@ class TranscriptionStream:
             event = json.loads(raw)
             if not isinstance(event, dict):
                 self._fail('invalid-transcription-event')
+        except self._timeout_errors:
+            # Silence is not a disconnection or permission to open a new stream.
+            # The owning capture's deadline/auth checks bound the whole session.
+            return {'type':'status'}
         except TranscriptionUnavailable:
             raise
         except Exception:

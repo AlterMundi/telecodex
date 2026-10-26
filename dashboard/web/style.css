@@ -896,3 +896,5 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 @media(max-width:380px) {
  .standalone-conversation header #conversation-companion pre { font-size:5px; }
 }
+
+#conversation-voice-state[data-live-caption="true"] { white-space:nowrap; overflow:hidden; text-overflow:clip; max-width:100%; }
