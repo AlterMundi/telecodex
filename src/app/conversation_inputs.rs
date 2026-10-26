@@ -11,7 +11,7 @@ struct Submit {
     id: String,
     text: String,
     #[serde(default)]
-    visual: Option<crate::visual::VisualReference>,
+    visual: Option<crate::visual::VisualSelection>,
     #[serde(default)]
     reply: Option<crate::store::ConversationReply>,
 }
@@ -600,7 +600,7 @@ struct VoiceSubmit {
     audio_sha256: String,
     mime: String,
     #[serde(default)]
-    visual: Option<crate::visual::VisualReference>,
+    visual: Option<crate::visual::VisualSelection>,
     #[serde(default)]
     reply: Option<crate::store::ConversationReply>,
 }

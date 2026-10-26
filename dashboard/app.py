@@ -577,11 +577,11 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         return result
 
     @app.get('/api/interaction/inputs/{ident}/image')
-    async def conversation_visual_image(request: Request,ident:str):
+    async def conversation_visual_image(request: Request,ident:str,index:int=0):
         await authorize_async(request)
         try:
             from starlette.concurrency import run_in_threadpool
-            data=await run_in_threadpool(provider.conversation_visual_image,ident)
+            data=await run_in_threadpool(provider.conversation_visual_image,ident,index)
         except (ValueError,ProviderUnavailable,OSError):raise HTTPException(409,'Selected image unavailable; do not substitute another view') from None
         await authorize_async(request)
         return Response(content=data,media_type='image/png')

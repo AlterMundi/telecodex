@@ -230,7 +230,7 @@ impl Store {
         &self,
         id: &str,
         human: i64,
-    ) -> Result<Option<crate::visual::VisualReference>> {
+    ) -> Result<Option<crate::visual::VisualSelection>> {
         let source = self.interaction_source(id, human)?;
         if source.channel != "conversation" {
             return Ok(None);

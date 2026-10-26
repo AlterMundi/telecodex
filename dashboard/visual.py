@@ -13,6 +13,7 @@ from .private_state import private_directory
 from scripts.speech_render import sync_directory
 
 MAX_BYTES = 2*1024*1024
+MAX_IMAGES = 8
 
 
 def png_dimensions(data):
@@ -80,7 +81,14 @@ class VisualSelectionInvalid(ValueError):
 
 def check_reference(value, fresh=False):
     try:
-        _check_reference(value,fresh)
+        if value is None:return
+        images=value if isinstance(value,list) else [value]
+        if not 1<=len(images)<=MAX_IMAGES:raise ValueError('Select between one and eight images')
+        identities=set()
+        for image in images:
+            _check_reference(image,fresh)
+            if image['source_id'] in identities:raise ValueError('Repeated visual source identity')
+            identities.add(image['source_id'])
     except (ValueError,TypeError,KeyError) as error:
         raise VisualSelectionInvalid("Select the captured image again") from error
 

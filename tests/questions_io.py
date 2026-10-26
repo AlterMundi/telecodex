@@ -267,11 +267,18 @@ import_desktop_history=false
             rows = [m for m in self.messages if html.unescape(m[1]['text']).startswith(f'Codex question {index}/') and m[0]['message_thread_id'] == topic and 'inline_keyboard' in m[1].get('reply_markup', {}) and (header is None or header in html.unescape(m[1]['text']))]
             return rows[-1] if rows else None
 
-    @staticmethod
-    def button(control, suffix):
+    def button(self, control, suffix):
         for row in control[1]['reply_markup']['inline_keyboard']:
             for button in row:
                 if button.get('callback_data', '').endswith(suffix):
+                    if button['callback_data'].startswith('q:') and self.mode != 'restart_gap':
+                        # Synthetic HTTP visibility precedes client handling of
+                        # its response and the retained native-question receipt.
+                        # Click a confirmed control, not an unbound HTTP request.
+                        # restart_gap deliberately clicks an uncertain old control.
+                        self.wait(lambda: self.row(
+                            'SELECT message_id FROM question_messages WHERE message_id=?',
+                            (control[0]['message_id'],)))
                     return control[0], button['callback_data']
         raise AssertionError('missing answer control')
 
