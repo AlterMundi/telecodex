@@ -695,7 +695,7 @@ window.Conversation = (() => {
         scroll(timeline.scrollTop+point.top-viewport.top-viewport.height*.25);
       selected.followed=true;
     }
-    let enabled = false, ready = false, reading = false, binding, canListen = false;
+    let enabled = false, ready = false, reading = false, binding, canListen = false, canStreamSpeech = false;
     let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
     let initialized = false, active, generation = 0, requestAbort, blobUrl, prefetched;
     const audioState = (text) => { $("#conversation-audio-state").textContent = text; };
@@ -796,6 +796,7 @@ window.Conversation = (() => {
       cancelSpeechWait();voiceBusy=false;generation++;
       requestAbort?.abort(); requestAbort = undefined;
       prefetched?.controller.abort();prefetched=undefined;
+      active?.streaming?.cancel();
       active = undefined;
       audio.pause(); audio.muted = true;
       audio.removeAttribute("src"); audio.load();
@@ -940,7 +941,7 @@ window.Conversation = (() => {
       await goalControls?.observe(value.goal_controls);
       microphone?.configure(value.can_speak,value.can_stream_transcribe);
       setCsrf(value.csrf);
-      canListen = !readOnly && value.can_listen;
+      canListen = !readOnly && value.can_listen;canStreamSpeech=canListen && !!value.can_stream_speech;
       if(!canListen && (voiceEnabled || active || speechWait))pause();
       $("#conversation-voice-replies").disabled=!canListen;
       for (const source of value.items)upsert(source);
@@ -1093,7 +1094,7 @@ window.Conversation = (() => {
       const deadline=setTimeout(()=>controller.abort(),145000);
       try{
         const response = await fetch("api/interaction/audio", {method:"POST",credentials:"same-origin",
-          headers:headers(),signal:controller.signal,body:JSON.stringify({source:source.id,revision:source.revision,offset})});
+          headers:headers(),signal:controller.signal,body:JSON.stringify({source:source.id,revision:source.revision,offset,...(canStreamSpeech && source.kind!=="native_question" && window.SpeechStream?.available()?{stream:true}:{})})});
         if (!response.ok) {
           const value = await response.json();
           const error = new Error(value.detail || "Audio unavailable. Continue reading or refresh.");
@@ -1102,6 +1103,12 @@ window.Conversation = (() => {
         if (response.headers.get("x-presentation-source") !== source.id
             || response.headers.get("x-presentation-revision") !== source.revision
             || response.headers.get("x-presentation-offset") !== String(offset)) throw new Error("Audio source mismatch");
+        if(response.headers.get("content-type")?.startsWith("application/x-ndjson")){
+          if(!canStreamSpeech || !window.SpeechStream?.available() || response.headers.get("x-audio-encoding")!=="mp3")throw Error("Unexpected streaming audio");
+          const nextHeader=response.headers.get("x-presentation-next-offset"),next=nextHeader===""?null:Number(nextHeader),end=Number(response.headers.get("x-presentation-end-offset"));
+          if(!Number.isSafeInteger(end)||end<=offset||end>offset+1600||next!==null&&next!==end)throw Error("Invalid stream boundary");
+          return {streaming:window.SpeechStream.open(response,controller.signal),next,end,textHash:response.headers.get("x-presentation-text-sha256"),prefetch:true};
+        }
         const stream = response.body.getReader(); const chunks = []; let length = 0;
         while (true) {
           const {value, done} = await stream.read(); if (done) break;
@@ -1149,7 +1156,9 @@ window.Conversation = (() => {
         const {blob,...metadata}=result.value;
         if(active!==selected || generation!==owned)return;
         Object.assign(selected,metadata);
-        blobUrl = URL.createObjectURL(blob);
+        blobUrl = selected.streaming?.url || URL.createObjectURL(blob);
+        selected.streaming?.onError(()=>{if(active===selected)stop("Speech stream ended. Your text remains available; no automatic retry.");});
+        if(active!==selected)return;
         audio.src = blobUrl;
         toggle.disabled = false;
         return await startPlayback();

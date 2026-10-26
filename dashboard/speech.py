@@ -34,6 +34,17 @@ def speech_part(source):
     return {**source, 'text':text[:end], 'next_offset':source['offset']+end}
 
 
+def speech_request(source):
+    text = source['text']
+    if source.get('kind') in ('worker_result','worker_progress','matrix_result') and source.get('offset') == 0:
+        label = source.get('label')
+        if not isinstance(label,str) or not label.strip():
+            raise SpeechUnavailable('Selected work source has no audible label')
+        text = label[:198] + '. ' + text
+    scope = speech_render.sha(speech_render.canonical([source['entry_binding'],source['id'],source['offset']]))
+    return {'scope':scope,'text':text}
+
+
 class Speech:
     def __init__(self, config):
         self.binding = Path(config['binding'])
@@ -43,6 +54,9 @@ class Speech:
         self.incremental = config.get('incremental_segments',False)
         if type(self.incremental) is not bool:
             raise ValueError('incremental_segments must be a boolean')
+        self.streaming = config.get('streaming_output',False)
+        if type(self.streaming) is not bool:
+            raise ValueError('streaming_output must be a boolean')
         self.capacity = asyncio.Semaphore(2)
 
     async def render(self, source):
@@ -55,17 +69,9 @@ class Speech:
         # The caller supplies a controller-certified part, never browser-authored text.
         config_bytes = speech_render.private_bytes(self.binding, 16384)
         route = speech_render.route(self.binding)
-        text = source['text']
-        if source.get('kind') in ('worker_result','worker_progress','matrix_result') and source.get('offset') == 0:
-            label = source.get('label')
-            if not isinstance(label, str) or not label.strip():
-                raise SpeechUnavailable('Selected work source has no audible label')
-            # Keep canonical text/offsets intact. The certified source label is
-            # spoken once, within the renderer's existing 1,800-character bound.
-            text = label[:198] + '. ' + text
-        scope = speech_render.sha(speech_render.canonical([
-            source['entry_binding'], source['id'], source['offset']]))
-        request = json.dumps({'scope': scope, 'text': text}).encode()
+        payload = speech_request(source)
+        text = payload['text']
+        request = json.dumps(payload).encode()
         command = [sys.executable, str(Path(speech_render.__file__).resolve()), '--binding', str(self.binding)]
         child = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
@@ -112,3 +118,38 @@ class Speech:
                 or speech_render.audio_info(data) != result.get('format')):
             raise SpeechUnavailable('Speech artifact integrity failed')
         return data, result
+
+    async def stream(self, source):
+        if not self.streaming or self.capacity.locked():
+            raise SpeechUnavailable('Streaming speech unavailable or occupied')
+        async with self.capacity:
+            config_bytes = speech_render.private_bytes(self.binding,16384)
+            command = [sys.executable,str(Path(speech_render.__file__).resolve()),'--binding',str(self.binding),'--stream']
+            child = await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,start_new_session=True,limit=65536)
+            total = 0; ended = False
+            try:
+                async with asyncio.timeout(self.timeout):
+                    child.stdin.write(json.dumps(speech_request(source)).encode());await child.stdin.drain();child.stdin.close()
+                    while raw := await child.stdout.readline():
+                        total += len(raw)
+                        if len(raw)>65536 or total>16*1024*1024 or ended:
+                            raise SpeechUnavailable('Streaming speech output exceeds bound')
+                        value=json.loads(raw)
+                        if value.get('type') not in ('audio','end'):
+                            raise SpeechUnavailable('Speech outcome retained; no automatic retry')
+                        if speech_render.private_bytes(self.binding,16384)!=config_bytes:
+                            raise SpeechUnavailable('Speech receiving binding changed')
+                        ended=value['type']=='end'
+                        if ended:
+                            # Retain the terminal frame until the process confirms success.
+                            terminal=value
+                        else:
+                            yield value
+                    if await child.wait()!=0 or not ended:
+                        raise SpeechUnavailable('Streaming speech incomplete')
+                    yield terminal
+            finally:
+                try:os.killpg(child.pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+                await child.wait()
