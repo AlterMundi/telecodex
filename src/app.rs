@@ -1503,18 +1503,25 @@ impl App {
                             .store
                             .uncertain_update_ids(user.tg_user_id, session_key)?;
                         let mut text = format_session_status(&session, &message.chat);
-                        if session.codex_thread_id.is_some() {
-                            let recovery = self
-                                .shared
-                                .store
-                                .goal_recovery_summary(user.tg_user_id, session_key)?;
+                        if let Some(recovery) = self
+                            .shared
+                            .store
+                            .goal_recovery_summary_if_owned(user.tg_user_id, session_key)?
+                        {
                             let latest = &recovery["recovery"]["latest"];
                             if let Some(state) = latest["state"].as_str() {
+                                let enabled = recovery["recovery"]["effective_enabled"].as_bool();
+                                let availability = match enabled {
+                                    Some(true) => "enabled",
+                                    Some(false) => "disabled",
+                                    None => "availability unknown",
+                                };
                                 text.push_str(&format!(
-                                    "\n- goal recovery: `{state}` · {} attempt(s)",
+                                    "\n- goal recovery: {availability} · retained `{state}` · {} attempt(s)",
                                     latest["attempts"].as_u64().unwrap_or(0)
                                 ));
                                 if state == "waiting"
+                                    && enabled == Some(true)
                                     && let Some(due) = latest["next_attempt_at"].as_i64()
                                 {
                                     text.push_str(&format!(

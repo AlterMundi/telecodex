@@ -58,6 +58,13 @@ def qualify(binary):
     j = Recovery(binary)
     try:
         j.prepare(seed_entry=True)
+        # An allowed participant retains ordinary /status access without gaining
+        # owner-only recovery evidence or control authority.
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("INSERT INTO users SELECT 101,'user',1,created_at,updated_at FROM users WHERE tg_user_id=100")
+        before_status = len(j.messages)
+        j.admit('/status', topic=7, user=101)
+        j.wait(lambda: any('Current Telegram session:' in message['text'] and message.get('message_thread_id') == 7 for message, _ in j.messages[before_status:]))
         j.stop()
         text = j.config.read_text().replace('[telegram]\n', '[telegram]\nenabled=false\n')
         text = '\n'.join(line for line in text.splitlines() if not line.startswith('bot_token_file='))+'\n'

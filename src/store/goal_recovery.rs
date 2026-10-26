@@ -12,6 +12,23 @@ fn capacity_error(error: &Value) -> bool {
 }
 
 impl Store {
+    /// Ordinary /status remains available to allowed topic participants. Only
+    /// the supplement is owner-scoped; a fresh/retired binding has no supplement.
+    pub fn goal_recovery_summary_if_owned(
+        &self,
+        human: i64,
+        key: SessionKey,
+    ) -> Result<Option<Value>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let owned:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND s.codex_thread_id IS NOT NULL AND s.force_fresh_thread=0)",params![key.chat_id,key.thread_id,human],|r|r.get(0))?;
+        drop(conn);
+        if owned {
+            self.goal_recovery_summary(human, key).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
     pub(super) fn init_goal_recovery(&self) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch(
@@ -255,6 +272,40 @@ mod tests {
         store.set_session_codex_thread(key, "native").unwrap();
         key
     }
+    #[test]
+    fn ordinary_status_omits_owner_supplement_for_other_participants_or_fresh_binding() {
+        let file = NamedTempFile::new().unwrap();
+        let store = Store::open(file.path(), &[100, 200], &defaults()).unwrap();
+        let key = owned(&store);
+        assert!(
+            store
+                .goal_recovery_summary_if_owned(100, key)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .goal_recovery_summary_if_owned(200, key)
+                .unwrap()
+                .is_none()
+        );
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET force_fresh_thread=1 WHERE chat_id=?1 AND thread_id=?2",
+                params![key.chat_id, key.thread_id],
+            )
+            .unwrap();
+        assert!(
+            store
+                .goal_recovery_summary_if_owned(100, key)
+                .unwrap()
+                .is_none()
+        );
+    }
+
     #[test]
     fn capacity_requires_structured_code_not_text_or_quota() {
         for code in [

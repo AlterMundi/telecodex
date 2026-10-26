@@ -86,14 +86,27 @@ class GoalAlerts(unittest.TestCase):
           CREATE TABLE goal_retries(human_id INTEGER,session_id INTEGER,native_thread TEXT,phase TEXT,next_at INTEGER,attempts INTEGER);
           INSERT INTO goal_retries VALUES(100,1,'native-a','waiting',220,3),(101,2,'native-b','uncertain',0,1);
         """)
-        self.assertEqual(goal_recovery_state(db,100,100,7,'native-a'),{'state':'waiting','next_attempt_at':220,'attempts':3})
+        self.assertEqual(goal_recovery_state(db,100,100,7,'native-a'),{'enabled':None,'state':'waiting','next_attempt_at':None,'attempts':3})
         self.assertIsNone(goal_recovery_state(db,100,101,8,'native-b'))
+        db.executescript("""CREATE TABLE bot_state(key TEXT,value TEXT);
+          INSERT INTO bot_state VALUES('goal_recovery_backend','{"enabled":false}');
+          CREATE TABLE goal_delegations(human_id INTEGER,doc TEXT);
+          INSERT INTO goal_delegations VALUES(100,'{"recovery":true,"scope":"owned_sessions"}');
+        """)
+        disabled=goal_recovery_state(db,100,100,7,'native-a')
+        self.assertFalse(disabled['enabled'])
+        self.assertIsNone(disabled['next_attempt_at'])
+        self.assertNotIn('next check',recovery_line(disabled))
+        db.execute("UPDATE bot_state SET value=?",(json.dumps({'enabled':True}),))
+        self.assertTrue(goal_recovery_state(db,100,100,7,'native-a')['enabled'])
+        db.execute("INSERT INTO bot_state VALUES('goal_recovery_policy:100:100:7','{\"enabled\":false}')")
+        self.assertFalse(goal_recovery_state(db,100,100,7,'native-a')['enabled'])
         db.execute("UPDATE sessions SET codex_thread_id='replacement' WHERE id=1")
         self.assertIsNone(goal_recovery_state(db,100,100,7,'replacement'))
         db.close()
 
     def test_recovery_status_uses_retained_labels_and_relative_time(self):
-        self.assertIn('next check in 2m',recovery_line({'state':'waiting','next_attempt_at':220},now=100))
+        self.assertIn('next check in 2m',recovery_line({'enabled':True,'state':'waiting','next_attempt_at':220},now=100))
         self.assertIn('automatic replay held',recovery_line({'state':'uncertain'}))
         self.assertIn('continuation accepted',recovery_line({'state':'acknowledged'}))
         self.assertNotIn('complete',recovery_line({'state':'acknowledged'}))

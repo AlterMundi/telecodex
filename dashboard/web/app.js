@@ -58,9 +58,10 @@ function recoveryLabel(value) {
     superseded:"Retired by later direction or authority",disabled:"Disabled",interrupted:"Interrupted",rejected:"Native control rejected"};
   const label = labels[value.state];
   if (!label) return "";
-  const next = value.state === "waiting" && Number.isSafeInteger(value.next_attempt_at)
+  const availability = value.enabled === true ? "" : value.enabled === false ? "Disabled · retained " : "Availability unknown · retained ";
+  const next = value.enabled === true && value.state === "waiting" && Number.isSafeInteger(value.next_attempt_at)
     ? ` · next check in ${elapsed(Math.max(0, Math.ceil(value.next_attempt_at-Date.now()/1000)))}` : "";
-  return `Goal recovery · ${label}${next}`;
+  return `Goal recovery · ${availability}${label}${next}`;
 }
 function authorizationHeaders() {
   if(deviceMode){
@@ -234,7 +235,7 @@ function sessions() {
     );
     head.title = s.title;
     if (s.goal) head.append(el("span", `Goal · ${s.goal.status}`, "goal-chip"));
-    if (s.goal_recovery && ["waiting","claimed","submitted","uncertain","partial"].includes(s.goal_recovery.state))
+    if (s.goal_recovery?.enabled === true && ["waiting","claimed","submitted","uncertain","partial"].includes(s.goal_recovery.state))
       head.append(el("span", "Recovery pending", "goal-chip"));
     const activeChildren = s.children.filter(
       (child) => child.status === "active",
