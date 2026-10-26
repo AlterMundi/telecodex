@@ -337,3 +337,11 @@ conversation feedback awaits source-session reassessment; uncertain delivery sta
 uncertain. The reply does not complete the task. A changed action cannot inherit an
 earlier reply badge. Dismissal and ordinary status refresh preserve drafts, image
 selection and recording objects, including stale advisory reply context.
+
+## Spoken-reply following
+
+Follow starts enabled unless the person explicitly disabled it before. It moves
+only while Voice on is enabled and not paused, and only within the conversation
+scroll area to the beginning of the verified spoken answer. Turning off Voice on
+or Follow preserves the reading position. Continuous within-answer tracking is a
+later increment; this control does not claim word-level synchronization.

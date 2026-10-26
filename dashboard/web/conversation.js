@@ -585,14 +585,15 @@ window.Conversation = (() => {
     const follow = $("#conversation-follow");
     if(standalone && follow){
       $("#conversation-follow-control").hidden=false;
-      try{follow.checked=window.localStorage?.getItem("interaction-follow-audio")==="true";}catch{}
+      follow.checked=true;
+      try{follow.checked=window.localStorage?.getItem("interaction-follow-audio")!=="false";}catch{}
       follow.addEventListener("change",()=>{
         try{window.localStorage?.setItem("interaction-follow-audio",String(follow.checked));}catch{}
         if(follow.checked)followPlayback(true);
       });
     }
     function followPlayback(force=false){
-      if(!standalone || !follow?.checked || document.hidden || !active || !force && active.offset!==0)return;
+      if(!standalone || !follow?.checked || !voiceEnabled || voiceSuspended || document.hidden || !active || !force && active.offset!==0)return;
       const card=cards.get(active.source.id);
       if(!card || !timeline?.contains?.(card.box) || !force && active.followed)return;
       const top=timeline.scrollTop+card.box.getBoundingClientRect().top-timeline.getBoundingClientRect().top;

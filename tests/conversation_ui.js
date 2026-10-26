@@ -401,10 +401,17 @@ function boot(readOnly=false,standalone=false,options={}) {
   const spokenCard=n=>lane.children.find(card=>card.dataset.sourceId===`native:${n}`);
   const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen');
   spokenCard(8).getBoundingClientRect=()=>({top:300});spokenCard(7).getBoundingClientRect=()=>({top:450});
+  assert.equal(followSwitch.checked,true,'Follow is enabled by default');
+  await listenButton(spokenCard(8)).handlers.click();followSwitch.handlers.change();
+  assert.equal(scrolls.length,0,'Voice off preserves the reader position even with Follow enabled');
+  followed.nodes.get('#conversation-voice-replies').handlers.click();
   followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,0,'Follow off never moves the chat');
   followSwitch.checked=true;followSwitch.handlers.change();assert.equal(scrolls.length,1);assert.equal(scrolls[0].top,200,'Follow targets the verified spoken answer within the timeline');
   await listenButton(spokenCard(7)).handlers.click();assert.equal(scrolls.length,2,'A new answer follows its own source');
-  followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,2,'Disabling Follow preserves the reader position');followed.ui.stop();
+  followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,2,'Disabling Follow preserves the reader position');
+  followSwitch.checked=true;followed.nodes.get('#conversation-voice-replies').handlers.click();
+  await listenButton(spokenCard(7)).handlers.click();followSwitch.handlers.change();
+  assert.equal(scrolls.length,2,'Turning Voice off also prevents subsequent Follow movement');followed.ui.stop();
 
   const noPlayer=boot(false,false,{clock:true});noPlayer.audio();await noPlayer.ui.refresh();
   noPlayer.nodes.get('#conversation-voice-replies').handlers.click();noPlayer.failAudio();noPlayer.addReplies(2);await noPlayer.ui.refresh();
