@@ -848,3 +848,15 @@ collector attachment; its missing tool is not repaired by replacing history.
 See [retained generated files](retained-artifacts.md) for the explicitly configured
 immutable artifact store, logical audiences, device file entitlement and recovery.
 File preparation runs independently of native conversation progress.
+
+### Long observer source turns
+
+The native source reader keeps a 48,000-byte history window. Individual turns
+use at most 32,000 bytes, retaining recent original statements and explicit
+omission markers when a long-running turn exceeds that allowance. UTF-8 text,
+role, native turn identity/status and provisional-versus-completed attribution
+remain intact; older completed context can still occupy the remaining window.
+A large current turn must not become an empty source merely because it cannot
+fit whole. Source-read failures emit fixed diagnostic categories, without private
+conversation text. `tests/observer_io.py` exercises a long active turn and unchanged
+reinspection without new source work or repeated synthesis.
