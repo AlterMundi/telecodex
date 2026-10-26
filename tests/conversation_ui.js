@@ -49,7 +49,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false,audioFailures=0;
   const source = n => ({id:`native:${n}`, kind:standalone&&n===1?"integrator_progress":"integrator_answer", sequence:n, observed_at:new Date(1704067200000+n*1000).toISOString(),
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`,...sourceOverrides.get(n)});
-  const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), humanTasks=new Map(), nativePosts = [];
+  const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), humanTasks=new Map(), nativePosts = [],taskPosts=[];
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
@@ -71,7 +71,11 @@ function boot(readOnly=false,standalone=false,options={}) {
         evidence:'Receiver-retained original; native acceptance is not incorporation.'};
     }
     if (url.pathname === "/interaction/tasks") return {binding:"fixture",items:[...humanTasks.values()],cursor:humanTasks.size,more:false};
-    if (url.pathname.startsWith("/interaction/tasks/")) return {...humanTasks.get(url.pathname.split("/").at(-1)),offset:0,next_offset:null};
+    if (url.pathname.startsWith("/interaction/tasks/")) {
+      const task=humanTasks.get(url.pathname.split("/").at(-1));
+      if(body){taskPosts.push({...body});task.state='cancelled';task.can_dismiss=false;return {id:task.id,binding:'fixture',revision:body.revision,dismissed:true};}
+      return {...task,offset:0,next_offset:null};
+    }
     if (url.pathname === "/interaction/requests") return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
     if (url.pathname.startsWith("/interaction/requests/")) {
       if (body) {nativePosts.push(JSON.parse(JSON.stringify(body)));throw new TypeError("Lost decision acknowledgement");}
@@ -165,7 +169,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   ui.authenticated();
   return {ui, nodes, requests, originals,replyTexts,partReads,humanTasks,
     holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
-    intersect(id,visible=true){const target=nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);assert(target,JSON.stringify({id,keys:nodes.get("#conversation-timeline").children.map(c=>c.dataset),state:nodes.get("#conversation-state")?.textContent}));intersection([{target,isIntersecting:visible}]);}, telegramOriginals, nativePosts,audioCalls,clock,recoveryPosts,
+    intersect(id,visible=true){const target=nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);assert(target,JSON.stringify({id,keys:nodes.get("#conversation-timeline").children.map(c=>c.dataset),state:nodes.get("#conversation-state")?.textContent}));intersection([{target,isIntersecting:visible}]);}, telegramOriginals, nativePosts,taskPosts,audioCalls,clock,recoveryPosts,
     profile(value){presentationProfile=value;},
     event(name){for(const fn of windowEvents.get(name)||[])fn();},
     hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
@@ -378,6 +382,18 @@ function boot(readOnly=false,standalone=false,options={}) {
   outage.clock.fire(450);await until(()=>outage.audioCalls.length===2&&!outage.nodes.get('#conversation-audio').paused);
   assert.equal(outage.audioCalls[1].source,'native:10','A failed TTS segment cannot strand the next independent reply');outage.ui.stop();
 
+  const submittedClips=[],recordingId='same-recording';
+  const dismissWhileRecording=boot(false,true,{capture:true,ownsVoice:true,voiceSubmit:()=>submittedClips.push(recordingId)});
+  dismissWhileRecording.humanTasks.set('e'.repeat(32),{id:'e'.repeat(32),binding:'fixture',revision:'task-r1',state:'pending',can_dismiss:true,title:'Observation',label:'#Worker',preview:'Observe',body:'Observe this',next_offset:null});
+  await dismissWhileRecording.ui.refresh();dismissWhileRecording.capture();dismissWhileRecording.nodes.get('#conversation-message').value='Keep my text too';
+  const attention=dismissWhileRecording.nodes.get('#conversation-task-cards').children[0];
+  await attention.children.find(child=>child.textContent==='Dismiss').handlers.click();
+  assert.equal(dismissWhileRecording.taskPosts.length,1);assert.equal(dismissWhileRecording.nodes.get('#conversation-message').value,'Keep my text too','Dismiss must preserve the occupied draft');
+  assert.equal(submittedClips.length,0,'Dismiss must not send/discard the recording');
+  await dismissWhileRecording.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+  assert.deepEqual(submittedClips,[recordingId],'The same recording still owns Send after dismissal');
+  assert.equal(dismissWhileRecording.nativePosts.length,0,'Dismissing attention is not a native question answer');dismissWhileRecording.ui.stop();
+
   const followed=boot(false,true);followed.audio();await followed.ui.refresh();
   const lane=followed.nodes.get('#conversation-timeline'),followSwitch=followed.nodes.get('#conversation-follow');
   const scrolls=[];lane.contains=card=>lane.children.includes(card);lane.getBoundingClientRect=()=>({top:100});lane.scrollTop=0;
@@ -385,10 +401,17 @@ function boot(readOnly=false,standalone=false,options={}) {
   const spokenCard=n=>lane.children.find(card=>card.dataset.sourceId===`native:${n}`);
   const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen');
   spokenCard(8).getBoundingClientRect=()=>({top:300});spokenCard(7).getBoundingClientRect=()=>({top:450});
+  assert.equal(followSwitch.checked,true,'Follow is enabled by default');
+  await listenButton(spokenCard(8)).handlers.click();followSwitch.handlers.change();
+  assert.equal(scrolls.length,0,'Voice off preserves the reader position even with Follow enabled');
+  followed.nodes.get('#conversation-voice-replies').handlers.click();
   followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,0,'Follow off never moves the chat');
   followSwitch.checked=true;followSwitch.handlers.change();assert.equal(scrolls.length,1);assert.equal(scrolls[0].top,200,'Follow targets the verified spoken answer within the timeline');
   await listenButton(spokenCard(7)).handlers.click();assert.equal(scrolls.length,2,'A new answer follows its own source');
-  followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,2,'Disabling Follow preserves the reader position');followed.ui.stop();
+  followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,2,'Disabling Follow preserves the reader position');
+  followSwitch.checked=true;followed.nodes.get('#conversation-voice-replies').handlers.click();
+  await listenButton(spokenCard(7)).handlers.click();followSwitch.handlers.change();
+  assert.equal(scrolls.length,2,'Turning Voice off also prevents subsequent Follow movement');followed.ui.stop();
 
   const noPlayer=boot(false,false,{clock:true});noPlayer.audio();await noPlayer.ui.refresh();
   noPlayer.nodes.get('#conversation-voice-replies').handlers.click();noPlayer.failAudio();noPlayer.addReplies(2);await noPlayer.ui.refresh();

@@ -244,3 +244,9 @@ remain unavailable. The action is explicit; loading a page does not resend work.
 conversation credential and CSRF check as destination selection. Existing
 `/interaction retry` semantics remain unchanged; this is their first-client
 adapter, not permission to replay an uncertain result.
+
+Human-task Dismiss uses POST `/api/interaction/tasks/{id}` with the existing
+interaction identity, CSRF token, current entry binding and exact task revision.
+The only action is `dismiss`; arbitrary state changes and native decisions are
+not supported. Monitor grants remain read-only and have no task access. The
+receipt records human attention cancellation, never work completion or approval.

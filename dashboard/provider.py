@@ -682,6 +682,17 @@ class Provider:
             raise ValueError('Invalid task cursor')
         return self.presentation(f'requests tasks list {after}')
 
+    def conversation_task_dismiss(self, ident, body):
+        import re
+        self.request_id(ident)
+        if (not isinstance(body, dict) or set(body) != {'binding','revision','action'}
+                or body.get('action') != 'dismiss'
+                or any(not isinstance(body.get(key), str) or not re.fullmatch('[a-f0-9]{64}', body[key])
+                       for key in ('binding','revision'))):
+            raise ValueError('Select the current action to dismiss')
+        return self.presentation('requests tasks dismiss '+json.dumps({
+            'id':ident,'binding':body['binding'],'revision':body['revision']},separators=(',',':')))
+
     def conversation_task_detail(self, ident, offset=0, revision=None):
         import re
         self.request_id(ident)

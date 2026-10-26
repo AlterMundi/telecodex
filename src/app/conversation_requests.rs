@@ -218,6 +218,29 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         bail!("Conversation request owner mismatch");
     }
     let entry = cfg.entry();
+    if let Some(raw) = args.strip_prefix("tasks dismiss ") {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Dismissal {
+            binding: String,
+            id: String,
+            revision: String,
+        }
+        let selected: Dismissal = serde_json::from_str(raw)?;
+        let mut armed = app.shared.pending_task_text.lock().await;
+        let result = app.shared.store.conversation_dismiss_human_task(
+            human,
+            entry,
+            &selected.binding,
+            &selected.id,
+            &selected.revision,
+        )?;
+        let target: SessionKey = serde_json::from_value(result["target"].clone())?;
+        if armed.get(&(target, human)) == Some(&selected.id) {
+            armed.remove(&(target, human));
+        }
+        return Ok(result);
+    }
     if let Some(args) = args.strip_prefix("tasks ") {
         let fields: Vec<_> = args.split_whitespace().collect();
         return match fields.as_slice() {

@@ -385,18 +385,55 @@ window.HumanTaskControls = (() => {
     const section=document.querySelector('#conversation-tasks'),container=document.querySelector('#conversation-task-cards');
     const state=document.querySelector('#conversation-task-state'),more=document.querySelector('#conversation-tasks-more');
     if(!section||!container||!state||!more)return;
-    const cards=new Map();let generation=0,reading=false,cursor=0,probe=0;
+    const cards=new Map(),feedback=new Map();let generation=0,reading=false,cursor=0,probe=0;
     const terminal=v=>['answered','completed','cancelled','withdrawn','expired'].includes(v?.state);
     const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
     const owns=(card,token)=>token===generation&&cards.get(card.id)===card;
-    function reset(){generation++;cards.clear();container.replaceChildren();section.hidden=true;cursor=probe=0;reading=false;more.hidden=true;state.textContent='';}
-    function controls(card){card.dismiss.hidden=!terminal(card.view);card.read.disabled=card.loading;card.reply.hidden=!canReply();card.reply.disabled=card.unavailable||card.loading||!card.complete||card.view?.state!=='pending'||card.view.binding!==getBinding();}
+    function reset(){generation++;cards.clear();feedback.clear();container.replaceChildren();section.hidden=true;cursor=probe=0;reading=false;more.hidden=true;state.textContent='';}
+    function controls(card){card.dismiss.hidden=!terminal(card.view)&&!(canReply()&&card.view?.can_dismiss===true);card.dismiss.disabled=card.loading||card.unavailable;card.read.disabled=card.loading;card.reply.hidden=!canReply();card.reply.disabled=card.unavailable||card.loading||!card.complete||card.view?.state!=='pending'||card.view.binding!==getBinding();}
+    const feedbackText=card=>{
+      if(card.view?.state!=='pending')return;
+      const input=feedback.get(`${card.id}:${card.view.revision}`);
+      if(!input)return;
+      return ({accepted:'Your reply reached the conversation; this action awaits reassessment.',routed:'Your reply is routed; this action awaits reassessment.',queued:'Your reply is saved and waiting to send.',retained:'Your reply is saved and waiting to send.',retained_unsent:'Your reply is saved; it has not been sent.',uncertain:'Your reply is saved; delivery is unconfirmed. Check its routing path.',preparing:'Your voice reply is being transcribed.',preparation_unconfirmed:'Your voice reply has no confirmed transcript yet.'})[input.phase];
+    };
+    function remove(card){cards.delete(card.id);card.box.remove();section.hidden=!cards.size;}
+    function observeInput(input){
+      const match=/^task:([a-f0-9]{32})$/.exec(input.reply?.source||'');
+      if(!match||input.binding!==getBinding()||input.reply.context_only!==true||!input.phase)return;
+      feedback.set(`${match[1]}:${input.reply.revision}`,input);
+      if(feedback.size>128)feedback.delete(feedback.keys().next().value);
+      const card=cards.get(match[1]);if(card&&feedbackText(card))card.status.textContent=feedbackText(card);
+    }
+    async function dismissTask(card){
+      if(terminal(card.view)){remove(card);return;}
+      if(!canReply()||card.loading||card.unavailable||card.view?.can_dismiss!==true)return;
+      const token=generation,selected={binding:getBinding(),revision:card.view.revision,action:'dismiss'};
+      card.loading=true;controls(card);
+      try{
+        const receipt=await api(`interaction/tasks/${card.id}`,selected);
+        if(!owns(card,token))return;
+        if(receipt.id!==card.id||receipt.binding!==selected.binding||receipt.revision!==selected.revision||receipt.dismissed!==true)throw Error('Dismissal receipt changed');
+        remove(card);
+      }catch(error){
+        if(!owns(card,token))return;
+        try{
+          const current=await api(`interaction/tasks/${card.id}?offset=0`);
+          if(!owns(card,token))return;
+          metadata(card,current);
+          if(terminal(card.view)){remove(card);return;}
+          card.note.textContent='Dismissal is unconfirmed. Read the current action before trying again.';
+        }catch{if(owns(card,token))card.note.textContent='Dismissal is unconfirmed. Reconnect to check the current action.';}
+        if([401,403].includes(error.status))unauthorized(error);
+      }finally{if(owns(card,token)){card.loading=false;controls(card);}}
+    }
     function metadata(card,v){
       if(v.binding!==getBinding())throw Error('Conversation changed; refresh current actions.');
       if(terminal(card.view)&&!terminal(v))return;
       if(card.view?.revision!==v.revision){card.complete=false;card.body.textContent='';card.body.hidden=true;card.links.hidden=true;card.box.dataset.expanded='false';card.preview.hidden=false;card.read.textContent='Read action';card.offset=undefined;card.links.replaceChildren();}
       card.unavailable=false;card.view=v;card.title.textContent=`${v.label} · ${v.title}`;
       card.preview.textContent=v.preview||'';card.status.textContent=({pending:'An action for you.',answering:'Feedback receipt is unconfirmed.',unknown:'Earlier feedback is unconfirmed.',answered:'Feedback recorded.',completed:'Marked done by you.',withdrawn:'No longer needed.',cancelled:'Cancelled.',expired:'This action is closed.'})[v.state]||'Current action unavailable.';
+      if(feedbackText(card))card.status.textContent=feedbackText(card);
       controls(card);
     }
     async function detail(card,continueReading=false){
@@ -411,7 +448,7 @@ window.HumanTaskControls = (() => {
         if(v.id!==card.id||revision&&v.revision!==revision||v.offset!==offset)throw Error('Task changed; read its current action.');
         const previous=card.body.textContent;metadata(card,v);
         card.body.textContent=(offset?previous:'')+v.body;card.offset=v.next_offset;card.complete=v.next_offset===null;
-        card.preview.hidden=true;card.box.dataset.expanded='true';card.body.hidden=card.links.hidden=false;card.read.textContent=card.complete?'Hide action':'Continue reading';
+        card.preview.hidden=true;card.box.dataset.expanded='true';card.body.hidden=card.links.hidden=false;card.read.textContent=card.complete?'Collapse action':'Continue reading';
         card.links.replaceChildren();for(const link of v.links||[]){
           try{const url=new URL(link.url);if(!['http:','https:'].includes(url.protocol))continue;
             const a=el('a',link.label);a.href=url.href;a.target='_blank';a.rel='noopener noreferrer';card.links.append(a);
@@ -428,7 +465,7 @@ window.HumanTaskControls = (() => {
       box.append(title,status,preview,body,links,read,reply,dismiss,note);container.append(box);
       const card={id:v.id,box,title,status,preview,body,links,note,read,reply,dismiss,complete:false,loading:false};cards.set(v.id,card);
       read.addEventListener('click',()=>{if(card.complete&&box.dataset.expanded==='true'){box.dataset.expanded='false';body.hidden=links.hidden=true;preview.hidden=false;read.textContent='Read action';return;}return detail(card,card.offset!==undefined&&card.offset!==null);});
-      dismiss.addEventListener('click',()=>{if(!terminal(card.view))return;cards.delete(card.id);box.remove();section.hidden=!cards.size;});
+      dismiss.addEventListener('click',()=>dismissTask(card));
       reply.addEventListener('click',()=>{
         if(!canReply()||!card.complete||card.loading||card.view.state!=='pending'||card.view.binding!==getBinding())return;
         if(onReply?.(card.view)!==true)card.note.textContent='Your draft is kept. Send or clear it before preparing this reply.';
@@ -448,7 +485,7 @@ window.HumanTaskControls = (() => {
       }catch(e){if(token===generation){for(const card of cards.values()){card.unavailable=true;controls(card);}section.hidden=false;state.textContent='Human actions unavailable. Refresh to reconnect.';if([401,403].includes(e.status))unauthorized(e);}}
       finally{if(token===generation){reading=false;more.disabled=false;}}
     }
-    more.addEventListener('click',()=>refresh(cursor));return {refresh,reset};
+    more.addEventListener('click',()=>refresh(cursor));return {refresh,reset,observeInput};
   }
   return {mount};
 })();

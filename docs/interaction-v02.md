@@ -266,7 +266,7 @@ Ordinary camera/gallery originals up to20MiB are accepted by the client. The cli
 
 Standalone Interaction can use `conversation_appearance = "authored"` to omit the automatic Homemaker stylesheet/script while Sessions continues to inherit its configured appearance. This is an explicit product choice; shared login and permissions remain unchanged. Its compact header, conversation area and composer remain separate, with recording status inside the composer and a paperclip-only attachment trigger.
 
-With Voice on, standalone Interaction permits verified reply playback, continuation gaps and incoming-reply polling while the document is hidden. Returning resumes a browser-paused segment after source validation, preserving its position. A human pause, Stop, loss of authorization, offline transition or real page unload still stops automatic playback. Mobile OS/browser suspension can prevent background execution; returning restores the existing opted-in intent, never a human-paused one. Physical phone background acceptance remains a separate check.
+With Voice on, standalone Interaction permits verified reply playback, continuation gaps and incoming-reply live updates while the document is hidden. Returning resumes a browser-paused segment after source validation, preserving its position. A human pause, Stop, loss of authorization, offline transition or real page unload still stops automatic playback. Mobile OS/browser suspension can prevent background execution; returning restores the existing opted-in intent, never a human-paused one. Physical phone background acceptance remains a separate check.
 
 Presentation resolves fallback `t<ID>` labels from the current authorized owner's session title without changing routing selectors, source IDs, revisions or explicit route aliases. A renamed session needs no route recreation.
 
@@ -320,3 +320,28 @@ provider intent/uncertain outcome cannot be retried this way. Once completed tex
 exists, recover the same original through owner control, not a fabricated text
 input or direct database mutation. Commit precedes audio retirement and routing;
 all original authorship, corrections and receiving grants remain applicable.
+
+## Human-task attention in the conversation
+
+`Read action` expands the selected action; `Collapse action` only folds its text.
+Explicit human `Dismiss` cancels that selected pending human-task entry in the
+existing ledger, with the current entry binding, exact revision and an audited,
+idempotent receipt. It never marks the requested work done, answers a native
+question, approves anything or stops a session. Direct-only tasks remain outside
+the integrating conversation scope. A lost acknowledgment is read back without
+automatically repeating the write. Existing Telegram /pending reads the same state.
+
+`Reply in conversation` prepares ordinary text/voice context. Show the saved
+original's real ingress progress beside the matching task revision: accepted
+conversation feedback awaits source-session reassessment; uncertain delivery stays
+uncertain. The reply does not complete the task. A changed action cannot inherit an
+earlier reply badge. Dismissal and ordinary status refresh preserve drafts, image
+selection and recording objects, including stale advisory reply context.
+
+## Spoken-reply following
+
+Follow starts enabled unless the person explicitly disabled it before. It moves
+only while Voice on is enabled and not paused, and only within the conversation
+scroll area to the beginning of the verified spoken answer. Turning off Voice on
+or Follow preserves the reading position. Continuous within-answer tracking is a
+later increment; this control does not claim word-level synchronization.

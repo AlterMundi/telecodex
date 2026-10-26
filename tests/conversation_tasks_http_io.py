@@ -47,7 +47,8 @@ def qualify(binary):
         assert permitted('GET','/api/interaction/tasks')
         assert permitted('GET','/api/interaction/tasks/'+task['id'])
         assert not permitted('GET','/api/interaction/tasks','monitor_readonly')
-        assert not permitted('POST','/api/interaction/tasks/'+task['id'])
+        assert permitted('POST','/api/interaction/tasks/'+task['id'])
+        assert not permitted('POST','/api/interaction/tasks/'+task['id'],'monitor_readonly')
         assert client.get('/api/interaction/tasks').status_code==401
         login=client.post('/api/session',json={'init_data':'100'},headers={'origin':config['origin']})
         headers={'authorization':'Bearer '+login.json()['session_token']}
@@ -103,6 +104,28 @@ def qualify(binary):
         assert len(second['items'])==3 and not second['more']
         assert direct_id not in {v['id'] for v in first['items']+second['items']}
         assert client.get('/api/interaction/tasks/'+direct_id,headers=headers).status_code==409
+        # Human dismissal uses the same scoped ledger, not a native answer or turn.
+        selected=second['items'][0]
+        selected=client.get('/api/interaction/tasks/'+selected['id'],headers=headers).json()
+        assert selected['can_dismiss'] and selected['state']=='pending'
+        decision={'binding':page['binding'],'revision':selected['revision'],'action':'dismiss'}
+        path='/api/interaction/tasks/'+selected['id']
+        assert client.post(path,headers=headers,json=decision).status_code==403
+        assert client.post(path,headers=post_headers,json={'state':'completed'}).status_code==400
+        assert client.post(path,headers=post_headers,json={**decision,'revision':'0'*64}).status_code==409
+        assert client.post(path,headers=post_headers,json={**decision,'binding':'0'*64}).status_code==409
+        assert client.post('/api/interaction/tasks/'+direct_id,headers=post_headers,json=decision).status_code==409
+        packets_before=sum(len(v) for v in j.packets.values())
+        dismissed=client.post(path,headers=post_headers,json=decision)
+        assert dismissed.status_code==200,dismissed.text
+        receipt=dismissed.json();assert receipt['dismissed'] and receipt['new_dismissal'] and not receipt['human_completion'] and not receipt['work_cancelled']
+        repeated=client.post(path,headers=post_headers,json=decision)
+        assert repeated.status_code==200 and not repeated.json()['new_dismissal'],repeated.text
+        current=client.get(path,headers=headers).json()
+        assert current['state']=='cancelled' and current['dismissal']['revision']==selected['revision'] and not current['can_dismiss']
+        assert sum(len(v) for v in j.packets.values())==packets_before,'Dismiss must not start/steer/cancel source work'
+        assert j.row("SELECT count(*) FROM audit_log WHERE action='human_task_dismissed'")==[(1,)]
+        assert j.row('SELECT state FROM human_interactions WHERE id=?',(direct_id,))==[('pending',)]
         retired=j.cli(access,'withdraw_task',{'id':task['id'],'revision':view['revision'],'reason':'Synthetic later work made this action obsolete; no human completion is asserted.','links':[]})
         assert retired['human_completion'] is False
         closed=client.get('/api/interaction/tasks/'+task['id'],headers=headers).json()

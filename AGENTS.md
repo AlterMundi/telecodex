@@ -4,7 +4,7 @@ Interaction is an independent application: web now, native/badge clients later.
 Telegram is an optional session projection, never the application shell or a
 required launch path. A child should be able to use only this app. Current UI
 and Beacon sound delivery is owned by #213/#221 and docs/interaction-v02.md:
-readable conversation first, read-only machinery below and initially collapsed,
+readable conversation first, read-only machinery in the header inspector (initially closed),
 perceptible per-being ASCII expression and an audible opt-in sonic composition.
 Do not equate renderer/mapping tests with the delivered visual or sonic experience.
 
@@ -42,5 +42,8 @@ Durable human tasks and native questions have distinct read paths. The independe
 client's For you section reuses the ledger and exact entry/routed-local-turn task
 scope. A task:ID reply is untrusted context for ordinary text/voice, never a native
 answer, human completion or approval. Inspect human_task before interpreting it;
-use the existing scoped withdrawal only when obsolete. Do not import later direct
-tasks or create another task store, responder, mutation endpoint or review request.
+use the existing scoped withdrawal only when obsolete. Explicit human Dismiss uses
+the same task ledger and exact current entry/task revision, without completion,
+native approval or work cancellation. Reply feedback remains ordinary conversation
+context; its visible progress is not proof of task completion. Do not import later
+direct tasks or create another task store, responder or arbitrary completion route.
