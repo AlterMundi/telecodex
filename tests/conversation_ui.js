@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 function boot(readOnly=false,standalone=false,options={}) {
   const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
-  const recoveryPosts=[];
+  const recoveryPosts=[],mediaActions=new Map();const mediaSession={setActionHandler:(name,fn)=>mediaActions.set(name,fn)};
   const gaps=new Map(),documentEvents=new Map(),windowEvents=new Map();
   const subscribe=(events,name,fn)=>events.set(name,[...(events.get(name)||[]),fn]);
   const clock={pending:()=>[...gaps.values()].map(t=>t.ms),fire(ms){
@@ -18,7 +18,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     return setTimeout(fn,ms);
   };
   const cancelTimeout=id=>{if(gaps.has(id))gaps.delete(id);else clearTimeout(id);};
-  let capture,intersection;const replyTexts=new Map(),partReads=[],replyHolds=new Map();
+  let capture,intersection,pageFailure;const replyTexts=new Map(),partReads=[],replyHolds=new Map();
   function element() {
     return {
       children: [], dataset: {}, handlers: {}, classList: {toggle() {}},
@@ -53,6 +53,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
+    if(pageFailure && url.pathname==="/interaction"){pageFailure=false;throw new TypeError("Synthetic network suspension");}
     if(url.pathname==='/interaction/telegram-inputs'){
       if(options.telegramDenied)throw Object.assign(Error('Telegram observation denied'),{status:403});
       const before=Number(url.searchParams.get('before')),after=url.searchParams.get('direction')==='after';
@@ -136,7 +137,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
-  const context = vm.createContext({window:{localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
+  const context = vm.createContext({window:{navigator:{mediaSession},localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
     URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
     fetch:(_route, options) => {
@@ -174,13 +175,13 @@ function boot(readOnly=false,standalone=false,options={}) {
     holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
     intersect(id,visible=true){const target=nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id);assert(target,JSON.stringify({id,keys:nodes.get("#conversation-timeline").children.map(c=>c.dataset),state:nodes.get("#conversation-state")?.textContent}));intersection([{target,isIntersecting:visible}]);}, telegramOriginals, nativePosts,taskPosts,audioCalls,clock,recoveryPosts,
     profile(value){presentationProfile=value;},
-    event(name){for(const fn of windowEvents.get(name)||[])fn();},
+    mediaSession,mediaActions,event(name,value){for(const fn of windowEvents.get(name)||[])fn(value);},
     hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
     show(){document.hidden=false;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
     capture(){capture.pauseAudio();capture.onActivity(true);},
     finishCapture(){capture.onActivity(false);},
     capturedInput(value){capture.onInput(value);},
-    failAudio(n=1){audioFailures=n;},
+    failPage(){pageFailure=true;},failAudio(n=1){audioFailures=n;},
     closeNativeRequest(){Object.assign(nativeRequests.get('native-request'),{state:'answered',actionable:false});},
     overrideSource(n,value){sourceOverrides.set(n,value);},addReplies(n){count+=n;},audio(parts=false){renderAudio=true;multipart=parts;},
     nativeRequest() {
@@ -371,6 +372,16 @@ function boot(readOnly=false,standalone=false,options={}) {
   await until(()=>background.audioCalls.length===2&&!bgPlayer.paused);
   bgPlayer.paused=true;background.show();await until(()=>!bgPlayer.paused);
   assert.equal(background.audioCalls.length,2,'Returning resumes the same verified segment without replaying its input');
+  assert.equal(background.mediaSession.playbackState,'playing','Opted-in playback is registered with the OS media session');
+  background.hide();background.event('offline');assert.equal(bgPlayer.paused,false,'A network transition does not silence an already loaded reply');
+  assert.equal(background.nodes.get('#conversation-voice-replies').dataset.voiceState,'on');
+  bgPlayer.paused=true;background.event('online');await until(()=>!bgPlayer.paused);
+  background.show();
+  await until(()=>!background.nodes.get('#conversation-refresh').disabled);background.failPage();await background.ui.refresh();
+  assert.equal(background.nodes.get('#conversation-voice-replies').dataset.voiceState,'on','A transient refresh failure cannot become a human pause');
+  background.mediaActions.get('pause')();assert.equal(bgPlayer.paused,true);assert.equal(background.mediaSession.playbackState,'paused');
+  background.show();assert.equal(bgPlayer.paused,true,'OS Pause is explicit human intent');
+  background.mediaActions.get('play')();await until(()=>!bgPlayer.paused);
   background.ui.pause();background.hide();background.show();
   assert.equal(bgPlayer.paused,true,'Returning never overrides an explicit human pause');background.ui.stop();
 
@@ -488,9 +499,16 @@ function boot(readOnly=false,standalone=false,options={}) {
   await until(()=>ranges.at(-1)>3200);
   assert.equal(trackingScrolls.at(-1).behavior,'instant','Reduced motion never introduces animated following');
   const preferenceBefore=followPreference.get('interaction-follow-audio');
-  trackLane.handlers.wheel();assert.equal(followPreference.get('interaction-follow-audio'),preferenceBefore,'Manual reading does not overwrite the explicit Follow preference');assert.equal(tracked.nodes.get('#conversation-follow').checked,false,'Manual reading explicitly releases Follow');
+  trackLane.handlers.wheel();assert.equal(followPreference.get('interaction-follow-audio'),preferenceBefore,'Manual reading does not overwrite the explicit Follow preference');assert.equal(tracked.nodes.get('#conversation-follow').checked,true,'A gesture never switches Follow off');
   const manualScrolls=trackingScrolls.length;trackPlayer.currentTime=95;trackPlayer.handlers.timeupdate();
-  assert.equal(trackingScrolls.length,manualScrolls,'Following never fights a manual reader');
+  assert.equal(trackingScrolls.length,manualScrolls,'Following waits while the person scrolls');
+  tracked.clock.fire(180);assert(trackingScrolls.length>manualScrolls,'Following returns to spoken progress after scrolling settles');
+  trackLane.handlers.pointerdown({pointerId:7});const heldScrolls=trackingScrolls.length;trackPlayer.currentTime=99;trackPlayer.handlers.timeupdate();
+  assert.equal(trackingScrolls.length,heldScrolls,'A held finger owns the viewport');
+  tracked.event('pointerup',{pointerId:7});assert(trackingScrolls.length>heldScrolls,'Releasing the finger resumes Follow');
+  tracked.nodes.get('#conversation-follow').checked=false;tracked.nodes.get('#conversation-follow').handlers.change();
+  const explicitOff=trackingScrolls.length;trackLane.handlers.pointerdown({pointerId:8});tracked.event('pointercancel',{pointerId:8});trackPlayer.handlers.timeupdate();
+  assert.equal(trackingScrolls.length,explicitOff,'Explicitly disabled Follow stays disabled after a gesture');
   tracked.nodes.get('#conversation-follow').checked=true;tracked.nodes.get('#conversation-follow').handlers.change();
   const beforeRevision=trackingScrolls.length;
   tracked.overrideSource(8,{revision:'new-revision',text_sha256:'new-content'});await tracked.ui.refresh();
