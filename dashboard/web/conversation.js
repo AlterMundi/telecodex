@@ -56,7 +56,7 @@ window.Conversation = (() => {
       $("#conversation-sound").append($("#conversation-sound-controls"),$("#conversation-sound-feedback"));
       const compose = $("#conversation-compose"), playback = $("#conversation-audio-tools");
       const dock = node("div"); dock.id = "conversation-dock";
-      compose.before(dock); dock.append(compose, playback);
+      compose.before(dock); dock.append(playback, compose);
     }
     const companion=standalone?window.ConversationCompanion?.mount():undefined;
     if(standalone){
@@ -80,7 +80,19 @@ window.Conversation = (() => {
     }
     const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential,onState:value=>companion?.sonic?.(value)});
     const presentState=patch=>{companion?.update(patch);sound?.update(patch);};
-    if(standalone)$("#conversation-diagnostics").open=false;
+    if(standalone){
+      const inspector=$("#conversation-diagnostics"),inspectButton=$("#conversation-inspect");
+      inspector.open=false;inspectButton.hidden=false;
+      inspector.setAttribute("role","region");inspector.setAttribute("aria-label","Under the hood");
+      const placeInspector=()=>{const header=$("header");if(header?.getBoundingClientRect)inspector.style.setProperty("--inspector-top",`${header.getBoundingClientRect().bottom+8}px`);};
+      inspectButton.addEventListener("click",()=>{inspector.open=!inspector.open;placeInspector();if(inspector.open)inspector.querySelector?.("summary")?.focus?.();});
+      inspector.addEventListener("toggle",()=>{inspectButton.setAttribute("aria-expanded",String(inspector.open));if(inspector.open)placeInspector();else inspectButton.focus?.();});
+      document.addEventListener("keydown",event=>{if(event.key==="Escape" && inspector.open){inspector.open=false;inspectButton.focus?.();}});
+      window.addEventListener("resize",placeInspector);
+      if(window.ResizeObserver)new window.ResizeObserver(placeInspector).observe($("header"));
+      const apps=$(".apps-return");if(apps){apps.title="Apps";apps.setAttribute("aria-label","Apps");}
+      placeInspector();
+    }
     const speechGaps={chunk:180,reply:450,question:1200};
     let speechWait;
     const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
@@ -563,6 +575,29 @@ window.Conversation = (() => {
     toggle.type = "button";
     toggle.id = "conversation-play";
     audio.before(toggle);
+    const playLabel = text => {
+      toggle.textContent = text; toggle.title = text;
+      toggle.setAttribute("aria-label", text);
+      toggle.dataset.playbackState = text.startsWith("Pause") ? "pause" : "play";
+    };
+    playLabel("Play audio");
+    const follow = $("#conversation-follow");
+    if(standalone && follow){
+      $("#conversation-follow-control").hidden=false;
+      try{follow.checked=window.localStorage?.getItem("interaction-follow-audio")==="true";}catch{}
+      follow.addEventListener("change",()=>{
+        try{window.localStorage?.setItem("interaction-follow-audio",String(follow.checked));}catch{}
+        if(follow.checked)followPlayback(true);
+      });
+    }
+    function followPlayback(force=false){
+      if(!standalone || !follow?.checked || document.hidden || !active || !force && active.offset!==0)return;
+      const card=cards.get(active.source.id);
+      if(!card || !timeline?.contains?.(card.box) || !force && active.followed)return;
+      const top=timeline.scrollTop+card.box.getBoundingClientRect().top-timeline.getBoundingClientRect().top;
+      timeline.scrollTo({top:Math.max(0,top),behavior:window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches?"instant":"smooth"});
+      active.followed=true;
+    }
     let enabled = false, ready = false, reading = false, binding, canListen = false;
     let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
     let initialized = false, active, generation = 0, requestAbort, blobUrl;
@@ -681,7 +716,7 @@ window.Conversation = (() => {
       active.generation = generation;
       active.auto = false;
       audio.pause(); audio.muted = true;
-      toggle.textContent = "Play audio";
+      playLabel("Play audio");
       toggle.disabled = !blobUrl;
       audioState("Paused. Your replies remain available.");
     }
@@ -912,15 +947,16 @@ window.Conversation = (() => {
         if(replyFocus?.reference.context_only){clearFocus();selected.focusVersion=focusVersion;}
         voiceContext=["worker_result","matrix_result","native_question"].includes(selected.source.kind)
           ?{source:selected.source.id,revision:selected.source.revision,context_only:true}:undefined;
-        toggle.textContent = "Pause audio";
+        playLabel("Pause audio");
         audioState("Playing this reply.");
         presentState({playback:"playing"});
+        followPlayback();
       } catch (e) {
         if (active !== selected || generation !== owned) return;
         selected.verifying = false;
         audio.pause(); audio.muted = true;
         if (e.name === "NotAllowedError") {
-          toggle.disabled = false; toggle.textContent = "Play audio";
+          toggle.disabled = false; playLabel("Play audio");
           audioState("Audio ready. Press Play audio to listen.");
         } else {
           stop("This reply changed or is unavailable. Refresh before listening.");
@@ -981,9 +1017,9 @@ window.Conversation = (() => {
         return {failed:true,generation};
       } finally { clearTimeout(deadline); if (requestAbort === controller) requestAbort = undefined; }
     }
-    audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort)presentState({playback:undefined});});
+    audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort){playLabel("Play audio");presentState({playback:undefined});}});
     audio.addEventListener("playing",()=>{
-      if(active && !active.verifying && !audio.muted)presentState({playback:"playing"});
+      if(active && !active.verifying && !audio.muted){playLabel("Pause audio");presentState({playback:"playing"});}
     });
     audio.addEventListener("ended", async () => {
       if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || !playbackAllowed() || !enabled) return;
@@ -997,7 +1033,7 @@ window.Conversation = (() => {
         }
         return;
       }
-      audioState("End of reply."); toggle.textContent = "Play audio again";
+      audioState("End of reply."); playLabel("Play audio again");
       if(selected.source.kind!=="native_question" || selected.finished){nextSpokenReply("reply",selected.source);return;}
       selected.finished=true;
       try {

@@ -44,7 +44,7 @@ window.ConversationSound = (() => {
       unconfirmed:sources.filter(s=>s.state==="unknown" || [s.tools_running,s.error,s.pending].some(value=>typeof value!=="boolean")).length,truncated:!!frame.truncated};
   }
   function renderer({Context=window.AudioContext||window.webkitAudioContext,changed=()=>{}}={}) {
-    let context,master,breath,lfo,modulation,quiet=false,volume=0.3,catalog,masterEnvelope,pulseKey,signature;
+    let context,master,breath,lfo,modulation,ducking=1,volume=0.3,catalog,masterEnvelope,pulseKey,signature;
     const tones=new Map();
     // Track our linear envelopes rather than reading an AudioParam's scheduled target.
     const valueAt=(envelope,at)=>!envelope?0:at>=envelope.end?envelope.target:
@@ -72,7 +72,8 @@ window.ConversationSound = (() => {
       };setTimeout(finish,370);
       context=master=breath=lfo=modulation=masterEnvelope=undefined;pulseKey=signature=undefined;changed(false);
     }
-    function level(){if(master && context)masterEnvelope=ramp(master.gain,masterEnvelope,quiet?0:volume*(catalog?.peak_gain||0),context.currentTime,0.12);}
+    function level(seconds=0.12){if(master && context)masterEnvelope=ramp(master.gain,masterEnvelope,ducking*volume*(catalog?.peak_gain||0),context.currentTime,seconds);}
+    function setDucking(value){const next=Math.max(0,Math.min(1,Number(value)||0)),seconds=next<ducking?0.18:0.6;ducking=next;level(seconds);}
     function render(composition,v){
       catalog=v;level();if(!context || context.state!=="running")return {voices:[],dropped:composition.voices.length,running:false};
       const voices=composition.voices.filter(s=>s.components.every(key=>v.fundamental_hz*v.components[key]<context.sampleRate*0.45));
@@ -117,7 +118,7 @@ window.ConversationSound = (() => {
           master.connect(breath);breath.connect(owned.destination);lfo.connect(modulation);modulation.connect(breath.gain);lfo.start();}
         owned.onstatechange=()=>{if(context!==owned)return;if(owned.state!=="running"){for(const tone of tones.values())halt(tone);tones.clear();master.gain.value=0;masterEnvelope=signature=undefined;}changed(owned.state==="running");};
         await owned.resume();if(context!==owned){owned.close().catch(()=>{});return false;}changed(owned.state==="running");return owned.state==="running";},
-      render,stop,setVolume(value){volume=Math.max(0,Math.min(1,Number(value)||0));level();},setQuiet(value){quiet=!!value;level();}};
+      render,stop,setVolume(value){volume=Math.max(0,Math.min(1,Number(value)||0));level();},setDucking,setQuiet(value){setDucking(value?0:1);}};
   }
   function mount({api,unauthorized=()=>{},getAuthority=()=>"",onState=()=>{},now=()=>performance.now()}={}) {
     const button=document.querySelector("#conversation-sound-toggle"),status=document.querySelector("#conversation-sound-status"),score=document.querySelector("#conversation-sound-score"),volume=document.querySelector("#conversation-sound-volume");
@@ -126,7 +127,7 @@ window.ConversationSound = (() => {
     function setStatus(detail,brief=detail){status.textContent=detail;if(feedback){feedback.textContent=brief;feedback.hidden=detail==="Off";}if(controls)controls.hidden=!enabled;}
     let enabled=false,suspended=false,generation=0,authority,request,frame,vocabulary,catalog,received=0,requestElapsed=0,expiry,local={};
     const engine=renderer({changed(running){suspended=!running;if(enabled){button.textContent=running?"≈ Mute Beacon":"≈ Resume Beacon";if(!running)setStatus("Audio suspended · tap to resume");}}});
-    const isQuiet=()=>["permission","recording","finalizing"].includes(local.capture) || local.uploading===true || ["playing","preparing"].includes(local.playback);
+    const voiceLevel=()=>["permission","recording","finalizing"].includes(local.capture) || local.uploading===true ? 0 : ["playing","preparing"].includes(local.playback) ? 0.18 : 1;
     function disable(){enabled=false;authority=undefined;generation++;clearTimeout(expiry);request=undefined;frame=undefined;engine.stop();button.setAttribute("aria-pressed","false");button.textContent="≈ Beacon";setStatus("Off");score.replaceChildren();}
     function draw(){
       if(!enabled || !frame || !vocabulary)return;
@@ -134,9 +135,9 @@ window.ConversationSound = (() => {
       if(!frame.configured){disable();setStatus("State observer is not configured");return;}
       const played=engine.render(composition,vocabulary);
       const label=document.querySelector("#conversation-sound-vocabulary");if(label)label.textContent=`${vocabulary.label} · ${vocabulary.fundamental_hz} Hz F1 · ${vocabulary.wave} · revision ${vocabulary.revision}`;
-      const silent=isQuiet();
-      engine.setQuiet(silent);
-      setStatus(!played.running?"Audio suspended · tap to resume":Number(volume.value)===0?"Muted · state labels remain available":silent?"Quiet during voice capture or reply":`${played.voices.length} session voices · ${composition.unconfirmed} unconfirmed · ${composition.omitted+played.dropped} omitted${composition.truncated?" · additional sources unavailable":""}`, !played.running?"Beacon paused · tap to resume":Number(volume.value)===0?"Beacon muted":silent?"Beacon quiet while you speak or listen":played.voices.length?`Beacon · ${played.voices.length} session voice${played.voices.length===1?"":"s"}${composition.unconfirmed?" · some state unconfirmed":""}`:"Beacon quiet · no active session voices");
+      const gain=voiceLevel(),silent=gain===0,lowered=gain>0 && gain<1;
+      engine.setDucking(gain);
+      setStatus(!played.running?"Audio suspended · tap to resume":Number(volume.value)===0?"Muted · state labels remain available":silent?"Quiet during voice capture":lowered?"Lowered under reply audio":`${played.voices.length} session voices · ${composition.unconfirmed} unconfirmed · ${composition.omitted+played.dropped} omitted${composition.truncated?" · additional sources unavailable":""}`, !played.running?"Beacon paused · tap to resume":Number(volume.value)===0?"Beacon muted":silent?"Beacon quiet while you speak":lowered?"Beacon softly under reply audio":played.voices.length?`Beacon · ${played.voices.length} session voice${played.voices.length===1?"":"s"}${composition.unconfirmed?" · some state unconfirmed":""}`:"Beacon quiet · no active session voices");
       const rows=composition.sources.map(source=>{const row=document.createElement("li");
         const notes=source.components.map(key=>`F${vocabulary.components[key]}`);row.textContent=`${source.label||source.id} · ${source.state.replaceAll("_"," ")} · ${notes.length?notes.join(" + "):"quiet"}${played.voices.some(v=>v.id===source.id)?"":" · outside this mix"}`;return row;});score.replaceChildren(...rows);
       clearTimeout(expiry);
@@ -169,7 +170,7 @@ window.ConversationSound = (() => {
     document.addEventListener("visibilitychange",()=>{if(document.hidden)disable();});
     window.addEventListener("pagehide",disable);
     window.addEventListener("offline",disable);
-    return {refresh,reset(){disable();local={};},disable,update(patch){local={...local,...patch};engine.setQuiet(isQuiet());if(enabled && frame)draw();}};
+    return {refresh,reset(){disable();local={};},disable,update(patch){local={...local,...patch};engine.setDucking(voiceLevel());if(enabled && frame)draw();}};
   }
   return {state,components,validate,plan,renderer,mount};
 })();

@@ -85,7 +85,7 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   client.update({capture:'recording'});assert.equal(liveMaster.gain.value,0);
   assert.match(nodes.get('#conversation-sound-feedback').textContent,/quiet while/);
   client.update({capture:'idle'});assert(liveMaster.gain.value>0);
-  client.update({playback:'playing'});assert.equal(liveMaster.gain.value,0);
+  const fullGain=liveMaster.gain.value;client.update({playback:'playing'});assert(Math.abs(liveMaster.gain.value-fullGain*0.18)<1e-9);assert.match(nodes.get('#conversation-sound-feedback').textContent,/softly under/);
   client.update({playback:undefined});assert(liveMaster.gain.value>0);
   now=21000;const expiry=[...timers.entries()].find(([,t])=>t.ms===20001);assert(expiry);timers.delete(expiry[0]);expiry[1].fn();assert.match(nodes.get('#conversation-sound-status').textContent,/1 unconfirmed/);
   assert(!live.nodes.some(n=>n.frequency.value===845),'Stale evidence invented a pitch');
