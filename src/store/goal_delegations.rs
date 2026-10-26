@@ -44,14 +44,6 @@ pub(super) fn grant_on(
     Ok(value)
 }
 
-pub(super) fn delegated_plan(plan: &GoalPlan) -> bool {
-    matches!(
-        plan.action,
-        GoalAction::Edit | GoalAction::Pause | GoalAction::Resume
-    ) && plan.token_budget.is_none()
-        && plan.followup.is_none()
-}
-
 pub(super) fn validate_on(
     conn: &Connection,
     human: i64,

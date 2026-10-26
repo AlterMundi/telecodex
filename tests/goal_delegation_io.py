@@ -16,7 +16,7 @@ def qualify(binary):
     try:
         j.prepare(seed_entry=True)
         j.stop()
-        j.config.write_text(j.config.read_text().replace(
+        j.config.write_text(j.config.read_text().replace('[[interaction.targets]]\nname="Beta"\ntopic_id=8\n', '').replace(
             '[telegram]\n', '[telegram]\nenabled=false\n').replace(
             'bot_token_file=', 'unused_previous_token_file='))
         # TelegramConfig currently tolerates unknown historical config keys;
@@ -58,6 +58,11 @@ def qualify(binary):
             assert value['intent']['actor']['kind'] == 'daimon'
             return value['id']
 
+        for selector, native in [('self', 'native-topic-9'), ('t8', 'native-topic-8')]:
+            j.goals[native] = {**j.goals['native-topic-7'], 'threadId': native, 'status': 'active'}
+            control = prepare(entry, selector, 'pause', 'Delegate can select its own integrating goal and an owned unenrolled goal')
+            assert j.cli(entry, 'goal_execute', {'id': control})['phase'] == 'acknowledged'
+            assert j.goals[native]['status'] == 'paused'
         selected = prepare(entry, 't7', 'resume', 'Daimon continues the delegated objective')
         j.cli(entry, 'goal_execute', {'id': selected})
         j.wait(lambda: j.row('SELECT phase FROM interaction_goal_controls WHERE id=?', (selected,)) == [('acknowledged',)])

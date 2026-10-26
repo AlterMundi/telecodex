@@ -115,7 +115,13 @@ pub(super) async fn tool(
                 .strip_prefix("/self#")
                 .or_else(|| args.selector.strip_prefix('#'))
                 .unwrap_or(&args.selector);
-            let targets = if integrator {
+            let delegated = args.input_ref.is_none()
+                && args.plan.delegatable()
+                && app
+                    .shared
+                    .store
+                    .goal_delegation_allows_actor(human, key, &request.thread_id)?;
+            let targets = if integrator && !delegated {
                 super::routing::profile(&app.shared)?.resolve(selector)
             } else {
                 app.shared

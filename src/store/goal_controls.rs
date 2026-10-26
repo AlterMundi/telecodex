@@ -28,6 +28,13 @@ pub struct GoalPlan {
     pub followup: Option<String>,
 }
 impl GoalPlan {
+    pub(crate) fn delegatable(&self) -> bool {
+        matches!(
+            self.action,
+            GoalAction::Edit | GoalAction::Pause | GoalAction::Resume
+        ) && self.token_budget.is_none()
+            && self.followup.is_none()
+    }
     pub fn validate(&self) -> Result<()> {
         use GoalAction::*;
         if self.expected.revision.is_empty()
@@ -313,7 +320,7 @@ impl Store {
         super::live_tasks::actor_on(&tx, actor, closed)?;
         let entry_binding = binding_on(&tx, actor.human, actor.key)?;
         let actual_binding = binding_on(&tx, actor.human, target)?;
-        let delegation = if reference.is_none() && super::goal_delegations::delegated_plan(plan) {
+        let delegation = if reference.is_none() && plan.delegatable() {
             super::goal_delegations::grant_on(&tx, actor.human, target, false)
                 .ok()
                 .map(|mut grant| {
