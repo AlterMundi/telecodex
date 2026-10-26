@@ -10,7 +10,8 @@ from routing_io import Routing
 
 
 class Creation(Semantic):
-    def __init__(self,binary,unknown=False,retired=False):
+    def __init__(self,binary,unknown=False,retired=False,name="Gamma"):
+        self.name=name
         self.retired=retired
         self.unknown=unknown
         self.topic_calls=0
@@ -19,11 +20,11 @@ class Creation(Semantic):
 
     def created_topic(self,payload):
         self.topic_calls+=1
-        assert payload=={'chat_id':100,'name':'Gamma'}
-        return {} if self.unknown else {'message_thread_id':77,'name':'Gamma'}
+        assert payload=={'chat_id':100,'name':self.name}
+        return {} if self.unknown else {'message_thread_id':77,'name':self.name}
 
     def create_args(self):
-        return {'input_update':self.input_ref,'name':'Gamma','reason':'The original input defines an independent new Gamma task.','context_selectors':[]}
+        return {'input_update':self.input_ref,'name':self.name,'reason':'The original input defines an independent new Gamma task.','context_selectors':[]}
 
     def call(self,ident,operation,arguments):
         if ident=='forged':ident,operation,arguments='create','create',self.create_args()
@@ -44,8 +45,9 @@ class Creation(Semantic):
                     assert outcome['selector']=='t77'
                 self.call('repeat-create','create',self.create_args())
             elif ident=='repeat-create':
-                assert value['success'] is self.unknown
+                assert value['success'] is (self.unknown or (' ' in self.name and not self.retired))
                 if self.unknown:assert json.loads(value['contentItems'][0]['text'])['phase']=='uncertain'
+                elif ' ' in self.name and not self.retired:assert json.loads(value['contentItems'][0]['text'])['phase']=='ready'
                 self.call('creation-status','creation_status',{'input_update':self.input_ref})
             elif ident=='creation-status':
                 assert value['success']
@@ -53,14 +55,53 @@ class Creation(Semantic):
                 self.call('inventory-created','candidates',{'mode':'inventory','selectors':[]})
             else:
                 assert value['success']
-                assert {c['label'] for c in json.loads(value['contentItems'][0]['text'])['candidates']}==({'Alpha','Beta'} if self.unknown or self.retired else {'Alpha','Beta','Gamma'})
+                assert {c['label'] for c in json.loads(value['contentItems'][0]['text'])['candidates']}==({'Alpha','Beta'} if self.unknown or self.retired else {'Alpha','Beta',('t77' if ' ' in self.name else self.name)})
                 send({'method':'turn/completed','params':{'threadId':self.entry,'turn':{'id':self.entry_turn,'status':'completed'}}})
             return True
         return super().handle_extra_rpc(m,send)
 
 
-def created_destination(binary):
-    j=Creation(binary)
+class InvalidTitle(Creation):
+    def __init__(self,binary):
+        self.rejections=[]
+        super().__init__(binary,name=" bad title")
+
+    def handle_extra_rpc(self,m,send):
+        ident=m.get('id')
+        if m.get('method') is None and ident=='create' and not self.rejections:
+            value=m['result'];assert value['success'] is False
+            error=json.loads(value['contentItems'][0]['text'])
+            assert error['kind']=='creation_rejected' and error['code']=='invalid_creation_title'
+            assert error['stage']=='before_intent'
+            assert self.topic_calls==0 and self.row('SELECT count(*) FROM interaction_creations')==[(0,)]
+            self.rejections.append(error)
+            self.call('rejected-status','creation_status',{'input_update':self.input_ref})
+            return True
+        if m.get('method') is None and ident=='rejected-status':
+            assert m['result']['success']
+            assert json.loads(m['result']['contentItems'][0]['text'])['phase']=='not_found'
+            self.name='Diamond Badge'
+            self.call('create','create',self.create_args())
+            return True
+        return super().handle_extra_rpc(m,send)
+
+
+def invalid_title_then_corrected(binary):
+    j=InvalidTitle(binary)
+    try:
+        j.prepare()
+        original=j.admit('NATURAL-ROUTE Start an independent named task.',topic=1)
+        j.wait(lambda:len(j.creation_outputs)==4)
+        j.wait(lambda:len(j.instructions(77))==1 and j.instructions(77)[0][1]=='accepted')
+        assert len(j.rejections)==1 and j.topic_calls==1
+        assert j.row('SELECT count(*) FROM interaction_creations')==[(1,)]
+        assert json.loads(j.instructions(77)[0][2])['origin']['message_id']==original
+        print('PASS safe preflight rejection has zero effects; inspected correction uses the same original and creates exactly one topic')
+    finally:j.close()
+
+
+def created_destination(binary,name="Gamma"):
+    j=Creation(binary,name=name)
     try:
         j.prepare()
         original=j.admit('NATURAL-ROUTE Start the independent Gamma task from this exact original text.',topic=1)
@@ -69,8 +110,9 @@ def created_destination(binary):
         assert j.topic_calls==1
         doc=json.loads(j.instructions(77)[0][2])
         assert doc['text']==j.source_text and doc['origin']['message_id']==original
-        j.admit('#Gamma Change the new task requirement to 17.',topic=1)
+        j.admit('#t77 Change the new task requirement to 17.',topic=1)
         j.wait(lambda:len(j.instructions(77))==2 and j.instructions(77)[1][1]=='accepted')
+        assert j.row('SELECT session_title FROM sessions WHERE thread_id=77')==[(name,)]
         native=j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=77')[0][0]
         rows=j.instructions(77)
         requests=sorted({r for _,_,doc in rows for r in json.loads(doc)['requests']})
@@ -80,7 +122,7 @@ def created_destination(binary):
         j.wait(lambda:j.has('Gamma incorporated 17.',1))
         j.idle()
         j.stop();j.start()
-        j.admit('#Gamma Continue the retained created task.',topic=1)
+        j.admit('#t77 Continue the retained created task.',topic=1)
         j.wait(lambda:len(j.instructions(77))==3 and j.instructions(77)[2][1]=='accepted')
         assert j.topic_calls==1 and j.row('SELECT count(*) FROM interaction_creations')==[(1,)]
         assert j.row('SELECT count(*) FROM interaction_enrollments')==[(1,)]
@@ -129,5 +171,7 @@ def retired_before_send(binary):
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     created_destination(binary)
+    created_destination(binary,"Diamond Badge")
+    invalid_title_then_corrected(binary)
     uncertain_topic(binary)
     retired_before_send(binary)
