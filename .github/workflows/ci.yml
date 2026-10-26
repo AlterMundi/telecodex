@@ -145,13 +145,20 @@ jobs:
       - name: Qualify the optional shared integrating entry
         run: python3 -B tests/entry_projection_io.py target/release/telecodex
       - name: Ensure voice decoding prerequisite
+        timeout-minutes: 5
         run: |
           if ! command -v ffmpeg >/dev/null; then
-            # Reuse the runner's package index; refresh only after a known install failure.
-            sudo apt-get install -y --no-install-recommends ffmpeg || {
-              sudo apt-get update -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
-              sudo apt-get install -y --no-install-recommends ffmpeg
-            }
+            # CI40379212762 spent 16m24s fetching 62.8MB from the Azure mirror,
+            # exhausting the job before required native journeys could finish.
+            # Keep Ubuntu signature verification and every qualification gate.
+            for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+              if [ -f "$source" ]; then
+                sudo sed -i -E 's|https?://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
+              fi
+            done
+            apt_options=(-o Acquire::Retries=1 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::http::Dl-Limit=0 -o Acquire::https::Dl-Limit=0)
+            timeout 120s sudo apt-get "${apt_options[@]}" update
+            timeout 120s sudo apt-get "${apt_options[@]}" install -y --no-install-recommends ffmpeg
           fi
       # Exercise this new slice before the longer unchanged compatibility group.
       - name: Qualify live controller retirement and expression choices
