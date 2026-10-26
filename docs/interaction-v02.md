@@ -352,3 +352,9 @@ capture timestamps are retained atomically in the shared ingress-order ledger.
 Older missing timestamps stay explicitly unknown instead of being backfilled
 with refresh time. Follow resolves the visible Update from card for the exact
 spoken progress source; it never scrolls to its hidden diagnostic duplicate.
+
+Shared-login and interaction-device grants permit read-only Telegram originals
+and their existing trace/image routes, with the same receiving human and entry
+binding as the app inputs. A denied optional Telegram observation must not clear
+the conversation, draft or recording; it is not evidence that the whole browser
+session expired. Authentication expiry still follows the existing reconnect path.

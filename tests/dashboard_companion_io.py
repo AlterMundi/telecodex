@@ -65,6 +65,8 @@ class Companion(unittest.TestCase):
         self.config['additional_origins']=['https://home.example.test']
         self.client.close();self.client=self.client_for()
         self.provider.conversation_inputs=lambda before,direction: {'items':[], 'more':False}
+        self.provider.conversation_telegram_inputs=lambda before,direction: {'items':[], 'read_only':True}
+        self.provider.conversation_input_trace=lambda ident: {'id':ident,'read_only':True}
         submitted=[]
         self.provider.conversation_input_submit=lambda body: submitted.append(body) or {'phase':'queued'}
         token='h'*43
@@ -78,6 +80,8 @@ class Companion(unittest.TestCase):
             self.assertNotIn(token,access.text)
             self.assertEqual(self.client.get('/api/interaction',headers=headers).status_code,200)
             self.assertEqual(self.client.get('/api/interaction/inputs',headers=headers).status_code,200)
+            self.assertEqual(self.client.get('/api/interaction/telegram-inputs',headers=headers).status_code,200)
+            self.assertEqual(self.client.get('/api/interaction/inputs/telegram:123/trace',headers=headers).status_code,200)
             payload={'id':str(uuid.uuid4()),'text':'Shared session text'}
             for csrf in ('', 'wrong'):
                 denied=self.client.post('/api/interaction/inputs',json=payload,headers={**headers,'X-Dashboard-CSRF':csrf})
@@ -198,7 +202,12 @@ class Companion(unittest.TestCase):
         for route in (path,path+'/original',path+'/'+str(uuid.uuid4())):
             self.assertTrue(permitted('GET',route))
             self.assertFalse(permitted('POST',route))
-        for route in ('/api/interaction/telegram-inputs','/api/interaction/inputs/telegram:123/trace','/api/stop','/api/state'):
+        self.provider.conversation_telegram_inputs=lambda before,direction: {'items':[], 'read_only':True}
+        for route in ('/api/interaction/telegram-inputs','/api/interaction/inputs/telegram:123/trace'):
+            self.assertEqual(self.client.get(route,headers=self.headers).status_code,200)
+            for method in ('POST','PUT','DELETE'):
+                self.assertFalse(permitted(method,route))
+        for route in ('/api/stop','/api/state'):
             self.assertEqual(self.client.get(route,headers=self.headers).status_code,403)
 
     def test_monitor_grant_is_read_only_and_never_inherits_ambient_owner(self):
@@ -238,8 +247,8 @@ class Companion(unittest.TestCase):
             if selected!='/api/interaction/inputs':
                 self.assertEqual(self.client.get(selected,headers=headers).status_code,403,selected)
             self.assertEqual(self.client.post(selected,json={},headers=headers).status_code,403,selected)
-        # Existing interaction credentials do not silently gain monitor access.
-        self.assertEqual(self.client.get(path,headers=self.headers).status_code,403)
+        # Both clients observe the same retained human originals without writes.
+        self.assertEqual(self.client.get(path,headers=self.headers).status_code,200)
         self.grants.revoke(receipt['grant_id'])
         self.assertEqual(self.client.get(path,headers=headers).status_code,401)
         self.assertEqual(len(self.speech.calls),0)
