@@ -138,6 +138,9 @@ pub struct CodexConfig {
     pub auto_attach_latest_history: bool,
     pub default_cwd: PathBuf,
     pub default_model: Option<String>,
+    /// Named native model profiles selected by exact local conversation key.
+    #[serde(default)]
+    pub session_profiles: Vec<SessionModelProfile>,
     pub default_reasoning_effort: Option<String>,
     #[serde(default = "default_sandbox")]
     pub default_sandbox: String,
@@ -153,6 +156,42 @@ pub struct CodexConfig {
     pub import_desktop_history: bool,
     #[serde(default = "default_true")]
     pub import_cli_history: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionModelProfile {
+    pub chat_id: i64,
+    pub topic_id: i64,
+    pub profile: String,
+    pub reasoning_effort: Option<String>,
+}
+
+impl SessionModelProfile {
+    pub fn key(&self) -> crate::models::SessionKey {
+        crate::models::SessionKey::new(self.chat_id, Some(self.topic_id))
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.chat_id == 0
+            || self.topic_id < 0
+            || self.profile.is_empty()
+            || self.profile.len() > 64
+            || !self
+                .profile
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+            || self.reasoning_effort.as_deref().is_some_and(|v| {
+                !matches!(
+                    v,
+                    "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+                )
+            })
+        {
+            bail!("Invalid scoped native model profile");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
@@ -185,6 +224,13 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
+        let mut profile_keys = std::collections::HashSet::new();
+        for profile in &self.codex.session_profiles {
+            profile.validate()?;
+            if !profile_keys.insert(profile.key()) {
+                bail!("Duplicate native model profile for a conversation");
+            }
+        }
         if let Some(voice) = &self.voice {
             voice.validate()?;
             if self.interaction.is_none() {

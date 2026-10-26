@@ -275,6 +275,7 @@ fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
             auto_attach_latest_history: true,
             default_cwd: default_cwd.clone(),
             default_model: Some("gpt-5.4".to_string()),
+            session_profiles: vec![],
             default_reasoning_effort: Some("medium".to_string()),
             default_sandbox: "workspace-write".to_string(),
             default_approval: "never".to_string(),

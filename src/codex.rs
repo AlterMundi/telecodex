@@ -1,5 +1,5 @@
 use crate::{
-    config::SearchMode,
+    config::{SearchMode, SessionModelProfile},
     limits::{LimitsSnapshot, default_codex_home},
     models::{SessionRecord, TurnRequest},
     user_input::{NativeRequestId, UserInputDecision, UserInputRequest},
@@ -57,6 +57,96 @@ pub struct CodexRunner {
     goal_activation: Option<GoalActivation>,
     client_message_id: Option<String>,
     dynamic_tools: Vec<Value>,
+    session_profiles: Vec<SessionModelProfile>,
+}
+
+/// Only model routing is taken from the existing native profile. Bridge-owned
+/// instructions, tools, approvals and sandbox remain authoritative.
+struct NativeModelProfile {
+    model: String,
+    provider: String,
+    effort: Option<String>,
+    config: serde_json::Map<String, Value>,
+}
+
+impl NativeModelProfile {
+    fn load(home: &Path, selected: &SessionModelProfile) -> Result<Self> {
+        selected.validate()?;
+        let path = home.join(format!("{}.config.toml", selected.profile));
+        let raw = fs::read_to_string(path).context("Selected native model profile unavailable")?;
+        let parsed: toml::Value = toml::from_str(&raw)
+            .map_err(|_| anyhow!("Selected native model profile could not be parsed"))?;
+        let model = parsed
+            .get("model")
+            .and_then(toml::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .context("Native model profile requires a model")?
+            .to_owned();
+        let provider = parsed
+            .get("model_provider")
+            .and_then(toml::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .context("Native model profile requires a provider")?
+            .to_owned();
+        let effort = selected.reasoning_effort.clone().or_else(|| {
+            parsed
+                .get("model_reasoning_effort")
+                .and_then(toml::Value::as_str)
+                .map(str::to_owned)
+        });
+        let mut config = serde_json::Map::new();
+        for key in ["model_providers", "model_catalog_json"] {
+            if let Some(value) = parsed.get(key) {
+                let mut value = serde_json::to_value(value)?;
+                if key == "model_catalog_json" {
+                    let catalog = Path::new(
+                        value
+                            .as_str()
+                            .context("Native model catalog must be a path")?,
+                    );
+                    if catalog.is_relative() {
+                        value = json!(home.join(catalog));
+                    }
+                }
+                config.insert(key.into(), value);
+            }
+        }
+        config.insert("model_provider".into(), json!(provider));
+        config.insert("model".into(), json!(model));
+        if let Some(effort) = &effort {
+            config.insert("model_reasoning_effort".into(), json!(effort));
+        }
+        Ok(Self {
+            model,
+            provider,
+            effort,
+            config,
+        })
+    }
+
+    fn apply(&self, params: &mut Value) {
+        params["model"] = json!(self.model);
+        params["modelProvider"] = json!(self.provider);
+        params["config"]
+            .as_object_mut()
+            .expect("native thread configuration object")
+            .extend(self.config.clone());
+    }
+
+    fn verify(&self, response: &Value) -> Result<()> {
+        if response["model"].as_str() != Some(&self.model)
+            || response["modelProvider"].as_str() != Some(&self.provider)
+            || self
+                .effort
+                .as_deref()
+                .is_some_and(|e| response["reasoningEffort"].as_str() != Some(e))
+        {
+            bail!(
+                "Native thread has not adopted the selected model profile; no input was submitted. An active or subscribed thread may retain its current settings."
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -106,6 +196,12 @@ pub enum CodexEvent {
         text: String,
     },
     ThreadStarted(String),
+    NativeModelConfigured {
+        thread_id: String,
+        model: String,
+        provider: String,
+        effort: Option<String>,
+    },
     NativeTurnStarted(String),
     NativeInputAccepted(String),
     NativeSteerAccepted {
@@ -529,11 +625,51 @@ impl CodexRunner {
             goal_activation: None,
             client_message_id: None,
             dynamic_tools: vec![],
+            session_profiles: vec![],
         }
     }
     pub fn with_shared_app_server(mut self, shared: bool) -> Self {
         self.shared_app_server = shared;
         self
+    }
+    pub fn with_session_profiles(mut self, profiles: Vec<SessionModelProfile>) -> Self {
+        self.session_profiles = profiles;
+        self
+    }
+    fn session_profile(&self, key: crate::models::SessionKey) -> Option<&SessionModelProfile> {
+        self.session_profiles
+            .iter()
+            .find(|profile| profile.key() == key)
+    }
+
+    /// Apply a configured model to an existing idle native cache entry without
+    /// submitting input. Native resume preserves active/subscribed threads;
+    /// verify the returned settings instead of claiming ignored overrides worked.
+    pub async fn apply_session_profile(
+        &self,
+        session: &SessionRecord,
+    ) -> Result<Option<(String, String, Option<String>)>> {
+        let Some(selected) = self.session_profile(session.key) else {
+            return Ok(None);
+        };
+        if session.codex_thread_id.is_none() || session.force_fresh_thread {
+            return Ok(None);
+        }
+        let profile = NativeModelProfile::load(&default_codex_home(), selected)?;
+        let mut selected_session = session.clone();
+        selected_session.model = Some(profile.model.clone());
+        selected_session.reasoning_effort = profile.effort.clone();
+        let mut process = AppServerProcess::spawn(&self.binary, self.shared_app_server).await?;
+        process.initialize().await?;
+        let result = process
+            .start_or_resume_thread(&selected_session, false, &[], Some(&profile))
+            .await;
+        process.shutdown().await?;
+        let (native, _) = result?;
+        if session.codex_thread_id.as_deref() != Some(native.as_str()) {
+            bail!("Native profile adoption returned another conversation");
+        }
+        Ok(Some((native, profile.model, profile.effort)))
     }
     pub fn with_dynamic_tools(mut self, tools: Vec<Value>) -> Self {
         self.dynamic_tools = tools;
@@ -940,6 +1076,32 @@ impl CodexRunner {
         F: FnMut(CodexEvent) -> Fut,
         Fut: std::future::Future<Output = Result<CodexEventOutcome>>,
     {
+        // Collecting an already-running turn must retain its actual model.
+        // The selected profile applies at the next new-turn boundary.
+        let profile = if self
+            .goal_activation
+            .as_ref()
+            .is_some_and(|a| a.attach_turn.is_some())
+        {
+            None
+        } else {
+            self.session_profile(session.key)
+                .map(|p| NativeModelProfile::load(&default_codex_home(), p))
+                .transpose()
+                .map_err(|e| e.context(NativeInputNotSubmitted))?
+        };
+        let mut selected_session = session.clone();
+        if let Some(profile) = &profile {
+            selected_session.model = Some(profile.model.clone());
+            selected_session.reasoning_effort = profile.effort.clone();
+            if request.review_mode.is_some() {
+                return Err(anyhow!(
+                    "Native profile selection requires the App Server conversation path"
+                )
+                .context(NativeInputNotSubmitted));
+            }
+        }
+        let session = &selected_session;
         if let Some(spec) = self.build_review_command(session, request) {
             if self.bounded_turn.is_some() {
                 bail!("bounded Tribu turns do not run a separate review process");
@@ -953,6 +1115,7 @@ impl CodexRunner {
             self.goal_activation.as_ref(),
             self.client_message_id.as_deref(),
             &self.dynamic_tools,
+            profile.as_ref(),
             session,
             request,
             cancel,
@@ -1046,6 +1209,7 @@ async fn run_app_server_turn<F, Fut>(
     goal_activation: Option<&GoalActivation>,
     client_message_id: Option<&str>,
     dynamic_tools: &[Value],
+    profile: Option<&NativeModelProfile>,
     session: &SessionRecord,
     request: &TurnRequest,
     cancel: CancellationToken,
@@ -1108,7 +1272,7 @@ where
         "native turn preparation"
     );
     let (thread_id, native_model) = process
-        .start_or_resume_thread(session, request, bounded.is_some(), dynamic_tools)
+        .start_or_resume_thread(session, bounded.is_some(), dynamic_tools, profile)
         .await?;
     tracing::debug!(
         stage = "thread_bound",
@@ -1126,6 +1290,12 @@ where
         stderr_text: String::new(),
     };
     let _ = on_event(CodexEvent::ThreadStarted(thread_id.clone())).await?;
+    if let Some(profile) = profile {
+        let _ = on_event(CodexEvent::NativeModelConfigured {
+            thread_id: thread_id.clone(), model: profile.model.clone(),
+            provider: profile.provider.clone(), effort: profile.effort.clone(),
+        }).await?;
+    }
     if cancel.is_cancelled() {
         bail!("cancelled before native submission");
     }
@@ -2769,11 +2939,14 @@ impl AppServerProcess {
     async fn start_or_resume_thread(
         &mut self,
         session: &SessionRecord,
-        _request: &TurnRequest,
         bounded: bool,
         dynamic_tools: &[Value],
+        profile: Option<&NativeModelProfile>,
     ) -> Result<(String, Option<String>)> {
         let (method, mut params) = build_thread_request(session);
+        if let Some(profile) = profile {
+            profile.apply(&mut params);
+        }
         // Tools are declared only for a new thread. Native rollout metadata
         // restores them on resume; existing bindings are never replaced here.
         if method == "thread/start" && !dynamic_tools.is_empty() {
@@ -2785,6 +2958,9 @@ impl AppServerProcess {
         }
         let request_id = self.send_request(method, params).await?;
         let response = self.await_response(request_id).await?;
+        if let Some(profile) = profile {
+            profile.verify(&response)?;
+        }
         let thread_id = response
             .get("thread")
             .and_then(|thread| thread.get("id"))
@@ -3767,6 +3943,155 @@ while True:
             add_dirs: vec![sample_add_dir()],
             busy: false,
         }
+    }
+
+    fn model_profile_selector() -> SessionModelProfile {
+        SessionModelProfile {
+            chat_id: 1,
+            topic_id: 2,
+            profile: "fixture".into(),
+            reasoning_effort: Some("high".into()),
+        }
+    }
+
+    #[test]
+    fn native_model_profile_is_scoped_and_preserves_bridge_policy() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(
+            root.path().join("fixture.config.toml"),
+            r#"
+model = "fixture-model"
+model_provider = "fixture-provider"
+model_reasoning_effort = "xhigh"
+model_catalog_json = "catalog.json"
+approval_policy = "on-request"
+sandbox_mode = "danger-full-access"
+[model_providers.fixture-provider]
+wire_api = "responses"
+[model_providers.fixture-provider.auth]
+file = "retained-key-reference"
+[tui]
+model = "ignored-tui-field"
+"#,
+        )
+        .unwrap();
+        let selector = model_profile_selector();
+        let profile = NativeModelProfile::load(root.path(), &selector).unwrap();
+        let runner =
+            CodexRunner::new(PathBuf::from("unused")).with_session_profiles(vec![selector]);
+        let mut session = session_with_sandbox("workspace-write");
+        session.codex_thread_id = Some("same-history".into());
+        for key in [
+            session.key,
+            crate::models::SessionKey::new(1, Some(3)),
+            crate::models::SessionKey::new(9, Some(2)),
+        ] {
+            let mut candidate = session.clone();
+            candidate.key = key;
+            let (_, mut params) = build_thread_request(&candidate);
+            if runner.session_profile(key).is_some() {
+                profile.apply(&mut params);
+            }
+            assert_eq!(params["threadId"], "same-history");
+            assert_eq!(params["approvalPolicy"], "never");
+            assert_eq!(params["sandbox"], "workspace-write");
+            if key == session.key {
+                assert_eq!(params["modelProvider"], "fixture-provider");
+                assert_eq!(params["config"]["model_reasoning_effort"], "high");
+                assert_eq!(
+                    params["config"]["model_catalog_json"],
+                    json!(root.path().join("catalog.json"))
+                );
+                assert!(params["config"].get("tui").is_none());
+                assert!(params["config"].get("approval_policy").is_none());
+                assert!(params["config"].get("sandbox_mode").is_none());
+            } else {
+                assert_eq!(params["model"], "gpt-5.4");
+                assert!(params.get("modelProvider").is_none());
+                assert!(params["config"].get("model_providers").is_none());
+            }
+        }
+        assert_eq!(session.model.as_deref(), Some("gpt-5.4"));
+        let mut invalid = model_profile_selector();
+        invalid.profile = "../other".into();
+        assert!(invalid.validate().is_err());
+        profile.verify(&json!({"model":"fixture-model","modelProvider":"fixture-provider","reasoningEffort":"high"})).unwrap();
+        assert!(profile.verify(&json!({"model":"fixture-model","modelProvider":"openai","reasoningEffort":"high"})).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ignored_warm_profile_never_submits_input() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let binary = proxy_fixture(root.path(), listener.local_addr().unwrap().port());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut methods = Vec::new();
+            while let Some(Ok(frame)) = socket.next().await {
+                if !frame.is_text() {
+                    continue;
+                }
+                let value: Value = serde_json::from_str(frame.to_text().unwrap()).unwrap();
+                let method = value["method"].as_str().unwrap_or("").to_owned();
+                methods.push(method.clone());
+                assert_ne!(
+                    method, "turn/start",
+                    "A mismatched native provider must not receive the input"
+                );
+                let result = match method.as_str() {
+                    "initialize" => Some(json!({})),
+                    "thread/resume" => {
+                        assert_eq!(value["params"]["threadId"], "same-history");
+                        assert_eq!(value["params"]["modelProvider"], "fixture-provider");
+                        Some(
+                            json!({"thread":{"id":"same-history"},"model":"gpt-5.4","modelProvider":"openai","reasoningEffort":"medium"}),
+                        )
+                    }
+                    _ => None,
+                };
+                if let Some(result) = result {
+                    socket
+                        .send(WsMessage::Text(
+                            json!({"id":value["id"],"result":result}).to_string().into(),
+                        ))
+                        .await
+                        .unwrap();
+                }
+            }
+            methods
+        });
+        let profile = NativeModelProfile {
+            model: "fixture-model".into(),
+            provider: "fixture-provider".into(),
+            effort: Some("high".into()),
+            config: serde_json::Map::new(),
+        };
+        let mut session = session_with_sandbox("read-only");
+        session.codex_thread_id = Some("same-history".into());
+        let mut request = review_request();
+        request.review_mode = None;
+        let (_, rx) = mpsc::unbounded_channel();
+        let mut on_event = |_| async { Ok(CodexEventOutcome::None) };
+        let result = run_app_server_turn(
+            &binary,
+            true,
+            None,
+            None,
+            None,
+            &[],
+            Some(&profile),
+            &session,
+            &request,
+            CancellationToken::new(),
+            rx,
+            &mut on_event,
+        )
+        .await;
+        assert!(result.unwrap_err().is::<NativeInputNotSubmitted>());
+        let methods = server.await.unwrap();
+        assert!(methods.iter().any(|m| m == "thread/resume"));
     }
 
     fn review_request() -> TurnRequest {
