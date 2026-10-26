@@ -605,6 +605,38 @@ fn independent_topics_preserve_native_bindings_across_restart_without_history_im
 }
 
 #[tokio::test]
+async fn new_on_zero_forum_root_does_not_clear_its_binding() {
+    let (api, server) = crate::telegram::tests::serve_api(vec![(
+        200,
+        serde_json::json!({"ok":true,"result":{"message_id":20,"chat":{"id":100,"type":"supergroup"}}}),
+    )]);
+    let (mut app, _db) = sample_app();
+    Arc::get_mut(&mut app.shared).unwrap().telegram = TelegramClient::new("synthetic".into(), api);
+    let key = SessionKey::new(100, Some(0));
+    app.ensure_session(key, 100).unwrap();
+    app.shared
+        .store
+        .set_session_codex_thread(key, "retained-root-native")
+        .unwrap();
+    let user = app.shared.store.get_user(100).unwrap().unwrap();
+    let message:Message=serde_json::from_value(serde_json::json!({"message_id":3,"message_thread_id":0,"chat":{"id":100,"type":"supergroup","is_forum":true},"text":"/new Chosen title"})).unwrap();
+    app.handle_new_session(&user, &message, Some("Chosen title".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        app.shared
+            .store
+            .get_session(key)
+            .unwrap()
+            .unwrap()
+            .codex_thread_id
+            .as_deref(),
+        Some("retained-root-native")
+    );
+    assert!(server.join().unwrap()[0].0.contains("sendMessage"));
+}
+
+#[tokio::test]
 async fn named_new_reuses_topic_rename_and_preserves_old_native_history() {
     let reply = serde_json::json!({"ok":true,"result":{"message_id":20,"chat":{"id":100,"type":"private"}}});
     let (api, server) = crate::telegram::tests::serve_api(vec![

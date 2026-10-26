@@ -2111,7 +2111,7 @@ impl App {
         message: &Message,
         title: Option<String>,
     ) -> Result<()> {
-        if message.chat.is_forum.unwrap_or(false) && message.message_thread_id.is_none() {
+        if message.chat.is_forum.unwrap_or(false) && message.message_thread_id.unwrap_or(0) == 0 {
             self.send_status(
                 message.chat.id,
                 message.message_thread_id,
