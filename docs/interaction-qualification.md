@@ -198,7 +198,7 @@ status check must prevent another native submission. Verify refusal for an
 uncertain/accepted instruction, unrelated original, retired entry and read-only
 grant; historical evidence remains intact.
 
-For Q17, inspect each key control’s bounds with populated voice status and the player visible; document-level overflow alone can miss clipping inside a scroll container. Growing transcripts and replies must preserve live following, while updates must not move a reader browsing earlier history. Explicit text/voice submission returns to the live conversation.
+For Q17, inspect each key control’s bounds with populated voice status and the player visible; document-level overflow alone can miss clipping inside a scroll container. Growing transcripts and replies must preserve live following, while updates must not move a reader browsing earlier history. Explicit text/voice submission returns to the live conversation. Exercise a long multipart spoken reply and a visible Update from card: Follow advances inside the actual audio segment, resumes without jumping to the beginning, suspends while hidden/paused/inspecting and releases on manual reading. Check Voice off, unknown duration, Unicode offsets, source replacement and reduced motion. Position inside a segment is approximate; do not claim word-level synchronization.
 
 Use isolated test credentials/workers where needed. Preserve the human's browser session and existing device grants. Use synthetic destructive scenarios. A global Stop requires
 a fresh explicit human request for that operation, including during testing.
