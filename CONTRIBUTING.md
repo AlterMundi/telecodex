@@ -2,7 +2,7 @@
 
 Use English for code, documentation, issues, commits and PRs. Link an implementation PR to its owning repository issue and, when applicable, the Matrix parent. Preserve upstream's MIT license and propose focused, generally useful changes upstream after qualification.
 
-Before integration, require current-head CI success and independent review for token handling, ingress durability, session binding, migrations and other security/persistent-state changes. Review fixes against affected invariants; reuse valid evidence instead of restarting unrelated audits.
+Before integration, require passing checks for the final changed behavior and independent review for token handling, ingress durability, session binding, migrations and other security/persistent-state changes. Reuse a coherent passing CI baseline for unchanged behavior, naming its exact source and the subsequent delta in the PR. Recheck corrections against affected invariants instead of restarting unrelated audits or compatibility suites. Read and report infrastructure/provisioning failures separately; never describe them as passed tests. An unrelated runner prerequisite does not invalidate retained evidence or become a deployment gate for unchanged features.
 
 Run cargo fmt --all --check, locked text-only tests and clippy; optional audio changes must also pass locked all-features tests/clippy. Relevant CI qualifies Linux/macOS text builds with the committed toolchain. Test actual SQLite transactions/restarts, loopback HTTP and native App Server attachment where relevant. Unit tests alone do not prove live Telegram or native model delivery.
 
