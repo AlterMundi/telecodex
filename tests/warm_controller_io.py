@@ -52,7 +52,22 @@ frame_ms=100
         local=self.row("SELECT t.id FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.thread_id=? AND t.status='running' ORDER BY t.id DESC LIMIT 1",(topic,))[0][0]
         files=list(self.root.glob(f'.telecodex/turns/{local}-*/controller-access.json'))
         assert len(files)==1
-        return files[0]
+        selected=files[0]
+        # The synthetic native peer records turn/start before the bridge has
+        # consumed its ACK and bound the physical execution. Observe this
+        # read-only contract; never retry the following control action.
+        def ready():
+            result=subprocess.run([self.binary,'--controller',str(selected),
+                json.dumps({'operation':'capabilities','arguments':{}})],
+                capture_output=True,text=True,timeout=10)
+            if result.returncode==0:
+                outer=json.loads(result.stdout)
+                assert outer['ok'] and outer['result']['success'],outer
+                return True
+            assert 'Native turn has not started' in result.stderr,(result.stderr,result.stdout)
+            return False
+        self.wait(ready)
+        return selected
     def cli(self,path,operation,arguments=None,*,ok=True):
         token=json.loads(path.read_text())['token']
         result=subprocess.run([self.binary,'--controller',str(path),json.dumps({'operation':operation,'arguments':arguments or {}})],capture_output=True,text=True,timeout=30)
