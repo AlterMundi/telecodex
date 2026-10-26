@@ -54,6 +54,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
     if(url.pathname==='/interaction/telegram-inputs'){
+      if(options.telegramDenied)throw Object.assign(Error('Telegram observation denied'),{status:403});
       const before=Number(url.searchParams.get('before')),after=url.searchParams.get('direction')==='after';
       const rows=[...telegramOriginals.values()].filter(v=>after?v.sequence>before:!before||v.sequence<before).sort((a,b)=>after?a.sequence-b.sequence:b.sequence-a.sequence);
       const items=rows.slice(0,8);requests.push({telegram:true,body});
@@ -434,6 +435,15 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(telegramBubble.dataset.timelineTime,String(Date.parse('2024-01-01T00:00:05.500Z')));
   const telegramCount=telegramLane.children.length;await telegramChat.ui.refresh();assert.equal(telegramLane.children.length,telegramCount,'Refresh does not duplicate Telegram originals');
   assert(telegramChat.requests.filter(r=>r.telegram).every(r=>r.body===undefined),'Cross-surface observation never resubmits an original');telegramChat.ui.stop();
+  const telegramDenied=boot(false,true,{telegramDenied:true});
+  await telegramDenied.ui.refresh();
+  const retainedReplies=telegramDenied.nodes.get('#conversation-timeline').children.length;
+  assert(retainedReplies>0,'Denied optional Telegram observation preserves visible replies');
+  telegramDenied.nodes.get('#conversation-message').value='Unsent draft';
+  await telegramDenied.ui.refresh();
+  assert.equal(telegramDenied.nodes.get('#conversation-message').value,'Unsent draft');
+  assert.equal(telegramDenied.nodes.get('#conversation-timeline').children.length,retainedReplies);
+  telegramDenied.ui.stop();
 
   const noPlayer=boot(false,false,{clock:true});noPlayer.audio();await noPlayer.ui.refresh();
   noPlayer.nodes.get('#conversation-voice-replies').handlers.click();noPlayer.failAudio();noPlayer.addReplies(2);await noPlayer.ui.refresh();
