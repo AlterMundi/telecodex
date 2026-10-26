@@ -682,8 +682,6 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-compose > .conversation-tools { align-items:center; }
 #conversation-compose #conversation-voice { margin-left:auto; padding:0; }
 #conversation-compose #conversation-voice .conversation-tools { margin:0; gap:8px; }
-#conversation-compose .voice-replies-switch { display:flex; align-items:center; gap:7px; margin:0; font-size:14px; font-weight:400; cursor:pointer; min-height:44px; }
-#conversation-compose .voice-replies-switch input { width:20px; height:20px; margin:0; accent-color:var(--accent); }
 .standalone-conversation #conversation-compose #conversation-talk { min-width:48px; width:auto; min-height:48px; padding:8px 12px; border-radius:50%; font-size:20px; }
 #conversation-compose #conversation-voice-state { display:block; margin:6px 0 0; }
 #conversation-compose #conversation-voice-state:empty { display:none; }
@@ -694,7 +692,6 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
  #conversation-compose > .conversation-tools { gap:8px; }
  #conversation-compose #conversation-voice { margin-left:0; flex:1; }
  #conversation-compose #conversation-voice .conversation-tools { justify-content:flex-end; }
- #conversation-compose .voice-replies-switch { font-size:14px; max-width:130px; }
 }
 
 .composer-actions { display:grid; grid-template-columns:minmax(44px,1fr) auto auto; gap:8px; }
@@ -776,8 +773,17 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-compose > .composer-actions { margin-top:4px; grid-template-columns:44px minmax(0,1fr) 64px; gap:4px; min-height:44px; }
 .standalone-conversation #conversation-compose #conversation-voice { min-width:0; margin:0; }
 .standalone-conversation #conversation-compose #conversation-voice .conversation-tools { justify-content:flex-end; gap:6px; flex-wrap:nowrap; }
-.standalone-conversation #conversation-compose .voice-replies-switch { white-space:nowrap; max-width:none; gap:5px; font-size:14px; }
-.standalone-conversation #conversation-compose .voice-replies-switch input { width:18px; height:18px; }
+/* One vector vocabulary, independent of platform emoji fonts. */
+.control-icon { width:24px; height:24px; display:block; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+#conversation-voice-replies { display:grid; place-items:center; width:44px; min-width:44px; height:44px; padding:0; border-radius:14px; color:var(--muted); }
+#conversation-voice-replies[data-voice-state="on"] { color:var(--bg); background:var(--accent); border-color:var(--accent); }
+#conversation-voice-replies .voice-waves,#conversation-voice-replies .voice-paused { display:none; }
+#conversation-voice-replies[data-voice-state="on"] .voice-waves,#conversation-voice-replies[data-voice-state="paused"] .voice-paused { display:block; }
+#conversation-voice-replies[data-voice-state="on"] .voice-muted,#conversation-voice-replies[data-voice-state="paused"] .voice-muted { display:none; }
+#conversation-voice-replies[data-voice-state="paused"] { color:var(--accent); border-color:var(--accent); }
+.image-choice .control-icon { flex:none; width:28px; height:28px; }
+.standalone-conversation #conversation-compose #conversation-talk { display:grid; place-items:center; padding:0; font-size:0; }
+.standalone-conversation #conversation-talk::before { content:""; display:block; width:24px; height:24px; background:currentColor; mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%229%22%20y%3D%222%22%20width%3D%226%22%20height%3D%2213%22%20rx%3D%223%22%2F%3E%3Cpath%20d%3D%22M5%2010v2a7%207%200%200%200%2014%200v-2M12%2019v3m-4%200h8%22%2F%3E%3C%2Fsvg%3E") center / contain no-repeat; }
 .standalone-conversation #conversation-compose #conversation-talk,.standalone-conversation #conversation-compose #conversation-voice-discard { width:44px; height:44px; min-width:44px; min-height:44px; padding:6px; }
 .standalone-conversation #conversation-send { width:64px; min-width:64px; height:44px; padding:8px; }
 .standalone-conversation #conversation-compose-status { height:auto; flex-basis:auto; overflow:visible; }
@@ -844,11 +850,8 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-player #conversation-play { grid-column:1; grid-row:2; }
 .standalone-conversation #conversation-player #conversation-stop { grid-column:2; grid-row:2; }
 .standalone-conversation #conversation-player #conversation-play,.standalone-conversation #conversation-player #conversation-stop { min-width:44px; width:44px; min-height:44px; padding:4px; font-size:11px; line-height:15px; border-radius:12px; }
-.standalone-conversation #conversation-player #conversation-audio-state { grid-column:1 / -1; grid-row:3; font-size:11px; line-height:15px; overflow-wrap:anywhere; }
+.standalone-conversation #conversation-player #conversation-audio-state { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .standalone-conversation #conversation-diagnostics { grid-row:4; }
-@media(max-width:380px) {
- .standalone-conversation #conversation-dock:has(#conversation-player:not([hidden])) #conversation-voice-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
-}
 @media(max-width:380px) {
  .standalone-conversation #conversation-dock #conversation-compose { padding:6px; }
  .standalone-conversation #conversation-dock .composer-actions { grid-template-columns:44px minmax(0,1fr) 56px; gap:2px; }
@@ -856,10 +859,12 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 }
 
 /* Familiar audio glyphs keep their full keyboard/screen-reader labels and touch targets. */
-.standalone-conversation #conversation-player #conversation-play,.standalone-conversation #conversation-player #conversation-stop { display:grid; place-items:center; font-size:0; }
+.standalone-conversation #conversation-player #conversation-play,.standalone-conversation #conversation-player #conversation-stop { position:relative; display:grid; place-items:center; padding:0; font-size:0; }
 .standalone-conversation #conversation-play::before { content:""; display:block; width:0; height:0; border-top:7px solid transparent; border-bottom:7px solid transparent; border-left:12px solid currentColor; }
 .standalone-conversation #conversation-play[data-playback-state="pause"]::before { width:12px; height:14px; border:0; background:linear-gradient(to right,currentColor 0 4px,transparent 4px 8px,currentColor 8px 12px); }
 .standalone-conversation #conversation-stop::before { content:""; display:block; width:12px; height:12px; border-radius:1px; background:currentColor; }
+.standalone-conversation #conversation-play::before,.standalone-conversation #conversation-stop::before { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
+.standalone-conversation #conversation-play[data-playback-state="play"]::before { transform:translate(calc(-50% + 1px),-50%); }
 .standalone-conversation #conversation-follow-control:not([hidden]) { grid-column:1 / -1; grid-row:4; display:flex; align-items:center; justify-content:center; gap:6px; min-height:28px; font-size:12px; font-weight:400; }
 .standalone-conversation #conversation-follow { width:18px; height:18px; margin:0; accent-color:var(--accent); }
 
