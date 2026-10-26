@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 pub(super) fn schema() -> Value {
-    json!({"type":"object","properties":{"input_ref":{"oneOf":[{"type":"integer","minimum":0},{"type":"string","format":"uuid"}]},"name":{"type":"string","description":"Short single-token topic selector; stable tID names are reserved"},"reason":{"type":"string","description":"Why this original input is a distinct task; uncertainty or a busy worker is not a reason"},"context_selectors":{"type":"array","items":{"type":"string"},"maxItems":5}},"required":["input_ref","name","reason","context_selectors"],"additionalProperties":false})
+    json!({"type":"object","properties":{"input_ref":{"oneOf":[{"type":"integer","minimum":0},{"type":"string","format":"uuid"}]},"name":{"type":"string","description":"Human-selected topic title, including spaces (1-64 UTF-8 bytes, no surrounding whitespace, controls or markup). Multiword titles route through the returned stable tID selector; stable tID titles are reserved"},"reason":{"type":"string","description":"Why this original input is a distinct task; uncertainty or a busy worker is not a reason"},"context_selectors":{"type":"array","items":{"type":"string"},"maxItems":5}},"required":["input_ref","name","reason","context_selectors"],"additionalProperties":false})
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +16,43 @@ struct Create {
     name: String,
     reason: String,
     context_selectors: Vec<String>,
+}
+
+/// Only fixed, non-sensitive pre-admission diagnostics cross the tool boundary.
+#[derive(Debug)]
+pub(super) struct PreflightRejection(pub &'static str, pub &'static str);
+impl std::fmt::Display for PreflightRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.1)
+    }
+}
+impl std::error::Error for PreflightRejection {}
+
+pub(super) fn rejection(error: &anyhow::Error) -> Option<Value> {
+    error.downcast_ref::<PreflightRejection>().map(|e| json!({
+        "kind":"creation_rejected","code":e.0,"stage":"before_intent",
+        "message":e.1,"effect":"This call made no creation intent or topic mutation. Inspect creation_status for this original before correcting arguments; a prior or concurrent call may still exist."
+    }))
+}
+
+fn validate_name(name: &str) -> Result<()> {
+    let reserved = name
+        .strip_prefix('t')
+        .or_else(|| name.strip_prefix('T'))
+        .is_some_and(|s| s.parse::<i64>().is_ok());
+    if name.is_empty()
+        || name.len() > 64
+        || name.trim() != name
+        || reserved
+        || name.chars().any(|c| {
+            c.is_control()
+                || (c.is_whitespace() && c != ' ')
+                || matches!(c, '#' | '`' | '"' | '\'' | '<' | '>')
+        })
+    {
+        return Err(PreflightRejection("invalid_creation_title", "Use a 1-64 byte topic title. Ordinary spaces are supported; surrounding whitespace, controls, markup and reserved tID titles are not.").into());
+    }
+    Ok(())
 }
 
 /// Keep the selected captured revisions, not an unbounded copy of their text.
@@ -115,27 +152,22 @@ async fn create_selected(
     }
     let shared = &app.shared;
     let cfg = super::routing::profile(shared)?;
-    let reserved = args
-        .name
-        .strip_prefix('t')
-        .or_else(|| args.name.strip_prefix('T'))
-        .is_some_and(|s| s.parse::<i64>().is_ok());
-    if args.name.len() > 64
-        || reserved
-        || args.name.is_empty()
-        || args.name.chars().any(|c| {
-            c.is_whitespace() || c.is_control() || matches!(c, '#' | '`' | '"' | '\'' | '<' | '>')
-        })
-        || !(12..=1000).contains(&args.reason.len())
-        || args.context_selectors.len() > 5
-        || cfg.targets.len() >= 64
+    validate_name(&args.name)?;
+    if !(12..=1000).contains(&args.reason.len()) || args.context_selectors.len() > 5 {
+        return Err(PreflightRejection(
+            "invalid_creation_arguments",
+            "Use a 12-1000 byte reason and at most five context selectors.",
+        )
+        .into());
+    }
+    if cfg.targets.len() >= 64
         || !cfg.resolve(&args.name).is_empty()
         || cfg
             .matrix_targets
             .iter()
             .any(|target| target.name.eq_ignore_ascii_case(&args.name))
     {
-        bail!("Invalid, duplicate or unsupported new destination");
+        return Err(PreflightRejection("destination_unavailable", "The title already selects a destination or destination capacity is full. Inspect candidates; do not create a duplicate.").into());
     }
     args.input_ref.validate()?;
     let (original, message) = shared.store.interaction_entry_original(
@@ -332,6 +364,30 @@ async fn execute_claimed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titles_preserve_human_spaces_and_rejections_are_safe() {
+        for name in ["Diamond Badge", "Research", "共同 調査"] {
+            validate_name(name).unwrap();
+        }
+        for name in [
+            "",
+            " padded",
+            "trailing ",
+            "t77",
+            "bad\nname",
+            "bad\tname",
+            "<tag>",
+            "#route",
+        ] {
+            let error = validate_name(name).unwrap_err();
+            let result = rejection(&error).unwrap();
+            assert_eq!(result["code"], "invalid_creation_title");
+            assert_eq!(result["stage"], "before_intent");
+        }
+        assert!(validate_name(&"x".repeat(65)).is_err());
+        assert!(rejection(&anyhow::anyhow!("private arbitrary failure")).is_none());
+    }
 
     #[test]
     fn bounded_interview_keeps_source_identity_indices_and_small_originals() {

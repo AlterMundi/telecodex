@@ -156,6 +156,15 @@ impl Store {
             }
             return Ok((creation_on(&tx, &id, human)?, false));
         }
+        let duplicate: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND lower(json_extract(doc,'$.name'))=lower(?4))",
+            params![human,key.chat_id,key.thread_id,name], |r|r.get(0),
+        )?;
+        if duplicate {
+            return Err(anyhow!(
+                "A retained creation already reserves this title; inspect it instead of duplicating it"
+            ));
+        }
         let reserved:i64=tx.query_row("SELECT count(*) FROM interaction_creations WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3",params![human,key.chat_id,key.thread_id],|r|r.get(0))?;
         if reserved >= capacity as i64 {
             return Err(anyhow!("Creation capacity is already reserved"));
@@ -277,7 +286,7 @@ impl Store {
             RequestRelation::New,
             &self.instance_id,
         )?;
-        tx.execute("INSERT INTO interaction_enrollments(human_id,entry_chat,entry_topic,target_topic,session_id,name,creation_id) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![human,entry.chat_id,entry.thread_id,topic,session,d["name"].as_str(),id])?;
+        tx.execute("INSERT INTO interaction_enrollments(human_id,entry_chat,entry_topic,target_topic,session_id,name,creation_id) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![human,entry.chat_id,entry.thread_id,topic,session,if d["name"].as_str().is_some_and(|name|name.contains(' ')) {format!("t{topic}")} else {d["name"].as_str().context("Missing retained name")?.to_owned()},id])?;
         tx.execute(
             "UPDATE interaction_creations SET phase='ready' WHERE id=?1",
             [id],
