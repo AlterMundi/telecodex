@@ -854,3 +854,27 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
  .standalone-conversation #conversation-dock .composer-actions { grid-template-columns:44px minmax(0,1fr) 56px; gap:2px; }
  .standalone-conversation #conversation-dock #conversation-send { width:56px; min-width:56px; }
 }
+
+/* Familiar audio glyphs keep their full keyboard/screen-reader labels and touch targets. */
+.standalone-conversation #conversation-player #conversation-play,.standalone-conversation #conversation-player #conversation-stop { display:grid; place-items:center; font-size:0; }
+.standalone-conversation #conversation-play::before { content:""; display:block; width:0; height:0; border-top:7px solid transparent; border-bottom:7px solid transparent; border-left:12px solid currentColor; }
+.standalone-conversation #conversation-play[data-playback-state="pause"]::before { width:12px; height:14px; border:0; background:linear-gradient(to right,currentColor 0 4px,transparent 4px 8px,currentColor 8px 12px); }
+.standalone-conversation #conversation-stop::before { content:""; display:block; width:12px; height:12px; border-radius:1px; background:currentColor; }
+.standalone-conversation #conversation-follow-control:not([hidden]) { grid-column:1 / -1; grid-row:4; display:flex; align-items:center; justify-content:center; gap:6px; min-height:28px; font-size:12px; font-weight:400; }
+.standalone-conversation #conversation-follow { width:18px; height:18px; margin:0; accent-color:var(--accent); }
+
+/* The inspector owns a readable overlay, leaving the underlying chat/capture mounted. */
+.standalone-conversation main > #conversation { grid-template-rows:auto minmax(0,1fr) auto; }
+.standalone-conversation main:has(#conversation-diagnostics[open]) { height:100dvh; min-height:0; }
+.standalone-conversation #conversation:has(#conversation-diagnostics[open]) { overflow:hidden; grid-template-rows:auto minmax(0,1fr) auto; }
+.standalone-conversation #conversation-diagnostics:not([open]) { display:none; }
+.standalone-conversation #conversation-diagnostics[open] { position:fixed; inset:var(--inspector-top,100px) 12px 12px; z-index:20; overflow:auto; overscroll-behavior:contain; margin:0; padding:12px 16px 24px; border:1px solid var(--line); border-radius:18px; background:var(--bg); box-shadow:0 16px 60px #0008; }
+.standalone-conversation #conversation-diagnostics[open] > summary { position:sticky; top:-12px; z-index:1; background:var(--bg); min-height:44px; }
+.standalone-conversation #conversation-diagnostics[open] > summary > span { font-size:0; }
+.standalone-conversation #conversation-diagnostics[open] > summary > span::after { content:"×"; font-size:24px; }
+.standalone-conversation header #conversation-inspect { display:grid; place-items:center; width:44px; height:44px; padding:8px; }
+.standalone-conversation header #conversation-inspect[hidden] { display:none; }
+.standalone-conversation header #conversation-inspect[aria-expanded="true"] { color:var(--accent); border-color:var(--accent); }
+.standalone-conversation header .header-tools { gap:4px; }
+.standalone-conversation header .apps-return { display:grid; place-items:center; width:44px; height:44px; padding:4px; font-size:0; }
+.standalone-conversation header .apps-return::before { content:"▦"; font-size:22px; }

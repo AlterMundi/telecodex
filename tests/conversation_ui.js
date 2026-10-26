@@ -378,6 +378,18 @@ function boot(readOnly=false,standalone=false,options={}) {
   outage.clock.fire(450);await until(()=>outage.audioCalls.length===2&&!outage.nodes.get('#conversation-audio').paused);
   assert.equal(outage.audioCalls[1].source,'native:10','A failed TTS segment cannot strand the next independent reply');outage.ui.stop();
 
+  const followed=boot(false,true);followed.audio();await followed.ui.refresh();
+  const lane=followed.nodes.get('#conversation-timeline'),followSwitch=followed.nodes.get('#conversation-follow');
+  const scrolls=[];lane.contains=card=>lane.children.includes(card);lane.getBoundingClientRect=()=>({top:100});lane.scrollTop=0;
+  lane.scrollTo=value=>{scrolls.push(value);lane.scrollTop=value.top;};
+  const spokenCard=n=>lane.children.find(card=>card.dataset.sourceId===`native:${n}`);
+  const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen');
+  spokenCard(8).getBoundingClientRect=()=>({top:300});spokenCard(7).getBoundingClientRect=()=>({top:450});
+  followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,0,'Follow off never moves the chat');
+  followSwitch.checked=true;followSwitch.handlers.change();assert.equal(scrolls.length,1);assert.equal(scrolls[0].top,200,'Follow targets the verified spoken answer within the timeline');
+  await listenButton(spokenCard(7)).handlers.click();assert.equal(scrolls.length,2,'A new answer follows its own source');
+  followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,2,'Disabling Follow preserves the reader position');followed.ui.stop();
+
   const noPlayer=boot(false,false,{clock:true});noPlayer.audio();await noPlayer.ui.refresh();
   noPlayer.nodes.get('#conversation-voice-replies').handlers.click();noPlayer.failAudio();noPlayer.addReplies(2);await noPlayer.ui.refresh();
   await until(()=>noPlayer.clock.pending().includes(450));

@@ -29,7 +29,8 @@
           </svg>
           <h1>Sessions</h1>
         </div>
-        <div class="header-tools"><a class="apps-return" href="https://apps.dmn.homes/" aria-label="Back to Apps">▦ Apps</a><span id="provider">Telecodex</span><span id="conversation-account" hidden></span></div>
+        <div class="header-tools"><a class="apps-return" href="https://apps.dmn.homes/" aria-label="Back to Apps">▦ Apps</a><span id="provider">Telecodex</span><button id="conversation-inspect" type="button" hidden aria-label="Under the hood" title="Under the hood" aria-controls="conversation-diagnostics" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m14 6 4 4M4 20l9-9M13 4a6 6 0 0 0-2 7L4 18a1.5 1.5 0 0 0 2 2l7-7a6 6 0 0 0 7-7l-4 4-3-3 4-4a6 6 0 0 0-4 1Z"/></svg></button>
+        <span id="conversation-account" hidden></span></div>
       </header>
       <div id="feedback" role="status" aria-live="polite">
         Connecting to Telegram…
@@ -99,9 +100,10 @@
         <p id="conversation-sound-feedback" class="note" role="status" aria-live="polite" hidden></p>
 
         <section id="conversation-player" hidden aria-label="Reply audio">
-          <div class="conversation-tools"><strong id="conversation-playing"></strong><button id="conversation-stop" type="button">Stop audio</button></div>
+          <div class="conversation-tools"><strong id="conversation-playing"></strong><button id="conversation-stop" type="button" aria-label="Stop audio" title="Stop audio">Stop audio</button></div>
           <audio id="conversation-audio" controls preload="none"></audio>
           <p id="conversation-audio-state" role="status" aria-live="polite"></p>
+          <label id="conversation-follow-control" hidden><input id="conversation-follow" type="checkbox"> Follow</label>
         </section>
         </div>
         <details id="conversation-diagnostics">
