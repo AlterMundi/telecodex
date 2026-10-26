@@ -290,14 +290,35 @@ interrupting a segment already playing. The question remains available in the
 visible request area; its contextual reply reference is advisory. Ordinary
 discussion does not become an answer merely because a question was spoken.
 
-Capture, stop, pause, hide, page leave, voice disable and source/generation change
-cancel the owned wait. Suspending for disconnection or hiding discards the queued
-audio and requires an explicit voice action to resume; reconnect does not replay
-history. Text and actual work continue independently. A failed TTS preparation
-can advance to the next independent queued reply after a gap, without repeating
-the failed source; authorization failure suspends playback. Old progress remains
-coalesced behind a current final result. No new audio retention or provider is
-introduced by this player behavior.
+Capture, stop, pause, page leave, voice disable and source/generation changes
+cancel the owned wait. In the standalone app, opted-in Voice intent survives
+transient network errors and hidden/background playback where the browser allows
+it. Explicit Pause/Voice off remains explicit; OS screen-lock continuation still
+requires actual receiving acceptance.
+
+Starting capture immediately pauses and mutes the current media element, keeping
+its source, position and bounded owned stream. It does not clear queued worker
+returns or cancel native jobs. Manual playback cannot start while capture is
+active. If no newer reply takes its place, Resume uses that same element and
+position without another synthesis. Useful new replies retain sequential priority;
+the interrupted source stays visible with its Resume audio action.
+
+Standalone clients retain at most24 binding-scoped source/revision/segment-offset
+cursors in local storage, with no transcript or raw audio. This is client-reported
+media progress, not proof of human hearing. A reload or replacement player resumes
+from the last segment boundary, conservatively repeating the interrupted segment;
+it does not invent word timing or transfer seconds onto a different render.
+Explicit Resume reuses the existing canonical source validation and synthesis
+identity. Changed/retired/correction-pending sources retire their cursor. No
+browser cursor approves a native question, selects a work destination or triggers
+automatic replay. Uncertain synthesis retains its existing non-retry behavior.
+The integrating model does not yet receive these media cursors; durable semantic
+heard/remaining coordination remains #304.
+
+A failed TTS preparation can advance to the next independent queued reply after
+a gap, without repeating the failed source; authorization failure suspends
+playback. Old progress remains coalesced behind a current final result. No new
+audio retention or provider is introduced by this player behavior.
 
 `tests/conversation_ui.js` drives the shipped player with deterministic gap
 timers and synthetic media/network: chunk/reply/question spacing, priority,

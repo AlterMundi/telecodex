@@ -381,6 +381,42 @@ function boot(readOnly=false,standalone=false,options={}) {
   early.ended=true;const continuing=early.handlers.ended();incremental.clock.fire(180);await continuing;await until(()=>incremental.audioCalls.length===3&&!early.paused).catch(e=>{throw Error(JSON.stringify({calls:incremental.audioCalls,state:incremental.nodes.get('#conversation-state').textContent,audioState:incremental.nodes.get('#conversation-audio-state').textContent,paused:early.paused,muted:early.muted}));});
   assert.deepEqual(incremental.audioCalls.map(x=>x.offset),[0,120,420],'Continuation consumes its exact cached attempt and prepares only the next segment');
   incremental.ui.stop();const stoppedCalls=incremental.audioCalls.length;incremental.clock.fire(180);await new Promise(r=>setImmediate(r));assert.equal(incremental.audioCalls.length,stoppedCalls,'Stop cannot revive prefetched speech');
+  // Barge-in pauses the existing media immediately without canceling its
+  // stream or any native work. Reload can restart the interrupted segment,
+  // never claim word-level hearing from an estimated position.
+  const positionStorage=new Map();
+  const barge=boot(false,true,{clock:true,incremental:true,progressive:true,capture:true,followStorage:positionStorage});
+  barge.audio();barge.replyTexts.set('native:9','A retained mixed-language reply 🙂. '.repeat(40));await barge.ui.refresh();
+  barge.nodes.get('#conversation-voice-replies').handlers.click();barge.addReplies(1);await barge.ui.refresh();
+  const bargePlayer=barge.nodes.get('#conversation-audio');await until(()=>barge.audioCalls.length===2&&!bargePlayer.paused);
+  bargePlayer.ended=true;const bargeNext=bargePlayer.handlers.ended();barge.clock.fire(180);await bargeNext;
+  await until(()=>barge.audioCalls.length===3&&!bargePlayer.paused);bargePlayer.currentTime=7.5;
+  const activeTransport=barge.streamedTransports[1],beforeBargeCalls=barge.audioCalls.length;
+  barge.capture();assert.equal(bargePlayer.paused,true);assert.equal(bargePlayer.muted,true);
+  assert.equal(bargePlayer.currentTime,7.5);assert.equal(activeTransport.cancelled,false,'Barge-in retains the bounded owned audio stream');
+  await bargePlayer.beforeNodes[0].handlers.click();assert.equal(bargePlayer.paused,true,'Manual Play cannot leak audio into capture');
+  barge.finishCapture();await bargePlayer.beforeNodes[0].handlers.click();
+  assert.equal(bargePlayer.paused,false);assert.equal(bargePlayer.currentTime,7.5);
+  assert.equal(barge.audioCalls.length,beforeBargeCalls,'Resume reuses the same media without synthesis');
+  barge.capture();barge.finishCapture();
+  const stored=JSON.parse(positionStorage.get('interaction-speech-position:fixture'));
+  assert.deepEqual(stored.find(v=>v.source==='native:9'),{source:'native:9',revision:'revision-9',offset:120});
+  assert(!JSON.stringify(stored).includes('mixed-language'),'Playback storage contains no transcript');
+  barge.capture();const beforeWorker=barge.audioCalls.length;
+  barge.addReplies(1);barge.overrideSource(10,{kind:'worker_result',label:'Worker',target:{chat_id:100,thread_id:77},current:true,native_binding_current:true});await barge.ui.refresh();
+  assert.equal(barge.audioCalls.length,beforeWorker,'Worker returns wait while the microphone owns audio');
+  barge.finishCapture();await until(()=>barge.audioCalls.length>beforeWorker&&!bargePlayer.paused);
+  assert.equal(barge.audioCalls[beforeWorker].source,'native:10','Capture does not discard useful queued worker returns');
+
+  const restored=boot(false,true,{incremental:true,followStorage:positionStorage});restored.audio();restored.addReplies(1);
+  restored.replyTexts.set('native:9','A retained mixed-language reply 🙂. '.repeat(40));await restored.ui.refresh();
+  const restoredCard=restored.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:9');
+  const resume=restoredCard.children.flatMap(c=>c.children||[]).find(c=>c.textContent==='Resume audio');assert(resume);
+  await resume.handlers.click();assert.equal(restored.audioCalls[0].offset,120,'Reload resumes at the last segment boundary, conservatively repeating the interrupted segment');
+  assert(restored.partReads.some(v=>v.source==='native:9'&&v.offset===120),'Resume revalidates canonical source text');
+  restored.overrideSource(9,{revision:'new-revision',text_sha256:'new-sha'});await restored.ui.refresh();
+  assert(!JSON.parse(positionStorage.get('interaction-speech-position:fixture')).some(v=>v.source==='native:9'),'A source revision change retires the old playback cursor');
+  assert.equal(barge.nativePosts.length,0);assert.equal(restored.nativePosts.length,0);barge.ui.stop();restored.ui.stop();
   const futureFailure=boot(false,true,{clock:true,incremental:true,failOffset:120});futureFailure.audio();futureFailure.replyTexts.set('native:9','Actual canonical text. '.repeat(40));await futureFailure.ui.refresh();
   futureFailure.nodes.get('#conversation-voice-replies').handlers.click();futureFailure.addReplies(1);await futureFailure.ui.refresh();
   const futurePlayer=futureFailure.nodes.get('#conversation-audio');await until(()=>futureFailure.audioCalls.length===2&&!futurePlayer.paused);
@@ -449,7 +485,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const scrolls=[];lane.contains=card=>lane.children.includes(card);lane.getBoundingClientRect=()=>({top:100});lane.scrollTop=0;
   lane.scrollTo=value=>{scrolls.push(value);lane.scrollTop=value.top;};
   const spokenCard=n=>lane.children.find(card=>card.dataset.sourceId===`native:${n}`);
-  const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen');
+  const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>['Listen','Resume audio'].includes(child.textContent));
   const buffering=boot(false,true,{incremental:true,progressive:true});buffering.audio();await buffering.ui.refresh();
   const heldBuffer=buffering.holdReplyText('native:8');
   const bufferingCard=buffering.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:8');
