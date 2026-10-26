@@ -7,13 +7,24 @@ The full horizon remains [the maintained roadmap](interaction-roadmap.md).
 
 ## Current implementation boundary
 
-The optional app integration now connects `TranscriptionStream` to the existing
-microphone through an authenticated same-origin WebSocket. Its AudioWorklet
-captures mono PCM while the person speaks, shows revisable captions, and prepares
-one server-derived transcript for the exact finalized WAV. It is disabled by
-default and has not yet been enabled in the receiving deployment. Production
-still uses final-file ASR. This input layer does not complete output streaming,
-endpointing, barge-in, foreground separation or the continuous-voice milestone.
+The optional app integration connects `TranscriptionStream` to the existing
+microphone through an authenticated same-origin WebSocket. In `captions` mode,
+revisable text appears while speaking, while the ordinary compressed MediaRecorder
+retains the canonical original. Send closes the preview immediately and uploads
+that original once through the existing final-file ASR path. Captions never
+prepare trusted text or delay Send waiting for a recognition final. This preserves
+the accepted final transcriber's mixed-language command quality; it does not
+claim faster final recognition. Preview connection, backpressure or audio-graph
+startup failure closes only the preview and preserves the recording.
+
+The earlier `prepared` mode remains available for explicitly qualified receiving
+profiles: it prepares server-derived text for an exact finalized WAV. The selected
+mode is server configuration, checked before opening the provider. A stale client
+cannot choose the other contract. Both modes remain disabled by default.
+
+Output streaming is separately delivered through the existing HTML audio element
+(see below). Neither this input slice nor output streaming completes endpointing,
+barge-in, foreground separation or the continuous-voice milestone.
 
 The selected experiment uses Qwen Audio3.0's **input transcription only** with
 explicit manual mode. It never sends `response.create`, tools, conversation
@@ -65,7 +76,7 @@ blocks and a7400Hz input low-pass filter. Its graph output is muted.100ms chunks
 feed recognition, with bounded socket backpressure. Captions replace rather than
 append and never alter the draft, selected image/reply context or execute a turn.
 
-Only explicit Send uploads the finalized original WAV through the existing
+In `prepared` mode, only explicit Send uploads the finalized original WAV through the existing
 HTTP voice endpoint, with the capture UUID chosen before recording. The duration
 limit can end recognition for review without submitting work. Its headers,
 source SHA, selection and uncertain-receipt recovery use the existing microphone
@@ -73,7 +84,7 @@ state machine. Discard closes preparation without recognition commit or original
 admission. Socket failure or unavailable/late preparation keeps the complete local
 WAV for ordinary file-ASR; there is no provider reconnect or automatic audio replay.
 
-Completed recognition writes an immutable owner-only text receipt identified by
+Only `prepared` mode completed recognition writes an immutable owner-only text receipt identified by
 capture UUID, binding, PCM SHA, canonical WAV SHA, model and duration. It stores no
 raw preparation audio. The native `interaction_asr.py` helper may consume it only
 for the exact original UUID/WAV, and validates its final state, format, duration,
@@ -87,8 +98,12 @@ visibly. Browser-supplied caption text is never trusted for admission.
 
 Use the existing optional `[streaming_transcription]` configuration documented in
 `dashboard/config.example.toml`: `enabled`, exact `endpoint`, private
-`credential_file` and `cache_root`. The selected native ASR configuration must
-reference that same absolute directory as `streaming_cache_root`. Keep its existing
+`credential_file`, `cache_root` and optional `mode` (`prepared` by default).
+For `mode = "captions"`, leave native ASR configuration unchanged: no
+`streaming_cache_root`, no trusted preview receipts and no canonical PCM copy.
+The browser retains its normal compressed MediaRecorder original. For prepared
+mode, the selected native ASR configuration must reference that same absolute
+directory as `streaming_cache_root`. Keep its existing
 helper, route binding, durable cache and file-ASR provider. Describe the configured
 transcriber honestly as streaming recognition plus the existing file fallback;
 do not keep a file-provider-only label after enabling this path.
@@ -116,9 +131,19 @@ qualifies the locked WebSocket server and native exact-WAV receipt reader.
 `node tests/voice_stream_ui.js` checks the real worklet at16/44.1/48kHz, block
 continuity, WAV identity against Python's standard wave writer, partials, ordered
 finish, discard, setup cleanup and complete local fallback after network failure.
+Caption-mode regressions additionally prove exact compressed original delivery
+without a provider-final wait, including disconnected/not-ready sockets and
+preview AudioContext resume/connect failures. Server tests reject cross-mode
+clients and prove that captions cannot write a trusted final receipt.
 The existing microphone suite verifies that live preparation and the ordinary
 original upload retain one capture identity. Native ASR tests verify exact receipt
 matching, durable recovery and precedence of uncertain file transcription.
+
+A Chromium journey with a synthetic MediaStream and preview socket confirmed
+that real AudioWorklet captions arrived before Send and all five compressed
+MediaRecorder chunks retained their exact bytes (9,443bytes, Opus/WebM). The
+last original bytes arrived3.3ms after Send without a provider recognition commit.
+This qualifies browser mechanics only: no hardware, provider or native admission.
 
 A separate real-provider adapter journey used one5.76second synthetic Spanish /
 English clip paced at100ms. First provisional text arrived about0.62seconds after

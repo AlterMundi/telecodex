@@ -71,9 +71,11 @@ Development = "/your-development-mount"
 # artifact_access = false
 
 # Optional live input-transcription preparation; no conversational model change.
-# Enable only with the matching interaction_asr.py streaming_cache_root binding.
+# Captions preserve the ordinary compressed original and final file-ASR provider.
+# Prepared mode instead requires a matching interaction_asr.py streaming_cache_root.
 # [streaming_transcription]
 # enabled = true
+# mode = "captions" # or "prepared" (legacy default)
 # endpoint = "wss://your-workspace.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus"
 # credential_file = "/private/existing-provider-key"
 # cache_root = "/private/receiving/streaming-transcripts"

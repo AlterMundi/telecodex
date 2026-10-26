@@ -940,7 +940,7 @@ window.Conversation = (() => {
       else {filesConnected=true;fileJobs=value.artifacts?.jobs||[];files.clear();for(const card of cards.values())for(const file of card.source.artifacts||[])files.set(file.id,file);for(const file of value.artifacts?.items||[])files.set(file.id,file);}
       refreshFiles();
       await goalControls?.observe(value.goal_controls);
-      microphone?.configure(value.can_speak,value.can_stream_transcribe);
+      microphone?.configure(value.can_speak,value.can_stream_transcribe,value.streaming_transcription_mode);
       setCsrf(value.csrf);
       canListen = !readOnly && value.can_listen;canStreamSpeech=canListen && !!value.can_stream_speech;
       if(!canListen && (voiceEnabled || active || speechWait))pause();

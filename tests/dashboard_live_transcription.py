@@ -31,7 +31,7 @@ class Stream:
     opened = []
     def __init__(self,*args):
         self.events=queue.Queue();self.events.put({'type':'ready'})
-        self.pcm=b'';self.finished=False;self.closed=False
+        self.pcm=b'';self.finished=False;self.closed=False;self.closed_event=threading.Event()
         self.opened.append(self)
     def append(self,pcm):
         self.pcm+=pcm
@@ -46,7 +46,7 @@ class Stream:
         return {'text':'Final words','final':True,'model':'qwen-audio-3.0-realtime-plus',
                 'pcm_sha256':hashlib.sha256(self.pcm).hexdigest(),
                 'audio_millis':len(self.pcm)*1000//32000}
-    def close(self):self.closed=True;self.events.put(None)
+    def close(self):self.closed=True;self.events.put(None);self.closed_event.set()
 
 
 class LiveTranscription(unittest.TestCase):
@@ -90,11 +90,28 @@ class LiveTranscription(unittest.TestCase):
         self.assertEqual(value['text'],'Final words');self.assertEqual(value['capture_id'],self.ident)
         self.assertEqual(value['binding'],self.binding);self.assertEqual(self.provider.calls,[])
         self.assertFalse(list((self.root/'prepared').glob('*.wav')))
-        self.assertTrue(Stream.opened[0].finished);self.assertTrue(Stream.opened[0].closed)
+        self.assertTrue(Stream.opened[0].finished);self.assertTrue(Stream.opened[0].closed_event.wait(2))
         original=self.root/self.ident;original.write_bytes(wav_bytes(pcm));original.chmod(0o600)
         trusted=streaming_result({'streaming_cache_root':str(self.root/'prepared')},original,
                                  hashlib.sha256(original.read_bytes()).hexdigest())
         self.assertEqual(trusted,{'text':'Final words','streaming_model':'qwen-audio-3.0-realtime-plus'})
+    def test_caption_mode_never_prepares_canonical_text(self):
+        self.client.__exit__(None,None,None)
+        self.config['streaming_transcription']['mode']='captions'
+        self.client=TestClient(create_app(self.config,self.provider,lambda raw,bot:int(raw)),base_url='https://example.test');self.client.__enter__()
+        response=self.client.post('/api/session',json={'init_data':'100'},headers={'origin':'https://example.test'})
+        self.client.cookies.set('telecodex_dashboard',self.client.cookies.get('telecodex_dashboard'),path='/');self.csrf=self.client.get('/api/state').json()['csrf']
+        with self.open() as ws:
+            ws.send_json(self.meta(mode='captions'));self.assertEqual(ws.receive_json()['type'],'ready')
+            ws.send_bytes(b'\0\0'*1600);self.assertEqual(ws.receive_json()['type'],'partial')
+            ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'unavailable')
+        self.assertFalse(list((self.root/'prepared').glob('*.json')))
+        self.assertFalse(Stream.opened[0].finished);self.assertTrue(Stream.opened[0].closed_event.wait(2))
+        self.assertEqual(self.provider.calls,[])
+        with self.open() as ws:
+            ws.send_json(self.meta());self.assertEqual(ws.receive_json()['type'],'unavailable')
+        self.assertEqual(len(Stream.opened),1,'A stale prepared-mode client must not select a different stream contract')
+
     def test_wrong_origin_csrf_or_binding_never_opens_provider(self):
         with self.assertRaises(WebSocketDisconnect):
             with self.open('https://wrong.test'):pass
