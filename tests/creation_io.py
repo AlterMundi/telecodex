@@ -66,8 +66,14 @@ class InvalidTitle(Creation):
         self.rejections=[]
         super().__init__(binary,name=" bad title")
 
+    def call(self,ident,operation,arguments):
+        if ident=='create' and self.rejections:ident='corrected-create'
+        super().call(ident,operation,arguments)
+
     def handle_extra_rpc(self,m,send):
         ident=m.get('id')
+        if m.get('method') is None and ident=='corrected-create':
+            return super().handle_extra_rpc({**m,'id':'create'},send)
         if m.get('method') is None and ident=='create' and not self.rejections:
             value=m['result'];assert value['success'] is False
             error=json.loads(value['contentItems'][0]['text'])
