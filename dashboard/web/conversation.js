@@ -613,9 +613,10 @@ window.Conversation = (() => {
     function voiceKey(source) {return source.kind==="native_question"?`${source.id}:${source.revision}`:source.id;}
     function voiceStatus() {
       const button=$("#conversation-voice-replies");
-      button.checked=voiceEnabled && !voiceSuspended;
-      button.setAttribute("aria-pressed",String(voiceEnabled));
-      (document.querySelector("#conversation-voice-label")||button).textContent=voiceEnabled?voiceSuspended?"Voice paused":"Voice on":"Voice off";
+      const state=voiceEnabled?(voiceSuspended?"paused":"on"):"off";
+      button.dataset.voiceState=state;
+      button.setAttribute("aria-pressed",String(state==="on"));
+      button.setAttribute("aria-label",state==="on"?"Disable spoken replies":state==="paused"?"Resume spoken replies":"Enable spoken replies");
       button.title=voiceSuspended?"Voice replies paused · tap to resume":`Read new replies aloud${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`;
     }
     function enableVoice() {

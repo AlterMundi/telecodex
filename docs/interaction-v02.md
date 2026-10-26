@@ -353,6 +353,12 @@ Older missing timestamps stay explicitly unknown instead of being backfilled
 with refresh time. Follow resolves the visible Update from card for the exact
 spoken progress source; it never scrolls to its hidden diagnostic duplicate.
 
+Spoken output uses one accessible speaker icon with on/off/paused states instead
+of a visible checkbox and status label. The compact player retains accessible
+status announcements without helper copy below its centered playback icons.
+Attachment choices and recording use authored stroke vectors, avoiding
+platform-dependent emoji appearance. Input and speech state machines are unchanged.
+
 Shared-login and interaction-device grants permit read-only Telegram originals
 and their existing trace/image routes, with the same receiving human and entry
 binding as the app inputs. A denied optional Telegram observation must not clear
