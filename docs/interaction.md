@@ -1,5 +1,9 @@
 # Integrating conversation controller
 
+Product direction: [full roadmap and current continuous-voice plan](interaction-roadmap.md).
+Current execution: [milestone9](https://github.com/AlterMundi/telecodex/milestone/9).
+Remaining v0.2 obligations: [milestone8](https://github.com/AlterMundi/telecodex/milestone/8).
+
 ## Current repair direction — human correction, 2026-10-19
 
 The delivered pilot did not establish a coherent daily experience. The owner observed hidden progress in ordinary Telegram topics, repeated copies of shared answers and verbose relay packets. Prior completion records retain their bounded evidence but do not establish completion of the repaired product.
