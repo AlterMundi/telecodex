@@ -63,7 +63,10 @@ def install(app, config, provider, authorize, origins):
     selected = config.get('streaming_transcription', {})
     if selected.get('enabled') is not True:
         return False
-    if (set(selected) != {'enabled','endpoint','credential_file','cache_root'}
+    mode=selected.get('mode','prepared')
+    if (mode not in ('prepared','captions')
+            or set(selected)-{'enabled','endpoint','credential_file','cache_root','mode'}
+            or not {'enabled','endpoint','credential_file','cache_root'}<=set(selected)
             or any(not isinstance(selected[k], str) for k in ('endpoint','credential_file','cache_root'))
             or not all(Path(selected[k]).is_absolute() for k in ('credential_file','cache_root'))):
         raise ValueError('Explicit private streaming-transcription binding required')
@@ -86,11 +89,13 @@ def install(app, config, provider, authorize, origins):
                 if len(raw.encode()) > 8192:
                     raise ValueError('Streaming capture metadata exceeds bound')
                 meta = json.loads(raw)
-                if (not isinstance(meta, dict) or set(meta)-{'id','binding','csrf','authorization'}
+                if (not isinstance(meta, dict) or set(meta)-{'id','binding','csrf','authorization','mode'}
                         or not all(isinstance(meta.get(k),str) for k in ('id','binding','csrf'))
                         or not re.fullmatch('[a-f0-9-]{36}',meta['id'])
                         or not re.fullmatch('[a-f0-9]{64}',meta['binding'])):
                     raise ValueError('One exact capture binding required')
+                if meta.get('mode','prepared')!=mode:
+                    raise ValueError('Capture transcription mode changed')
                 provider.input_id(meta['id'])
                 headers = list(socket.scope['headers'])
                 if 'authorization' in meta:
@@ -137,6 +142,8 @@ def install(app, config, provider, authorize, origins):
                             await recheck()
                             await socket.send_json(event)
                         elif event['type']=='final':
+                            if mode=='captions':
+                                raise ValueError('Live captions are not a confirmed transcript')
                             await recheck()
                             value = await asyncio.to_thread(save_prepared,root,meta['id'],meta['binding'],bytes(pcm),stream.result())
                             await socket.send_json({'type':'prepared','id':meta['id'],
@@ -161,13 +168,14 @@ def install(app, config, provider, authorize, origins):
                         if not ready.is_set():raise ValueError('Wait for recognition readiness')
                         data = message['bytes']
                         await asyncio.to_thread(stream.append,data)
-                        pcm.extend(data)
+                        if mode=='prepared':pcm.extend(data)
                     else:
                         control = message.get('text','')
                         if len(control.encode())>256:raise ValueError('Control exceeds bound')
                         command = json.loads(control)
                         if command == {'type':'discard'}:break
                         if command != {'type':'finish'}:raise ValueError('Unknown capture control')
+                        if mode=='captions':raise ValueError('Live captions cannot finalize the original')
                         await recheck()
                         await asyncio.to_thread(stream.finish)
                         await reader

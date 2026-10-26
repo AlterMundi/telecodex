@@ -9,7 +9,7 @@ window.StreamingVoice=(()=>{
     return new Blob([header,...parts],{type:'audio/wav'});
   }
   const supported=()=>!!(window.AudioWorkletNode&&(window.AudioContext||window.webkitAudioContext)&&window.WebSocket);
-  async function create(media,{headers,binding,id,onPartial=()=>{}}){
+  async function create(media,{headers,binding,id,onPartial=()=>{},canonicalRecorder}){
     const Context=window.AudioContext||window.webkitAudioContext,context=new Context();
     let worklet;
     try{await context.audioWorklet.addModule('assets/voice-pcm.js');worklet=new AudioWorkletNode(context,'interaction-pcm');}
@@ -24,14 +24,19 @@ window.StreamingVoice=(()=>{
       for(const node of [source,filter,mute,worklet])if(node)node.disconnect();
       await context.close();throw error;
     }
-    let ready=false,parts=[],sent=0,bytes=0,ending=false,discarded=false,done=false,timer,finishSent=false;
-    const events=new EventTarget(),recorder={state:'inactive',mimeType:'audio/wav',addEventListener:(...args)=>events.addEventListener(...args)};
+    let ready=false,parts=[],sent=0,bytes=0,ending=false,discarded=false,done=false,timer,finishSent=false,disposed=false;
+    const events=new EventTarget(),recorder={state:'inactive',mimeType:canonicalRecorder?.mimeType||'audio/wav',addEventListener:(...args)=>events.addEventListener(...args)};
     function event(type,data){const e=new Event(type);if(data!==undefined)Object.defineProperty(e,'data',{value:data});events.dispatchEvent(e);}
-    function dispose(){clearTimeout(timer);source.disconnect();filter.disconnect();worklet.disconnect();mute.disconnect();context.close().catch(()=>{});socket.close();}
+    function dispose(){if(disposed)return;disposed=true;clearTimeout(timer);source.disconnect();filter.disconnect();worklet.disconnect();mute.disconnect();context.close().catch(()=>{});socket.close();}
     function complete(){
       if(done)return;done=true;
-      const blob=discarded?undefined:wav(parts);parts=[];dispose();recorder.state='inactive';
+      const blob=discarded||canonicalRecorder?undefined:wav(parts);parts=[];dispose();recorder.state='inactive';
       if(blob)event('dataavailable',blob);event('stop');
+    }
+    if(canonicalRecorder){
+      canonicalRecorder.addEventListener('dataavailable',e=>{if(!discarded&&!done)event('dataavailable',e.data);});
+      canonicalRecorder.addEventListener('error',()=>event('error'));
+      canonicalRecorder.addEventListener('stop',complete);
     }
     function pump(){
       if(!ready||socket.readyState!==WebSocket.OPEN||discarded)return;
@@ -40,14 +45,15 @@ window.StreamingVoice=(()=>{
           if(socket.bufferedAmount>256*1024){ready=false;socket.close();return;}
           socket.send(parts[sent++]);
         }
+        if(canonicalRecorder&&sent){parts.splice(0,sent);sent=0;}
         if(ending&&!finishSent){finishSent=true;socket.send(JSON.stringify({type:'finish'}));}
-      }catch{ready=false;socket.close();if(ending)complete();}
+      }catch{ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}
     }
     socket.onopen=()=>{
       if(done)return;
       try{
         const values=headers(),authorization=values.Authorization||values.authorization;
-        socket.send(JSON.stringify({id,binding,csrf:values['X-Dashboard-CSRF']||values['x-dashboard-csrf'],...(authorization?{authorization}:{})}));
+        socket.send(JSON.stringify({id,binding,...(canonicalRecorder?{mode:'captions'}:{}),csrf:values['X-Dashboard-CSRF']||values['x-dashboard-csrf'],...(authorization?{authorization}:{})}));
       }catch{ready=false;socket.close();}
     };
     socket.onmessage=event=>{
@@ -58,22 +64,26 @@ window.StreamingVoice=(()=>{
         if(value.type==='ready'){ready=true;pump();}
         else if(value.type==='partial'&&typeof value.text==='string')onPartial(value.text);
         else if(value.type==='prepared'){
+          if(canonicalRecorder)throw Error('Live captions cannot confirm the original');
           if(value.id!==id||!ending||!finishSent)throw Error('Unexpected prepared recording');
           complete();
-        }else if(value.type==='unavailable'){ready=false;socket.close();if(ending)complete();}
-      }catch{ready=false;socket.close();if(ending)complete();}
+        }else if(value.type==='unavailable'){ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}
+      }catch{ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}
     };
-    socket.onclose=()=>{ready=false;if(ending)complete();};
-    socket.onerror=()=>{ready=false;if(ending)complete();};
+    const unavailable=()=>{ready=false;if(canonicalRecorder){parts=[];dispose();}else if(ending&&!canonicalRecorder)complete();};
+    socket.onclose=unavailable;socket.onerror=unavailable;
     worklet.port.onmessage=message=>{
       if(done||discarded)return;
       if(message.data.pcm){
+        if(canonicalRecorder&&disposed)return;
         const input=message.data.pcm,remaining=120*32000-bytes;
         const pcm=input.byteLength>remaining?input.slice(0,remaining):input;
         if(pcm.byteLength){bytes+=pcm.byteLength;parts.push(pcm);pump();}
+        if(canonicalRecorder&&parts.reduce((n,p)=>n+p.byteLength,0)>256*1024){ready=false;dispose();parts=[];}
         if(bytes===120*32000)recorder.stop();
       }
       if(message.data.finished){
+        if(canonicalRecorder)return;
         clearTimeout(timer);ending=true;pump();
         // Keep the complete local WAV as ordinary file-ASR fallback. Never
         // create an original instruction on this preparation socket.
@@ -81,9 +91,19 @@ window.StreamingVoice=(()=>{
         if(socket.readyState===WebSocket.CLOSED)complete();
       }
     };
-    recorder.start=()=>{recorder.state='recording';source.connect(filter);filter.connect(worklet);worklet.connect(mute);mute.connect(context.destination);context.resume().catch(()=>{event('error');recorder.discard();});};
-    recorder.stop=()=>{if(recorder.state==='inactive'||ending||discarded)return;recorder.state='inactive';worklet.port.postMessage('finish');timer=setTimeout(complete,6000);};
-    recorder.discard=()=>{if(done)return;discarded=true;if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'discard'}));complete();};
+    function previewFailed(){
+      if(canonicalRecorder){ready=false;parts=[];dispose();}
+      else{event('error');recorder.discard();}
+    }
+    recorder.start=(timeslice)=>{
+      recorder.state='recording';canonicalRecorder?.start(timeslice);if(disposed)return;
+      try{
+        source.connect(filter);filter.connect(worklet);worklet.connect(mute);mute.connect(context.destination);
+        context.resume().catch(previewFailed);
+      }catch{previewFailed();}
+    };
+    recorder.stop=()=>{if(recorder.state==='inactive'||ending||discarded)return;recorder.state='inactive';if(canonicalRecorder){ending=true;ready=false;dispose();canonicalRecorder.stop();return;}worklet.port.postMessage('finish');timer=setTimeout(complete,6000);};
+    recorder.discard=()=>{if(done)return;discarded=true;if(canonicalRecorder&&canonicalRecorder.state!=='inactive'){canonicalRecorder.stop();dispose();return;}if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'discard'}));complete();};
     return recorder;
   }
   return {supported,create,wav};

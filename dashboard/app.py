@@ -440,6 +440,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 'can_stream_speech':bool(speech and speech.streaming),
                 'can_download_files':can_files,'artifacts':files,
                 'can_speak':bool(getattr(provider, 'receiver', {}).get('voice')),
+                'streaming_transcription_mode':config.get('streaming_transcription',{}).get('mode','prepared'),
                 'can_stream_transcribe':can_stream_transcribe and bool(getattr(provider,'receiver',{}).get('voice')) and dict(session).get('scope') != 'monitor_readonly'}
 
     @app.get('/api/interaction/inputs')

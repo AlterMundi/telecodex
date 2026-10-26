@@ -11,13 +11,13 @@ function worklet(rate){
 }
 function boot(fail){
  const contexts=[],sockets=[],worklets=[],timers=[];
- class Node{constructor(){this.links=[];this.disconnected=false;}connect(to){this.links.push(to);}disconnect(){this.disconnected=true;}}
+ class Node{constructor(){this.links=[];this.disconnected=false;}connect(to){if(fail==='connect')throw Error('Preview connect unavailable');this.links.push(to);}disconnect(){this.disconnected=true;}}
  class Context{
   constructor(){this.destination={};this.closed=false;this.audioWorklet={addModule:async path=>{assert.equal(path,'assets/voice-pcm.js');if(fail==='module')throw Error('Module unavailable');}};contexts.push(this);}
   createMediaStreamSource(media){assert.equal(media.kind,'synthetic-media');this.source=new Node();return this.source;}
   createBiquadFilter(){if(fail==='filter')throw Error('Graph unavailable');this.filter=new Node();this.filter.frequency={value:0};return this.filter;}
   createGain(){this.mute=new Node();this.mute.gain={value:1};return this.mute;}
-  async close(){this.closed=true;}async resume(){this.resumed=true;}
+  async close(){this.closed=true;}async resume(){if(fail==='resume')throw Error('Preview resume unavailable');this.resumed=true;}
  }
  class Worklet extends Node{
   constructor(context,name){super();assert.equal(name,'interaction-pcm');this.controls=[];this.port={postMessage:value=>this.controls.push(value)};worklets.push(this);}
@@ -34,7 +34,7 @@ function boot(fail){
  const window={AudioWorkletNode:Worklet,AudioContext:Context,WebSocket:Socket,location:{href:'https://example.invalid/interaction/'}};
  vm.runInNewContext(fs.readFileSync('dashboard/web/voice-stream.js','utf8'),{window,AudioWorkletNode:Worklet,WebSocket:Socket,URL,Blob,EventTarget,Event,ArrayBuffer,DataView,setTimeout:(fn,ms)=>{const t={fn,ms};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
  const captions=[],events=[];
- return {window,contexts,sockets,worklets,timers,captions,events,async create(){const recorder=await window.StreamingVoice.create({kind:'synthetic-media'},{id:uuid,binding,headers:()=>({'X-Dashboard-CSRF':'synthetic-csrf',Authorization:'Bearer synthetic-session'}),onPartial:value=>captions.push(value)});recorder.addEventListener('dataavailable',e=>events.push({type:'data',data:e.data}));recorder.addEventListener('stop',()=>events.push({type:'stop'}));return recorder;}};
+ return {window,contexts,sockets,worklets,timers,captions,events,async create(canonicalRecorder){const recorder=await window.StreamingVoice.create({kind:'synthetic-media'},{id:uuid,binding,canonicalRecorder,headers:()=>({'X-Dashboard-CSRF':'synthetic-csrf',Authorization:'Bearer synthetic-session'}),onPartial:value=>captions.push(value)});recorder.addEventListener('dataavailable',e=>events.push({type:'data',data:e.data}));recorder.addEventListener('stop',()=>events.push({type:'stop'}));return recorder;}};
 }
 (async()=>{
  // Resampling counts and cross-block continuity at common mobile capture rates.
@@ -66,5 +66,34 @@ function boot(fail){
  }
  const delayed=boot(),delayedDevice=await delayed.create();delayedDevice.start();delayed.worklets[0].emit({pcm:samples});delayedDevice.stop();delayed.worklets[0].emit({finished:true});delayed.timers.find(t=>t.ms===5000&&!t.cleared).fn();assert.equal(delayed.events[0].data.size,wav.length,'A provider that never opens cannot lose finalized audio');
  for(const failure of ['module','filter','socket']){const setup=boot(failure);await assert.rejects(setup.create());assert(setup.contexts[0].closed,`${failure} must release its owned audio graph`);}
+ class Canonical extends EventTarget{
+  constructor(){super();this.mimeType='audio/webm;codecs=opus';this.state='inactive';}
+  start(slice){this.state='recording';this.slice=slice;}
+  stop(){this.state='inactive';queueMicrotask(()=>{const e=new Event('dataavailable');Object.defineProperty(e,'data',{value:new Blob(['compressed-original'],{type:this.mimeType})});this.dispatchEvent(e);this.dispatchEvent(new Event('stop'));});}
+ }
+ for(const network of ['connected','disconnected','not-ready']){
+  const captions=boot(),canonical=new Canonical(),capture=await captions.create(canonical);capture.start(250);const socket=captions.sockets[0];socket.open();
+  assert.equal(JSON.parse(socket.sent[0]).mode,'captions');
+  if(network!=='not-ready')socket.message({type:'ready'});
+  captions.worklets[0].emit({pcm:samples});socket.message({type:'partial',text:'provisional, never canonical'});
+  if(network==='disconnected'){socket.close();await new Promise(yes=>setImmediate(yes));}
+  capture.stop();await new Promise(yes=>setImmediate(yes));
+  assert.deepEqual(captions.events.map(e=>e.type),['data','stop']);assert.equal(await captions.events[0].data.text(),'compressed-original');
+  assert.equal(captions.events[0].data.type,'audio/webm;codecs=opus');assert.equal(canonical.slice,250);
+  assert(!socket.sent.some(value=>typeof value==='string'&&JSON.parse(value).type==='finish'),'Captions never finalize or replace the original');
+  assert(!captions.timers.some(t=>!t.cleared&&t.ms===5000),'Send never waits for a provisional final');assert(captions.contexts[0].closed);
+ }
+ for(const failure of ['resume','connect']){
+  const preview=boot(failure),original=new Canonical(),capture=await preview.create(original);
+  let errors=0;capture.addEventListener('error',()=>errors++);capture.start(250);
+  await new Promise(yes=>setImmediate(yes));
+  assert.equal(original.state,'recording',`${failure} must preserve the original recording`);
+  assert.equal(capture.state,'recording');assert.equal(errors,0);assert.equal(preview.events.length,0);
+  assert(preview.contexts[0].closed);capture.stop();await new Promise(yes=>setImmediate(yes));
+  assert.deepEqual(preview.events.map(e=>e.type),['data','stop']);
+  assert.equal(await preview.events[0].data.text(),'compressed-original');assert.equal(preview.sockets.length,1);
+ }
+ const discarded=boot(),original=new Canonical(),capture=await discarded.create(original);capture.start(250);capture.discard();await new Promise(yes=>setImmediate(yes));
+ assert.deepEqual(discarded.events.map(e=>e.type),['stop'],'Discard never releases a canonical clip for upload');
  console.log('voice stream UI: resampling, exact WAV identity, captions/finish/discard, fallback and cleanup passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
