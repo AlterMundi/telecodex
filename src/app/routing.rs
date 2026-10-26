@@ -1528,6 +1528,11 @@ fn relevance(d: &crate::interaction::Delivery) -> &'static str {
 }
 
 fn publish(shared: Arc<AppShared>, delivery: crate::interaction::Delivery, human: i64) {
+    if !shared.config.telegram.enabled {
+        // Preserve canonical results as unsent; disabling a transport is not
+        // an uncertain HTTP attempt and must not consume publication claims.
+        return;
+    }
     if delivery.origin.message_id.is_none()
         && !shared.config.interaction.as_ref().is_some_and(|c| {
             c.telegram_entry_projection

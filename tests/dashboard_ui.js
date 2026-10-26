@@ -283,6 +283,11 @@ const hung = (options) => new Promise((resolve, reject) => {
   vm.runInContext('traffic({state:"unavailable"})', independent.context);
   assert.equal(independent.nodes.get("#traffic-topics").children.length,0);
   assert.match(independent.nodes.get("#traffic-status").textContent,/cannot be confirmed/);
+  assert.match(vm.runInContext('recoveryLabel({enabled:true,state:"waiting",next_attempt_at:Math.floor(Date.now()/1000)+120})', independent.context), /Goal recovery.*Waiting to retry.*next check/);
+  assert.match(vm.runInContext('recoveryLabel({state:"uncertain"})', independent.context), /automatic replay held/);
+  assert.equal(vm.runInContext('recoveryLabel({state:"untrusted provider text"})', independent.context), "");
+  const disabledRecovery=vm.runInContext('recoveryLabel({enabled:false,state:"waiting",next_attempt_at:1})', independent.context);
+  assert.match(disabledRecovery,/Disabled/);assert.doesNotMatch(disabledRecovery,/next check/);
   await require("./dashboard_health_ui.js")();
   console.log("dashboard UI: hidden launch, retry, HTTP deadlines and uncertain Stop passed");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

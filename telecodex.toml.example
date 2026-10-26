@@ -5,7 +5,26 @@ edit_debounce_ms = 900
 max_text_chunk = 3500
 tmp_dir = "/absolute/path/to/telecodex/tmp"
 
+# These defaults need a separately retained human delegation before any recovery.
+[goal_recovery]
+enabled = true
+interval_seconds = 60
+batch_size = 4
+
+# Optional sustained-incident producer, using its own scoped Alerts grant.
+# No credentials in argv; the supplied finite adapter reads a private config.
+# [goal_recovery.alerts]
+# command = ["python3", "/path/to/telecodex/scripts/goal_recovery_alerts.py", "--config", "/private/goal-recovery-alerts.json"]
+# human_id = 100 # Fictional; select this receiver's actual authorized human.
+# producer_id = "goal-recovery"
+# receiving_scope = "receiving-human"
+# resource_ref = "native-goal-service"
+# after_seconds = 600
+
 [telegram]
+# Set false for an independent app/backend without Telegram credentials or API
+# requests. Keep its existing session database and owner-control configuration.
+enabled = true
 bot_token_env = "TELEGRAM_BOT_TOKEN"
 api_base = "https://api.telegram.org"
 # Pending/history labels: "en" (default) or "es"; independent of journal payloads.

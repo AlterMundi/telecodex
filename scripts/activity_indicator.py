@@ -461,6 +461,56 @@ def goal_line(goal):
     return f'🎯 Goal · {state} · {objective}'
 
 
+def goal_recovery_state(database, human, chat, topic, native):
+    """Current-owner retained backend state; no RPC, authority or recovery."""
+    if not database.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='goal_retries'").fetchone():
+        return None  # Older receiving installation, not proof of disabled policy.
+    row = database.execute('''SELECT j.phase,j.next_at,j.attempts FROM goal_retries j
+        JOIN sessions s ON s.id=j.session_id JOIN users u ON u.tg_user_id=s.creator_user_id
+        WHERE j.human_id=? AND s.creator_user_id=j.human_id AND u.allowed=1
+          AND s.chat_id=? AND s.thread_id=? AND s.codex_thread_id=? AND s.force_fresh_thread=0
+          AND j.native_thread=s.codex_thread_id ORDER BY j.rowid DESC LIMIT 1''',
+        (human, chat, topic, native)).fetchone()
+    if not row:
+        return None
+    enabled = None
+    tables = {item[0] for item in database.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bot_state','goal_delegations')")}
+    if 'bot_state' in tables:
+        backend = database.execute("SELECT value FROM bot_state WHERE key='goal_recovery_backend'").fetchone()
+        policy = database.execute('SELECT value FROM bot_state WHERE key=?', (f'goal_recovery_policy:{human}:{chat}:{topic}',)).fetchone()
+        backend = json.loads(backend[0]) if backend else None
+        policy = json.loads(policy[0]) if policy else None
+        if backend and backend.get('enabled') is False or policy and policy.get('enabled') is False:
+            enabled = False
+        elif backend and backend.get('enabled') is True and 'goal_delegations' in tables:
+            grant = database.execute('SELECT doc FROM goal_delegations WHERE human_id=? ORDER BY rowid DESC LIMIT 1',(human,)).fetchone()
+            grant = json.loads(grant[0]) if grant else None
+            enabled = bool(grant and grant.get('recovery') is True and grant.get('scope') == 'owned_sessions')
+    return {'enabled': enabled, 'state': row[0], 'next_attempt_at': row[1] if row[0] == 'waiting' and enabled is True else None,
+            'attempts': row[2]}
+
+
+def recovery_line(state, now=None):
+    if not state:
+        return None
+    labels = {'waiting': 'waiting to retry', 'claimed': 'preparing continuation',
+              'submitted': 'native submission unconfirmed', 'acknowledged': 'continuation accepted',
+              'uncertain': 'outcome unknown; automatic replay held', 'partial': 'partial outcome; automatic replay held',
+              'returned': 'native result retained', 'native_completed': 'native continuation completed',
+              'failed_again': 'provider failure observed', 'superseded': 'retired by later direction or authority',
+              'disabled': 'disabled', 'interrupted': 'interrupted', 'rejected': 'native control rejected'}
+    label = labels.get(state.get('state'))
+    if not label:
+        return None
+    availability = '' if state.get('enabled') is True else ('disabled · retained ' if state.get('enabled') is False else 'availability unknown · retained ')
+    text = '⏳ Goal recovery · ' + availability + label
+    due = state.get('next_attempt_at')
+    if state.get('enabled') is True and state.get('state') == 'waiting' and type(due) is int:
+        seconds = max(0, due-int(time.time() if now is None else now))
+        text += f' · next check in {seconds}s' if seconds < 60 else f' · next check in {seconds//60}m'
+    return text
+
+
 def with_goal(text, goal):
     """Add metadata to an existing status without creating activity for a goal."""
     return text + ('\n' + goal if goal else '') if text else None
@@ -1246,8 +1296,14 @@ def run(args):
                     report = status_report(status, reader, children, now)
                     observed_goal = native.goal_observation(tid)
                     goal = goal_line(observed_goal['goal'])
+                    recovery = goal_recovery_state(bridge, topic['creator_user_id'], topic['chat_id'], topic['thread_id'], tid)
+                    recovery_text = recovery_line(recovery, now)
+                    if recovery_text:
+                        goal = (goal + '\n' if goal else '') + recovery_text
                     active_text = status_line(status, reader, children, now)
                     text = status_line(status, reader, children, now, automatic=True)
+                    if not text and recovery and recovery['enabled'] is True and recovery['state'] in ('waiting', 'claimed', 'submitted', 'uncertain', 'partial'):
+                        text = '⏳ Goal continuation pending'
                     if command:
                         report = active_text = command['line']
                         text = command['line'] if now-command['started'] >= 30 else None
@@ -1271,7 +1327,7 @@ def run(args):
                         active_text = with_pending(active_text,pending)
                         text = with_pending(text,pending)
                     exchange = timestamp(reader.last_exchange)
-                    if (update or pending or merge) and exchange is not None and now - exchange < 30:
+                    if (update or pending or merge or recovery) and exchange is not None and now - exchange < 30:
                         text = None
                     latest = latest_input(bridge, topic['chat_id'], topic['thread_id'])
                     position = {'exchange': reader.last_exchange,

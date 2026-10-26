@@ -50,3 +50,12 @@ work, budget-limited resumption after budget headroom exists, exhausted activati
 rejection and objective edits without kickoff, preserving accounting and explicit
 pause. They assert native operation counts as well as visible results. This
 qualification does not claim actual model execution or human receiving acceptance.
+
+## Shared backend recovery work
+
+[Issue297](https://github.com/AlterMundi/telecodex/issues/297) selects retained
+human delegation and default transient-failure recovery shared with independent
+clients. See [the implementation checkpoint and client contract](goal-service.md).
+The first slice retains attributable native failure evidence only; it does not
+yet enable delegated execution or automatic recovery, and does not resume any
+existing goal or replace the currently implemented confirmation policy.

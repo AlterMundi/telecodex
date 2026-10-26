@@ -54,12 +54,26 @@ pub struct TopicPublication {
 /// A control receipt belongs to its retained target, not the integrator turn
 /// that authored it. It never registers that turn as target conversation input.
 pub(super) fn goal_control_on(conn: &Connection, id: &str, phase: &str) -> Result<()> {
-    let (doc, human): (String, i64) = conn.query_row(
-        "SELECT doc,human_id FROM interaction_goal_controls WHERE id=?",
+    let (doc, human, receipt): (String, i64, Option<String>) = conn.query_row(
+        "SELECT doc,human_id,result FROM interaction_goal_controls WHERE id=?",
         [id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     let doc: serde_json::Value = serde_json::from_str(&doc)?;
+    if let Some(raw) = receipt {
+        let result: serde_json::Value = serde_json::from_str(&raw)?;
+        super::goal_controls::record_attempt_on(
+            conn,
+            id,
+            &json!({"attempt":doc["attempt"],"phase":phase,"result":result}),
+            &json!({"author":doc["actor"],"executor":doc["execution_actor"]}),
+        )?;
+    }
+    if doc["recovery"].is_object() {
+        // Preserve the exact receipt in shared recovery state. Routine attempts
+        // must not send one Telegram control notice each.
+        return super::goal_retries::settle_on(conn, id, phase);
+    }
     let action = match doc["plan"]["action"].as_str() {
         Some("start") => "start",
         Some("edit") => "edit",
@@ -78,7 +92,12 @@ pub(super) fn goal_control_on(conn: &Connection, id: &str, phase: &str) -> Resul
         "uncertain" => "Outcome unknown; the action will not be replayed automatically.",
         _ => return Err(anyhow!("Invalid goal publication outcome")),
     };
-    let body = format!("↪ Integrator action · goal {action}\n{outcome}");
+    let author = if doc["delegation"].is_object() {
+        "Daimon action"
+    } else {
+        "Integrator action"
+    };
+    let body = format!("↪ {author} · goal {action}\n{outcome}");
     let source = json!([id, doc["attempt"], phase]).to_string();
     conn.execute("INSERT OR IGNORE INTO topic_publications(local_turn,session_id,human_id,kind,source,body,phase,instance_id)
         VALUES(?1,?2,?3,'control',?4,?5,'ready','')",

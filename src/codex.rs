@@ -34,8 +34,8 @@ use tokio_util::sync::CancellationToken;
 
 mod goals;
 pub use goals::{
-    GoalActivation, GoalControl, GoalControlScope, GoalMetadataControl, GoalStopSnapshot,
-    NativeGoal, NativeGoalSnapshot,
+    GoalActivation, GoalControl, GoalControlScope, GoalMetadataControl, GoalMutationOrigin,
+    GoalStopSnapshot, NativeGoal, NativeGoalSnapshot,
 };
 
 /// The provider observed cancellation before it attempted the initial native
@@ -166,6 +166,9 @@ pub enum QuoteTextLookup {
     Incomplete,
 }
 
+#[cfg(test)]
+mod goal_failure_tests;
+
 pub struct RunSummary {
     pub codex_thread_id: Option<String>,
     pub assistant_text: String,
@@ -213,6 +216,17 @@ pub enum CodexEvent {
     NativeTurnTerminal {
         id: String,
         status: String,
+    },
+    /// Authoritative goal notification with its optional causal native turn.
+    NativeGoalBlocked {
+        turn_id: String,
+        goal: NativeGoal,
+    },
+    /// A terminal native failure, preserving structured provider classification.
+    NativeTurnFailure {
+        thread_id: String,
+        id: String,
+        error: Value,
     },
     ApprovalRequest(CodexApprovalRequest),
     UserInputRequest {
@@ -1616,7 +1630,7 @@ where
                         continue;
                     }
                     if let Some(GoalControl::ConditionalMetadata(control))=steer.goal.as_ref() {
-                        let result=goals::conditional_metadata(&mut process,&thread_id,&control.plan,&control.admission).await;
+                        let result=goals::conditional_metadata(&mut process,&thread_id,&control.plan,&control.admission,control.origin).await;
                         if result.0=="acknowledged" {
                             if matches!(control.plan.action,crate::store::GoalAction::Pause|crate::store::GoalAction::Clear) {staged_goal=false;}
                             goal_snapshot_request_id=None;
@@ -1696,7 +1710,12 @@ where
                 if !event_matches_run(&thread_id,active_turn_id.as_deref(),&method,&params,shared_app_server){continue;}
                 if method == "thread/goal/updated" {
                     goal_snapshot_request_id=None;
-                    if let Some(goal)=goals::parse_goal(&params,&thread_id)? { goal_active=goal.status=="active"; }
+                    if let Some(goal)=goals::parse_goal(&params,&thread_id)? {
+                        goal_active=goal.status=="active";
+                        if let Some(event)=blocked_goal_observation(&params,goal) {
+                            let _=on_event(event).await?;
+                        }
+                    }
                 } else if method == "thread/goal/cleared" { goal_snapshot_request_id=None; goal_active=false;
                 } else if method == "serverRequest/resolved" {
                     if let Some(id) = params.get("requestId") {
@@ -1972,6 +1991,16 @@ fn steer_response(
     }
 }
 
+/// Preserve only the goal notification's own causal turn, never the collector's
+/// current turn or an unrelated terminal event inferred by proximity.
+fn blocked_goal_observation(params: &Value, goal: NativeGoal) -> Option<CodexEvent> {
+    let turn = params["turnId"].as_str().filter(|s| !s.is_empty())?;
+    (goal.status == "blocked").then(|| CodexEvent::NativeGoalBlocked {
+        turn_id: turn.into(),
+        goal,
+    })
+}
+
 /// Distinguishes never-sent input from input whose native acceptance is unknown.
 fn reject_outstanding_steers(
     queued_steers: VecDeque<CodexSteerRequest>,
@@ -2033,6 +2062,22 @@ where
                     .get("status")
                     .and_then(Value::as_str)
                     .unwrap_or("completed");
+                if status == "failed"
+                    && let (Some(thread), Some(id), Some(error)) = (
+                        params["threadId"]
+                            .as_str()
+                            .or(summary.codex_thread_id.as_deref()),
+                        turn["id"].as_str(),
+                        turn.get("error").filter(|v| v.is_object()),
+                    )
+                {
+                    let _ = on_event(CodexEvent::NativeTurnFailure {
+                        thread_id: thread.into(),
+                        id: id.into(),
+                        error: error.clone(),
+                    })
+                    .await?;
+                }
                 if let Some(id) = turn.get("id").and_then(Value::as_str) {
                     let _ = on_event(CodexEvent::NativeTurnTerminal {
                         id: id.to_string(),
@@ -2237,7 +2282,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeModelConfigured { .. }|CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeModelConfigured { .. }|CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::NativeGoalBlocked { .. }|CodexEvent::NativeTurnFailure { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;

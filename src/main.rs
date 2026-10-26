@@ -42,6 +42,7 @@ async fn main() -> Result<()> {
                     | "matrix"
                     | "observer"
                     | "topics"
+                    | "goal"
             )
         {
             anyhow::bail!(
@@ -58,6 +59,7 @@ async fn main() -> Result<()> {
                 | "matrix"
                 | "observer"
                 | "topics"
+                | "goal"
         ) {
             args[3..].join(" ")
         } else {
