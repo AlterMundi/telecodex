@@ -307,6 +307,7 @@ jobs:
       - run: python -B tests/dashboard_io.py
       - run: python -B tests/dashboard_companion_io.py
       - run: python -B tests/dashboard_live.py
+      - run: python -B tests/dashboard_transcription.py
       - run: node tests/dashboard_live_ui.js
       - run: python -B tests/dashboard_sonic.py
       - run: python -B tests/presentation_io.py
