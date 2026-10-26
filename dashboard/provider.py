@@ -515,11 +515,12 @@ class Provider:
             existing=db.execute('SELECT 1 FROM conversation_inputs WHERE id=? AND human_id=?',(ident,self.human)).fetchone()
         if not existing:
             check_reference(value,fresh=True)
-            path=Path(str(self.receiver['db_path'])+'.visual')/value['image_sha256']
-            try:
-                data=read_png(path,value['image_sha256'])
-                if png_dimensions(data)!=(value['width'],value['height']):raise ValueError('Selected dimensions changed')
-            except (ValueError,OSError):raise VisualSelectionInvalid('Selected image unavailable. Select it again.') from None
+            for image in value if isinstance(value,list) else [value]:
+                path=Path(str(self.receiver['db_path'])+'.visual')/image['image_sha256']
+                try:
+                    data=read_png(path,image['image_sha256'])
+                    if png_dimensions(data)!=(image['width'],image['height']):raise ValueError('Selected dimensions changed')
+                except (ValueError,OSError):raise VisualSelectionInvalid('Selected image unavailable. Select it again.') from None
 
     def conversation_visual_upload(self, data, expected):
         import re
@@ -534,11 +535,13 @@ class Provider:
         if not self.authorized(self.human):raise ProviderUnavailable('Conversation grant changed')
         return result
 
-    def conversation_visual_image(self, ident):
+    def conversation_visual_image(self, ident, index=0):
         self.input_id(ident)
         original=self.conversation_input_status(ident)
         ref=original.get('visual')
-        if not isinstance(ref,dict):raise ValueError('No selected image')
+        images=ref if isinstance(ref,list) else [ref] if isinstance(ref,dict) else []
+        if type(index) is not int or not 0<=index<len(images):raise ValueError('No selected image')
+        ref=images[index]
         from .visual import read_png
         return read_png(Path(str(self.receiver['db_path'])+'.visual')/ref['image_sha256'],ref['image_sha256'])
 

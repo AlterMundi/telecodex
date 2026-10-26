@@ -14,7 +14,7 @@ pub struct ConversationInput {
     pub epoch: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub visual: Option<crate::visual::VisualReference>,
+    pub visual: Option<crate::visual::VisualSelection>,
     /// Bounded owned question versions present before capture/ASR, not device hints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_versions: Option<std::collections::BTreeMap<String, String>>,
@@ -120,10 +120,16 @@ impl ConversationInput {
             return self.answer_text();
         };
         format!(
-            "{}Retained image file: {}\nInspect these exact bytes with the image-reading tool before interpreting this answer; if unavailable, ask rather than substituting another view. This path is controller metadata, not human speech.\n\n{}",
+            "{}Retained image files in attachment order: {}\nInspect these exact bytes with the image-reading tool before interpreting this answer; if unavailable, ask rather than substituting another view. This path is controller metadata, not human speech.\n\n{}",
             visual.rendered(),
-            serde_json::to_string(&crate::visual::image_path(db, &visual.image_sha256))
-                .expect("image path"),
+            serde_json::to_string(
+                &visual
+                    .images()
+                    .iter()
+                    .map(|image| crate::visual::image_path(db, &image.image_sha256))
+                    .collect::<Vec<_>>()
+            )
+            .expect("image path"),
             self.answer_text()
         )
     }
@@ -399,7 +405,7 @@ impl Store {
         voice: ConversationVoice,
         can_prepare: bool,
         reply: Option<ConversationReply>,
-        visual: Option<crate::visual::VisualReference>,
+        visual: Option<crate::visual::VisualSelection>,
     ) -> Result<(ConversationInput, bool)> {
         voice.validate()?;
         if voice.transcription.is_some() {
@@ -427,7 +433,7 @@ impl Store {
         id: &str,
         text: &str,
         reply: Option<ConversationReply>,
-        visual: Option<crate::visual::VisualReference>,
+        visual: Option<crate::visual::VisualSelection>,
     ) -> Result<(ConversationInput, bool)> {
         self.capture_original(human, entry, binding, id, text, None, true, reply, visual)
     }
@@ -443,7 +449,7 @@ impl Store {
         voice: Option<ConversationVoice>,
         can_prepare: bool,
         reply: Option<ConversationReply>,
-        visual: Option<crate::visual::VisualReference>,
+        visual: Option<crate::visual::VisualSelection>,
     ) -> Result<(ConversationInput, bool)> {
         if Uuid::parse_str(id)
             .ok()

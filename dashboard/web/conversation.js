@@ -386,20 +386,26 @@ window.Conversation = (() => {
         const continueButton=node("button","Reply to this session");continueButton.type="button";continueButton.hidden=true;actions.append(continueButton);
         const routeBox=node("div",undefined,"reply-route"),select=node("select"),routeButton=node("button","Send to session"),routeNote=node("p","","reply-error");
         select.setAttribute("aria-label","Destination session");routeButton.type="button";routeBox.hidden=true;routeBox.append(select,routeButton,routeNote);
-        const imageButton=node("button","Show selected image"),imageView=node("canvas");imageButton.type="button";imageButton.hidden=true;imageView.hidden=true;imageView.className="input-visual";imageView.setAttribute("role","img");
+        const imageButton=node("button","Show selected image"),imageView=node("div");imageButton.type="button";imageButton.hidden=true;imageView.hidden=true;imageView.className="input-visual";imageView.setAttribute("role","img");
         imageButton.addEventListener("click",async()=>{
-          if(!imageView.hidden){imageView.hidden=true;imageView.width=imageView.height=0;imageButton.textContent="Show selected image";return;}
-          const owned=inputGeneration,controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);imageButton.disabled=true;imageButton.textContent="Loading selected image…";
+          const references=Array.isArray(card.value.visual)?card.value.visual:[card.value.visual];
+          const showLabel=references.length>1?`Show images (${references.length})`:"Show selected image";
+          if(!imageView.hidden){imageView.hidden=true;imageView.replaceChildren();imageButton.textContent=showLabel;return;}
+          const owned=inputGeneration,controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);imageButton.disabled=true;imageButton.textContent="Loading images…";
           try{
-            const response=await fetch(`api/interaction/inputs/${encodeURIComponent(card.value.id)}/image`,{headers:headers(),credentials:"same-origin",signal:controller.signal});
-            if(!response.ok)throw Object.assign(Error("Image unavailable"),{status:response.status});
-            const bitmap=await createImageBitmap(await response.blob());
-            if(owned!==inputGeneration){bitmap.close();return;}
-            const ref=card.value.visual;imageView.width=bitmap.width;imageView.height=bitmap.height;const context=imageView.getContext("2d");context.drawImage(bitmap,0,0);bitmap.close();
-            context.strokeStyle="#fff";context.lineWidth=Math.max(3,ref.width/200);context.beginPath();context.arc(ref.point.x,ref.point.y,Math.max(6,ref.width/80),0,2*Math.PI);context.stroke();
-            imageView.setAttribute("aria-label",`Captured image. Selected point X ${ref.point.x}, Y ${ref.point.y}.`);imageView.hidden=false;imageButton.textContent="Hide selected image";
+            const views=[];
+            for(const [index,ref] of references.entries()){
+              const response=await fetch(`api/interaction/inputs/${encodeURIComponent(card.value.id)}/image?index=${index}`,{headers:headers(),credentials:"same-origin",signal:controller.signal});
+              if(!response.ok)throw Object.assign(Error("Image unavailable"),{status:response.status});
+              const bitmap=await createImageBitmap(await response.blob());
+              if(owned!==inputGeneration){bitmap.close();return;}
+              const view=node("canvas");view.className="input-visual";view.width=bitmap.width;view.height=bitmap.height;const context=view.getContext("2d");context.drawImage(bitmap,0,0);bitmap.close();
+              if(ref.point){context.strokeStyle="#fff";context.lineWidth=Math.max(3,ref.width/200);context.beginPath();context.arc(ref.point.x,ref.point.y,Math.max(6,ref.width/80),0,2*Math.PI);context.stroke();}
+              view.setAttribute("role","img");view.setAttribute("aria-label",`Captured image ${index+1} of ${references.length}.`+(ref.point?` Selected point X ${ref.point.x}, Y ${ref.point.y}.`:" Whole image; no point selected."));views.push(view);
+            }
+            imageView.replaceChildren(...views);imageView.hidden=false;imageButton.textContent=references.length>1?"Hide images":"Hide selected image";
           }catch(e){status.textContent="Selected image unavailable. The message was not resent.";if([401,403].includes(e.status))failed(e);}
-          finally{clearTimeout(deadline);imageButton.disabled=false;if(imageView.hidden)imageButton.textContent="Show selected image";}
+          finally{clearTimeout(deadline);imageButton.disabled=false;if(imageView.hidden)imageButton.textContent=showLabel;}
         });
         const trace=node("details",undefined,"routing-trace"),traceSummary=node("summary","Show routing path"),traceState=node("p","","note"),traceContent=node("div"),traceRefresh=node("button","Refresh route");
         traceRefresh.type="button";traceState.setAttribute("role","status");trace.append(traceSummary,traceState,traceContent,traceRefresh);
@@ -479,6 +485,7 @@ window.Conversation = (() => {
       card.value = {...card.value, ...value};
       messageTime(card.time,card.value.received_at);
       card.imageButton.hidden=!card.value.visual;
+      if(card.imageView.hidden)card.imageButton.textContent=Array.isArray(card.value.visual)?`Show images (${card.value.visual.length})`:"Show selected image";
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
       card.status.textContent = phaseText(card.value);
       card.check.hidden=readOnly || card.value.read_only===true || (["accepted","routed","answered"].includes(card.value.phase) && (!!card.value.text || (card.value.preview?.length||0)<1000));

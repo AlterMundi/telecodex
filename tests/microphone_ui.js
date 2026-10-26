@@ -21,7 +21,8 @@ function boot(){
   if(mode==='before'){mode=undefined;throw Error('Offline before capture');}
   if(mode==='visual-refusal'){mode=undefined;return {ok:false,status:400,json:async()=>({code:'visual_reselection',submission_attempted:false})};}
   if(mode==='denied'){mode=undefined;return {ok:false,status:403,json:async()=>({})};}
-  const result={id,phase:capturePhase,retired:captureRetired,visual:options.headers['X-Visual-Reference']?JSON.parse(options.headers['X-Visual-Reference']):undefined,voice:{audio_sha256:options.headers['X-Audio-Sha256']}};originals.set(id,result);
+  const result={id,phase:capturePhase,retired:captureRetired,visual:options.headers['X-Visual-Reference']?JSON.parse(options.headers['X-Visual-Reference']):undefined,voice:{audio_sha256:options.headers['X-Audio-Sha256']}};if(mode==='visual-extra'){mode=undefined;result.visual.push({source_id:'unexpected-third-image'});}
+  originals.set(id,result);
   if(uploadHold)await uploadHold.promise;
   if(mode==='after'){mode=undefined;throw Error('Lost acknowledgement');}
   return {ok:true,json:async()=>result};
@@ -98,5 +99,10 @@ function boot(){
  await unknownVisual.click();await until(()=>unknownVisual.received.length===1);
  assert.equal(new Set(unknownVisual.uploads.map(v=>v.headers['X-Input-Id'])).size,1,'A later pre-submission refusal cannot settle an earlier unknown attempt or replace its UUID');
  assert(unknownVisual.uploads.every(v=>JSON.stringify(JSON.parse(v.headers['X-Visual-Reference']))===JSON.stringify(oldVisual)),'Uncertain retry cannot adopt a newly selected image');
+ const pair=[oldVisual,newVisual],frozenPair=boot();frozenPair.visual(pair);const heldPermission=frozenPair.permission();const startingPair=frozenPair.click();frozenPair.visual([newVisual]);heldPermission.resolve(frozenPair.media());await startingPair;frozenPair.click();await until(()=>frozenPair.received.length===1);
+ assert.deepEqual(JSON.parse(frozenPair.uploads[0].headers['X-Visual-Reference']),pair,'Permission delays retain both original images in order');
+ const changedPair=boot();changedPair.visual(pair);changedPair.mode('visual-extra');await changedPair.click();changedPair.click();await until(()=>changedPair.state().startsWith('Recording unconfirmed'));
+ assert.equal(changedPair.received.length,0,'A receipt with an extra image must not consume the frozen recording');assert.equal(changedPair.uploads.length,1);
+ changedPair.originals.values().next().value.visual=pair;await changedPair.check();await until(()=>changedPair.received.length===1);assert.equal(changedPair.uploads.length,1,'Correct receipt observation does not resend audio');
  console.log('Microphone UI: finalized one-button capture, playback pause, source hashing, explicit identical retry, receipt-only recovery, hidden/cancel/late permission cleanup, duration-limit review and binding reset passed; zero models.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
