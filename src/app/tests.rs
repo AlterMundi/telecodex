@@ -295,6 +295,56 @@ fn sample_config(db_path: PathBuf, default_cwd: PathBuf) -> Config {
     }
 }
 
+#[test]
+fn conversation_profile_does_not_spread_to_created_workers() {
+    let (mut app, _db) = sample_app();
+    let source_key = SessionKey::new(100, Some(7));
+    Arc::get_mut(&mut app.shared)
+        .unwrap()
+        .config
+        .codex
+        .session_profiles
+        .push(crate::config::SessionModelProfile {
+            chat_id: 100,
+            topic_id: 7,
+            profile: "fixture".into(),
+            reasoning_effort: Some("high".into()),
+        });
+    let mut source = app
+        .shared
+        .store
+        .ensure_session(source_key, 100, &sample_defaults())
+        .unwrap();
+    source.model = Some("selected-profile-model".into());
+    source.reasoning_effort = Some("high".into());
+    source.session_prompt = Some("Retain the selected workspace context".into());
+    source.sandbox_mode = "read-only".into();
+    for (topic, native) in [(8, None), (9, Some("native-history-fork"))] {
+        let target = SessionKey::new(100, Some(topic));
+        let mut template = source.clone();
+        template.codex_thread_id = native.map(str::to_owned);
+        app.initialize_topic_session(target, 100, &template)
+            .unwrap();
+        let actual = app.shared.store.get_session(target).unwrap().unwrap();
+        assert_eq!(actual.model, app.shared.session_defaults.model);
+        assert_eq!(
+            actual.reasoning_effort,
+            app.shared.session_defaults.reasoning_effort
+        );
+        assert_eq!(actual.codex_thread_id.as_deref(), native);
+        assert_eq!(actual.session_prompt, source.session_prompt);
+        assert_eq!(actual.sandbox_mode, "read-only");
+    }
+    assert_eq!(source.model.as_deref(), Some("selected-profile-model"));
+    // Ordinary topic inheritance retains its established behavior.
+    source.key = SessionKey::new(100, Some(11));
+    let target = SessionKey::new(100, Some(12));
+    app.initialize_topic_session(target, 100, &source).unwrap();
+    let actual = app.shared.store.get_session(target).unwrap().unwrap();
+    assert_eq!(actual.model, source.model);
+    assert_eq!(actual.reasoning_effort, source.reasoning_effort);
+}
+
 fn sample_app() -> (App, NamedTempFile) {
     let db = NamedTempFile::new().unwrap();
     let config = sample_config(db.path().to_path_buf(), sample_workspace());

@@ -335,7 +335,9 @@ reasoning_effort = "high"
 
 Only model, provider definitions, model catalog and reasoning effort are imported.
 The bridge retains its tools, instructions, approvals and sandbox. Other
-conversations and the native default profile remain unchanged. Keep credential
+conversations and the native default profile remain unchanged. New topics/workers
+created from a selected conversation use receiving model/effort defaults rather
+than copying that local selection. Ordinary topic inheritance remains unchanged. Keep credential
 references in the native profile; never copy credentials into bridge config.
 
 An existing native thread keeps its ID and history. Startup attempts metadata-only

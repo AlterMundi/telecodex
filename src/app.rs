@@ -2081,9 +2081,25 @@ impl App {
         if destination.busy || destination.codex_thread_id.is_some() {
             anyhow::bail!("Destination already active; existing conversation preserved");
         }
+        let mut inherited = template.clone();
+        if key != template.key
+            && self
+                .shared
+                .config
+                .codex
+                .session_profiles
+                .iter()
+                .any(|p| p.key() == template.key)
+        {
+            // A local profile belongs to its selected conversation, not future
+            // workers. Native history forks use the harness's new-thread config;
+            // independent topics likewise retain the receiving model defaults.
+            inherited.model = self.shared.session_defaults.model.clone();
+            inherited.reasoning_effort = self.shared.session_defaults.reasoning_effort.clone();
+        }
         self.shared
             .store
-            .apply_empty_session_template(key, template, user_id)?;
+            .apply_empty_session_template(key, &inherited, user_id)?;
         Ok(())
     }
 
