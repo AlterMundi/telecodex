@@ -273,13 +273,17 @@ async fn refresh(
         .context("Unbound observer session")?;
     let card = shared.store.observer_card(key, human, native)?;
     let activity_cut = shared.store.observer_activity_cut(key, human, native)?;
-    let mut source = shared.codex.merge_history(native).await.inspect_err(|error| {
-        tracing::warn!(
-            topic = key.thread_id,
-            failure_code = failure_code(error),
-            "Observer source read unconfirmed; retained without automatic retry"
-        );
-    })?;
+    let mut source = shared
+        .codex
+        .merge_history(native)
+        .await
+        .inspect_err(|error| {
+            tracing::warn!(
+                topic = key.thread_id,
+                failure_code = failure_code(error),
+                "Observer source read unconfirmed; retained without automatic retry"
+            );
+        })?;
     shared
         .store
         .observer_question_evidence(key, human, &mut source)?;
