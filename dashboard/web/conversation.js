@@ -116,7 +116,7 @@ window.Conversation = (() => {
       clearFocus();voiceContext=undefined;draft.value=message;draft.focus?.();compose.scrollIntoView?.({block:"nearest"});return true;
     }});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value)drainVoice();},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -723,8 +723,52 @@ window.Conversation = (() => {
       if(active && !audio.ended)voiceBusy=true;
       voiceStatus();
     }
+    // Client media progress is advisory. Persist only source/revision and the
+    // last segment boundary, never transcript text or a claim of human hearing.
+    const speechPositions=new Map();let positionBinding;
+    const positionKey=()=>"interaction-speech-position:"+binding;
+    function positionLabel(card){
+      const saved=speechPositions.get(card.source.id);
+      card.listen.textContent=saved?.revision===card.source.revision?"Resume audio":"Listen";
+      card.listen.title=saved?.revision===card.source.revision?"Resume from the interrupted segment; part of it may repeat":"Listen to this reply";
+    }
+    function savePositions(){
+      if(!standalone || !binding)return;
+      try{window.localStorage?.setItem(positionKey(),JSON.stringify([...speechPositions.values()]));}catch{}
+    }
+    function loadPositions(){
+      if(positionBinding===binding)return;positionBinding=binding;speechPositions.clear();
+      if(!standalone)return;
+      try{
+        const raw=window.localStorage?.getItem(positionKey());if(!raw || raw.length>16384)return;
+        const saved=JSON.parse(raw);if(!Array.isArray(saved)||saved.length>24)return;
+        for(const value of saved)if(value && typeof value.source==='string' && value.source.length<=256
+          && typeof value.revision==='string' && value.revision.length<=256
+          && Number.isSafeInteger(value.offset) && value.offset>=0 && value.offset<=1000000)
+          speechPositions.set(value.source,{source:value.source,revision:value.revision,offset:value.offset});
+      }catch{}
+    }
+    function forgetPosition(source){
+      if(speechPositions.delete(source.id)){savePositions();const card=cards.get(source.id);if(card)positionLabel(card);}
+    }
+    function rememberPosition(){
+      if(!active || active.verifying || !blobUrl)return;
+      const source=active.source;
+      if(source.current===false || source.correction_pending || source.native_binding_current===false)return;
+      if(active.segmentEnded && active.next===null){forgetPosition(source);return;}
+      const offset=active.segmentEnded && Number.isSafeInteger(active.next)?active.next:active.offset;
+      speechPositions.delete(source.id);speechPositions.set(source.id,{source:source.id,revision:source.revision,offset});
+      while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
+      savePositions();const card=cards.get(source.id);if(card)positionLabel(card);
+    }
     function beginVoiceCapture() {
-      draft.blur?.();enableVoice();voiceBusy=false;stop("Listening to your input. Replies remain in the conversation.");
+      draft.blur?.();enableVoice();voiceBusy=false;cancelSpeechWait();
+      if(active && blobUrl && !active.verifying){
+        rememberPosition();active.generation=++generation;active.auto=false;active.interrupted=true;
+        audio.pause();audio.muted=true;toggle.disabled=true;playLabel("Resume audio");
+        presentState({playback:undefined});
+        audioState("Listening to your input. The interrupted reply can be resumed.");
+      }else stop("Listening to your input. Replies remain in the conversation.");
     }
     const speaker=source=>source.kind.startsWith("integrator_")?"integrator":JSON.stringify(source.target);
     function rememberFinal(source) {
@@ -792,6 +836,7 @@ window.Conversation = (() => {
       if(voiceEnabled && !voiceSuspended)disableVoice();else {enableVoice();drainVoice();}
     });
     function stop(text = "Audio stopped.") {
+      rememberPosition();
       presentState({playback:undefined});
       cancelSpeechWait();voiceBusy=false;generation++;
       requestAbort?.abort(); requestAbort = undefined;
@@ -808,6 +853,7 @@ window.Conversation = (() => {
       $("#conversation-player").hidden = true;
     }
     function pause() {
+      rememberPosition();
       presentState({playback:undefined});
       cancelSpeechWait();voiceBusy=false;voiceQueue.length=0;
       voiceSuspended=true;voiceStatus();
@@ -880,7 +926,14 @@ window.Conversation = (() => {
         cards.set(source.id, card);
         reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
         read.addEventListener("click",()=>readCard(card));
-        listen.hidden=readOnly;listen.addEventListener("click", () => !readOnly && listenTo(card.source));
+        listen.hidden=readOnly;listen.addEventListener("click", () => {
+          if(readOnly || captureBusy)return;
+          const saved=speechPositions.get(card.source.id);
+          if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended){
+            voiceSuspended=false;voiceStatus();return startPlayback();
+          }
+          return listenTo(card.source,saved?.revision===card.source.revision?saved.offset:0);
+        });
       } else if (card.source.text_sha256 !== source.text_sha256) {
         card.body.textContent = source.preview;
         card.autoRevision=undefined;card.autoWanted=false;
@@ -908,6 +961,9 @@ window.Conversation = (() => {
         : source.completed ? "Session reports this request complete." : "Session progress; work may continue.";
       card.box.dataset.pending = String(!!source.correction_pending || source.native_binding_current === false);
       card.listen.hidden = !canListen;
+      if(source.current===false || source.correction_pending || source.native_binding_current===false
+        || speechPositions.get(source.id)?.revision!==source.revision)forgetPosition(source);
+      positionLabel(card);
       if(!progress)graph?.result(source);
       sessionProgress(source);
       if(source.kind!=="worker_progress"){
@@ -933,7 +989,7 @@ window.Conversation = (() => {
       }
       companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
-      binding = value.binding;
+      binding = value.binding;loadPositions();
       canFiles=!readOnly && value.can_download_files===true;
       if(!canFiles)clearFiles();
       else if(value.artifacts?.state==="unavailable")filesConnected=false;
@@ -1034,7 +1090,7 @@ window.Conversation = (() => {
 
     async function startPlayback() {
       const selected = active;
-      if (!selected || !blobUrl || !playbackAllowed() || !enabled) return;
+      if (!selected || !blobUrl || !playbackAllowed() || !enabled || captureBusy) return;
       const owned = selected.generation;
       const position = audio.currentTime;
       selected.verifying = true;
@@ -1059,7 +1115,7 @@ window.Conversation = (() => {
         selected.segmentEnded = false;
         selected.verified=verified;
         selected.textEnd=selected.offset+Array.from(verified.text).length;
-        selected.auto = true;
+        selected.auto = true;selected.interrupted=false;
         audio.muted = false;
         await audio.play();
         if (active !== selected || generation !== owned) return;
@@ -1137,6 +1193,7 @@ window.Conversation = (() => {
       waiting.result=requestAudio(source,offset,controller).then(value=>({value}),error=>({error}));
     }
     async function listenTo(source, offset = 0, chain) {
+      if(captureBusy)return;
       const prepared=prefetched && prefetched.source.id===source.id && prefetched.source.revision===source.revision && prefetched.offset===offset?prefetched:undefined;
       if(prepared)prefetched=undefined;
       if(!chain?.queued)voiceSuspended=false;
@@ -1180,7 +1237,7 @@ window.Conversation = (() => {
     audio.addEventListener("ended", async () => {
       if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || !playbackAllowed() || !enabled) return;
       presentState({playback:undefined});
-      const selected=active, owned=generation;selected.segmentEnded=true;
+      const selected=active, owned=generation;selected.segmentEnded=true;rememberPosition();
       if (selected.next !== null) {
         audioState("A short pause before continuing…");
         if(await waitForSpeech("chunk",selected.source)){
@@ -1203,6 +1260,7 @@ window.Conversation = (() => {
       if(voiceEnabled && generation===owned)nextSpokenReply("question",selected.source);
     });
     toggle.addEventListener("click", () => {
+      if(captureBusy)return;
       if (audio.paused) { cancelSpeechWait();voiceSuspended=false;voiceStatus();if (audio.ended) audio.currentTime = 0; startPlayback(); }
       else pause();
     });
