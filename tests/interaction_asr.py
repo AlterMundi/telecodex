@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -100,6 +101,37 @@ class Retention(unittest.TestCase):
         self.source.write_bytes(b'another original')
         with self.assertRaisesRegex(asr.RenderError,'capacity'):self.run_asr()
         self.assertEqual(self.calls(),1)
+    def test_history_accounting_is_read_only_and_new_intent_remains_durable(self):
+        root=self.root/'cache';root.mkdir(mode=0o700)
+        for n in range(40):
+            old=root/f'{n:064x}';old.mkdir(mode=0o700)
+            (old/'state.json').write_text(json.dumps({'phase':'completed'}))
+            (old/'draft.json').write_text('retained transcript')
+        job=root/('f'*64);job.mkdir(mode=0o700)
+        synced=[];fsync=os.fsync
+        def record(fd):
+            info=os.fstat(fd)
+            if stat.S_ISDIR(info.st_mode):synced.append((info.st_dev,info.st_ino))
+            return fsync(fd)
+        before={p:p.read_bytes() for p in root.glob('*/draft.json')}
+        with patch.object(os,'fsync',side_effect=record):
+            asr.reserve(root,job,{'phase':'intent'},asr.DEFAULT_BUDGET)
+        self.assertEqual(json.loads((job/'state.json').read_text()),{'phase':'intent'})
+        info=job.stat()
+        self.assertEqual(synced,[(info.st_dev,info.st_ino)],'Only the new intent directory needs a durability barrier')
+        self.assertEqual({p:p.read_bytes() for p in before},before)
+
+    def test_accounting_rejects_symlink_or_nonprivate_history_before_reserving(self):
+        root=self.root/'cache';root.mkdir(mode=0o700)
+        job=root/('f'*64);job.mkdir(mode=0o700)
+        old=root/('a'*64);old.symlink_to(self.root,target_is_directory=True)
+        with self.assertRaisesRegex(asr.RenderError,'unsafe-asr-cache-directory'):
+            asr.reserve(root,job,{'phase':'intent'},asr.DEFAULT_BUDGET)
+        self.assertFalse((job/'state.json').exists())
+        old.unlink();old.mkdir(mode=0o755);old.chmod(0o755)
+        with self.assertRaisesRegex(asr.RenderError,'unsafe-asr-cache-directory'):
+            asr.reserve(root,job,{'phase':'intent'},asr.DEFAULT_BUDGET)
+        self.assertFalse((job/'state.json').exists())
     def test_changed_derivative_is_protected_and_text_still_available(self):
         with patch.object(asr,'retire_preparation',side_effect=OSError('defer')):self.run_asr()
         media=next((self.root/'cache').rglob('source.media'));media.write_bytes(b'changed')

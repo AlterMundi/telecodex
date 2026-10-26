@@ -303,6 +303,13 @@ read-only inspection are a design target, not a claim of tested child usability.
 
 ## Measurements and acceptance
 
+ASR cache accounting must inspect retained private jobs without creating them or
+syncing each historical directory. Qualify a populated history: the new intent
+still crosses its file/directory durability barrier before provider execution;
+uncertain reservations, byte limits, ownership and symlink rejection stay intact.
+Removing these history-dependent writes is not proof of streaming transcription
+or a measured end-to-end improvement on a human phone.
+
 Measure the journey by original input: end of speech/commit, transcript ready,
 routing decision, native acceptance, first useful progress, final result and
 playback start/end. Separate queue, preparation, inference and execution time;
@@ -486,3 +493,18 @@ No S case passes merely because a sound name, score, mock event, planned rendere
 or favorable code review exists. Unimplemented synthesis and subjective claims
 remain explicitly unproven. Default silence and read-only visual inspection stay
 available. Existing Q/V requirements and direct-topic independence still apply.
+
+## Continuous-voice extension — milestone9
+
+The maintained [full roadmap and v0.3 execution plan](interaction-roadmap.md)
+extends this protocol; existing evidence remains valid for unchanged behavior.
+Qualification must cover partial captions during capture, one committed original
+on Send, discard without dispatch, revision/correction order, reconnect without
+uncertain replay, useful incremental output, speech interruption independent of
+job cancellation, and coherent concurrent question/progress/final returns.
+Measure first partial, ASR finalization, final intended speech to first intelligible
+sound, segment gaps and interruption-to-silence separately. Exercise Spanish with
+English names/commands, long pauses and self-corrections. Keep deterministic
+transport/state fixtures separate from actual provider and physical-phone hearing
+evidence. Reuse the accepted base and do not recreate its obsolete generic
+human-testing request.

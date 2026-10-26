@@ -1,5 +1,8 @@
 # Daimon Interaction v0.2 — coherent single-chat experience
 
+Full horizon and next selected delivery: [maintained roadmap](interaction-roadmap.md).
+This document owns the remaining v0.2 obligations; continuous voice is milestone9.
+
 Status: the human accepted the current independent app and integrating channel as a solid, reasonably reliable and versatile functional base on 2026-10-26. The immutable tag is `interaction-functional-baseline-2026-10-26`. Preserve that working experience while completing the remaining milestone 8 / Project 14 / #208 requirements. Qwen is receiving-verified only for the integrating conversation under PR 288 / #285; worker/observer models and global defaults remain unchanged. The header identifies the selected daimon and authenticated human on two lines; remaining #213/#221 refinements stay in scope. General functional acceptance does not invent specific physical or aesthetic judgments. Parent: AlterMundi/daimon-matrix#313.
 
 ## Outcome and scope
