@@ -341,6 +341,34 @@ def failed_synthesis_diagnostic(binary):
         j.close()
 
 
+def oversized_active_source(binary):
+    j = Observer(binary)
+    try:
+        j.prepare()
+        before=j.row('SELECT count(*) FROM turns')
+        items=[{'type':'userMessage','content':[{'type':'text','text':f'Historical note {i:02}: '+('relación ' * 250)}]} for i in range(90)]
+        items.append({'type':'userMessage','content':[{'type':'text','text':'Latest correction: attach the whole image; selecting a point is optional.'}]})
+        j.histories['native-topic-7'].append({'id':'long-active-source','status':'inProgress','items':items})
+        j.admit('/interaction observe #Alpha',topic=1)
+        j.wait(lambda:j.card() is not None)
+        card=j.card()
+        source=json.loads(j.row('SELECT source_doc FROM interaction_observer_attempts ORDER BY rowid DESC LIMIT 1')[0][0])
+        assert card['bounded'] and source['text_truncated'] and source['unfinished_observed']
+        assert source['boundary'] and source['entries'], 'A long active turn displaced all completed source context'
+        current=source['in_progress_entries'];assert len(current)==1
+        assert len(current[0].encode())<=32000 and len(''.join(source['entries']+current).encode())<=48000
+        assert 'long-active-source' in current[0] and 'provisional statements' in current[0]
+        assert 'Earlier statements' in current[0] and 'Latest correction: attach the whole image' in current[0]
+        assert 'Historical note 00' not in current[0]
+        assert j.row('SELECT count(*) FROM turns')==before and j.summaries==1
+        j.admit('/interaction observe #Alpha',topic=1)
+        j.wait(lambda:j.has('Source unchanged; no synthesis call.',1))
+        assert j.summaries==1
+        print('PASS oversized active source preserves recent human corrections, UTF-8 byte bounds, provisional provenance and older completed context; one observer synthesis, no source execution or duplicate work')
+    finally:
+        j.close()
+
+
 def owner_observer_commands(binary):
     import subprocess
     j = Observer(binary)
@@ -401,3 +429,4 @@ if __name__ == '__main__':
     synthesis_profile_and_global_budget(binary)
     failed_synthesis_diagnostic(binary)
     owner_observer_commands(binary)
+    oversized_active_source(binary)

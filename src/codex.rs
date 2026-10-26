@@ -781,8 +781,9 @@ impl CodexRunner {
                             texts.push(format!("{role}: {text}"));
                         }
                     }
-                    let entry=format!("[Native source turn {turn_id}; native status {}; {}]\n{}",turn["status"].as_str().unwrap_or("unknown"),if completed{"completed"}else{"provisional statements, not completed decisions or effects"},texts.join("\n"));
-                    if entry.len()>budget {bounded=true;break;}
+                    let header=format!("[Native source turn {turn_id}; native status {}; {}]",turn["status"].as_str().unwrap_or("unknown"),if completed{"completed"}else{"provisional statements, not completed decisions or effects"});
+                    let Some((entry,clipped))=bounded_handoff_entry(&header,&texts,budget.min(32_000)) else {bounded=true;break;};
+                    bounded |= clipped; text_truncated |= clipped;
                     if completed && boundary.is_none(){boundary=Some(turn_id.to_string());}
                     turn_ids.push(turn_id.to_string());
                     budget-=entry.len();if completed{entries.push(entry);}else{provisional.push(entry);}
@@ -2157,6 +2158,83 @@ fn quote_occurrences(text: &str, needle: &str) -> usize {
     };
     let next = first + text[first..].chars().next().unwrap().len_utf8();
     if text[next..].contains(needle) { 2 } else { 1 }
+}
+
+/// Bound a source turn by recent statements, rather than dropping the whole
+/// turn when a long-running conversation exceeds the source window. Keep role,
+/// native turn/status and explicit omissions, including at UTF-8 boundaries.
+fn bounded_handoff_entry(header: &str, texts: &[String], limit: usize) -> Option<(String, bool)> {
+    let full = format!("{header}\n{}", texts.join("\n"));
+    if full.len() <= limit {
+        return Some((full, false));
+    }
+    let marker =
+        "[Earlier statements in this source turn omitted to fit the bounded history window.]";
+    let mut remaining = limit.checked_sub(header.len() + marker.len() + 2)?;
+    if remaining < 64 {
+        return None;
+    }
+    let mut recent = Vec::new();
+    for text in texts.iter().rev() {
+        if text.len() < remaining {
+            remaining -= text.len() + 1;
+            recent.push(text.clone());
+        } else {
+            if recent.is_empty() {
+                let (role, body) = text.split_once(": ").unwrap_or(("source", text));
+                let prefix = format!("{role}: [Beginning of this message omitted] ");
+                let keep = remaining.checked_sub(prefix.len())?;
+                let mut start = body.len().saturating_sub(keep);
+                while !body.is_char_boundary(start) {
+                    start += 1;
+                }
+                recent.push(format!("{prefix}{}", &body[start..]));
+            }
+            break;
+        }
+    }
+    if recent.is_empty() {
+        return None;
+    }
+    recent.reverse();
+    Some((format!("{header}\n{marker}\n{}", recent.join("\n")), true))
+}
+
+#[cfg(test)]
+mod bounded_source_tests {
+    use super::bounded_handoff_entry;
+    #[test]
+    fn short_turn_is_unchanged() {
+        assert_eq!(
+            bounded_handoff_entry("turn", &["user: hello".into()], 100),
+            Some(("turn\nuser: hello".into(), false))
+        );
+    }
+    #[test]
+    fn oversized_turn_keeps_recent_corrections_and_provenance() {
+        let texts = (0..91)
+            .map(|i| format!("user: correction-{i:02} {}", "é".repeat(700)))
+            .collect::<Vec<_>>();
+        let (entry, clipped) = bounded_handoff_entry(
+            "[Native source turn original; native status inProgress; provisional]",
+            &texts,
+            32_000,
+        )
+        .unwrap();
+        assert!(clipped && entry.len() <= 32_000);
+        assert!(entry.contains("native status inProgress; provisional"));
+        assert!(entry.contains("Earlier statements") && entry.contains("correction-90"));
+        assert!(!entry.contains("correction-00"));
+    }
+    #[test]
+    fn one_large_message_has_explicit_utf8_safe_tail() {
+        let text = format!("assistant: {} latest correction", "🌀".repeat(20_000));
+        let (entry, clipped) = bounded_handoff_entry("turn", &[text], 1024).unwrap();
+        assert!(clipped && entry.len() <= 1024);
+        assert!(entry.contains("assistant: [Beginning of this message omitted]"));
+        assert!(entry.ends_with("latest correction"));
+        assert!(bounded_handoff_entry("turn", &["user: long".repeat(100)], 32).is_none());
+    }
 }
 
 fn native_handoff_text(item: &Value) -> Option<(&'static str, String)> {

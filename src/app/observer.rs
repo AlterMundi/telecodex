@@ -228,6 +228,8 @@ fn failure_code(error: &anyhow::Error) -> &'static str {
             "handoff selection outside source" => return "support_outside_source",
             "handoff selection exceeds bound" => return "too_many_supports",
             "handoff summary empty or exceeds output bound" => return "output_bound",
+            "source has no native text to merge" => return "source_no_text",
+            "merge source read timed out; source unchanged" => return "source_read_timeout",
             "handoff summary must be structured JSON" => return "invalid_json",
             "handoff summary missing" => return "missing_summary",
             "handoff selection missing" => return "missing_supports",
@@ -271,7 +273,17 @@ async fn refresh(
         .context("Unbound observer session")?;
     let card = shared.store.observer_card(key, human, native)?;
     let activity_cut = shared.store.observer_activity_cut(key, human, native)?;
-    let mut source = shared.codex.merge_history(native).await?;
+    let mut source = shared
+        .codex
+        .merge_history(native)
+        .await
+        .inspect_err(|error| {
+            tracing::warn!(
+                topic = key.thread_id,
+                failure_code = failure_code(error),
+                "Observer source read unconfirmed; retained without automatic retry"
+            );
+        })?;
     shared
         .store
         .observer_question_evidence(key, human, &mut source)?;
