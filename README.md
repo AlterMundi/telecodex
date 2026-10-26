@@ -610,3 +610,5 @@ For an existing alert-decorated Apps menu migration, select the configuration an
 menu while only the web sidecar is stopped, then start it. Attention adopts the new
 target only after observing that exact configured menu under its existing binding.
 Keep previous menu/config receipts; do not restore delivery journals or native state.
+
+Interaction product planning: [full roadmap and continuous-voice delivery plan](docs/interaction-roadmap.md), with linked milestones and qualification.
