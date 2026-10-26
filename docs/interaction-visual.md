@@ -1,13 +1,13 @@
 # Selected visual context
 
-The integrating conversation can retain one selected point in one still image
+The integrating conversation can retain one still image with an optional selected point
 with an original text message or finalized voice clip. The original UUID,
 authenticated owner, entry generation, admitted destinations, correction order
 and return route remain the existing Interaction contracts. Uploading an image
 alone starts no conversation or model work.
 
-In the browser, open **Point to something in an image**, choose an image and
-select a point. Clicking, arrow keys and explicit X/Y fields select the same
+In the browser, use the paperclip to choose a photo or take one. The whole image is attached
+by default; selecting a point is optional. Clicking, arrow keys and explicit X/Y fields select the same
 image-pixel coordinates. Then write or speak normally. A message can still use
 `#Topic`, reply context or semantic routing. Choosing another image clears its
 selection. Recording freezes the selected image before microphone acquisition;
@@ -43,6 +43,8 @@ token. It returns the hash and actual image dimensions, with
 }
 ```
 
+Set `point` to `null` to refer to the whole image, without invented coordinates.
+
 Coordinates start at the top-left of the retained image: X points right and Y
 down, within the actual pixel bounds. `source_id` identifies the client-selected
 view; the revision identifies its exact bytes. Time and producer kind are
@@ -54,8 +56,8 @@ after its reported capture is refused. This consumer does not install or enable
 a camera/gesture producer.
 
 A new selection must be no older than five minutes and cannot name different
-selected/image revisions, an unavailable/ambiguous/disconnected view, a missing
-point or absent image bytes. The HTTP response asks for a fresh selection and
+selected/image revisions, an unavailable/ambiguous/disconnected view, or absent
+image bytes. The HTTP response asks for a fresh selection and
 admits no original. A structured `visual_reselection` response certifies that
 this attempt did not reach original submission. The composer can request a new
 selection; an explicit recording retry can then freeze the same saved clip

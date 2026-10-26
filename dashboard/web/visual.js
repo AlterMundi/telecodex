@@ -23,7 +23,7 @@ window.VisualInput = (() => {
       return await new Promise((resolve,reject)=>target.toBlob(blob=>blob?resolve(blob):reject(Error('Image encoding unavailable')),'image/png'));
     }
     let generation=0,chosen,point,selectedAt,selectionState="empty";
-    function reset(clearFile=true,nextState="empty"){generation++;chosen?.bitmap.close();chosen=point=selectedAt=undefined;selectionState=nextState;if(clearFile){file.value='';if(camera)camera.value='';}canvas.hidden=true;if(coordinates)coordinates.hidden=true;clear.hidden=nextState==='empty';x.value=y.value='';x.disabled=y.disabled=true;status.textContent='Choose an image, then point to what you mean.';}
+    function reset(clearFile=true,nextState="empty"){generation++;chosen?.bitmap.close();chosen=point=selectedAt=undefined;selectionState=nextState;if(clearFile){file.value='';if(camera)camera.value='';}canvas.hidden=true;if(coordinates)coordinates.hidden=true;clear.hidden=nextState==='empty';x.value=y.value='';x.disabled=y.disabled=true;status.textContent='Choose an image. Marking a point is optional.';}
     function draw(){if(!chosen)return;const c=canvas.getContext('2d');c.drawImage(chosen.bitmap.element||chosen.bitmap,0,0,canvas.width,canvas.height);if(point){const r=Math.max(6,canvas.width/80);c.strokeStyle='#ffffff';c.lineWidth=Math.max(3,canvas.width/200);c.beginPath();c.arc(point.x,point.y,r,0,2*Math.PI);c.stroke();c.strokeStyle='#111111';c.lineWidth=Math.max(1,canvas.width/500);c.stroke();}}
     function select(px,py){if(!chosen||!Number.isInteger(px)||!Number.isInteger(py)||px<0||py<0||px>=canvas.width||py>=canvas.height){point=undefined;status.textContent='Select one point inside this image.';return;}point={x:px,y:py};selectedAt=new Date().toISOString();x.value=String(px);y.value=String(py);draw();status.textContent='Point selected. Your next message will include this captured image.';}
     async function choose(source){
@@ -54,7 +54,7 @@ window.VisualInput = (() => {
         const preview=await decode(blob);
         if(owned!==generation){preview.close();return;}
         chosen={blob,bitmap:preview,image_sha256,source_id:crypto.randomUUID(),captured_at:new Date().toISOString(),uploaded:false};
-        selectionState='ready';canvas.hidden=false;if(coordinates)coordinates.hidden=false;clear.hidden=false;x.disabled=y.disabled=false;x.max=String(canvas.width-1);y.max=String(canvas.height-1);draw();status.textContent='Point to what you mean in this image. You can also enter X and Y.';
+        selectedAt=chosen.captured_at;selectionState='ready';canvas.hidden=false;if(coordinates)coordinates.hidden=false;clear.hidden=false;x.disabled=y.disabled=false;x.max=String(canvas.width-1);y.max=String(canvas.height-1);draw();status.textContent='Image attached. You can optionally mark a point.';
       }catch(e){if(owned===generation){reset(false,'failed');status.textContent=e.message==='Choose an image smaller than 20 MiB.'?e.message:'Cannot open this image. Try a JPEG, PNG or WebP, or remove it; your text is kept.';}}
     }
     file.addEventListener('change',()=>choose(file));
@@ -67,10 +67,9 @@ window.VisualInput = (() => {
       if(selectionState==='loading')throw Error('Wait for the selected image to open, or remove it before sending.');
       if(selectionState==='failed')throw Error('The selected image is unavailable. Choose another image or remove it.');
       if(!chosen)return undefined;
-      if(!point)throw Error('Point to what you mean in the image before sending.');
-      if(Date.now()-Date.parse(selectedAt)>300000)throw Error('Select the image again to refresh your point.');
+      if(Date.now()-Date.parse(selectedAt)>300000)throw Error('Select the image again to refresh your selection.');
       const owned=generation,image=chosen,binding=getBinding();
-      const reference={source_kind:'selected_image',source_id:image.source_id,image_sha256:image.image_sha256,width:canvas.width,height:canvas.height,captured_at:image.captured_at,selected_at:selectedAt,selected_revision:image.image_sha256,state:'selected',point:{...point}};
+      const reference={source_kind:'selected_image',source_id:image.source_id,image_sha256:image.image_sha256,width:canvas.width,height:canvas.height,captured_at:image.captured_at,selected_at:selectedAt,selected_revision:image.image_sha256,state:'selected',point:point?{...point}:null};
       if(!image.uploaded){
         const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);
         try {
