@@ -156,7 +156,10 @@ def lifecycle(binary):
         j.command('/goal clear','Goal cleared.');j.command('/goal clear','No goal to clear.')
         before=len(j.rpc);j.stop();j.start();j.command('/goal','No goal currently set')
         assert not any(x.get('method')=='turn/start' for x in j.rpc[before:])
-        assert j.row("select count(*) from incoming_updates where status in ('received','processing','queued','started')")==[(0,)]
+        # Telegram observes the reply before its HTTP send returns and the
+        # dispatcher settles the ingress row. Require that same settled state
+        # within the fixture's existing bound, rather than sampling mid-send.
+        j.wait(lambda:j.row("select count(*) from incoming_updates where status in ('received','processing','queued','started')")==[(0,)])
         print('PASS lifecycle, continuation, summary, ForceReply edit, replacement, isolation, clear, restart')
     finally:j.close()
 
