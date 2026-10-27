@@ -549,7 +549,7 @@ impl CodexRunner {
         client_id: &str,
     ) -> Result<Option<(String, String)>> {
         Ok(self
-            .admitted_turn_observation(thread, expected, client_id)
+            .admitted_turn_observation(thread, expected, client_id, "full")
             .await?
             .map(|(id, status, _)| (id, status)))
     }
@@ -560,7 +560,20 @@ impl CodexRunner {
         turn: &str,
     ) -> Result<Option<(String, String)>> {
         Ok(self
-            .admitted_turn_observation(thread, Some(turn), "")
+            .admitted_turn_observation(thread, Some(turn), "", "full")
+            .await?
+            .map(|(_, status, reply)| (status, reply)))
+    }
+
+    /// Native summary retains the actual final agent item, without tool-history
+    /// hydration. Use only for an exact already admitted terminal reply lookup.
+    pub async fn selected_turn_summary_reply(
+        &self,
+        thread: &str,
+        turn: &str,
+    ) -> Result<Option<(String, String)>> {
+        Ok(self
+            .admitted_turn_observation(thread, Some(turn), "", "summary")
             .await?
             .map(|(_, status, reply)| (status, reply)))
     }
@@ -570,13 +583,14 @@ impl CodexRunner {
         thread: &str,
         expected: Option<&str>,
         client_id: &str,
+        items_view: &str,
     ) -> Result<Option<(String, String, String)>> {
         tokio::time::timeout(Duration::from_secs(10),async {
             let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
             process.initialize().await?;
             let mut cursor:Option<String>=None;
             for _ in 0..10 {
-                let id=process.send_request("thread/turns/list",json!({"threadId":thread,"limit":100,"sortDirection":"desc","cursor":cursor,"itemsView":"full"})).await?;
+                let id=process.send_request("thread/turns/list",json!({"threadId":thread,"limit":100,"sortDirection":"desc","cursor":cursor,"itemsView":items_view})).await?;
                 let page=process.await_response(id).await?;
                 for turn in page["data"].as_array().context("native turn page malformed")? {
                     let id=turn["id"].as_str().context("native turn ID missing")?;

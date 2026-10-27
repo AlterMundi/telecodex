@@ -146,3 +146,9 @@ Local completion is selection evidence, never proof of native completion. No
 question is replayed, no thread is replaced, and unavailable observations retain
 uncertainty. Explicit `/nexus reconcile` remains available. A missing dispatch
 acknowledgement is a separate condition and does not authorize this recovery.
+
+The automatic lookup requests native `itemsView: "summary"`. The receiving
+native ThreadStore summary preserves the actual final agent item without
+hydrating every tool item from many turns. Explicit full-history reconciliation
+retains its established path. A summary or missing final is never synthesized
+into a reply. The process fixture asserts the bounded summary-view request.

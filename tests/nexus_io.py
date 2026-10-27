@@ -290,6 +290,8 @@ def automatic_missing_terminal(binary):
         j.start();j.wait(lambda:j.state_of()[0]=='completed')
         assert j.state_of()[1:]==(native,'Automatically recovered selected final.')
         assert j.native_turns==starts
+        reads=[r for r in j.rpc if r.get('method')=='thread/turns/list']
+        assert reads and all(r['params'].get('itemsView')=='summary' for r in reads)
         assert not j.row("SELECT reply FROM nexus_executions WHERE reply LIKE '%other reply%'")
         print('PASS automatic exact-turn terminal recovery without human reconcile or native replay')
     finally:j.close()
