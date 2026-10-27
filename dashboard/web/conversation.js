@@ -914,7 +914,7 @@ window.Conversation = (() => {
     $("#conversation-voice-replies").addEventListener("click",()=>{
       if(voiceEnabled && !voiceSuspended)disableVoice();else {
         enableVoice();
-        if(captureBusy)return;
+        if(captureBusy){voiceBusy=false;return;}
         if(active && blobUrl && !audio.ended){
           voiceBusy=true;void startPlayback();
         }else{
