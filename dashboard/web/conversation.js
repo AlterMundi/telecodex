@@ -621,7 +621,9 @@ window.Conversation = (() => {
       if(event.key!=="Enter" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey
         || event.isComposing || event.keyCode===229)return;
       event.preventDefault();
-      if(!event.repeat && !send.disabled && !readOnly)compose.requestSubmit();
+      if(!event.repeat && !send.disabled && !readOnly){
+        if(typeof compose.requestSubmit==="function")compose.requestSubmit();else send.click();
+      }
     });
     compose.addEventListener("submit", async event => {
       event.preventDefault();
