@@ -690,8 +690,7 @@ superseded validations cannot publish it later. Completed media retains the full
 segment boundary even if word alignment ends before trailing punctuation. No new
 native schema, provider request, transcript storage or answer/work authority is
 introduced. Position is device/provider playback evidence, never proof of hearing.
-A reload before any canonical source exists still has no persisted provisional
-cursor; full semantic attention remains under301/304.
+Full semantic attention remains under301/304.
 
 The shipped player regression failed0 versus20 against the previous code and
 passes with aligned/missing/invalid timing, capture-to-confirmation, backward seek
@@ -700,6 +699,28 @@ headers for progressive live prefixes, matching the real endpoint instead of
 silently taking the batch path. Scheduler checks cover earlier gaps, partial-to-
 canonical completion, changed source and binding retirement. These are synthetic
 digital checks, not new provider latency or physical-device acceptance.
+
+### Reload before canonical confirmation
+
+The standalone app also retains bounded, binding-scoped provisional selectors
+and media ranges in local browser storage. It stores no provisional transcript,
+audio or provider credential. Reload holds these previous attempts: it does not
+automatically synthesize another prefix, infer hearing or resume native work.
+Once the canonical item appears, including on the initial history page, the
+existing source reader validates the complete frozen prefix before transferring
+its cursor to ordinary Resume audio. Changed confirmation resets the cursor but
+keeps the restored attempt held for explicit Listen. Failed observation retains
+the checkpoint and does not authorize another synthesis.
+
+Only a successful write to the existing canonical position store retires the
+provisional checkpoint. A failed position write leaves the previous checkpoint
+available for the next reload. Missing/blocked browser storage cannot guarantee
+continuity across a closed view; ordinary in-memory controls remain available.
+The shipped-player regression exercises reload before completion, canonical text
+on the first page, exact word position, no automatic historical speech, and a
+failed canonical write followed by recovery. Scheduler checks cover binding
+isolation, invalid storage and changed/unavailable canonical sources. These are
+synthetic browser-state checks, not physical playback or hearing acceptance.
 
 
 ### Coupled actual streaming voice-to-answer observations — 2026-10-27
