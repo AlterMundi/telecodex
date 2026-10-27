@@ -137,7 +137,9 @@ def qualify(binary,pack=False):
         j.answer(8,'The selected helper evidence.')
         j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
         j.answer(7,'Work incorporating the helper evidence.')
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered'")==[(0,)])
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase NOT IN ('delivered','internal')")==[(0,)])
+        assert j.row("SELECT count(*) FROM interaction_deliveries WHERE phase='internal'")==[(1,)]
+        assert not j.has('The selected helper evidence.',1)
         j.wait(lambda:not worker.exists())
         j.cli(stale,'capabilities',ok=False)
         sources=j.cli(entry,'conversation')['presentation']['items']

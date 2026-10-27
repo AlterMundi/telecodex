@@ -100,7 +100,7 @@ Delta: after session_request admission, finish this first turn with DELTA-DEFERR
             rows=j.row('SELECT d.phase,d.doc FROM interaction_deliveries d JOIN interaction_requests r ON r.id=d.request_id JOIN interaction_sources s ON s.id=r.input_id WHERE s.update_id=?',(original,))
             return any(phase=='delivered' and json.loads(raw)['completed'] and 'DELTA-COMPLETED' in json.loads(raw)['body'] for phase,raw in rows)
         await_effect(completed_return,'committed completed caller return')
-        await_effect(lambda:j.row("SELECT count(*) FROM interaction_deliveries d JOIN interaction_session_requests c ON c.target_instruction=d.request_id WHERE d.phase='delivered'")[0][0]==1,'committed helper return')
+        await_effect(lambda:j.row("SELECT count(*) FROM interaction_deliveries d JOIN interaction_session_requests c ON c.target_instruction=d.request_id WHERE d.phase='internal'")[0][0]==1,'committed internal helper return')
         j.idle()
         assert report['topic_requests']==1
         assert j.row('SELECT thread_id,codex_thread_id,busy FROM sessions WHERE thread_id!=88 ORDER BY thread_id')==before
@@ -192,7 +192,7 @@ After admission, finish this turn with DELTA-DEFERRED and no completed original 
             rows=j.row('SELECT d.phase,d.doc FROM interaction_deliveries d JOIN interaction_requests r ON r.id=d.request_id JOIN interaction_sources s ON s.id=r.input_id WHERE s.update_id=?',(prior['original_update'],))
             return any(phase=='delivered' and json.loads(raw)['completed'] and 'DELTA-COMPLETED' in json.loads(raw)['body'] for phase,raw in rows)
         await_effect(completed_return,'committed completed caller return')
-        await_effect(lambda:j.row("SELECT count(*) FROM interaction_deliveries d JOIN interaction_session_requests c ON c.target_instruction=d.request_id WHERE d.phase='delivered'")[0][0]==1,'committed helper return')
+        await_effect(lambda:j.row("SELECT count(*) FROM interaction_deliveries d JOIN interaction_session_requests c ON c.target_instruction=d.request_id WHERE d.phase IN ('internal','delivered')")[0][0]==1,'retained helper return (including historical public receipts)')
         j.idle()
         assert j.row('SELECT thread_id,codex_thread_id,busy FROM sessions ORDER BY thread_id')==before
         assert j.row("SELECT id,phase FROM interaction_deliveries WHERE phase='uncertain' ORDER BY id")==uncertain
