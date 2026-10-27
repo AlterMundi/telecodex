@@ -117,7 +117,7 @@ class Presentation(unittest.TestCase):
         self.assertEqual(first.headers['x-playback-observation'],'not_observed')
         self.assertNotIn(str(self.root),str(dict(first.headers)))
         self.assertIn(self.provider.source['text'].encode(),self.fixture.calls[0][2])
-        self.assertIn(('Novedades desde Alfa. '+self.provider.source['text']).encode(),self.fixture.calls[0][2])
+        self.assertIn(('Novedades desde Alfa\n'+self.provider.source['text']).encode(),self.fixture.calls[0][2])
         canonical = self.client.get('/api/interaction/part',params=self.body,headers=self.headers)
         self.assertEqual(canonical.json()['text'],self.provider.source['text'])
         self.client.close()
@@ -147,7 +147,7 @@ class Presentation(unittest.TestCase):
             self.provider.source['label']='#Beta'
             self.fixture.release.set()
             self.assertEqual(pending.result(timeout=8).status_code,409)
-        self.assertIn(b'Novedades desde Alfa. ',self.fixture.calls[0][2])
+        self.assertIn(b'Novedades desde Alfa\n',self.fixture.calls[0][2])
         self.assertEqual(len(self.fixture.calls),1)
 
     def test_worker_continuation_and_integrator_audio_do_not_repeat_a_label(self):
@@ -160,7 +160,7 @@ class Presentation(unittest.TestCase):
             from dashboard.speech import Speech
             renderer=Speech(self.config['speech'])
             asyncio.run(renderer.render(self.provider.source))
-            self.assertNotIn(b'Novedades desde Alfa. ',self.fixture.calls[-1][2])
+            self.assertNotIn(b'Novedades desde Alfa',self.fixture.calls[-1][2])
 
     def test_correction_during_synthesis_prevents_stale_audio_response(self):
         self.login()

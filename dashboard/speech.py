@@ -52,9 +52,35 @@ def speech_request(source, language="en-US"):
         if not label:
             raise SpeechUnavailable('Selected work source has no audible label')
         introduction = 'Novedades desde' if language.split('-')[0] == 'es' else 'Update from'
-        text = introduction + ' ' + label[:198] + '. ' + text
+        text = introduction + ' ' + label[:198] + '\n\n' + text
     scope = speech_render.sha(speech_render.canonical([source['entry_binding'],source['id'],source['offset']]))
     return {'scope':scope,'text':text}
+
+
+def canonical_word_alignment(source, payload, language, alignment):
+    """Only exact plain-text projection can certify canonical word positions.
+
+    Markdown/URL/topic-label transformations retain approximate Follow. Do not
+    guess a canonical position from provider ordinals or a text similarity match.
+    """
+    text = payload['text']
+    spoken = speech_render.spoken_markdown(text, language)
+    if (not isinstance(alignment, dict)
+            or alignment.get('text_sha256') != hashlib.sha256(spoken.encode()).hexdigest()
+            or not text.endswith(source['text']) or not spoken.endswith(source['text']) or not isinstance(alignment.get('words'), list)
+            or not 1 <= len(alignment['words']) <= 512):
+        return None
+    prefix = len(spoken)-len(source['text']); result = []; previous = 0; last_time = 0
+    for word in alignment['words']:
+        if (not isinstance(word,list) or len(word)!=4 or any(type(n) is not int for n in word)):
+            return None
+        begin,end,start,stop = word
+        if not previous <= begin < end <= len(spoken) or not last_time <= start < stop <= 3600000:
+            return None
+        previous=end;last_time=stop
+        if begin >= prefix:
+            result.append([source['offset']+begin-prefix,source['offset']+end-prefix,start,stop])
+    return {'offset':source['offset'],'words':result} if result else None
 
 
 class Speech:
@@ -69,6 +95,9 @@ class Speech:
         self.streaming = config.get('streaming_output',False)
         if type(self.streaming) is not bool:
             raise ValueError('streaming_output must be a boolean')
+        self.word_timestamps = config.get('word_timestamps',False)
+        if type(self.word_timestamps) is not bool:
+            raise ValueError('word_timestamps must be a boolean')
         self.capacity = asyncio.Semaphore(2)
 
     async def render(self, source):
@@ -142,7 +171,10 @@ class Speech:
             total = 0; ended = False
             try:
                 async with asyncio.timeout(self.timeout):
-                    child.stdin.write(json.dumps(speech_request(source, speech_render.route(self.binding)['language'])).encode());await child.stdin.drain();child.stdin.close()
+                    language=speech_render.route(self.binding)['language']
+                    payload=speech_request(source,language)
+                    request={**payload, **({'timing':True} if self.word_timestamps else {})}
+                    child.stdin.write(json.dumps(request).encode());await child.stdin.drain();child.stdin.close()
                     while raw := await child.stdout.readline():
                         total += len(raw)
                         if len(raw)>65536 or total>16*1024*1024 or ended:
@@ -160,6 +192,9 @@ class Speech:
                             yield value
                     if await child.wait()!=0 or not ended:
                         raise SpeechUnavailable('Streaming speech incomplete')
+                    alignment=canonical_word_alignment(source,payload,language,terminal.pop('alignment',None))
+                    if alignment is not None:
+                        terminal['alignment']=alignment
                     yield terminal
             finally:
                 try:os.killpg(child.pid,signal.SIGKILL)

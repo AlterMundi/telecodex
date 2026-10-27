@@ -571,10 +571,11 @@ class Provider:
         import re
         if value is None:return
         if (not isinstance(value,dict)
-                or set(value)!={'source','revision','segment_offset','position_millis','duration_millis','state'}
+                or set(value) not in ({'source','revision','segment_offset','position_millis','duration_millis','state'}, {'source','revision','segment_offset','position_millis','duration_millis','state','word_offset'})
                 or not isinstance(value['source'],str) or len(value['source'])>256
                 or not isinstance(value['revision'],str) or not re.fullmatch('[a-f0-9]{64}',value['revision'])
                 or type(value['segment_offset']) is not int or not 0<=value['segment_offset']<=1000000
+                or 'word_offset' in value and (type(value['word_offset']) is not int or not value['segment_offset']<=value['word_offset']<=min(1000000,value['segment_offset']+1600))
                 or type(value['position_millis']) is not int or not 0<=value['position_millis']<=3600000
                 or value['duration_millis'] is not None and (type(value['duration_millis']) is not int or not 1<=value['duration_millis']<=3600000)
                 or value['state'] not in ('playing','paused','interrupted')):
