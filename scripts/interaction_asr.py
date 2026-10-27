@@ -268,6 +268,11 @@ def process(source, binding, include_retention=False, completed_only=False):
             # Durable text remains usable; a later exact read can finish cleanup.
             pass
         result = {'text': state['result']['text'], 'final': True}
+        if state.get('preparation_kind') == 'streaming':
+            model = state['result'].get('streaming_model')
+            if model not in ('qwen-audio-3.0-realtime-plus', 'gemini-3.5-transcribe-live'):
+                raise RenderError('invalid-completed-streaming-transcript')
+            result['streaming_model'] = model
         if include_retention:
             result['preparation_audio_deleted'] = preparation_deleted
         return result

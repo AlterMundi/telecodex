@@ -305,6 +305,9 @@ For UI/provider rollback, select the retained previous dashboard with PR341's
 compatible scripts reader, restore the previous dashboard configuration and keep
 the streaming-cache reference in the ASR adapter until retained prepared originals
 are consumed. Restart only the web unit. Never erase completed/uncertain receipts
-or restore native history. The native configured transcriber label still describes
-the Groq file fallback; completed prepared receipts separately retain the actual
-Gemini model. No new per-message provider claim is inferred from that static label.
+or restore native history. The native configured transcriber label describes the Groq file fallback. The
+owner helper also reports the source-bound streaming model, and new native
+transcript provenance retains it separately as optional `actual_transcriber`.
+Older receipts without that field remain readable; never infer actual provider
+from the static configured label or rewrite history. Receiving adoption of this
+additive provenance follow-up is recorded separately from PR341 input delivery.

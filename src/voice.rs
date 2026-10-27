@@ -62,6 +62,9 @@ pub struct TranscriptSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_id: Option<String>,
     pub configured_transcriber: String,
+    /// Actual recognizer reported by the source-bound owner helper, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_transcriber: Option<String>,
     pub committed_at: String,
     pub audio_millis: u64,
     pub preparation_millis: u64,
@@ -175,6 +178,15 @@ pub async fn transcribe_committed(
     if value["final"] == false || value["partial"] == true {
         bail!("Transcriber returned a partial interpretation");
     }
+    let actual_transcriber = match value.get("streaming_model") {
+        None => None,
+        Some(model) => match model.as_str() {
+            Some("gemini-3.5-transcribe-live" | "qwen-audio-3.0-realtime-plus") => {
+                model.as_str().map(str::to_owned)
+            }
+            _ => bail!("Transcriber returned an unsupported streaming model"),
+        },
+    };
     let text = value["text"]
         .as_str()
         .context("Transcriber returned no final text")?
@@ -186,7 +198,7 @@ pub async fn transcribe_committed(
     if format!("{:x}", Sha256::digest(read_media(path).await?)) != hash {
         bail!("Voice source changed during preparation");
     }
-    Ok((text,TranscriptSource{audio_sha256:hash,telegram_file_id:telegram_file_id.map(str::to_owned),capture_id:capture_id.map(str::to_owned),configured_transcriber:config.transcriber_label.clone(),committed_at:chrono::Utc::now().to_rfc3339(),audio_millis:(pcm.len()/4) as u64*1000/16000,preparation_millis:preparation_started.elapsed().as_millis() as u64,transcription_millis,interpretation:"Machine transcription of the original human voice clip; not exact verified written speech".into()}))
+    Ok((text,TranscriptSource{audio_sha256:hash,telegram_file_id:telegram_file_id.map(str::to_owned),capture_id:capture_id.map(str::to_owned),configured_transcriber:config.transcriber_label.clone(),actual_transcriber,committed_at:chrono::Utc::now().to_rfc3339(),audio_millis:(pcm.len()/4) as u64*1000/16000,preparation_millis:preparation_started.elapsed().as_millis() as u64,transcription_millis,interpretation:"Machine transcription of the original human voice clip; not exact verified written speech".into()}))
 }
 
 async fn read_media(path: &Path) -> Result<Vec<u8>> {

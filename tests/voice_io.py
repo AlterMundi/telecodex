@@ -76,7 +76,7 @@ def semantic_voice_and_responsive_corrections(binary):
     try:
         j.prepare()
         gate=j.root/'release-asr'
-        original,payload,digest=j.voice('NATURAL-ROUTE Use requirement 10 for Alpha and Beta.',gate=gate)
+        original,payload,digest=j.voice('NATURAL-ROUTE Use requirement 10 for Alpha and Beta.',gate=gate,flags={'streaming_model':'gemini-3.5-transcribe-live'})
         j.wait(lambda:digest in j.calls())
         source_paths=j.root/'asr-paths'
         j.wait(lambda:source_paths.exists() and any(json.loads(line)[0]==digest for line in source_paths.read_text().splitlines()))
@@ -97,10 +97,13 @@ def semantic_voice_and_responsive_corrections(binary):
         source=json.loads(j.row('SELECT doc FROM interaction_sources WHERE event_id=?',(str(original),))[0][0])
         assert source['transcription']['audio_sha256']==digest and source['text'].startswith('NATURAL-ROUTE')
         assert source['transcription']['audio_millis']==100
+        assert source['transcription']['actual_transcriber']=='gemini-3.5-transcribe-live'
+        assert source['transcription']['configured_transcriber']=='synthetic/asr-no-inference'
         j.wait(lambda:not downloaded.exists())
         packet=j.packets['native-topic-7'][-1]['input'][0]['text']
         provenance=json.loads(packet.split('Transport provenance: ',1)[1].split('\nCurrent instruction:',1)[0])
         assert provenance['transcription']['audio_sha256']==digest
+        assert provenance['transcription']['actual_transcriber']=='gemini-3.5-transcribe-live'
         assert provenance['input_ref']==original and isinstance(provenance['capture_order'],int)
         assert 'capture_order records source chronology' in packet
         assert str(correction) in packet and str(original) in packet

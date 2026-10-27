@@ -1319,6 +1319,7 @@ mod tests {
             telegram_file_id: None,
             capture_id: Some(id.into()),
             configured_transcriber: "synthetic/asr".into(),
+            actual_transcriber: None,
             committed_at: now_string(),
             audio_millis: 100,
             preparation_millis: 1,

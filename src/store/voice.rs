@@ -239,6 +239,7 @@ mod tests {
             telegram_file_id: Some("synthetic-voice-file".into()),
             capture_id: None,
             configured_transcriber: "fixture/no-inference".into(),
+            actual_transcriber: None,
             committed_at: now_string(),
             audio_millis: 1000,
             preparation_millis: 50,
