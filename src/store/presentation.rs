@@ -685,24 +685,16 @@ mod tests {
         store
             .start_response_draft(100, entry, local, "entry-native", "physical")
             .unwrap();
-        let write = |human, key, native, physical, item, text| {
-            store.interaction_response_draft(human, key, local, native, physical, item, text)
-        };
+        let write =
+            |human: i64, key: SessionKey, native: &str, physical: &str, item: &str, text: &str| {
+                store.interaction_response_draft(human, key, local, native, physical, item, text)
+            };
         assert!(!write(100, entry, "worker-native", "physical", "A", "Hidden").unwrap());
         assert!(!write(100, worker.key, "entry-native", "physical", "A", "Hidden").unwrap());
         assert!(!write(100, entry, "entry-native", "wrong-turn", "A", "Hidden").unwrap());
         assert!(write(200, entry, "entry-native", "physical", "A", "Hidden").is_err());
-        assert!(
-            !write(
-                100,
-                entry,
-                "entry-native",
-                "physical",
-                "A",
-                &"x".repeat(65537)
-            )
-            .unwrap()
-        );
+        let oversized = "x".repeat(65537);
+        assert!(!write(100, entry, "entry-native", "physical", "A", &oversized).unwrap());
         assert!(
             write(
                 100,
