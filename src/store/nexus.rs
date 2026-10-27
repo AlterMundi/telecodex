@@ -101,9 +101,12 @@ impl Store {
         if previous["phase"] != "undetermined" || !previous["_known_unsent_recovery"].is_null() {
             return Ok(false);
         }
-        // Reuse the complete immutable contribution/route identity comparison.
-        if self.nexus_receive(id, observed)? {
-            return Ok(false);
+        // The whole frozen request and route must match, including response mode
+        // and return context. Fresh queue metadata cannot redirect old intent.
+        if previous["request"] != observed["request"] || previous["target"] != observed["target"] {
+            return Err(anyhow!(
+                "Nexus request identity changed before undispatched recovery"
+            ));
         }
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
@@ -669,6 +672,20 @@ mod tests {
         assert!(
             store
                 .nexus_recover_undispatched("unsent", &changed)
+                .is_err()
+        );
+        let mut changed_mode = fresh.clone();
+        changed_mode["request"]["response_mode"] = json!("another_mode");
+        assert!(
+            store
+                .nexus_recover_undispatched("unsent", &changed_mode)
+                .is_err()
+        );
+        let mut changed_context = fresh.clone();
+        changed_context["request"]["return_context"] = json!({"playback_ms":999});
+        assert!(
+            store
+                .nexus_recover_undispatched("unsent", &changed_context)
                 .is_err()
         );
         assert!(store.nexus_recover_undispatched("unsent", &fresh).unwrap());
