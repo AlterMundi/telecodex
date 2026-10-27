@@ -422,6 +422,10 @@ read of existing pending/answering/unknown ledger items in current internal nati
 sessions, excluding the integrating entry. It retains source dates, target and
 revision, checks session/turn ownership and current native binding, and never
 creates a responder or widens canonical For you. Ledger visibility does not
-establish an available live native response channel. This slice is not a deployed
-carousel: device permission, fresh detail/actions and UI wiring are still required.
+establish an available live native response channel. The explicit `internal request`
+reader and `internal decide` controls reuse live question/approval responders and
+the existing receipt ledger, with separate source revisions and a transactional
+recheck of internal-session scope. Ordinary originals and canonical For you do not
+gain broader scope. This slice is not a deployed carousel: device permission,
+durable task detail/actions and UI wiring are still required.
 Owning task #61; stage4 attention and native repair remain in plan #301/milestone9.

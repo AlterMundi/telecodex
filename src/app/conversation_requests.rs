@@ -158,9 +158,32 @@ async fn detail(
     id: &str,
     offset: usize,
 ) -> Result<Value> {
+    detail_scoped(app, human, entry, id, offset, false).await
+}
+fn request_snapshot(
+    app: &App,
+    human: i64,
+    entry: SessionKey,
+    id: &str,
+    internal: bool,
+) -> Result<ConversationRequest> {
+    if internal {
+        app.shared.store.internal_native_request(human, entry, id)
+    } else {
+        app.shared.store.conversation_request(human, entry, id)
+    }
+}
+async fn detail_scoped(
+    app: &App,
+    human: i64,
+    entry: SessionKey,
+    id: &str,
+    offset: usize,
+    internal: bool,
+) -> Result<Value> {
     {
         let guard = app.shared.pending_questions.lock().await;
-        let snapshot = app.shared.store.conversation_request(human, entry, id)?;
+        let snapshot = request_snapshot(app, human, entry, id, internal)?;
         if let Some(p) = guard
             .get(id)
             .filter(|p| question_matches(p, &snapshot, human))
@@ -169,7 +192,7 @@ async fn detail(
         }
     }
     let guard = app.shared.pending_approvals.lock().await;
-    let snapshot = app.shared.store.conversation_request(human, entry, id)?;
+    let snapshot = request_snapshot(app, human, entry, id, internal)?;
     if let Some(p) = guard
         .get(id)
         .filter(|p| approval_matches(p, &snapshot, human))
@@ -219,11 +242,22 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         bail!("Conversation request owner mismatch");
     }
     let entry = cfg.entry();
-    if let Some(after) = args.strip_prefix("internal list ") {
-        return app
-            .shared
-            .store
-            .internal_pending_page(human, entry, after.parse()?);
+    if let Some(raw) = args.strip_prefix("internal decide ") {
+        let decision: Decision = serde_json::from_str(raw)?;
+        return decide_scoped(app, human, entry, decision, None, None, true).await;
+    }
+    if let Some(args) = args.strip_prefix("internal ") {
+        let fields: Vec<_> = args.split_whitespace().collect();
+        return match fields.as_slice() {
+            ["list", after] => app
+                .shared
+                .store
+                .internal_pending_page(human, entry, after.parse()?),
+            ["request", id, offset] if id.len() <= 64 => {
+                detail_scoped(app, human, entry, id, offset.parse()?, true).await
+            }
+            _ => bail!("Expected internal list CURSOR, request ID OFFSET or decide JSON"),
+        };
     }
     if let Some(raw) = args.strip_prefix("tasks dismiss ") {
         #[derive(Deserialize)]
@@ -542,6 +576,17 @@ async fn decide(
     source_input: Option<&str>,
     interpretation: Option<(&str, &CancellationToken, bool)>,
 ) -> Result<Value> {
+    decide_scoped(app, human, entry, d, source_input, interpretation, false).await
+}
+async fn decide_scoped(
+    app: &App,
+    human: i64,
+    entry: SessionKey,
+    d: Decision,
+    source_input: Option<&str>,
+    interpretation: Option<(&str, &CancellationToken, bool)>,
+    internal: bool,
+) -> Result<Value> {
     if d.id.len() > 64 || d.revision.len() != 64 {
         bail!("Invalid request decision identity");
     }
@@ -549,13 +594,13 @@ async fn decide(
     if let Some(result) = already_recorded(app, human, entry, &d, &action, source_input)? {
         return Ok(result);
     }
-    let snapshot = app.shared.store.conversation_request(human, entry, &d.id)?;
+    let snapshot = request_snapshot(app, human, entry, &d.id, internal)?;
     if snapshot.item.state != "pending" {
         bail!("Native request no longer pending");
     }
     if snapshot.item.source["kind"] == "question" {
         let mut guard = app.shared.pending_questions.lock().await;
-        let snapshot = app.shared.store.conversation_request(human, entry, &d.id)?;
+        let snapshot = request_snapshot(app, human, entry, &d.id, internal)?;
         if let Some(result) = already_recorded(app, human, entry, &d, &action, source_input)? {
             return Ok(result);
         }
@@ -636,7 +681,7 @@ async fn decide(
         }
     } else if snapshot.item.source["kind"] == "approval" {
         let mut guard = app.shared.pending_approvals.lock().await;
-        let snapshot = app.shared.store.conversation_request(human, entry, &d.id)?;
+        let snapshot = request_snapshot(app, human, entry, &d.id, internal)?;
         if let Some(result) = already_recorded(app, human, entry, &d, &action, source_input)? {
             return Ok(result);
         }
