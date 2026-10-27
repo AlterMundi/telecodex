@@ -301,8 +301,8 @@ and streaming input quality remain unfinished under milestone9.
 
 The selected receiving releases include PR341's dashboard/provider contract. The
 prepared-transcript cache is shared with the existing native ASR adapter binding.
-For UI/provider rollback, select the retained previous dashboard with PR341's
-compatible scripts reader, restore the previous dashboard configuration and keep
+For UI/provider rollback, select the retained previous dashboard with the current
+compatible completion reader, restore the previous dashboard configuration and keep
 the streaming-cache reference in the ASR adapter until retained prepared originals
 are consumed. Restart only the web unit. Never erase completed/uncertain receipts
 or restore native history. The native configured transcriber label describes the Groq file fallback. The
@@ -326,8 +326,7 @@ legacy completion reads or ordinary file-ASR fallback. No automatic cleanup of
 these records is installed. Retain this compatible completion reader during
 rollback, even if streaming input is turned off; do not replace it with an older
 helper that cannot read flat outcomes. Adopt after existing helper processes
-have exited, without terminating or replaying them. Native journals and legacy
-cache contents remain unchanged. This removes a historical-cache scan and data-
+have exited, without terminating or replaying them. Native journals and retained legacy outcomes are preserved. This removes a historical-cache scan and data-
 volume durability barriers from the prepared completion path; it does not claim
 an end-to-end latency target or explain every reported wait.
 
@@ -353,3 +352,24 @@ well as network failures/server outages. A timeout must not become a human
 pause. Explicit player/OS Pause, Stop, access revocation and leaving the ordinary
 non-standalone view retain their existing behavior. This fixes a reproduced
 timeout path; it does not identify the cause of every reported device pause.
+
+## Prepared completion receiving evidence
+
+PR348 source637836cdb08f5f18ec3e64e77073d994bba6e56c is receiving-selected
+with both configured ASR helper aliases following the immutable scripts release.
+Final CI40456253842 passed;28 ASR contracts cover bounded flat recovery, old
+uncertainty, full-quota fallback and an older helper attempting the same actual
+identity lock during a prepared commit. Focused independent review corrections
+were rechecked. Existing helpers drained without interruption; the selected
+completed-only alias recovered a flat completion without a provider/native call.
+Native listener/collectors, model selection and Qwen TTS configuration remained
+unchanged. Existing legacy directories may gain an empty identity-lock namespace;
+retained legacy outcomes are preserved, rather than migrated or rewritten.
+
+One isolated local pair reused the same retained synthetic provider preparation
+and100 synthetic historical jobs in each file-ASR cache: baseline0.9767seconds
+and new completion0.01862seconds, with historical reservations1→0. This supports
+the reduction in local completion work; it is not a speed guarantee, a complete
+conversation latency distribution or physical-device/hearing acceptance. Useful
+foreground response latency, semantic heard/remaining coordination and full
+stage2–4 acceptance remain unfinished under milestone9 and #301/#303/#304.
