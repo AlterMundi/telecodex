@@ -34,7 +34,8 @@ class Sessions(Routing):
         for ident,_ in rows:
             assert self.row('SELECT count(*) FROM interaction_public_deliveries WHERE id=?',(ident,))==[(0,)]
             assert self.row('SELECT count(*) FROM interaction_delivery_parts WHERE delivery_id=?',(ident,))==[(0,)]
-            self.read('presentation','part','delivery:'+ident,'not-a-public-revision','0',ok=False)
+            refused=self.read('presentation','part','delivery:'+ident,'not-a-public-revision','0',ok=False)
+            assert 'Presentation source unavailable' in refused['error'],'Must reject the source before revision checking'
         assert not self.has(text,1)
         page=self.read('presentation','list','0','0')['result']
         assert not any(text in i.get('text','') for i in page['items'])
