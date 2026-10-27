@@ -597,7 +597,7 @@ window.Conversation = (() => {
       card.value = {...card.value, ...value};
       messageTime(card.time,card.value.received_at);
       if(card.fileList)card.fileList.remove();
-      if(card.value.files?.length){card.fileList=node('div');card.fileList.className='input-files';card.value.files.forEach((file,index)=>{const link=node('a',file.name);link.href=`api/interaction/inputs/${encodeURIComponent(card.value.id)}/files/${index}`;link.download=file.name;card.fileList.append(link);});card.imageButton.parentNode.append(card.fileList);}
+      if(card.value.files?.length){card.fileList=node('div');card.fileList.className='input-files';card.value.files.forEach((file,index)=>{const button=node('button',file.name);button.type='button';button.disabled=!attachedFiles;button.addEventListener('click',async()=>{button.disabled=true;try{await attachedFiles.download(file,card.value.id,index);button.textContent=file.name;}catch(error){button.textContent=error.message||'Original file unavailable';}finally{button.disabled=!attachedFiles;}});card.fileList.append(button);});card.imageButton.parentNode.append(card.fileList);}
       card.imageButton.hidden=!card.value.visual;
       if(card.imageView.hidden)card.imageButton.textContent=Array.isArray(card.value.visual)?`Show images (${card.value.visual.length})`:"Show selected image";
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
