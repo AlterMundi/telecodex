@@ -193,6 +193,7 @@ pub enum CodexEvent {
     FinalAnswerCompleted(String),
     /// Revisable display only; never a canonical answer or a publication receipt.
     NativeMessageDraft {
+        started: bool,
         thread_id: String,
         turn_id: String,
         item_id: String,
@@ -2131,6 +2132,7 @@ where
                     params["itemId"].as_str(),
                 ) {
                     let _ = on_event(CodexEvent::NativeMessageDraft {
+                        started: false,
                         thread_id: thread.into(),
                         turn_id: turn.into(),
                         item_id: item.into(),
@@ -2146,6 +2148,20 @@ where
                 if item.get("type").and_then(Value::as_str) == Some("agentMessage") {
                     summary.assistant_text.clear();
                     *assistant_message_completed = false;
+                    if let (Some(thread), Some(turn), Some(id)) = (
+                        params["threadId"].as_str(),
+                        params["turnId"].as_str(),
+                        item["id"].as_str(),
+                    ) {
+                        let _ = on_event(CodexEvent::NativeMessageDraft {
+                            started: true,
+                            thread_id: thread.into(),
+                            turn_id: turn.into(),
+                            item_id: id.into(),
+                            text: String::new(),
+                        })
+                        .await?;
+                    }
                 }
                 if item.get("type").and_then(Value::as_str) == Some("commandExecution") {
                     let command = item
@@ -2173,6 +2189,7 @@ where
                                 item["id"].as_str(),
                             ) {
                                 let _ = on_event(CodexEvent::NativeMessageDraft {
+                                    started: false,
                                     thread_id: thread.into(),
                                     turn_id: turn.into(),
                                     item_id: id.into(),

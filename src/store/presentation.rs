@@ -97,6 +97,7 @@ impl Store {
         physical: &str,
         item: &str,
         text: &str,
+        started: bool,
     ) -> Result<bool> {
         if [thread, physical, item]
             .iter()
@@ -132,10 +133,24 @@ impl Store {
         {
             return Ok(false);
         }
+        if started {
+            if previous["item"] == item {
+                return Ok(false);
+            }
+            let value = json!({"local":local,"thread":thread,"turn":physical,"generation":generation,"item":item,"text":null,"closed":false});
+            conn.execute(
+                "UPDATE bot_state SET value=?2 WHERE key=?1",
+                params![key, value.to_string()],
+            )?;
+            return Ok(true);
+        }
+        if previous["item"] != item || previous["closed"] == true {
+            return Ok(false);
+        }
         if text.trim().is_empty() {
             if previous["item"] == item {
                 conn.execute(
-                    "UPDATE bot_state SET value=json_set(value,'$.text',NULL) WHERE key=?1",
+                    "UPDATE bot_state SET value=json_set(value,'$.text',NULL,'$.closed',json('true')) WHERE key=?1",
                     [&key],
                 )?;
             }
@@ -186,7 +201,7 @@ impl Store {
             ))?
         );
         if let Some(item) = item {
-            conn.execute("UPDATE bot_state SET value=json_set(value,'$.text',NULL) WHERE key=?1 AND json_extract(value,'$.local')=?2 AND json_extract(value,'$.turn')=?3 AND json_extract(value,'$.item')=?4",params![key,local,physical,item])?;
+            conn.execute("UPDATE bot_state SET value=json_set(value,'$.text',NULL,'$.closed',json('true')) WHERE key=?1 AND json_extract(value,'$.local')=?2 AND json_extract(value,'$.turn')=?3 AND json_extract(value,'$.item')=?4",params![key,local,physical,item])?;
         } else {
             conn.execute("DELETE FROM bot_state WHERE key=?1 AND json_extract(value,'$.local')=?2 AND json_extract(value,'$.turn')=?3",params![key,local,physical])?;
         }
@@ -685,9 +700,26 @@ mod tests {
         store
             .start_response_draft(100, entry, local, "entry-native", "physical")
             .unwrap();
+        let begin = |physical: &str, item: &str| {
+            store
+                .interaction_response_draft(
+                    100,
+                    entry,
+                    local,
+                    "entry-native",
+                    physical,
+                    item,
+                    "",
+                    true,
+                )
+                .unwrap()
+        };
+        begin("physical", "A");
         let write =
             |human: i64, key: SessionKey, native: &str, physical: &str, item: &str, text: &str| {
-                store.interaction_response_draft(human, key, local, native, physical, item, text)
+                store.interaction_response_draft(
+                    human, key, local, native, physical, item, text, false,
+                )
             };
         assert!(!write(100, entry, "worker-native", "physical", "A", "Hidden").unwrap());
         assert!(!write(100, worker.key, "entry-native", "physical", "A", "Hidden").unwrap());
@@ -737,6 +769,7 @@ mod tests {
                 .is_null()
         );
         assert!(!write(100, entry, "entry-native", "physical", "A", "Late replay").unwrap());
+        begin("physical", "B");
         assert!(write(100, entry, "entry-native", "physical", "B", "Next draft").unwrap());
         store
             .clear_response_draft(local, "physical", Some("unrelated-item"))
@@ -756,6 +789,7 @@ mod tests {
                 .unwrap()["response_draft"]
                 .is_null()
         );
+        begin("physical", "C");
         assert!(
             write(
                 100,
@@ -781,6 +815,7 @@ mod tests {
             )
             .unwrap()
         );
+        begin("physical-2", "D");
         assert!(
             write(
                 100,
@@ -805,6 +840,18 @@ mod tests {
                 .unwrap()["response_draft"]
                 .is_null()
         );
+        assert!(
+            !write(
+                100,
+                entry,
+                "entry-native",
+                "physical-2",
+                "D",
+                "Late after blank completion"
+            )
+            .unwrap()
+        );
+        begin("physical-2", "E");
         assert!(
             write(
                 100,
