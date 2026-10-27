@@ -32,6 +32,7 @@ function boot(){
  f.context.fetch=async(url,options)=>({ok:true,status:200,json:async()=>({...JSON.parse(decodeURIComponent(options.headers['X-File-Reference'])),media:'retained',work_admitted:false})});
  const rest=await f.ui.capture();assert.equal(rest.length,1);assert.equal(rest[0].name,'later.txt');
  f.nodes.get('#conversation-files-list').children[0].children[1].handlers.click();assert.equal((await f.ui.capture()).length,0);
+ f.ui.consumed([]);assert.equal(f.nodes.get('#conversation-visual').open,false);
  f.ui.reset();assert(!f.ui.hasFiles());
  const race=boot();await race.choose([['existing.txt','existing']]);let release;
  race.nodes.get('#conversation-files').files=[{name:'pending.txt',size:1,type:'text/plain',arrayBuffer:()=>new Promise(resolve=>{release=()=>resolve(new Uint8Array([1]).buffer);})}];

@@ -42,3 +42,14 @@ The deployed dashboard release is independently selected at
 800ae05f81edda02330d6817f2aced457800f4c3-pending-navigation; inspect its source
 before adoption and preserve unrelated current web changes. Do not infer that
 this branch's web tree is the currently selected release.
+
+## Telecodex adoption after the checkpoint
+
+PR382 owns the continued implementation. Independent review found and corrected
+companion file-route permissions, authenticated original download and preparation
+cancellation. Actual Chromium voice qualification additionally caught object-key
+ordering in original-file receipt comparison; explicit field comparison now
+preserves ordered references without rejecting semantically identical JSON.
+Controlled native paths are read and checksummed, not merely searched as packet
+metadata. Receiving storage has explicit byte/count caps and no original eviction.
+See conversation-files.md and issue380 for final qualification/adoption state.

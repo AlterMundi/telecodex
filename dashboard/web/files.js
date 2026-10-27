@@ -19,7 +19,7 @@ window.FileInput=(()=>{
    const owned=generation,binding=getBinding();const selected=files.slice();
    for(const file of selected){
     if(!file.uploaded){status.textContent=`Saving ${file.ref.name}…`;let response;try{response=await fetch('api/interaction/files',{method:'POST',headers:{...headers(),'Content-Type':'application/octet-stream','X-File-Reference':encodeURIComponent(JSON.stringify(file.ref))},body:file.blob});}catch{throw Error('File upload unconfirmed. Keep the selection and check your connection.');}
-     if(response.status===401||response.status===403)unauthorized(Object.assign(Error('File access changed.'),{status:response.status}));if(!response.ok)throw Error('Original file upload failed; no message was submitted.');const value=await response.json();for(const key of Object.keys(file.ref))if(value[key]!==file.ref[key])throw Error('File acknowledgement differs from the selected original.');file.uploaded=true;
+     if(response.status===401||response.status===403)unauthorized(Object.assign(Error('File access changed.'),{status:response.status}));if(!response.ok)throw Error(response.status===507?'Original file storage is full. Existing originals are preserved; no message was submitted.':'Original file upload failed; no message was submitted.');const value=await response.json();for(const key of Object.keys(file.ref))if(value[key]!==file.ref[key])throw Error('File acknowledgement differs from the selected original.');file.uploaded=true;
     }
     if(owned!==generation||binding!==getBinding())throw Error('File selection changed. Review it before sending.');
    }
@@ -37,7 +37,7 @@ window.FileInput=(()=>{
     const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=ref.name;link.hidden=true;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
    }finally{clearTimeout(deadline);}
   }
-  function consumed(refs){const ids=new Set((refs||[]).map(r=>r.file_id));files=files.filter(f=>!ids.has(f.ref.file_id));render();status.textContent='';}
+  function consumed(refs){const ids=new Set((refs||[]).map(r=>r.file_id));files=files.filter(f=>!ids.has(f.ref.file_id));render();status.textContent='';if(!files.length){const sheet=document.querySelector('#conversation-visual');if(sheet)sheet.open=false;}}
   function reset(){generation++;preparing=false;files=[];render();status.textContent='';if(picker)picker.value='';}
   return {capture,download,consumed,reset,hasFiles:()=>preparing||files.length>0};
  }

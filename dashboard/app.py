@@ -571,7 +571,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     async def conversation_file_upload(request: Request):
         session=await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf',''),session['csrf']):raise HTTPException(403,'Action token missing')
-        from .files import MAX_BYTES
+        from .files import MAX_BYTES,FileCapacityError
         from urllib.parse import unquote
         try:
             ref=json.loads(unquote(request.headers.get('x-file-reference',''),errors='strict'))
@@ -582,6 +582,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 chunks.append(chunk)
             from starlette.concurrency import run_in_threadpool
             result=await run_in_threadpool(provider.conversation_file_upload,b''.join(chunks),ref)
+        except FileCapacityError:raise HTTPException(507,'Original file storage reached its receiving limit; existing originals are preserved') from None
         except (ValueError,UnicodeError):raise HTTPException(400,'Original file unavailable, changed or above twenty MiB') from None
         except (ProviderUnavailable,OSError):raise HTTPException(503,'File upload unconfirmed; no work was admitted') from None
         await authorize_async(request)

@@ -1,4 +1,4 @@
-# Original files in the conversation — implementation candidate
+# Original files in the conversation
 
 Owning issue:#380, milestone8. The independent composer adds Files beside
 Gallery/Camera. Files retains original bytes rather than fitting them onto the
@@ -19,7 +19,7 @@ server does not interpret or execute uploaded content. Declared MIME identifies
 the user's file; it is not verified content classification. Generic files remain
 separate from image capture/pixel provenance and from voice transcription.
 
-Qualification added: original PDF/text/binary/empty byte retention and malformed
+Qualification: original PDF/text/binary/empty byte retention and malformed
 reference/changed source/symlink rejection; UI selection order, upload on send,
 acknowledgement reuse and preserving later selections; actual HTTP/native peers
 for text+voice and cold/busy front+routed workers, immutable retry and restart.
@@ -27,6 +27,19 @@ These controlled peers make no model calls. The HTTP journey can optionally read
 an operator-selected local PDF via TELECODEX_ORIGINAL_FILE_FIXTURE; no private
 fixture is versioned. Passing stub journeys do not prove human-device acceptance.
 
-At this checkpoint the code is not deployed. Source checks/media/UI regressions
-have passed; final native HTTP qualification and receiving adoption are pending.
-Keep this status explicit until the exact candidate is qualified and selected.
+The actual compiled CI candidate passed the HTTP/native journey, including a
+valid five-page raster PDF, direct reads of retained paths in cold/busy front and
+routed packets, immutable retry, voice and restart. Chromium qualification
+covers real file selection, original submission, authenticated verified download
+and reload. Synthetic peers/capture spend no model calls; human-device acceptance
+and content interpretation remain separate evidence. Receiving adoption is
+recorded in the owning issue and operator release receipt.
+
+Each receiving file store is capped at256MiB and1024entries, serialized across
+uploads. Full storage returns507 before admitting work; verified existing-byte
+retries still succeed. Originals are retained without automatic eviction.
+This is a bounded stop policy: operators must reconcile source references and
+preserve required originals before explicit archival/retirement; do not delete
+files by age or restore an old input journal. Temporary upload files are removed
+on ordinary success/failure. Interrupted staging files count against the same
+capacity until an operator inspects them; no unbounded cleanup daemon is added.

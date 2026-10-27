@@ -1,4 +1,5 @@
 """Opaque immutable original attachments; retention never admits model work."""
+import fcntl
 import hashlib
 import os
 from pathlib import Path
@@ -11,6 +12,11 @@ from scripts.speech_render import sync_directory
 
 MAX_BYTES=20*1024*1024
 MAX_FILES=8
+MAX_STORED_BYTES=256*1024*1024
+MAX_STORED_FILES=1024
+
+class FileCapacityError(ValueError):
+    pass
 
 def check_reference(files):
     if files is None:return
@@ -44,11 +50,24 @@ def retain_file(db,data,ref):
     check_reference([ref])
     if not isinstance(data,bytes) or len(data)!=ref['size'] or hashlib.sha256(data).hexdigest()!=ref['sha256']:raise ValueError('Original upload checksum changed')
     directory=private_directory(Path(str(db)+'.files'));sync_directory(directory.parent)
-    fd,name=tempfile.mkstemp(prefix='.file-',dir=directory)
-    try:
-        with os.fdopen(fd,'wb') as stream:stream.write(data);stream.flush();os.fsync(stream.fileno())
-        try:os.link(name,directory/ref['sha256'],follow_symlinks=False)
-        except FileExistsError:read_file(db,ref)
-        sync_directory(directory)
-    finally:os.unlink(name)
+    lock=os.open(directory/'.capacity.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW|os.O_NONBLOCK,0o600)
+    with os.fdopen(lock,'rb') as guard:
+        m=os.fstat(guard.fileno())
+        if not stat.S_ISREG(m.st_mode) or m.st_uid!=os.getuid() or m.st_mode&0o077:raise ValueError('Private file storage required')
+        fcntl.flock(guard,fcntl.LOCK_EX)
+        # Exact acknowledged retries need no additional storage, even at capacity.
+        if (directory/ref['sha256']).exists():
+            read_file(db,ref)
+            return {**ref,'media':'retained','work_admitted':False}
+        retained=[entry.lstat() for entry in directory.iterdir() if entry.name!='.capacity.lock']
+        if any(not stat.S_ISREG(m.st_mode) for m in retained):raise ValueError('Original storage contains an unexpected entry')
+        if len(retained)>=MAX_STORED_FILES or sum(m.st_size for m in retained)+len(data)>MAX_STORED_BYTES:
+            raise FileCapacityError('Original file storage reached its receiving limit; existing originals are preserved')
+        fd,name=tempfile.mkstemp(prefix='.file-',dir=directory)
+        try:
+            with os.fdopen(fd,'wb') as stream:stream.write(data);stream.flush();os.fsync(stream.fileno())
+            try:os.link(name,directory/ref['sha256'],follow_symlinks=False)
+            except FileExistsError:read_file(db,ref)
+            sync_directory(directory)
+        finally:os.unlink(name)
     return {**ref,'media':'retained','work_admitted':False}
