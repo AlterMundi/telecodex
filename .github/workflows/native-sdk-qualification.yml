@@ -8,7 +8,6 @@ permissions:
   contents: read
 jobs:
   native:
-    uses: compaii/codex/.github/workflows/native-maintenance.yml@8d4957f7b1d68ceec78f97e9224882a833fe8135
+    uses: compaii/codex/.github/workflows/native-maintenance.yml@801800a39d66cfa536f69e82a86ba32c683112ce
     with:
-      # The workflow-only stack fix does not change the qualified production tree.
-      source_ref: d7a036726616ba32cb3c222e7aa5a2b29defd253
+      source_ref: 801800a39d66cfa536f69e82a86ba32c683112ce
