@@ -171,8 +171,8 @@ class Companion(unittest.TestCase):
         source={'entry_binding':'fixture','id':'worker:1','kind':'worker_progress',
                 'label':'#Realtime','offset':0,'text':'**A useful update.**'}
         original=copy.deepcopy(source)
-        self.assertEqual(speech_request(source,'es-US')['text'],'Novedades desde Realtime. **A useful update.**')
-        self.assertEqual(speech_request(source,'en-US')['text'],'Update from Realtime. **A useful update.**')
+        self.assertEqual(speech_request(source,'es-US')['text'],'Novedades desde Realtime\n\n**A useful update.**')
+        self.assertEqual(speech_request(source,'en-US')['text'],'Update from Realtime\n\n**A useful update.**')
         self.assertEqual(speech_request({**source,'offset':100},'es-US')['text'],source['text'])
         self.assertEqual(source,original,'Canonical source and offsets remain unchanged')
 

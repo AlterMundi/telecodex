@@ -126,7 +126,7 @@ async fn playback_context(
     }
     let mut result = json!({"kind":"original_playback_context","input_ref":input.id,
         "report":input.playback,"source_data":true,"read_only":true,
-        "interpretation":"Frozen untrusted device media position at original capture, not current playback or proof of hearing. A segment boundary is not a heard-text boundary: media milliseconds do not align words, and manual seeking or partial playback may have occurred. The canonical text window can extend beyond the actual synthesized chunk. No destination, answer, approval, resumption, work cancellation or new dispatch is selected. Interpret the actual human message; do not resume or repeat speech merely because a report exists."});
+        "interpretation":"Frozen untrusted device media position at original capture, not current playback or proof of hearing. A segment boundary is not a heard-text boundary. Optional word_offset reports a provider-aligned canonical word-end position for an exact speech projection; otherwise media milliseconds alone do not align words. Manual seeking or partial playback may have occurred; preceding text is not necessarily heard. The canonical text window can extend beyond the actual synthesized chunk. No destination, answer, approval, resumption, work cancellation or new dispatch is selected. Interpret the actual human message; do not resume or repeat speech merely because a report exists."});
     let Some(report) = input.playback else {
         result["availability"] = json!("not_reported");
         return Ok(result);
@@ -173,6 +173,10 @@ async fn playback_context(
             let window: String = text.chars().take(1600).collect();
             let end = offset + window.chars().count();
             result["availability"] = json!("current_source");
+            if let Some(position) = report.word_offset.filter(|p| *p >= offset && *p <= end) {
+                result["source_position"] = json!({"offset":position,"basis":"device_reported_provider_word_end",
+                    "prefix_heard":false,"interpretation":"A media cursor, not a listening receipt. Text before this position may have been skipped; text after it may remain unplayed."});
+            }
             result["source_part"] = json!({"id":report.source,"revision":report.revision,
                 "kind":view["kind"],"target":view["target"],"label":view["label"],
                 "offset":offset,"text":window,

@@ -135,7 +135,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", can_listen:true,can_report_playback:options.playback===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
+    return {binding:"fixture", csrf:"synthetic", can_listen:true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
@@ -163,7 +163,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.()};}};
   if(options.progressive)context.window.SpeechStream={available:()=>true,open(_response,signal){
-    const value={url:'blob:fixture-stream',signal,cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
+    const value={url:'blob:fixture-stream',signal,position:seconds=>options.wordPosition?.(seconds),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
   }};
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   if(options.autoText)context.window.IntersectionObserver=class{
@@ -558,6 +558,15 @@ function boot(readOnly=false,standalone=false,options={}) {
   const oldReceiver=boot(false,true,{capture:true});oldReceiver.audio();await oldReceiver.ui.refresh();
   const oldCard=oldReceiver.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');await listenButton(oldCard).handlers.click();
   assert.equal(oldReceiver.playbackContext(),undefined,'Older receivers never get an unsupported metadata field');oldReceiver.ui.stop();
+  for(const capable of [false,true]){
+    const timed=boot(false,true,{capture:true,playback:true,progressive:true,incremental:true,wordTiming:capable,wordPosition:seconds=>seconds>=4?20:0});
+    timed.audio();timed.replyTexts.set('native:8','A longer canonical answer for timed speech. '.repeat(5));await timed.ui.refresh();
+    const card=timed.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');
+    await listenButton(card).handlers.click();const audio=timed.nodes.get('#conversation-audio');audio.currentTime=5;
+    assert.equal(timed.playbackContext().word_offset,capable?20:undefined,'New cursor requires actual native capability');
+    audio.currentTime=1;assert.equal(timed.playbackContext().word_offset,capable?0:undefined,'Backward seeking must not retain the maximum reported word');
+    timed.capture();assert.equal(audio.paused,true);timed.finishCapture();timed.ui.stop();
+  }
   const updatesFollow=boot(false,true);updatesFollow.audio();
   updatesFollow.overrideSource(8,{kind:'worker_progress',target:{chat_id:100,thread_id:77},label:'Alpha'});
   await updatesFollow.ui.refresh();updatesFollow.nodes.get('#conversation-voice-replies').handlers.click();
@@ -1062,7 +1071,9 @@ function boot(readOnly=false,standalone=false,options={}) {
   const end={type:'end',audio_bytes:raw.length,audio_sha256:await hash(raw)};
   const first=await setup();first.send(audio);await until(()=>first.media.appended.length===1);
   assert.equal(first.media.readyState,'open','First audio appended before terminal result');
-  first.send(end);first.close();assert.equal((await first.stream.done).complete,true);await until(()=>first.media.readyState==='ended');
+  first.send({...end,alignment:{offset:240,words:[[240,244,0,200],[245,246,400,600]]}});first.close();assert.equal((await first.stream.done).complete,true);await until(()=>first.media.readyState==='ended');
+  assert.equal(first.stream.position(.3),244);assert.equal(first.stream.position(.7),246);assert.equal(first.stream.position(.1),240,'Backward seek follows actual current media time');
+  const unavailable=await setup();unavailable.send(audio);unavailable.send({...end,alignment:{offset:0,words:[[0,1,200,100]]}});unavailable.close();assert.equal((await unavailable.stream.done).complete,true);assert.equal(unavailable.stream.position(1),undefined,'Bad optional timing does not break successful audio');unavailable.stream.cancel();
   const bad=await setup();bad.send({...audio,sha256:'0'.repeat(64)});const failure=await bad.stream.done;
   assert.equal(failure.complete,false);assert.equal(bad.media.appended.length,0,'Corrupt audio is never appended');
   const stopped=await setup();stopped.send(audio);stopped.abort.abort();await stopped.stream.done;

@@ -11,6 +11,8 @@ pub struct ConversationPlayback {
     pub source: String,
     pub revision: String,
     pub segment_offset: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word_offset: Option<usize>,
     pub position_millis: u64,
     pub duration_millis: Option<u64>,
     pub state: String,
@@ -33,6 +35,9 @@ impl ConversationPlayback {
                 .revision
                 .bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+            || self.word_offset.is_some_and(|v| {
+                v < self.segment_offset || v > 1_000_000 || v - self.segment_offset > 1600
+            })
             || self.segment_offset > 1_000_000
             || self.position_millis > 3_600_000
             || self
@@ -160,7 +165,7 @@ impl ConversationInput {
         };
         match &self.playback {
             Some(playback) => format!(
-                "[Device-reported playback context]\n{}\nClient-reported media progress at input capture, not proof of human hearing or comprehension. segment_offset is a canonical text segment boundary; position/duration are media milliseconds, not word alignment. This metadata does not select a destination, answer or approval, cancel native work, or instruct resumption. Use playback_context with this input_ref to inspect the frozen report and bounded canonical source text on demand if relevant; it may be stale or unrelated.\n\n{}",
+                "[Device-reported playback context]\n{}\nClient-reported media progress at input capture, not proof of human hearing or comprehension. segment_offset is a canonical text segment boundary; position/duration are media milliseconds. Optional word_offset is a device-reported canonical boundary derived from provider word-end timestamps for an exactly matched speech projection; seeking or partial playback can occur, so it is not proof that the preceding text was heard. This metadata does not select a destination, answer or approval, cancel native work, or instruct resumption. Use playback_context with this input_ref to inspect the frozen report and bounded canonical source text on demand if relevant; it may be stale or unrelated.\n\n{}",
                 serde_json::json!({"input_ref":self.id,"playback":playback}),
                 rendered
             ),
@@ -1193,6 +1198,7 @@ mod tests {
             source: "native:77".into(),
             revision: "b".repeat(64),
             segment_offset: 240,
+            word_offset: Some(260),
             position_millis: 3700,
             duration_millis: Some(12000),
             state: "interrupted".into(),
@@ -1273,6 +1279,7 @@ mod tests {
             source: "native:7".into(),
             revision: "c".repeat(64),
             segment_offset: 0,
+            word_offset: None,
             position_millis: 1,
             duration_millis: None,
             state: "playing".into(),
@@ -1289,6 +1296,23 @@ mod tests {
             value.source = source.into();
             assert!(value.validate().is_err());
         }
+        let legacy = serde_json::to_value(&base).unwrap();
+        assert!(legacy.get("word_offset").is_none());
+        assert!(
+            serde_json::from_value::<ConversationPlayback>(legacy)
+                .unwrap()
+                .word_offset
+                .is_none()
+        );
+        for offset in [1601, 1_000_001] {
+            let mut value = base.clone();
+            value.word_offset = Some(offset);
+            assert!(value.validate().is_err());
+        }
+        let mut prior = base.clone();
+        prior.segment_offset = 30;
+        prior.word_offset = Some(29);
+        assert!(prior.validate().is_err());
         let mut value = base.clone();
         value.segment_offset = 1_000_001;
         assert!(value.validate().is_err());

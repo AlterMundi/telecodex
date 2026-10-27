@@ -6,7 +6,7 @@ window.SpeechStream=(()=>{
   function open(response,signal){
     if(!available())throw Error("Progressive audio unavailable");
     const media=new window.MediaSource(),url=URL.createObjectURL(media),reader=response.body.getReader();
-    let buffer,queue=[],all=[],bytes=0,sequence=0,complete=false,closed=false,failure,handler;
+    let buffer,queue=[],all=[],bytes=0,sequence=0,complete=false,closed=false,failure,handler,words,alignmentOffset;
     const timer=setTimeout(()=>fail(Error("Speech stream deadline exceeded")),145000);
     function cancel(){
       if(closed)return;closed=true;clearTimeout(timer);signal?.removeEventListener("abort",cancel);
@@ -46,6 +46,16 @@ window.SpeechStream=(()=>{
           const merged=new Uint8Array(bytes);let offset=0;for(const part of all){merged.set(part,offset);offset+=part.length;}
           if(!bytes || value.audio_bytes!==bytes || await digest(merged)!==value.audio_sha256)throw Error("Incomplete audio stream");
           if(closed)return;
+          const candidate=value.alignment?.words;
+          if(Number.isSafeInteger(value.alignment?.offset) && value.alignment.offset>=0 && value.alignment.offset<=1000000 && Array.isArray(candidate) && candidate.length>0 && candidate.length<=512){
+            let previous=value.alignment.offset,lastTime=0,valid=true;
+            for(const word of candidate){
+              if(!Array.isArray(word)||word.length!==4||word.some(n=>!Number.isSafeInteger(n))
+                ||word[0]<previous||word[1]<=word[0]||word[1]>1001600||word[2]<lastTime||word[3]<=word[2]||word[3]>3600000){valid=false;break;}
+              previous=word[1];lastTime=word[3];
+            }
+            if(valid){words=candidate;alignmentOffset=value.alignment.offset;}
+          }
           complete=true;all=[];clearTimeout(timer);pump();
         }else throw Error("Speech outcome retained; no automatic retry");
       }
@@ -61,7 +71,13 @@ window.SpeechStream=(()=>{
       }catch(error){fail(error);}
       return {complete:complete&&!failure,error:failure};
     })();
-    return {url,cancel,done,onError(fn){handler=fn;if(failure)fn(failure);}};
+    function position(seconds){
+      if(!words || !Number.isFinite(seconds) || seconds<0)return;
+      const millis=seconds*1000;let offset=alignmentOffset;
+      for(const word of words){if(word[3]>millis)break;offset=word[1];}
+      return offset;
+    }
+    return {url,cancel,done,position,onError(fn){handler=fn;if(failure)fn(failure);}};
   }
   return {available,open};
 })();
