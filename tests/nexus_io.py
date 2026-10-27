@@ -7,6 +7,11 @@ from goals_io import Goals
 
 OPERATOR = '''import argparse,json,pathlib,sqlite3,sys
 p=argparse.ArgumentParser();p.add_argument('--workspace');p.add_argument('--state');p.add_argument('op');a=p.parse_args();v=json.load(sys.stdin)
+marker=pathlib.Path(a.state)/'fail-before-dispatch'
+if a.op=='dispatch' and marker.exists():
+ mode=marker.read_text();calls=pathlib.Path(a.state)/'failed-dispatch-calls';calls.write_text(calls.read_text()+'x' if calls.exists() else 'x')
+ if mode=='once':marker.unlink()
+ sys.exit(1)
 db=sqlite3.connect(pathlib.Path(a.state)/'operator.sqlite',timeout=5);db.row_factory=sqlite3.Row;db.execute('BEGIN IMMEDIATE')
 root_binding=json.loads(db.execute("SELECT doc FROM binding").fetchone()[0])
 selected=v.get('table_id')
@@ -276,6 +281,29 @@ def known_turn_recovery(binary):
     finally:j.close()
 
 
+def undispatched_recovery(binary):
+    j=Nexus(binary)
+    try:
+        j.prepare();starts=j.native_turns
+        (j.state/'fail-before-dispatch').write_text('once');j.enqueue()
+        j.wait(lambda:j.state_of()[0]=='completed',seconds=25)
+        assert j.native_turns==starts+1
+        assert (j.state/'failed-dispatch-calls').read_text()=='x'
+        assert len(j.row("SELECT id FROM nexus_requests WHERE id='request'"))==1
+        print('PASS fresh queued/no-dispatch proof recovers the same request once without native replay')
+    finally:j.close()
+    j=Nexus(binary)
+    try:
+        j.prepare();starts=j.native_turns
+        (j.state/'fail-before-dispatch').write_text('permanent');j.enqueue()
+        j.wait(lambda:(j.state/'failed-dispatch-calls').exists() and (j.state/'failed-dispatch-calls').read_text()=='xx',seconds=25)
+        time.sleep(2.2)
+        assert (j.state/'failed-dispatch-calls').read_text()=='xx'
+        assert j.native_turns==starts and j.state_of()[0]=='queued'
+        print('PASS repeated uncommitted dispatch failure is bounded to one recovery and retains the request')
+    finally:j.close()
+
+
 def automatic_missing_terminal(binary):
     j=Nexus(binary,'hold_after_connect')
     try:
@@ -384,6 +412,6 @@ def writer_hold_other_target(binary):
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
-    scenarios=(delivered,table_launches,reviewed_iteration,peer_request,controls,refusals,uncertainty,known_turn_recovery,automatic_missing_terminal,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
+    scenarios=(delivered,table_launches,reviewed_iteration,peer_request,controls,refusals,uncertainty,known_turn_recovery,undispatched_recovery,automatic_missing_terminal,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
     for run in scenarios:
         if len(sys.argv)==2 or run.__name__ in sys.argv[2:]:run(binary)

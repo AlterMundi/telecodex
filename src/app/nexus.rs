@@ -538,8 +538,17 @@ async fn poll(app: &App) -> Result<()> {
         .context("Nexus pending response is not a list")?
     {
         let id = id.as_str().context("Nexus request identity missing")?;
-        if app.shared.store.nexus_request(id)?.is_some() {
-            continue;
+        let retained = app.shared.store.nexus_request(id)?;
+        if let Some(old) = retained.as_ref() {
+            if old["phase"] != "undetermined"
+                || old["reason"] != "Dispatch acknowledgement missing; no automatic native replay"
+                || !old["dispatch_id"].is_null()
+                || !old["local_turn"].is_null()
+                || !old["native_turn"].is_null()
+                || !old["_known_unsent_recovery"].is_null()
+            {
+                continue;
+            }
         }
         let doc = cfg
             .call(
@@ -576,7 +585,12 @@ async fn poll(app: &App) -> Result<()> {
         if session.busy && active.is_none() {
             continue;
         }
-        if !app.shared.store.nexus_receive(id, &doc)? {
+        let received = if retained.is_some() {
+            app.shared.store.nexus_recover_undispatched(id, &doc)?
+        } else {
+            app.shared.store.nexus_receive(id, &doc)?
+        };
+        if !received {
             continue;
         }
         if let Some(active) = active {

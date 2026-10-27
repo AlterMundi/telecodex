@@ -86,6 +86,43 @@ impl Store {
     pub fn nexus_recover_queue(&self, id: &str) -> Result<bool> {
         Ok(self.conn.lock().expect("store mutex poisoned").execute("UPDATE nexus_requests SET phase='queued',instance_id=? WHERE id=? AND phase='retained_queue' AND dispatch_id IS NULL AND native_turn IS NULL",params![self.instance_id,id])?==1)
     }
+    /// One recovery only when a fresh owner inspection proves dispatch never
+    /// committed. Missing native acknowledgement is explicitly excluded.
+    pub fn nexus_recover_undispatched(&self, id: &str, observed: &Value) -> Result<bool> {
+        if observed["request"]["request_id"] != id
+            || observed["request"]["status"] != "queued"
+            || !observed["dispatch_id"].is_null()
+        {
+            return Ok(false);
+        }
+        let Some(previous) = self.nexus_request(id)? else {
+            return Ok(false);
+        };
+        if previous["phase"] != "undetermined" || !previous["_known_unsent_recovery"].is_null() {
+            return Ok(false);
+        }
+        // Reuse the complete immutable contribution/route identity comparison.
+        if self.nexus_receive(id, observed)? {
+            return Ok(false);
+        }
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let raw: String = tx.query_row("SELECT doc FROM nexus_requests WHERE id=?", [id], |r| {
+            r.get(0)
+        })?;
+        let mut doc: Value = serde_json::from_str(&raw)?;
+        doc["_known_unsent_recovery"] = json!({"observed_at":now_string(),"evidence":"fresh owner inspection: queued, no dispatch"});
+        let changed = tx.execute(
+            "UPDATE nexus_requests SET phase='queued',doc=?,instance_id=?,reason='One recovery after observed non-dispatch'
+             WHERE id=? AND phase='undetermined' AND dispatch_id IS NULL AND local_turn IS NULL
+             AND native_turn IS NULL AND echo_attempted=0
+             AND reason='Dispatch acknowledgement missing; no automatic native replay'
+             AND json_type(doc,'$._known_unsent_recovery') IS NULL",
+            params![serde_json::to_string(&doc)?,self.instance_id,id],
+        )?;
+        tx.commit()?;
+        Ok(changed == 1)
+    }
     pub fn nexus_finish(&self, id: &str) -> Result<()> {
         if let Some(doc) = self.nexus_request(id)? {
             match doc["phase"].as_str() {
@@ -602,6 +639,53 @@ mod tests {
                 .iter()
                 .any(|(_, v)| v["request_id"] == "empty" && v["status"] == "completed")
         );
+    }
+    #[test]
+    fn undispatched_recovery_requires_fresh_proof_identity_and_is_bounded() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open(&root.path().join("db"));
+        let mut fresh = doc("unsent");
+        fresh["dispatch_id"] = Value::Null;
+        fresh["request"]["status"] = json!("queued");
+        store.nexus_receive("unsent", &fresh).unwrap();
+        store.nexus_begin_claim("unsent").unwrap();
+        store
+            .nexus_phase(
+                "unsent",
+                "undetermined",
+                "Dispatch acknowledgement missing; no automatic native replay",
+            )
+            .unwrap();
+        let mut dispatched = fresh.clone();
+        dispatched["request"]["status"] = json!("handed_off");
+        dispatched["dispatch_id"] = json!("remote-committed");
+        assert!(
+            !store
+                .nexus_recover_undispatched("unsent", &dispatched)
+                .unwrap()
+        );
+        let mut changed = fresh.clone();
+        changed["request"]["contribution"]["text"] = json!("Changed source");
+        assert!(
+            store
+                .nexus_recover_undispatched("unsent", &changed)
+                .is_err()
+        );
+        assert!(store.nexus_recover_undispatched("unsent", &fresh).unwrap());
+        assert_eq!(
+            store.nexus_request("unsent").unwrap().unwrap()["request"]["contribution"],
+            fresh["request"]["contribution"]
+        );
+        assert!(store.nexus_begin_claim("unsent").unwrap());
+        store
+            .nexus_phase(
+                "unsent",
+                "undetermined",
+                "Dispatch acknowledgement missing; no automatic native replay",
+            )
+            .unwrap();
+        assert!(!store.nexus_recover_undispatched("unsent", &fresh).unwrap());
+        assert!(store.nexus_outbox().unwrap().is_empty());
     }
     #[test]
     fn missing_terminal_requires_exact_admission_and_native_observation() {
