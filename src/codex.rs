@@ -4311,7 +4311,7 @@ model = "ignored-tui-field"
             let context = runtime_context(&original);
             let mut restored = String::new();
             assert_eq!(context["telecodex.context"]["kind"], "application");
-            for (key, fragment) in context
+            for (_, fragment) in context
                 .as_object()
                 .unwrap()
                 .iter()
