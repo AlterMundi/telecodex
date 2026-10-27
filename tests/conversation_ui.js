@@ -27,7 +27,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
       addEventListener(name, fn) { this.handlers[name] = fn; },
-      append(...children) { for(const child of children){const at=this.children.indexOf(child);if(at>=0)this.children.splice(at,1);this.children.push(child);} },
+      append(...children) { this.appendCalls=(this.appendCalls||0)+1;for(const child of children){const at=this.children.indexOf(child);if(at>=0)this.children.splice(at,1);this.children.push(child);} },
       replaceChildren(...children) { this.children = children; },
       insertBefore(child, before) {
         const previous = this.children.indexOf(child);
@@ -537,7 +537,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const updateLane=updatesFollow.nodes.get('#conversation-timeline');let updateScrolls=0;
   updateLane.contains=card=>updateLane.children.includes(card);updateLane.getBoundingClientRect=()=>({top:100});updateLane.scrollTop=0;
   updateLane.scrollTo=()=>{updateScrolls++;};
-  const updateCard=updateLane.children.find(card=>card.children[0]?.textContent==='Update from Alpha');assert(updateCard);
+  const updateCard=updateLane.children.find(card=>card.children[0]?.children[0]?.textContent==='Update from Alpha');assert(updateCard);
   updateCard.getBoundingClientRect=()=>({top:350});
   const hiddenUpdate=updatesFollow.nodes.get('#conversation-results').children.find(card=>card.dataset.sourceId==='native:8');
   await hiddenUpdate.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen').handlers.click();
@@ -678,6 +678,8 @@ function boot(readOnly=false,standalone=false,options={}) {
   const muteControl=(fixture,id)=>fixture.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id&&!c.removed).children[0].children.find(c=>c.className==='session-audio-mute');
   const alphaMute=muteControl(muted,'native:8');assert(alphaMute);alphaMute.handlers.click();
   assert.equal(alphaMute['aria-pressed'],'true');assert.match(alphaMute['aria-label'],/Unmute.*Alpha/);
+  const muteHeading=muted.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8').children[0],attached=muteHeading.appendCalls;
+  await muted.ui.refresh();assert.equal(muteHeading.appendCalls,attached,'Live refresh never detaches/re-appends the focused mute button');
   muted.nodes.get('#conversation-voice-replies').handlers.click();
   muted.overrideSource(9,worker(7,'Alpha'));muted.overrideSource(10,worker(8,'Beta'));muted.addReplies(2);await muted.ui.refresh();
   const mutedPlayer=muted.nodes.get('#conversation-audio');await until(()=>muted.audioCalls.length===1&&!mutedPlayer.paused);

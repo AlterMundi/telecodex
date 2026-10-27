@@ -188,8 +188,12 @@ window.Conversation = (() => {
         (muted?'<path d="m16 9 5 6m0-6-5 6"/>':'<path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>')+'</svg>';
     }
     function sessionTitle(card,source,label){
-      card.title.textContent=label;card.muteSource=source;
-      const key=sessionKey(source);if(readOnly || !key)return;
+      card.muteSource=source;
+      const key=sessionKey(source);
+      if(readOnly || !key){card.title.textContent=label;card.titleLabel=undefined;card.muteAttached=false;return;}
+      // Refresh the label without detaching a focused keyboard control.
+      if(!card.titleLabel){card.title.textContent="";card.titleLabel=node("span");card.title.append(card.titleLabel);}
+      card.titleLabel.textContent=label;
       if(!card.mute){
         card.mute=node("button",undefined,"session-audio-mute");card.mute.type="button";
         card.mute.addEventListener("click",()=>{
@@ -203,7 +207,8 @@ window.Conversation = (() => {
           voiceStatus();Promise.resolve().then(drainVoice);
         });
       }
-      muteButtonState(card);card.title.append(card.mute);
+      muteButtonState(card);
+      if(!card.muteAttached){card.title.append(card.mute);card.muteAttached=true;}
     }
     function clearProgress(){for(const card of progressCards.values())card.box.remove();progressCards.clear();settledProgress.clear();}
     const replyText=body=>window.ConversationMarkdown?.source(body) ?? body.textContent;
