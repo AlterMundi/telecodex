@@ -109,6 +109,34 @@ class Render(unittest.TestCase):
         del self.config['env_file']
         self.binding.write_text(json.dumps(self.config))
 
+    def test_markdown_projection_preserves_labels_code_and_canonical_digest(self):
+        original = '**Real Time**: [Android](https://example.org/path). Use `git status`. 🎸'
+        request = {**self.request, 'text': original}
+        result = self.render(request)
+        self.assertIn('Real Time: Android. Use git status. 🎸'.encode(), self.calls[0][2])
+        self.assertNotIn(b'**Real Time**', self.calls[0][2])
+        self.assertNotIn(b'https://example.org', self.calls[0][2])
+        self.assertEqual(result['text_sha256'], hashlib.sha256(original.encode()).hexdigest())
+        self.assertTrue(self.render(request)['cache_hit'])
+        self.assertEqual(len(self.calls), 1)
+        # Identical spoken text with different original markup is not a cache
+        # collision against the source digest or an invented original.
+        plain = {**request, 'text': 'Real Time: Android. Use git status. 🎸'}
+        self.assertNotEqual(self.render(plain)['render_id'], result['render_id'])
+        self.assertEqual(speech.spoken_markdown('<https://example.org/a>', 'es-US'), 'enlace')
+        self.assertEqual(speech.spoken_markdown('<https://example.org/a>', 'en-US'), 'link')
+        self.assertEqual(speech.spoken_markdown('![Diagram](https://example.org/image)', 'en-US'), 'Diagram')
+        self.assertEqual(speech.spoken_markdown('```sh\ngit status --short\n```', 'en-US'), 'git status --short')
+        self.assertEqual(speech.spoken_markdown('2 * 3 = 6', 'en-US'), '2 * 3 = 6')
+
+    def test_streamed_markdown_uses_label_not_url_and_retains_source_hash(self):
+        self.qwen_route();self.content_type='text/event-stream';self.data=self.stream_data();frames=[]
+        original='Read **Real Time** and [the source](https://example.org/).'
+        speech.stream_render(self.binding,{**self.request,'text':original},frames.append)
+        self.assertEqual(json.loads(self.calls[0][2])['input']['text'],'Read Real Time and the source.')
+        state=json.loads(next((self.root/'cache').glob('*/state.json')).read_text())
+        self.assertEqual(state['text_sha256'],hashlib.sha256(original.encode()).hexdigest())
+
     def test_qwen_http_identity_download_and_cache(self):
         self.qwen_route()
         url = 'https://speech.oss-ap-southeast-1.aliyuncs.com/sample.wav?signature=fake'

@@ -417,3 +417,19 @@ excerpts are bounded; complete replies remain in the conversation's reply view.
 Unrouted originals and unavailable target responses remain explicit. The monitor
 uses the existing authenticated owner surface; interaction-only device grants
 do not gain this inspection endpoint.
+
+
+### TV and older browser compatibility
+
+The standalone page retains a solid dark background plus readable muted/border
+colors when color-mix is unsupported. The recording control uses an inline SVG
+rather than a CSS mask or device font glyph; the same icon survives microphone
+state resets. Capture failures distinguish denied permission, no accessible
+device, device-open failure, unsupported recording and browser security refusal
+using fixed messages, without exposing raw platform error text. Permission alone
+does not prove that a TV remote microphone is accessible to a web page.
+
+Samsung remote configuration research is separate from this client behavior.
+Actual TV playback delayed until a tab switch remains an unresolved receiving
+report under [#326](https://github.com/AlterMundi/telecodex/issues/326), not a
+confirmed autoplay diagnosis or an unsupported-browser conclusion.
