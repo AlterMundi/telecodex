@@ -834,7 +834,7 @@ pub(super) async fn inspect_shared(
         bail!("Selected session changed during inspection");
     }
     let requests = shared.store.interactions_page(target, human, 0, false)?;
-    let mut result = json!({"kind":"goal_inspection","target":target,"label":super::routing::label(&shared,target),
+    let mut result = json!({"kind":"goal_inspection","target":target,"label":super::routing::label(shared,target),
         "native_thread":native,"target_binding":binding,"receiver_busy":session.busy,"native_activity":activity.ok(),
         "pending_human_actions":requests.pending_total,"unconfirmed_human_receipts":requests.actionable_total-requests.pending_total,
         "stop_held":shared.store.stop_fenced(target)?,"maintenance_held":shared.store.maintenance_writer_held(target)?,
