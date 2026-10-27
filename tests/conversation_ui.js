@@ -154,7 +154,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       if(renderAudio && JSON.parse(options.body).source.startsWith('live:')){
         const selected=JSON.parse(options.body),end=Number(selected.source.split(':')[4]),text=Array.from(optionsForFixture.liveText||optionsForFixture.responseDraft.text).slice(selected.offset,end).join('');
         const data=Buffer.from('synthetic live audio'),hash=require('node:crypto').createHash('sha256');
-        return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':'','x-presentation-end-offset':String(end),'x-presentation-text-sha256':hash.update(text).digest('hex'),'x-presentation-prefetch':'true','x-audio-sha256':require('node:crypto').createHash('sha256').update(data).digest('hex')}}));
+        return Promise.resolve(new Response(data,{headers:{...(optionsForFixture.progressive?{'content-type':'application/x-ndjson','x-audio-encoding':'mp3'}:{}),'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':'','x-presentation-end-offset':String(end),'x-presentation-text-sha256':hash.update(text).digest('hex'),'x-presentation-prefetch':'true','x-audio-sha256':require('node:crypto').createHash('sha256').update(data).digest('hex')}}));
       }
       if(renderAudio){
         const selected=JSON.parse(options.body);if(optionsForFixture.failOffset===selected.offset)return Promise.resolve(new Response(JSON.stringify({detail:'Synthetic future preparation outage'}),{status:503}));const data=Buffer.from('synthetic audio'),hash=require('node:crypto').createHash('sha256').update(data).digest('hex');
@@ -471,6 +471,34 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(interruptedLive.audioCalls[2].offset,Number(interruptedLive.audioCalls[1].source.split(':')[4]),'Explicit resume continues the matching canonical tail once');
 
   interruptedLive.ui.stop();
+
+  // A captured provisional prefix can become a confirmed reply while paused.
+  // Its validated word cursor must survive that handover and a view reload.
+  for(const alignment of [true,false,'invalid']){
+    const storage=new Map(),words={liveSpeech:true,clock:true,capture:true,playback:true,progressive:true,incremental:true,wordTiming:true,followStorage:storage,
+      wordPosition:(seconds,offset)=>alignment==='invalid'?offset+9000:alignment?offset+(seconds>=4?20:0):undefined,
+      responseDraft:{provisional:true,native_turn:'partial-live',native_item:'partial-item',text:'A useful spoken sentence with words. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
+    const partial=boot(false,true,words);partial.audio();await partial.ui.refresh();partial.nodes.get('#conversation-voice-replies').handlers.click();await partial.ui.refresh();
+    const player=partial.nodes.get('#conversation-audio');await until(()=>partial.audioCalls.length===1&&!player.paused&&!player.muted);
+    player.currentTime=5;partial.capture();partial.finishCapture();
+    const text='A useful spoken sentence with words. The confirmed remainder.';words.liveText=text;words.responseDraft=null;partial.addReplies(1);
+    partial.overrideSource(9,{native_turn:'partial-live',native_item:'partial-item',text_characters:text.length,preview:text});partial.replyTexts.set('native:9',text);
+    await partial.ui.refresh();
+    const saved=JSON.parse(storage.get('interaction-speech-position:fixture')).find(row=>row.source==='native:9');
+    assert.equal(saved.offset,alignment===true?20:0,'Provisional capture preserves the available exact word cursor through canonical handover');
+    assert.equal(partial.audioCalls.length,1,'A paused prefix is not synthesized again on confirmation');
+    if(alignment===true){player.currentTime=1;partial.ui.pause();assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture')).find(row=>row.source==='native:9').offset,0,'A backward seek in the retained prefix replaces its newer cursor');player.currentTime=5;partial.ui.pause();}
+    const reloaded=boot(false,true,{...words,followStorage:storage});reloaded.audio();reloaded.addReplies(1);
+    reloaded.overrideSource(9,{native_turn:'partial-live',native_item:'partial-item',text_characters:text.length,preview:text});reloaded.replyTexts.set('native:9',text);await reloaded.ui.refresh();
+    const card=reloaded.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:9');await card.children[3].children[1].handlers.click();
+    assert.equal(reloaded.audioCalls.at(-1).offset,alignment===true?20:0);reloaded.ui.stop();
+    {
+      await player.beforeNodes[0].handlers.click();await until(()=>!player.paused&&!player.muted);
+      player.ended=true;await player.handlers.ended();
+      assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture')).find(row=>row.source==='native:9').offset,Number(partial.audioCalls[0].source.split(':')[4]),'A completed prefix keeps its full boundary with missing or shorter word timing');
+    }
+    partial.ui.stop();
+  }
 
   const gapOptions={liveSpeech:true,clock:true,progressive:true,incremental:true,wordTiming:true,wordPosition:(_seconds,offset)=>offset+10,responseDraft:{provisional:true,native_turn:'gap-physical',native_item:'gap-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
   const gapVoice=boot(false,true,gapOptions);gapVoice.audio();await gapVoice.ui.refresh();gapVoice.failAudio();

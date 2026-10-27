@@ -67,16 +67,36 @@ window.LiveSpeech=(()=>{
     }
     function resume(source){
       const record=records.get(identity(source));
-      if(record?.canonical!==source.id)return;
-      return record.completed;
+      if(record?.validatedSource?.id!==source.id || record.validatedSource.revision!==source.revision)return;
+      return resumeOffset(record);
+    }
+    function resumeOffset(record){
+      const partial=record.partial;
+      // A cursor is current media position, not a monotonic hearing receipt.
+      // It may move backwards, but cannot jump over an earlier unsaid gap.
+      return partial && partial.start<=record.completed?partial.end:record.completed;
+    }
+    function checkpoint(source,start,end){
+      const record=source && records.get(identity(source));
+      if(!record || record.changed || source.kind!=="integrator_live"
+        || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+        || start<source.speech_start || end<start || end>source.speech_end
+        || source.speech_end>record.attempted)return;
+      record.partial={source:source.id,start,end};
+      return record.canonicalSource?{source:record.canonicalSource,resume:resumeOffset(record)}:undefined;
     }
     function ended(source,start=source.speech_start,end=source.speech_end){
       const record=records.get(identity(source));
       if(!record || record.changed && source.kind==="integrator_live" || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end<=start)return;
+      if(record.partial?.source===source.id)record.partial=undefined;
       if(record.finished.size<128)record.finished.set(start,end);
       // Completed later ranges never erase an earlier interrupted/failed gap.
       let advance=true;
-      while(advance){advance=false;for(const [begin,stop] of record.finished){
+      while(advance){advance=false;
+        if(record.partial && record.partial.start<=record.completed){
+          record.completed=Math.max(record.completed,record.partial.end);record.partial=undefined;advance=true;
+        }
+        for(const [begin,stop] of record.finished){
         if(begin<=record.completed && stop>record.completed){record.completed=stop;advance=true;}
         if(stop<=record.completed)record.finished.delete(begin);
       }}
@@ -85,18 +105,21 @@ window.LiveSpeech=(()=>{
     async function reconcile(source,validate){
       const record=records.get(identity(source));
       if(!record || !["integrator_answer","integrator_progress"].includes(source.kind))return {source};
-      record.canonical=source.id;record.canonicalSource=source;record.pending=undefined;
-      if(!record.last)return {source};
+      const mapping={source};record.mapping=mapping;
+      record.canonical=source.id;record.canonicalSource=undefined;record.pending=undefined;
+      if(!record.last){record.canonicalSource=source;record.validatedSource=source;return {source};}
       // Validate the full frozen prefix against the canonical item, not a preview.
       let changed=false;
       try{await validate(record.last,record.last.speech_start);}catch(error){
         if(error.status!==409)throw error;changed=true;
       }
-      if(changed){record.changed=true;record.completed=0;record.finished.clear();}
+      if(records.get(record.key)!==record || record.mapping!==mapping)return {source,skip:true};
+      record.canonicalSource=source;record.validatedSource=source;
+      if(changed){record.changed=true;record.completed=0;record.partial=undefined;record.finished.clear();}
       return {source:{...source,speech_start:changed?0:record.attempted},changed,
-        resume:changed?0:record.completed,skip:!changed && (record.interrupted || record.attempted>=source.text_characters)};
+        resume:changed?0:resumeOffset(record),skip:!changed && (record.interrupted || record.attempted>=source.text_characters)};
     }
-    return {observe,next,admit,reconcile,ended,resume,unsent,interrupt,continueSource,continuation,reset};
+    return {observe,next,admit,reconcile,ended,resume,checkpoint,unsent,interrupt,continueSource,continuation,reset};
   }
   return {mount};
 })();

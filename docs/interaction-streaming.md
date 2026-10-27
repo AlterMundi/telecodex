@@ -669,3 +669,34 @@ migration. Deploy the compatible native reader before the updated web scripts;
 roll back UI/configuration while preserving that reader, current journals,
 prepared ASR receipts and uncertain originals. Never restore an old database or
 resend an original to change its capture-time question set.
+
+
+### Partial provisional speech position
+
+A provider-aligned word cursor from the currently loaded provisional prefix now
+survives capture/pause and matching canonical confirmation. The player snapshots
+its current bounded offset before handover and stores only the confirmed source,
+revision and offset in the existing binding-scoped local position record. Resume
+after view reload starts there; explicit loaded Play still reuses the existing
+media. Missing/invalid timing retains the actual segment boundary, with no
+interpolation. A backward seek replaces the current partial cursor rather than
+keeping its high-water mark.
+
+The live scheduler retains one partial media range separately from completed
+ranges. It cannot advance over an earlier unsaid gap. Completion of the matching
+prefix or an explicitly resumed canonical remainder joins those ranges. A new canonical mapping stays unpublished while prefix validation is pending or
+offline. Changed confirmation retires the partial cursor; entry replacement and
+superseded validations cannot publish it later. Completed media retains the full
+segment boundary even if word alignment ends before trailing punctuation. No new
+native schema, provider request, transcript storage or answer/work authority is
+introduced. Position is device/provider playback evidence, never proof of hearing.
+A reload before any canonical source exists still has no persisted provisional
+cursor; full semantic attention remains under301/304.
+
+The shipped player regression failed0 versus20 against the previous code and
+passes with aligned/missing/invalid timing, capture-to-confirmation, backward seek
+and explicit Resume after reload. The loopback stream fixture now uses NDJSON
+headers for progressive live prefixes, matching the real endpoint instead of
+silently taking the batch path. Scheduler checks cover earlier gaps, partial-to-
+canonical completion, changed source and binding retirement. These are synthetic
+digital checks, not new provider latency or physical-device acceptance.

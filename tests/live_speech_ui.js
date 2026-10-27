@@ -44,5 +44,45 @@ const deadline=setTimeout(()=>{throw Error("Live speech test did not settle");},
  const unplayed=await gap.reconcile(canonical,async()=>{});assert.equal(unplayed.resume,0,'Later completion cannot hide the first unsaid gap');
  const completed=gap.ended(interrupted);assert.equal(completed.resume,later.speech_end,'Finishing a live prefix after confirmation updates the canonical cursor');
  assert.equal(gap.resume(canonical),later.speech_end);
+ const partial=context.window.LiveSpeech.mount();partial.observe({...key,text:'A useful spoken sentence. Unfinished'},'binding');
+ const playing=await partial.next();assert(partial.admit(playing));
+ partial.checkpoint(playing,0,12);partial.interrupt(playing);
+ assert.equal((await partial.reconcile(canonical,async()=>{})).resume,12,'Confirmation retains partial aligned media position');
+ assert.equal(partial.checkpoint(playing,0,4).resume,4,'Backward media seek replaces a partial high-water mark');
+ assert.equal(partial.checkpoint(playing,0,playing.speech_end+1),undefined);assert.equal(partial.resume(canonical),4);
+ assert.equal(partial.ended(canonical,4,100).resume,100,'Explicit canonical remainder joins the retained partial prefix');
+ const changedPartial=context.window.LiveSpeech.mount();changedPartial.observe({...key,text:'A useful spoken sentence. Unfinished'},'binding');
+ const obsolete=await changedPartial.next();assert(changedPartial.admit(obsolete));changedPartial.checkpoint(obsolete,0,12);
+ assert.equal((await changedPartial.reconcile(canonical,async()=>{throw Object.assign(Error('Changed'),{status:409});})).resume,0);
+ assert.equal(changedPartial.checkpoint(obsolete,0,20),undefined,'Old timing cannot refine a changed canonical reply');
+ const partialGap=context.window.LiveSpeech.mount();partialGap.observe({...key,text:'First sentence. Unfinished'},'binding');
+ const missing=await partialGap.next();assert(partialGap.admit(missing));
+ partialGap.observe({...key,text:'First sentence. Second useful sentence. Unfinished'},'binding');
+ const ahead=await partialGap.next();assert(partialGap.admit(ahead));partialGap.checkpoint(ahead,ahead.speech_start,ahead.speech_start+5);
+ assert.equal((await partialGap.reconcile(canonical,async()=>{})).resume,0,'A later aligned prefix cannot hide the earlier unplayed range');
+ let validateAgain;const rechecking=partialGap.reconcile(canonical,()=>new Promise(resolve=>{validateAgain=resolve;}));
+ assert.equal(partialGap.resume(canonical),0,'Revalidating the same source cannot remove its known earlier-gap fence');
+ assert.equal(partialGap.resume({...canonical,revision:'unverified-new-revision'}),undefined,'The previous gap fence is scoped to its validated revision');
+ assert.equal(partialGap.checkpoint(ahead,ahead.speech_start,ahead.speech_start+6),undefined);
+ validateAgain();assert.equal((await rechecking).resume,0);
+ assert.equal(partialGap.ended(missing).resume,ahead.speech_start+6,'An earlier completed gap joins the later partial cursor');
+ partialGap.reset();assert.equal(partialGap.checkpoint(ahead,ahead.speech_start,ahead.speech_start+10),undefined,'Entry reset retires timing state');
+ for(const outcome of ['match','changed','offline','reset']){
+   const pendingState=context.window.LiveSpeech.mount();pendingState.observe({...key,text:'A useful spoken sentence. Unfinished'},'binding');
+   const selected=await pendingState.next();assert(pendingState.admit(selected));pendingState.checkpoint(selected,0,12);
+   let release,reject;const validation=new Promise((yes,no)=>{release=yes;reject=no;});
+   const mapping=pendingState.reconcile(canonical,()=>validation);
+   assert.equal(pendingState.checkpoint(selected,0,20),undefined,'Pending validation cannot publish a canonical cursor');
+   assert.equal(pendingState.resume(canonical),undefined);
+   assert.equal(pendingState.continuation(selected),undefined);
+   if(outcome==='reset'){pendingState.reset();release();assert.equal((await mapping).skip,true);assert.equal(pendingState.resume(canonical),undefined);}
+   else if(outcome==='offline'){
+     reject(new TypeError('Offline'));await assert.rejects(mapping,/Offline/);
+     assert.equal(pendingState.checkpoint(selected,0,22),undefined,'A failed observation cannot expose an unverified canonical mapping');
+   }else{
+     if(outcome==='changed')reject(Object.assign(Error('Changed'),{status:409}));else release();
+     assert.equal((await mapping).resume,outcome==='match'?20:0);
+   }
+ }
  clearTimeout(deadline);console.log('PASS live prefixes: useful boundary, Unicode hash, one owned attempt, canonical handover, manual cursor, changed source, network uncertainty, code and entry fences; zero media/providers.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
