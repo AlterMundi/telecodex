@@ -129,6 +129,12 @@ class Render(unittest.TestCase):
         self.assertEqual(speech.spoken_markdown('```sh\ngit status --short\n```', 'en-US'), 'git status --short')
         self.assertEqual(speech.spoken_markdown('2 * 3 = 6', 'en-US'), '2 * 3 = 6')
 
+    def test_spoken_topic_labels_preserve_code_and_issue_references(self):
+        self.assertEqual(speech.spoken_markdown('Novedades de **#Realtime** y #H.B. Guitar.', 'es-US'),
+                         'Novedades de Realtime y H.B. Guitar.')
+        self.assertEqual(speech.spoken_markdown('Use C#; see #123 and `#Realtime`.', 'en-US'),
+                         'Use C#; see #123 and #Realtime.')
+
     def test_streamed_markdown_uses_label_not_url_and_retains_source_hash(self):
         self.qwen_route();self.content_type='text/event-stream';self.data=self.stream_data();frames=[]
         original='Read **Real Time** and [the source](https://example.org/).'
