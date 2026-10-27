@@ -1188,7 +1188,7 @@ mod tests {
     #[test]
     fn playback_context_is_immutable_advisory_and_survives_restart() {
         let (file, store, key, binding) = setup();
-        let id = Uuid::new_v4().to_string();
+        let id = Uuid::now_v7().to_string();
         let playback = ConversationPlayback {
             source: "native:77".into(),
             revision: "b".repeat(64),
@@ -1251,7 +1251,7 @@ mod tests {
                     200,
                     key,
                     &binding,
-                    &Uuid::new_v4().to_string(),
+                    &Uuid::now_v7().to_string(),
                     "Other owner",
                     None,
                     None,
