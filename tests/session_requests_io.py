@@ -122,10 +122,10 @@ def live_return(binary):
         ok,status=j.tool(7,'session_requests',{});assert ok and status['requests'][0]['phase']=='returned'
         ok,status=j.tool(7,'session_receive',{'request_id':admitted['request']['id']});assert ok and status['new_return_instruction'] is None
         j.answer(7,'Original task completed with the attributed dependency.')
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_public_deliveries WHERE phase!='delivered'")==[(0,)] and j.row('SELECT count(*) FROM interaction_public_deliveries')[0][0]>=1,seconds=25)
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_public_deliveries WHERE phase!='delivered'")==[(0,)] and j.has('Original task completed with the attributed dependency.',1),seconds=25)
         j.idle()
         assert len(j.instructions(8))==1 and len(j.instructions(7))==2
-        assert sum('Original task completed with the attributed dependency.' in m['text'] for m,_ in j.messages)==1
+        assert sum('Original task completed with the attributed dependency.' in m['text'] for m,_ in j.messages)==1, [m['text'] for m,_ in j.messages]
         page=j.read('presentation','list','0','0')['result']
         public=[i for i in page['items'] if 'Original task completed with the attributed dependency.' in i.get('preview','')]
         assert len(public)==1 and public[0]['sequence']>0
@@ -159,7 +159,7 @@ def one_slot_deferred_return(binary):
         j.wait(lambda:len(j.instructions(7))==3 and j.instructions(7)[2][1]=='accepted')
         j.internal_delivery('Original logical task resumed using returned evidence.')
         j.answer(7,'Corrected original task completed using internal evidence.',item='corrected-final')
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_public_deliveries WHERE phase!='delivered'")==[(0,)] and j.row('SELECT count(*) FROM interaction_public_deliveries')[0][0]>=2,seconds=25)
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_public_deliveries WHERE phase!='delivered'")==[(0,)] and j.has('Corrected original task completed using internal evidence.',1),seconds=25)
         j.idle()
         assert j.row('SELECT phase FROM interaction_session_requests WHERE id=?',(admitted['request']['id'],))==[('returned',)]
         assert sum('Corrected original task completed using internal evidence.' in m['text'] for m,_ in j.messages)==1
