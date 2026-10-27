@@ -719,6 +719,14 @@ function boot(readOnly=false,standalone=false,options={}) {
   futurePlayer.ended=true;const futureEnd=futurePlayer.handlers.ended();futureFailure.clock.fire(180);await futureEnd;
   assert.equal(futureFailure.audioCalls.filter(x=>x.offset===120).length,1,'Consuming a failed/uncertain future preparation never repeats its provider attempt');futureFailure.ui.stop();
 
+  const nextBackground=boot(false,true,{clock:true});nextBackground.audio();await nextBackground.ui.refresh();
+  nextBackground.nodes.get('#conversation-voice-replies').handlers.click();nextBackground.addReplies(1);await nextBackground.ui.refresh();
+  const nextPlayer=nextBackground.nodes.get('#conversation-audio');await until(()=>nextBackground.audioCalls.length===1&&!nextPlayer.paused);
+  nextBackground.hide();nextPlayer.ended=true;nextPlayer.paused=true;await nextPlayer.handlers.ended();nextBackground.clock.fire(450);
+  nextBackground.addReplies(1);await nextBackground.ui.refresh();await until(()=>nextBackground.audioCalls.length===2&&!nextPlayer.paused);
+  assert.equal(nextBackground.mediaSession.playbackState,'playing','A new reply after end-of-media starts while still hidden');
+  assert.equal(nextBackground.nodes.get('#conversation-voice-replies').dataset.voiceState,'on');nextBackground.ui.stop();
+
   const background=boot(false,true,{clock:true});background.audio(true);await background.ui.refresh();
   background.nodes.get('#conversation-voice-replies').handlers.click();background.addReplies(1);await background.ui.refresh();
   const bgPlayer=background.nodes.get('#conversation-audio');await until(()=>background.audioCalls.length===1&&!bgPlayer.paused);

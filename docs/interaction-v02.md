@@ -422,3 +422,26 @@ The Files composer increment carries unchanged PDFs and other original bytes
 through the retained conversation and native/routed attachment path. This remains
 milestone8 base-experience work. See [the contract and qualification boundary](conversation-files.md).
 A PNG-only selector or an upload receipt does not close native file delivery.
+
+
+### Background reply continuity
+
+Voice-on in the standalone client remains opted in across hidden state and the
+end of an individual reply. Tests cover a later reply arriving while the page is
+still hidden, as well as continuation within one reply; explicit OS/manual Pause
+and Stop keep their existing meaning. This does not prove phone background
+acceptance or override browser/OS suspension.
+
+The notification stream previously aborted on pagehide but restored only for a
+BFCache pageshow. A non-BFCache return could leave the client marked active with
+no subscription. Lifecycle and network recovery now replace that exact stream,
+request a retained-view catch-up and fence obsolete callbacks by generation.
+A single45-second deadline detects missing15-second server heartbeats, then uses
+the existing1–10second reconnect backoff. Each mount retains at most one selected
+subscription, one heartbeat/retry timer and64KiB of unfinished event text. Stop,
+expired access and pagehide abort owned I/O and clear timers; no work is submitted
+or replayed by reconnect. This is a reproduced client failure and correction,
+not an established diagnosis of the human's particular Android interruption.
+Physical testing must still cover two separate replies while another app is
+foreground and after screen lock. For full OS-managed background playback beyond
+web lifecycle guarantees, the native-mobile roadmap remains the owning track.
