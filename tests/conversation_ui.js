@@ -479,7 +479,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       wordPosition:(seconds,offset)=>alignment==='invalid'?offset+9000:alignment?offset+(seconds>=4?20:0):undefined,
       responseDraft:{provisional:true,native_turn:'partial-live',native_item:'partial-item',text:'A useful spoken sentence with words. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
     const partial=boot(false,true,words);partial.audio();await partial.ui.refresh();partial.nodes.get('#conversation-voice-replies').handlers.click();await partial.ui.refresh();
-    const player=partial.nodes.get('#conversation-audio');await until(()=>partial.audioCalls.length===1&&!player.paused);
+    const player=partial.nodes.get('#conversation-audio');await until(()=>partial.audioCalls.length===1&&!player.paused&&!player.muted);
     player.currentTime=5;partial.capture();partial.finishCapture();
     const text='A useful spoken sentence with words. The confirmed remainder.';words.liveText=text;words.responseDraft=null;partial.addReplies(1);
     partial.overrideSource(9,{native_turn:'partial-live',native_item:'partial-item',text_characters:text.length,preview:text});partial.replyTexts.set('native:9',text);
@@ -493,7 +493,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     const card=reloaded.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:9');await card.children[3].children[1].handlers.click();
     assert.equal(reloaded.audioCalls.at(-1).offset,alignment===true?20:0);reloaded.ui.stop();
     {
-      await player.beforeNodes[0].handlers.click();await until(()=>!player.paused);
+      await player.beforeNodes[0].handlers.click();await until(()=>!player.paused&&!player.muted);
       player.ended=true;await player.handlers.ended();
       assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture')).find(row=>row.source==='native:9').offset,Number(partial.audioCalls[0].source.split(':')[4]),'A completed prefix keeps its full boundary with missing or shorter word timing');
     }
