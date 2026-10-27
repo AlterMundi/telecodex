@@ -912,7 +912,18 @@ window.Conversation = (() => {
       voiceEnabled=false;voiceBusy=false;voiceQueue.length=0;voiceFinalTimes.clear();voiceContext=undefined;voiceStatus();stop();
     }
     $("#conversation-voice-replies").addEventListener("click",()=>{
-      if(voiceEnabled && !voiceSuspended)disableVoice();else {enableVoice();drainVoice();}
+      if(voiceEnabled && !voiceSuspended)disableVoice();else {
+        enableVoice();
+        if(captureBusy)return;
+        if(active && blobUrl && !audio.ended){
+          voiceBusy=true;void startPlayback();
+        }else{
+          // A cancelled preparation or ended segment cannot own the queue
+          // forever. Release it without retrying its synthesis automatically.
+          if(active)stop();
+          voiceBusy=false;drainVoice();
+        }
+      }
     });
     function stop(text = "Audio stopped.") {
       rememberPosition();
