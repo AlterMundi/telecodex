@@ -506,6 +506,28 @@ async fn flush(shared: &AppShared) -> Result<()> {
     Ok(())
 }
 async fn poll(app: &App) -> Result<()> {
+    // A final answer can be retained even when its terminal stream event was
+    // missed. Inspect the already admitted exact native turn, never start one.
+    for (turn, native, thread) in app.shared.store.nexus_missing_terminals()? {
+        match app
+            .shared
+            .codex
+            .selected_turn_summary_reply(&thread, &native)
+            .await
+        {
+            Ok(Some((status, reply)))
+                if matches!(status.as_str(), "completed" | "failed" | "interrupted") =>
+            {
+                app.shared
+                    .store
+                    .nexus_observed_reply(turn, &native, &reply, &status)?;
+            }
+            Ok(_) => {}
+            Err(_) => tracing::warn!(
+                "Nexus native terminal observation unavailable; input retained without replay"
+            ),
+        }
+    }
     flush(&app.shared).await?;
     let cfg = config(&app.shared)?;
     let pending = cfg
