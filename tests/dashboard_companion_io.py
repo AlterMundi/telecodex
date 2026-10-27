@@ -140,6 +140,17 @@ class Companion(unittest.TestCase):
             asyncio.run(scenario())
         self.assertEqual(lookup.call_count,2,'Revalidate after I/O without a cross-request identity cache')
 
+    def test_live_speech_requires_selected_configuration(self):
+        self.provider.source['kind']='integrator_live'
+        rejected=self.audio()
+        self.assertEqual(rejected.status_code,409)
+        self.assertEqual(len(self.speech.calls),0)
+        self.config['speech']['live_response']=True
+        self.client.close();self.client=self.client_for()
+        result=self.audio()
+        self.assertEqual(result.status_code,200,result.text)
+        self.assertEqual(len(self.speech.calls),1)
+
     def test_incremental_parts_preserve_full_unicode_text_and_question_contract(self):
         text=('A sentence with a technical command git status and 🙂. '*70)
         offset=0;parts=[]

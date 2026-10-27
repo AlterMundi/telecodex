@@ -50,8 +50,9 @@ if sys.argv[1:]!=['app-server','proxy']: sys.exit(7)"""))
         self.messages.clear();self.telegram_methods.clear()
 
 class Browser:
-    def __init__(self,j,companion=False):
+    def __init__(self,j,companion=False,speech=None):
         config={'receiver_config':str(j.config),'state_dir':str(j.root/'dashboard'),'origin':'https://example.test','bot_id':123}
+        if speech is not None:config['speech']=speech
         if companion:config['companion']={'enabled':True,'grants_dir':str(j.root/'companion-grants')}
         self.provider=Provider(config)
         self.client=TestClient(create_app(config,self.provider,lambda raw,bot:int(raw)),base_url=config['origin'])

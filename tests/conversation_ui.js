@@ -123,6 +123,11 @@ function boot(readOnly=false,standalone=false,options={}) {
       if (heldValidation) { heldValidation.started = true; return heldValidation.promise; }
       const sourceId=url.searchParams.get('source'),offset=Number(url.searchParams.get('offset'));
       partReads.push({source:sourceId,offset});
+      if(sourceId.startsWith('live:')){
+        const fields=sourceId.split(':'),end=Number(fields[4]),text=Array.from(options.liveText||options.responseDraft?.text||'').slice(0,end).join('');
+        if(require('node:crypto').createHash('sha256').update(text).digest('hex')!==fields[5])throw Object.assign(Error('Changed live prefix'),{status:409});
+        return {text:Array.from(text).slice(offset).join(''),offset,next_offset:null};
+      }
       if(replyHolds.has(sourceId)){const hold=replyHolds.get(sourceId);replyHolds.delete(sourceId);hold.started();await hold.promise;}
       if(replyTexts.has(sourceId)){const text=Array.from(replyTexts.get(sourceId)),end=Math.min(offset+1600,text.length);return {text:text.slice(offset,end).join(''),next_offset:end<text.length?end:null};}
       return {text:"Selected reply", next_offset:null};
@@ -135,17 +140,22 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", response_draft:options.responseDraft, can_listen:true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
+    return {binding:"fixture", csrf:"synthetic", response_draft:options.responseDraft, can_listen:true,can_speak_live_response:options.liveSpeech===true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
   const context = vm.createContext({window:{navigator:{mediaSession},localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
-    URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
+    URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:options.hashHold?{...require("node:crypto"),subtle:{digest:(algorithm,bytes)=>options.hashHold.active?new Promise(resolve=>options.hashHold.releases.push(()=>resolve(require("node:crypto").createHash('sha256').update(bytes).digest()))):require("node:crypto").subtle.digest(algorithm,bytes)}}:require("node:crypto"),
     fetch:(_route, options) => {
       if(_route.startsWith('api/interaction/artifacts/'))return Promise.resolve(new Response('Actual fixture file',{headers:{'X-Artifact-Sha256':require('node:crypto').createHash('sha256').update('Actual fixture file').digest('hex')}}));
       audioCalls.push(JSON.parse(options.body));
       if(audioFailures){audioFailures--;return Promise.resolve(new Response(JSON.stringify({detail:'Synthetic TTS outage'}),{status:503}));}
+      if(renderAudio && JSON.parse(options.body).source.startsWith('live:')){
+        const selected=JSON.parse(options.body),end=Number(selected.source.split(':')[4]),text=Array.from(optionsForFixture.liveText||optionsForFixture.responseDraft.text).slice(selected.offset,end).join('');
+        const data=Buffer.from('synthetic live audio'),hash=require('node:crypto').createHash('sha256');
+        return Promise.resolve(new Response(data,{headers:{'x-presentation-source':selected.source,'x-presentation-revision':selected.revision,'x-presentation-offset':String(selected.offset),'x-presentation-next-offset':'','x-presentation-end-offset':String(end),'x-presentation-text-sha256':hash.update(text).digest('hex'),'x-presentation-prefetch':'true','x-audio-sha256':require('node:crypto').createHash('sha256').update(data).digest('hex')}}));
+      }
       if(renderAudio){
         const selected=JSON.parse(options.body);if(optionsForFixture.failOffset===selected.offset)return Promise.resolve(new Response(JSON.stringify({detail:'Synthetic future preparation outage'}),{status:503}));const data=Buffer.from('synthetic audio'),hash=require('node:crypto').createHash('sha256').update(data).digest('hex');
         if(optionsForFixture.incremental){
@@ -165,6 +175,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   if(options.progressive)context.window.SpeechStream={available:()=>true,open(_response,signal){
     const value={url:'blob:fixture-stream',signal,position:seconds=>options.wordPosition?.(seconds),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
   }};
+  if(options.liveSpeech)vm.runInContext(fs.readFileSync("dashboard/web/live-speech.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   if(options.autoText)context.window.IntersectionObserver=class{
     constructor(callback){intersection=callback;}observe(){}unobserve(){}disconnect(){}
@@ -366,6 +377,47 @@ function boot(readOnly=false,standalone=false,options={}) {
   await follow.ui.refresh();
   assert.equal(live.scrollTop,live.scrollHeight,'The committed transcript cannot silently leave following mode');
   const until=async check=>{for(let n=0;n<100;n++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error("Voice transition did not finish");};
+  const liveOptionsAudio={liveSpeech:true,clock:true,playback:true,capture:true,responseDraft:{provisional:true,native_turn:'physical',native_item:'early',text:'First useful sentence. Remaining text',observed_at:'2100-01-01T00:00:00Z'}};
+  const liveVoice=boot(false,true,liveOptionsAudio);liveVoice.audio();await liveVoice.ui.refresh();
+  liveVoice.nodes.get('#conversation-voice-replies').handlers.click();await liveVoice.ui.refresh();
+  const livePlayer=liveVoice.nodes.get('#conversation-audio');await until(()=>liveVoice.audioCalls.length===1&&!livePlayer.paused&&!livePlayer.muted);
+  const liveEnd=Number(liveVoice.audioCalls[0].source.split(':')[4]);assert.equal(liveVoice.audioCalls[0].offset,0);
+  livePlayer.currentTime=.5;livePlayer.duration=2;
+  assert(liveVoice.playbackContext().source.startsWith('live:'),'Capture retains a source-linked device cursor during early speech');
+  const confirmedText='First useful sentence. Remaining text is now confirmed.';
+  liveOptionsAudio.liveText=confirmedText;liveOptionsAudio.responseDraft=null;liveVoice.addReplies(1);
+  liveVoice.overrideSource(9,{native_turn:'physical',native_item:'early',text_characters:Array.from(confirmedText).length,preview:confirmedText});liveVoice.replyTexts.set('native:9',confirmedText);
+  await liveVoice.ui.refresh();assert.equal(liveVoice.audioCalls.length,1,'Confirmation cannot overlap or repeat the active prefix');
+  livePlayer.ended=true;await livePlayer.handlers.ended();liveVoice.clock.fire(450);
+  await until(()=>liveVoice.audioCalls.length===2&&!livePlayer.paused);
+  assert.equal(liveVoice.audioCalls[1].source,'native:9');assert.equal(liveVoice.audioCalls[1].offset,liveEnd,'Canonical speech starts after the reserved prefix');
+  liveVoice.ui.stop();
+  const hashHold={active:true,releases:[]},selectionOptions={liveSpeech:true,capture:true,hashHold,responseDraft:{provisional:true,native_turn:'held-physical',native_item:'held-item',text:'Useful interrupted sentence. More',observed_at:'2100-01-01T00:00:00Z'}};
+  const selectionRace=boot(false,true,selectionOptions);selectionRace.audio();await selectionRace.ui.refresh();
+  selectionRace.nodes.get('#conversation-voice-replies').handlers.click();await selectionRace.ui.refresh();await until(()=>hashHold.releases.length===1);
+  selectionRace.capture();selectionRace.finishCapture();
+  hashHold.releases.shift()();await until(()=>hashHold.releases.length===1);hashHold.releases.shift()();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(selectionRace.audioCalls.length,0,'Capture invalidates an awaited prefix even after recording finishes');
+  hashHold.active=false;await selectionRace.ui.refresh();await until(()=>selectionRace.audioCalls.length===1);
+  selectionRace.ui.stop();
+  const gapOptions={liveSpeech:true,clock:true,responseDraft:{provisional:true,native_turn:'gap-physical',native_item:'gap-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
+  const gapVoice=boot(false,true,gapOptions);gapVoice.audio();await gapVoice.ui.refresh();gapVoice.failAudio();
+  gapVoice.nodes.get('#conversation-voice-replies').handlers.click();await gapVoice.ui.refresh();await until(()=>gapVoice.clock.pending().includes(450));
+  gapOptions.responseDraft.text='First sentence. Second sentence. Unfinished';await gapVoice.ui.refresh();gapVoice.clock.fire(450);
+  const gapPlayer=gapVoice.nodes.get('#conversation-audio');await until(()=>gapVoice.audioCalls.length===2&&!gapPlayer.paused);
+  gapPlayer.ended=true;await gapPlayer.handlers.ended();
+  const gapText='First sentence. Second sentence. The confirmed tail.';gapOptions.liveText=gapText;gapOptions.responseDraft=null;gapVoice.addReplies(1);
+  gapVoice.overrideSource(9,{native_turn:'gap-physical',native_item:'gap-item',text_characters:gapText.length,preview:gapText});gapVoice.replyTexts.set('native:9',gapText);
+  await gapVoice.ui.refresh();gapVoice.clock.fire(450);await until(()=>gapVoice.audioCalls.length===3&&!gapPlayer.paused);
+  gapVoice.ui.pause();
+  const gapCard=gapVoice.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:9');
+  await gapCard.children[3].children[1].handlers.click();
+  await until(()=>gapVoice.audioCalls.length===4);
+  assert.equal(gapVoice.audioCalls.at(-1).offset,0,'Pause during the canonical tail cannot overwrite an earlier unsaid prefix');
+  gapVoice.ui.stop();
+
+
+
   let voiceSubmissions=0;
   const ownedVoice=boot(false,false,{capture:true,ownsVoice:true,voiceSubmit:()=>{voiceSubmissions++;}});await ownedVoice.ui.refresh();
   ownedVoice.nodes.get('#conversation-message').value='Keep this text draft while sending speech';

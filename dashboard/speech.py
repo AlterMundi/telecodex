@@ -98,6 +98,9 @@ class Speech:
         self.word_timestamps = config.get('word_timestamps',False)
         if type(self.word_timestamps) is not bool:
             raise ValueError('word_timestamps must be a boolean')
+        self.live_response = config.get('live_response',False)
+        if type(self.live_response) is not bool:
+            raise ValueError('live_response must be a boolean')
         self.capacity = asyncio.Semaphore(2)
 
     async def render(self, source):

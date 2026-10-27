@@ -279,10 +279,12 @@ class Provider:
 
     def presentation_part(self, source, revision, offset):
         import re
-        if (not isinstance(source, str) or not re.fullmatch(r'(?:(?:delivery|input|matrix):[a-f0-9-]{36}|native:[1-9][0-9]{0,18}|request:[a-f0-9]{32})', source)
+        if (not isinstance(source, str) or not re.fullmatch(r'(?:(?:delivery|input|matrix):[a-f0-9-]{36}|native:[1-9][0-9]{0,18}|request:[a-f0-9]{32}|live:[A-Za-z0-9_-]{1,128}:[A-Za-z0-9_-]{1,128}:[0-9]{1,5}:[0-9]{1,5}:[a-f0-9]{64})', source)
                 or not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{64}', revision)
                 or type(offset) is not int or not 0 <= offset <= 10**9):
             raise ValueError('Invalid presentation selection')
+        if source.startswith('live:'):
+            return self.presentation(f'presentation speech {source} {revision} {offset}')
         if source.startswith('input:'):
             value = self.presentation(f'input status {self.input_id(source[6:])}')
             view = self.clarification_source(value)
@@ -572,7 +574,7 @@ class Provider:
         if value is None:return
         if (not isinstance(value,dict)
                 or set(value) not in ({'source','revision','segment_offset','position_millis','duration_millis','state'}, {'source','revision','segment_offset','position_millis','duration_millis','state','word_offset'})
-                or not isinstance(value['source'],str) or len(value['source'])>256
+                or not isinstance(value['source'],str) or len(value['source'])>448
                 or not isinstance(value['revision'],str) or not re.fullmatch('[a-f0-9]{64}',value['revision'])
                 or type(value['segment_offset']) is not int or not 0<=value['segment_offset']<=1000000
                 or 'word_offset' in value and (type(value['word_offset']) is not int or not value['segment_offset']<=value['word_offset']<=min(1000000,value['segment_offset']+1600))
@@ -580,7 +582,14 @@ class Provider:
                 or value['duration_millis'] is not None and (type(value['duration_millis']) is not int or not 1<=value['duration_millis']<=3600000)
                 or value['state'] not in ('playing','paused','interrupted')):
             raise ValueError('Invalid bounded device playback context')
-        if value['source'].startswith('native:'):
+        if value['source'].startswith('live:'):
+            if not re.fullmatch(r'live:[A-Za-z0-9_-]{1,128}:[A-Za-z0-9_-]{1,128}:[0-9]{1,5}:[0-9]{1,5}:[a-f0-9]{64}',value['source']):
+                raise ValueError('Invalid live playback source')
+            fields=value['source'].split(':');start,end=int(fields[3]),int(fields[4])
+            if (str(start)!=fields[3] or str(end)!=fields[4] or not 0<end-start<=640 or end>65536
+                    or value['segment_offset']!=start or value.get('word_offset',start)>end):
+                raise ValueError('Invalid live playback boundary')
+        elif value['source'].startswith('native:'):
             suffix=value['source'][7:]
             if not re.fullmatch('[1-9][0-9]{0,18}',suffix) or int(suffix)>2**63-1:
                 raise ValueError('Invalid native playback source')
