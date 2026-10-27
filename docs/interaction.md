@@ -931,7 +931,9 @@ Native App Server truncates each additional-context value at 1,000 approximate
 tokens (4,000 UTF-8 bytes). Telecodex preserves runtime control in ordered
 `application` fragments of at most 3,000 bytes, with `telecodex.runtime` first
 and zero-padded continuation keys. Concatenating those values restores the exact
-original instructions, including multilingual text. Human originals stay in
+original instructions, including multilingual text. A separate revision/count
+manifest identifies the current set when native history emits only changed values
+or a shorter turn retires older continuation keys. Human originals stay in
 `input`; no runtime policy or retained source summary is recast as human speech.
 An application context index is orientation metadata, not worker authority.
 Observer summaries, goal details and blockers are requested on demand rather

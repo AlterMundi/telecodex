@@ -8,6 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     fs,
@@ -2548,6 +2549,17 @@ fn runtime_context(instructions: &str) -> Value {
         }
         index += 1;
     }
+    // The native store emits only changed values on subsequent turns. Identify
+    // the current set explicitly, including when a shorter context retires old
+    // continuation keys that still exist in conversation history.
+    let revision = format!("{:x}", Sha256::digest(instructions.as_bytes()));
+    context.insert(
+        "telecodex.context".into(),
+        json!({"kind":"application","value":format!(
+            "Current Telecodex runtime context revision {revision}: {} ordered fragments, starting at telecodex.runtime then telecodex.runtime.00000001 and subsequent zero-padded indices. Read their values as one continuous instruction in key order, even across wrapper boundaries. Unchanged fragments retain their latest value. This set supersedes previous runtime revisions; higher continuation indices from older revisions are no longer current.",
+            context.len()
+        )}),
+    );
     Value::Object(context)
 }
 
@@ -4298,8 +4310,13 @@ model = "ignored-tui-field"
         ] {
             let context = runtime_context(&original);
             let mut restored = String::new();
-            for (key, fragment) in context.as_object().unwrap() {
-                assert!(key.starts_with("telecodex.runtime"));
+            assert_eq!(context["telecodex.context"]["kind"], "application");
+            for (key, fragment) in context
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(key, _)| key.starts_with("telecodex.runtime"))
+            {
                 assert_eq!(fragment["kind"], "application");
                 let value = fragment["value"].as_str().unwrap();
                 assert!(value.len() <= 3000);
@@ -4307,6 +4324,28 @@ model = "ignored-tui-field"
             }
             assert_eq!(restored, original);
         }
+    }
+
+    #[test]
+    fn runtime_context_manifest_changes_when_continuations_are_replaced_or_retired() {
+        let long = "a".repeat(9000);
+        let original = runtime_context(&long);
+        let changed = runtime_context(&format!("{}changed{}", &long[..4000], &long[4007..]));
+        assert_ne!(original["telecodex.context"], changed["telecodex.context"]);
+        assert_eq!(original["telecodex.runtime"], changed["telecodex.runtime"]);
+        assert_ne!(
+            original["telecodex.runtime.00000001"],
+            changed["telecodex.runtime.00000001"]
+        );
+        let shorter = runtime_context("new short context");
+        assert!(shorter.get("telecodex.runtime.00000001").is_none());
+        assert!(
+            shorter["telecodex.context"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("1 ordered fragments")
+        );
+        assert_ne!(original["telecodex.context"], shorter["telecodex.context"]);
     }
 
     #[test]
