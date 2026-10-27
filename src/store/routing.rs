@@ -250,8 +250,14 @@ impl Store {
             };
             // Session dependencies retain their own correlation/return behavior;
             // human requests share one response per actual requesting carrier.
-            let authored =
-                super::session_requests::author_on(&tx, &input.input_id)?.map(|_| request.clone());
+            let original_input: String = tx.query_row(
+                "SELECT input_id FROM interaction_requests WHERE id=?",
+                [&request],
+                |r| r.get(0),
+            )?;
+            let authored = super::session_requests::author_on(&tx, &original_input)?
+                .filter(|author| author["kind"] == "session_request")
+                .map(|_| request.clone());
             selected.push((order, sequence, origin, authored, request));
         }
         selected.sort_by_key(|(order, sequence, _, _, _)| std::cmp::Reverse((*order, *sequence)));
@@ -281,7 +287,7 @@ impl Store {
             }
         }
         let mut deliveries = Vec::new();
-        for (origin, _, requests) in groups {
+        for (origin, authored, requests) in groups {
             let request = requests[0].clone();
             let id = Uuid::new_v5(
                 &Uuid::NAMESPACE_URL,
@@ -300,7 +306,12 @@ impl Store {
                 completed: false,
                 current: false,
                 correction_pending: false,
-                phase: "reserved".into(),
+                phase: if authored.is_some() {
+                    "internal"
+                } else {
+                    "reserved"
+                }
+                .into(),
             };
             delivery.completed = claim.as_ref().is_some_and(|c| {
                 delivery
@@ -309,7 +320,7 @@ impl Store {
                     .all(|request| c.completed.contains(request))
             });
             (delivery.current, delivery.correction_pending) = delivery_freshness(&tx, &delivery)?;
-            tx.execute("INSERT INTO interaction_deliveries(id,result_id,request_id,human_id,phase,doc,instance_id) VALUES(?1,?2,?3,?4,'reserved',?5,?6)",params![id,result_id,delivery.request_id,human,serde_json::to_string(&delivery)?,self.instance_id])?;
+            tx.execute("INSERT INTO interaction_deliveries(id,result_id,request_id,human_id,phase,doc,instance_id) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id,result_id,delivery.request_id,human,delivery.phase,serde_json::to_string(&delivery)?,self.instance_id])?;
             for request in delivery.requests() {
                 tx.execute(
                     "INSERT INTO interaction_delivery_requests VALUES(?1,?2)",
@@ -326,7 +337,7 @@ impl Store {
     pub fn interaction_begin_delivery(&self, id: &str, human: i64) -> Result<Option<Delivery>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let raw:Option<String>=tx.query_row("SELECT d.doc FROM interaction_deliveries d JOIN users u ON u.tg_user_id=d.human_id WHERE d.id=?1 AND d.human_id=?2 AND u.allowed=1 AND d.phase='reserved' AND NOT EXISTS(SELECT 1 FROM interaction_delivery_parts p WHERE p.delivery_id=d.id)",params![id,human],|r|r.get(0)).optional()?;
+        let raw:Option<String>=tx.query_row("SELECT d.doc FROM interaction_deliveries d JOIN users u ON u.tg_user_id=d.human_id WHERE d.id=?1 AND d.human_id=?2 AND u.allowed=1 AND d.phase='reserved' AND NOT EXISTS(SELECT 1 FROM interaction_requests r JOIN interaction_session_authors a ON a.input_id=r.input_id WHERE r.id=d.request_id AND json_extract(a.doc,'$.kind')='session_request') AND NOT EXISTS(SELECT 1 FROM interaction_delivery_parts p WHERE p.delivery_id=d.id)",params![id,human],|r|r.get(0)).optional()?;
         let Some(raw) = raw else {
             return Ok(None);
         };

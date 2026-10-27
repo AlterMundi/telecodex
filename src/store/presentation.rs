@@ -245,7 +245,9 @@ impl Store {
             JOIN interaction_sources x ON x.id=r.input_id
             JOIN sessions s ON s.id=r.session_id
             WHERE d.rowid{comparison}?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2
-            AND s.creator_user_id=?2 AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4
+            AND s.creator_user_id=?2 AND NOT EXISTS(SELECT 1 FROM interaction_session_authors a
+                WHERE a.input_id=r.input_id AND json_extract(a.doc,'$.kind')='session_request')
+            AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4
             ORDER BY d.rowid {order} LIMIT 9"
         ))?;
         let deliveries = stmt
@@ -389,6 +391,8 @@ pub(super) fn source_on(
              JOIN interaction_requests r ON r.id=d.request_id JOIN interaction_sources x ON x.id=r.input_id
              JOIN sessions s ON s.id=r.session_id JOIN interaction_results o ON o.id=d.result_id
              WHERE d.id=?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2 AND s.creator_user_id=?2
+             AND NOT EXISTS(SELECT 1 FROM interaction_session_authors a
+                 WHERE a.input_id=r.input_id AND json_extract(a.doc,'$.kind')='session_request')
              AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4",
              params![id,human,entry.chat_id,entry.thread_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
         let Some((doc, phase, current_native, result_native, force_fresh, result_id)) = row else {

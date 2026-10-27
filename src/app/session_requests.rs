@@ -69,7 +69,7 @@ pub(super) fn tool_call(
                 _=>bail!("Unsupported local worker operation"),
             }
         }.await;
-        let value=match result{Ok(v)=>crate::codex::dynamic_tool_result(true,v.to_string()),Err(_)=>crate::codex::dynamic_tool_result(false,"Local session request unavailable for this owner, active parent, generation, selection or dependency budget. No uncertain request was replayed.".into())};
+        let value=match result{Ok(v)=>crate::codex::dynamic_tool_result(true,v.to_string()),Err(e) if e.to_string()=="Destination already received this original input; no duplicate dependency was created"=>crate::codex::dynamic_tool_result(false,"The integrator already routed this original to that work session. Do not forward it again or summarize its eventual answer as your own update. Continue only your assigned work; no dependency or new work was created.".into()),Err(_)=>crate::codex::dynamic_tool_result(false,"Local session request unavailable for this owner, active parent, generation, selection or dependency budget. No uncertain request was replayed.".into())};
         let _ = send.send(value);
     });
     recv

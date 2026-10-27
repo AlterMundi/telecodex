@@ -693,7 +693,17 @@ with its own role-specific capabilities. `inputs` identifies accepted inputs in
 that actual native execution. `session_request` selects an original human parent,
 a stable caller request ID, one existing unambiguous topic and at most 16,000
 bytes of session-authored text. It does not copy a transcript or create a topic.
-`session_requests` inspects the latest sixteen retained dependencies.
+`session_requests` inspects the latest sixteen retained dependencies. A worker must not forward
+an original to a destination that the integrator has already selected for that
+same input. Admission reports that existing route without creating another task;
+exact reads of an already retained dependency keep their original outcome.
+
+Helper results are internal returns to their requesting session, not additional
+human-facing replies. They remain canonical and inspectable by that caller, but
+are excluded from the chat/audio presentation and Telegram publication. A final
+covering both a direct human request and a helper request therefore produces one
+human response and one internal return, rather than two spoken copies. Historical
+helper deliveries are also excluded from presentation without erasing receipts.
 
 Runtime context names the selected worker topic and separates its task from
 integrator-only clauses in the unchanged human message. For a continuing request,

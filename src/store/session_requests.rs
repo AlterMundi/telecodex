@@ -169,6 +169,17 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
+        // The integrator has already handed this exact original to the target.
+        // A second worker must not manufacture a parallel task and callback.
+        let already_routed: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM interaction_instructions WHERE input_id=?1 AND session_id=?2 AND phase NOT IN ('rejected','cancelled'))",
+            params![p.input_id, target_id], |r| r.get(0),
+        )?;
+        if existing.is_none() && already_routed {
+            return Err(anyhow!(
+                "Destination already received this original input; no duplicate dependency was created"
+            ));
+        }
         let count: i64 = tx.query_row(
             "SELECT count(*) FROM interaction_session_requests WHERE parent_instruction=?",
             [parent],
@@ -471,6 +482,9 @@ mod tests {
         local
     }
     fn parent(s: &Store, a: &SessionRecord) -> Instruction {
+        parent_targets(s, a, vec![a.id])
+    }
+    fn parent_targets(s: &Store, a: &SessionRecord, targets: Vec<i64>) -> Instruction {
         let i = s
             .interaction_admit(
                 &SourceInput {
@@ -479,7 +493,7 @@ mod tests {
                     event_id: "human-parent".into(),
                     update_id: None,
                     human_id: 100,
-                    target_sessions: vec![a.id],
+                    target_sessions: targets,
                     origin: ReturnRoute {
                         chat_id: 100,
                         thread_id: 1,
@@ -583,6 +597,34 @@ mod tests {
         }
         assert!(send("fifth", "No unbounded fanout").is_err());
         let d = result(&s, &b, &i);
+        assert_eq!(d.phase, "internal");
+        assert!(s.interaction_begin_delivery(&d.id, 100).unwrap().is_none());
+        // An older writer may have reserved the same internal result for public
+        // delivery. The claim boundary, not just its new phase, prevents replay.
+        s.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE interaction_deliveries SET phase='reserved' WHERE id=?",
+                [&d.id],
+            )
+            .unwrap();
+        assert!(s.interaction_begin_delivery(&d.id, 100).unwrap().is_none());
+        let entry = setup(&s, 1);
+        let page = s
+            .interaction_presentation_list(100, entry.key, 0, 0)
+            .unwrap();
+        assert!(page["items"].as_array().unwrap().is_empty());
+        assert!(
+            s.interaction_presentation_part(
+                100,
+                entry.key,
+                &format!("delivery:{}", d.id),
+                "unused",
+                0
+            )
+            .is_err()
+        );
         assert!(
             s.interaction_session_request(
                 b.key,
@@ -625,6 +667,118 @@ mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn direct_original_is_not_forwarded_again_but_existing_dependency_remains_inspectable() {
+        for helper_first in [true, false] {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+            let a = setup(&s, 7);
+            let b = setup(&s, 8);
+            let p = parent_targets(&s, &a, vec![a.id, b.id]);
+            let source: SourceInput = {
+                let conn = s.conn.lock().unwrap();
+                let raw: String = conn
+                    .query_row(
+                        "SELECT doc FROM interaction_sources WHERE id=?",
+                        [&p.input_id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                serde_json::from_str(&raw).unwrap()
+            };
+            let closed = tokio_util::sync::CancellationToken::new();
+            let send = |id| {
+                s.interaction_session_request(
+                    a.key,
+                    100,
+                    "native-7",
+                    "parent-turn",
+                    &p.id,
+                    id,
+                    b.key,
+                    "Selected work",
+                    &closed,
+                )
+            };
+            // A genuinely new dependency retains its exact identity even if a
+            // direct route for the original is admitted afterwards.
+            let (call, _, _) = send("before-route").unwrap();
+            s.interaction_admit(&source, b.key, RequestRelation::New)
+                .unwrap();
+            assert_eq!(send("before-route").unwrap().0.id, call.id);
+            let error = send("duplicate-route").unwrap_err().to_string();
+            assert!(error.contains("Destination already received this original input"));
+            assert_eq!(
+                s.interaction_session_requests(a.key, 100, "native-7")
+                    .unwrap()
+                    .len(),
+                1
+            );
+            let helper = s
+                .interaction_instruction(&call.target_instruction, 100)
+                .unwrap()
+                .unwrap();
+            let direct = s
+                .interaction_admit(&source, b.key, RequestRelation::New)
+                .unwrap()
+                .0;
+            let physical = "mixed-result-turn";
+            let (root, steered) = if helper_first {
+                (&helper, &direct)
+            } else {
+                (&direct, &helper)
+            };
+            let local = accept(&s, &b, root, physical);
+            s.interaction_transport(&steered.id, 100, local, P::Submitting, None)
+                .unwrap();
+            s.interaction_transport(&steered.id, 100, local, P::Accepted, Some(physical))
+                .unwrap();
+            let text = format!(
+                "One human answer\n<daimon-result>{}</daimon-result>",
+                json!({"requests":[direct.id, helper.id], "covered":[direct.id, helper.id], "completed":[direct.id, helper.id]})
+            );
+            let deliveries = s
+                .interaction_record_result(
+                    &root.id,
+                    100,
+                    local,
+                    "native-8",
+                    physical,
+                    "mixed-answer",
+                    &text,
+                    true,
+                )
+                .unwrap();
+            assert_eq!(deliveries.len(), 2);
+            assert_eq!(
+                deliveries.iter().filter(|d| d.phase == "reserved").count(),
+                1
+            );
+            assert_eq!(
+                deliveries.iter().filter(|d| d.phase == "internal").count(),
+                1
+            );
+            let entry = setup(&s, 1);
+            let page = s
+                .interaction_presentation_list(100, entry.key, 0, 0)
+                .unwrap();
+            let items = page["items"].as_array().unwrap();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0]["request_id"], direct.id);
+            let internal = deliveries.iter().find(|d| d.phase == "internal").unwrap();
+            assert!(
+                s.interaction_session_return(&internal.id, 100)
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                s.interaction_session_return(&internal.id, 100)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
     #[test]
     fn dependency_author_and_admission_commit_atomically_and_retired_or_withdrawn_calls_do_not_return()
      {
