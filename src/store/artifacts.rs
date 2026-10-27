@@ -260,7 +260,7 @@ impl Store {
             params![entry.chat_id, entry.thread_id, human],
             |r| r.get(0),
         )?;
-        let mut q=conn.prepare("SELECT j.phase,m.rowid,r.id FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN interaction_native_messages m ON m.local_turn=j.local AND m.native_thread=json_extract(j.doc,'$.output.native') AND m.native_turn=json_extract(j.doc,'$.output.turn') AND m.item_id=json_extract(j.doc,'$.output.item') LEFT JOIN interaction_results r ON r.native_thread=m.native_thread AND r.native_turn=m.native_turn AND r.item_id=m.item_id WHERE j.human=?1 AND t.from_user_id=?1 AND s.creator_user_id=?1 AND u.allowed=1 AND (t.session_id=?2 OR EXISTS(SELECT 1 FROM interaction_deliveries d WHERE d.result_id=r.id AND d.human_id=?1 AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4) OR (m.phase='final_answer' AND r.id IS NULL AND EXISTS(SELECT 1 FROM conversation_inputs c JOIN interaction_goal_controls g ON g.human_id=c.human_id AND g.entry_chat=?3 AND g.entry_topic=?4 AND g.phase='acknowledged' AND json_extract(g.doc,'$.worker_execution.local')=m.local_turn AND json_extract(g.doc,'$.worker_execution.native')=m.native_thread WHERE c.id=m.presentation_input AND c.human_id=?1 AND c.session_id=?2))) ORDER BY j.local DESC LIMIT 128")?;
+        let mut q=conn.prepare("SELECT j.phase,m.rowid,r.id FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id JOIN interaction_native_messages m ON m.local_turn=j.local AND m.native_thread=json_extract(j.doc,'$.output.native') AND m.native_turn=json_extract(j.doc,'$.output.turn') AND m.item_id=json_extract(j.doc,'$.output.item') LEFT JOIN interaction_results r ON r.native_thread=m.native_thread AND r.native_turn=m.native_turn AND r.item_id=m.item_id WHERE j.human=?1 AND t.from_user_id=?1 AND s.creator_user_id=?1 AND u.allowed=1 AND (t.session_id=?2 OR EXISTS(SELECT 1 FROM interaction_deliveries d WHERE d.result_id=r.id AND d.human_id=?1 AND json_extract(d.doc,'$.origin.chat_id')=?3 AND json_extract(d.doc,'$.origin.thread_id')=?4) OR ((m.phase='final_answer' OR m.phase IS NULL) AND r.id IS NULL AND EXISTS(SELECT 1 FROM conversation_inputs c JOIN interaction_goal_controls g ON g.human_id=c.human_id AND g.entry_chat=?3 AND g.entry_topic=?4 AND g.phase='acknowledged' AND json_extract(g.doc,'$.worker_execution.local')=m.local_turn AND json_extract(g.doc,'$.worker_execution.native')=m.native_thread WHERE c.id=m.presentation_input AND c.human_id=?1 AND c.session_id=?2))) ORDER BY j.local DESC LIMIT 128")?;
         let jobs=q.query_map(params![human,session,entry.chat_id,entry.thread_id],|r|Ok(json!({"phase":r.get::<_,String>(0)?,"native_source":format!("native:{}",r.get::<_,i64>(1)?),"result_id":r.get::<_,Option<String>>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(
             json!({"schema":"telecodex.artifacts/v1","items":views_on(&conn,human,session,None,None,true)?,"jobs":jobs}),
@@ -302,7 +302,7 @@ impl Store {
 
     pub fn artifact_output(&self, local: i64, human: i64) -> Result<Option<Value>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
-        Ok(conn.query_row("SELECT m.native_thread,m.native_turn,m.item_id FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE m.local_turn=?1 AND t.from_user_id=?2 AND s.creator_user_id=?2 AND u.allowed=1 AND m.phase='final_answer' ORDER BY m.rowid DESC LIMIT 1",params![local,human],|r|Ok(json!({"native":r.get::<_,String>(0)?,"turn":r.get::<_,String>(1)?,"item":r.get::<_,String>(2)?}))).optional()?)
+        Ok(conn.query_row("SELECT m.native_thread,m.native_turn,m.item_id FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE m.local_turn=?1 AND t.from_user_id=?2 AND s.creator_user_id=?2 AND u.allowed=1 AND (m.phase='final_answer' OR m.phase IS NULL) ORDER BY m.rowid DESC LIMIT 1",params![local,human],|r|Ok(json!({"native":r.get::<_,String>(0)?,"turn":r.get::<_,String>(1)?,"item":r.get::<_,String>(2)?}))).optional()?)
     }
     pub fn artifact_entry_binding(&self, human: i64, entry: SessionKey) -> Result<Value> {
         let conn = self.conn.lock().expect("store mutex poisoned");
@@ -339,7 +339,7 @@ fn goal_return_audiences_on(conn: &Connection, human: i64, id: Option<&str>) -> 
          JOIN sessions e ON e.id=c.session_id AND e.creator_user_id=a.human_id
          JOIN sessions s ON s.id=a.source_session AND s.creator_user_id=a.human_id
          JOIN users u ON u.tg_user_id=a.human_id AND u.allowed=1
-         WHERE a.human_id=?1 AND t.from_user_id=?1 AND m.phase='final_answer'
+         WHERE a.human_id=?1 AND t.from_user_id=?1 AND (m.phase='final_answer' OR m.phase IS NULL)
            AND (?2 IS NULL OR a.id=?2)
            AND EXISTS(SELECT 1 FROM interaction_goal_controls g WHERE g.human_id=?1
              AND g.entry_chat=e.chat_id AND g.entry_topic=e.thread_id AND g.phase='acknowledged'

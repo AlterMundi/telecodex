@@ -881,7 +881,7 @@ pub(super) async fn process_turn(
                                 } else {
                                     shared.store.record_native_message(turn_id, &thread_id, &native_turn, &item_id, phase.as_deref(), &text)?;
                                 }
-                                if phase.as_deref()==Some("final_answer") && super::artifact_outputs::retain(shared.clone(),turn_id,requester_user_id,&artifact_workspace).is_err() {
+                                if phase.as_deref().is_none_or(|p|p=="final_answer") && super::artifact_outputs::retain(shared.clone(),turn_id,requester_user_id,&artifact_workspace,Some(serde_json::json!({"native":thread_id,"turn":native_turn,"item":item_id}))).is_err() {
                                     tracing::warn!("Response files remain unavailable; output is preserved");
                                 }
                                 super::topic_publications::wake(shared.clone(),session_key);
@@ -1067,6 +1067,7 @@ pub(super) async fn process_turn(
         turn_id,
         queued.request.from_user_id,
         &turn_workspace,
+        None,
     ) {
         Ok(staged) => staged,
         Err(_) => {

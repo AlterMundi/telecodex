@@ -26,6 +26,7 @@ pub(super) fn retain(
     local: i64,
     human: i64,
     workspace: &TurnWorkspace,
+    output: Option<serde_json::Value>,
 ) -> Result<bool> {
     if !shared
         .config
@@ -35,7 +36,7 @@ pub(super) fn retain(
     {
         return Ok(false);
     }
-    let Some(mut output) = shared.store.artifact_output(local, human)? else {
+    let Some(mut output) = output.or(shared.store.artifact_output(local, human)?) else {
         return Ok(false);
     };
     if fs::read_dir(&workspace.out_dir)?.next().is_none() {
@@ -356,7 +357,10 @@ pub(super) fn snapshot(
                 .map_err(|_| anyhow!("Unsupported output filename"))?;
             if name.is_empty()
                 || name.chars().count() > 128
-                || name.chars().any(|c| c.is_control() || c == '\\')
+                || name
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '/' | '\\'))
+                || matches!(name.as_str(), "." | "..")
             {
                 bail!("Unsupported output filename")
             }

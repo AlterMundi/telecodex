@@ -160,6 +160,52 @@ fn artifact_snapshot_retains_actual_bytes_with_partial_failure_and_no_path_autho
         id
     );
     assert_eq!(fs::read(&private).unwrap(), b"Never copy this");
+    // New response snapshots enumerate their frozen names, not later live files.
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(out.join("good.txt")).unwrap();
+    let mut frozen = observed.clone();
+    frozen["files"] = json!({"good.txt":[meta.dev(),meta.ino(),meta.len(),meta.mtime(),meta.mtime_nsec(),meta.ctime(),meta.ctime_nsec()]});
+    for index in 0..11 {
+        fs::write(out.join(format!("later-{index}.txt")), b"Later response").unwrap();
+    }
+    artifact_outputs::snapshot(
+        &app.shared,
+        &cfg,
+        local,
+        100,
+        &out,
+        Some(&anchored),
+        &frozen,
+    )
+    .unwrap();
+    assert_eq!(
+        app.shared.store.artifact_list(100, key).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    // A disappeared selected file is unavailable, never silently omitted.
+    frozen["files"] = json!({"missing.txt":[]});
+    assert!(
+        artifact_outputs::snapshot(
+            &app.shared,
+            &cfg,
+            local,
+            100,
+            &out,
+            Some(&anchored),
+            &frozen
+        )
+        .is_err()
+    );
+    assert!(
+        app.shared.store.artifact_list(100, key).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["name"] == "missing.txt" && v["available"] == false)
+    );
 }
 
 #[cfg(unix)]

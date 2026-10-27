@@ -80,13 +80,13 @@ topic_id=8
     def instructions(self, topic):
         return self.row('SELECT i.id,i.phase,i.doc FROM interaction_instructions i JOIN sessions s ON s.id=i.session_id WHERE s.thread_id=? ORDER BY i.sequence', (topic,))
 
-    def answer_worker(self, topic, text, *, item=None, finish=True):
+    def answer_worker(self, topic, text, *, item=None, finish=True, phase="final_answer"):
         native = self.row('SELECT codex_thread_id FROM sessions WHERE thread_id=?', (topic,))[0][0]
         rows = self.instructions(topic)
         requests = sorted({request for _, _, doc in rows for request in json.loads(doc)['requests']})
         claim = {'requests': requests, 'covered': [row[0] for row in rows], 'completed': requests}
         self.broadcast(native, 'item/completed', {'turnId': self.workers[native], 'item': {
-            'id': item or 'canonical-answer-'+str(topic), 'type': 'agentMessage', 'phase': 'final_answer',
+            'id': item or 'canonical-answer-'+str(topic), 'type': 'agentMessage', 'phase': phase,
             'text': text+'\n<daimon-result>'+json.dumps(claim)+'</daimon-result>'}})
         if finish:self.broadcast(native, 'turn/completed', {'turn': {'id': self.workers[native], 'status': 'completed'}})
 

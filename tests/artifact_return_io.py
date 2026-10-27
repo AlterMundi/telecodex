@@ -60,10 +60,11 @@ def files_before_execution_ends(binary):
         first=j.read('presentation','artifacts','list')['result']['items']
         out=j.artifact_out
         (out/'second.txt').write_bytes(b'Second response deliverable')
-        j.answer_worker(7,'Second response adds a file without repeating the first.',item='checkpoint-two',finish=False)
+        j.answer_worker(7,'Second response adds a file without repeating the first.',item='checkpoint-two',finish=False,phase=None)
         j.wait(lambda:any(v['name']=='second.txt' for v in j.read('presentation','artifacts','list')['result']['items']))
         after=j.read('presentation','artifacts','list')['result']['items']
         assert len([v for v in after if v['name']=='alpha.txt'])==1,'Prior file was reattributed/repeated'
+        assert j.row("SELECT native_item FROM interaction_artifacts WHERE name='second.txt'")==[('checkpoint-two',)]
         assert all(any(v['id']==old['id'] for v in after) for old in first)
         j.broadcast(native,'turn/completed',{'turn':{'id':j.workers[native],'status':'completed'}})
         j.idle()
