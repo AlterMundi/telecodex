@@ -510,11 +510,17 @@ async fn poll(app: &App) -> Result<()> {
     // missed. Inspect the already admitted exact native turn, never start one.
     for (turn, native, thread) in app.shared.store.nexus_missing_terminals()? {
         match app.shared.codex.selected_turn_reply(&thread, &native).await {
-            Ok(Some((status, reply))) if matches!(status.as_str(), "completed" | "failed" | "interrupted") => {
-                app.shared.store.nexus_observed_reply(turn, &native, &reply, &status)?;
+            Ok(Some((status, reply)))
+                if matches!(status.as_str(), "completed" | "failed" | "interrupted") =>
+            {
+                app.shared
+                    .store
+                    .nexus_observed_reply(turn, &native, &reply, &status)?;
             }
             Ok(_) => {}
-            Err(_) => tracing::warn!("Nexus native terminal observation unavailable; input retained without replay"),
+            Err(_) => tracing::warn!(
+                "Nexus native terminal observation unavailable; input retained without replay"
+            ),
         }
     }
     flush(&app.shared).await?;
