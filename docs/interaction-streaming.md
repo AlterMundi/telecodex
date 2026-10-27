@@ -468,8 +468,8 @@ completed audio without timing remains playable without regeneration. Invalid,
 partial, reordered or mismatched timing leaves ordinary audio and approximate
 Follow available; it does not authorize another provider request.
 
-Only final sentence snapshots are reconciled. Sentence punctuation at word
-boundaries may differ, while internal punctuation such as3.0 or foo.bar and
+Only final sentence snapshots are reconciled. Alphabetic sentence-ending periods
+may differ, while internal punctuation such as3.0 or foo.bar and
 command operators remain exact. Provider indices are never canonical positions.
 A bounded compact timing map is stored with the existing successful audio state,
 without retaining another text/audio journal. Timing is delivered in the terminal
@@ -494,3 +494,9 @@ remain unchanged. The separate human report of punctuation spoken within paragra
 is not attributed solely to that prefix; a retained calm-voice sample's ASR draft
 did not reproduce “dot”/“punto”, which does not invalidate the intermittent report.
 The exact reported app text contains ordinary sentence punctuation, not those words.
+
+The selected Qwen style instruction now explicitly treats ordinary sentence
+punctuation as silent pauses, preserves literal commands and version numbers, and
+never asks for punctuation names. This is a provider-guidance mitigation, not a
+verified cure for the intermittent paragraph report. No blanket punctuation
+stripping, old-audio regeneration or native conversation change is applied.

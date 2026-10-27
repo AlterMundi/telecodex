@@ -493,6 +493,14 @@ class Render(unittest.TestCase):
             self.assertIsNone(speech.word_alignment('Hola',sentences))
         self.assertIsNone(speech.word_alignment('Hola mundo',[{'index':0,'words':[word]}]))
 
+    def test_word_alignment_does_not_drop_command_operators(self):
+        for text, tokens in [('x != y',['x','=','y']),('!foo',['foo']),('x ?: y',['x','y']),('. foo',['foo'])]:
+            words=[{'text':v,'begin_time':n*200,'end_time':(n+1)*200}for n,v in enumerate(tokens)]
+            self.assertIsNone(speech.word_alignment(text,[{'index':0,'words':words}]),text)
+        for text in ['3.0','foo.bar','x!=y','!foo']:
+            words=[{'text':text,'begin_time':0,'end_time':200}]
+            self.assertIsNotNone(speech.word_alignment(text,[{'index':0,'words':words}]),text)
+
     def test_canonical_word_mapping_preserves_prefix_and_unicode(self):
         sys.path.insert(0,str(SCRIPT.parents[1]))
         from dashboard.speech import canonical_word_alignment

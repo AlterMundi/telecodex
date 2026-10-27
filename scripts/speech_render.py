@@ -469,11 +469,12 @@ def word_alignment(spoken, sentences):
     All times must share one monotonic audio clock. Sentence-local clocks, changed
     text, oversized arrays or incomplete coverage leave alignment unavailable.
     """
-    punctuation = '.,;:!?¿¡'
+    punctuation = '.'
     def separator(n, char):
         # Provider words can add sentence punctuation at token boundaries. Keep
-        # internal punctuation (3.0, foo.bar) and all command operators exact.
-        return char.isspace() or char in punctuation and not (n > 0 and n+1 < len(spoken) and spoken[n-1].isalnum() and spoken[n+1].isalnum())
+        # internal punctuation (3.0, foo.bar), dot-sourcing and command operators exact.
+        # Other ambiguous punctuation keeps timing unavailable rather than guessing.
+        return char.isspace() or char == '.' and n > 0 and spoken[n-1].isalpha() and (n+1 == len(spoken) or spoken[n+1].isspace())
     origin = [n for n, char in enumerate(spoken) if not separator(n, char)]
     normalized = ''.join(spoken[n] for n in origin)
     cursor = 0; last_time = 0; words = []
