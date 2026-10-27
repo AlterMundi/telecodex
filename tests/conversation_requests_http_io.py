@@ -111,9 +111,16 @@ def qualify(binary):
             'threadId':'native-topic-8','turnId':j.workers['native-topic-8'],'itemId':'direct-choice','isBlocking':True,
             'questions':[{'id':'direct','header':'Direct Beta','question':'Which direct requirement should continue?','options':None}]}})
         j.wait(lambda:bool(j.row("SELECT id FROM human_interactions WHERE state='pending' AND native_thread='native-topic-8'")))
+        # Ledger persistence precedes show_question and live responder publication.
+        # Observing the row is not evidence that its native answer channel exists.
+        def direct_question_ready():
+            response=client.get('/api/interaction/internal',headers=headers)
+            assert response.status_code==200,response.text
+            return any(v['target']['thread_id']==8 and v.get('actionable') is True for v in response.json()['items'])
+        j.wait(direct_question_ready)
         internal=client.get('/api/interaction/internal',headers=headers);assert internal.status_code==200,internal.text
         pending=next(v for v in internal.json()['items'] if v['target']['thread_id']==8)
-        assert pending['kind']=='question' and pending['actionable'] and pending['binding']==binding
+        assert pending['kind']=='question' and pending['actionable'] and pending['binding']==binding,pending
         assert pending['id'] not in {v['id'] for v in client.get('/api/interaction/requests',headers=headers).json()['items']}
         assert client.get('/api/interaction/requests/'+pending['id'],headers=headers).status_code==409
         selected=client.get('/api/interaction/internal/requests/'+pending['id'],headers=headers)
