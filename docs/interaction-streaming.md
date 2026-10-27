@@ -700,3 +700,57 @@ headers for progressive live prefixes, matching the real endpoint instead of
 silently taking the batch path. Scheduler checks cover earlier gaps, partial-to-
 canonical completion, changed source and binding retirement. These are synthetic
 digital checks, not new provider latency or physical-device acceptance.
+
+
+### Coupled actual streaming voice-to-answer observations — 2026-10-27
+
+Three sequential cold/warm trials now traverse one monotonic timeline through
+actual Gemini streaming recognition, the shipped exact-WAV upload/prepared-ASR
+adapter, selected native Sol6.1/medium and the source-revalidated Qwen streaming
+speech adapter. This extends the earlier text-original trials, which excluded
+recognition. No production conversation, microphone, physical playback, work
+dispatch or model/provider configuration changed. Native365 and web366 are the
+receiving source baseline.
+
+The source is the retained5.76-second synthetic Spanish/English demo mentioning
+`git status`. A fixed isolated session task explains the mentioned command in
+one useful Spanish sentence without executing it, using tools or adding filler.
+This is a synthetic statement-to-explanation task, not an ordinary human question
+benchmark. Audio was paced in100ms chunks. Each explicit Send admitted one
+original, using its prepared transcript without a file-ASR provider call. All
+three replies explained `git status`; their returned MP3 bytes decoded to
+non-silent audio offline.
+
+| Trial | First partial from audio start | Audio end to prepared | Send to native request | Native request to first text | Speech request to first frame | Audio end to first response frame |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| cold | 0.69s | 0.49s | 4.07s | 4.44s | 3.74s | 13.88s |
+| warm1 | 0.72s | 0.41s | 2.04s | 5.42s | 2.48s | 11.22s |
+| warm2 | 0.69s | 0.47s | 2.29s | 4.00s | 1.80s | 9.51s |
+
+The three audio-end-to-encoded-frame observations are9.51–13.88s, median11.22s.
+The useful sentence completed before a provisional speech boundary was selected,
+so these three replies used the canonical source. First text to speech-request
+selection added0.86–1.12s. The Send-to-native-request interval includes transcript
+commit/orchestration/client startup, not just recognition. Cold committed-ASR
+preparation reported3.14s (2.69s in its helper); warm preparation reported0.38s
+and0.36s (helper0.18s/0.12s). The data identifies these separate waits, but does
+not yet establish which mechanism dominates the warm admission overhead.
+
+One verifier initially expected a new durable transcript mirror for every
+capture. Identical source bytes intentionally share one immutable result. Both
+completed originals, native turns and synthesis results were retained; only the
+third, proven unattempted planned original continued after correcting that count.
+Final totals are3 recognition streams,3 originals,3 native turn/start,0 steer,
+0 work dispatches,3 completed speech attempts,3 capture-specific prepared records
+and1 exact-PCM transcript mirror. No provider/native operation was replayed.
+
+These are sequential uncontrolled observations, not a distribution or matched
+voice baseline speedup. The sample's last energy above PCM magnitude200 occurs
+at5.569s; using that proxy adds about0.19s to each final column. Neither waveform
+energy nor audio file end proves the human's final intended word. Encoded frames
+and offline non-silence do not establish browser decode/first intelligible sound,
+WAN/device scheduling or hearing. No subsecond success is claimed. Current
+selected-stack latency and full receiving/device acceptance remain unfinished
+under301/303/304. Inspect native admission and output-boundary waits before
+changing a conversational model; a different foreground model still requires
+the human's explicit choice.
