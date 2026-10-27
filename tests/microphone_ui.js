@@ -2,10 +2,20 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),crypto=require('node:crypto').webcrypto;
 const until=async fn=>{for(let n=0;n<100;n++){if(fn())return;await new Promise(yes=>setTimeout(yes,5));}throw Error('Expected microphone transition did not occur');};
 const deferred=()=>{let resolve;return {promise:new Promise(yes=>{resolve=yes;}),resolve:value=>resolve(value)};};
-function boot(live=false){
+function memoryRecovery(){
+ const values=new Map();
+ const db={createObjectStore(){},close(){},transaction(_name,mode){
+   const tx={aborted:false,abort(){this.aborted=true;this.onabort?.();},objectStore(){return {
+     get(key){const request={};queueMicrotask(()=>{request.result=values.get(key);request.onsuccess?.();queueMicrotask(()=>{if(!tx.aborted)tx.oncomplete?.();});});return request;},
+     put(value,key){assert.equal(mode,'readwrite');values.set(key,value);},delete(key){assert.equal(mode,'readwrite');values.delete(key);}
+   };}};return tx;
+ }};
+ return {values,open(){const request={result:db};queueMicrotask(()=>request.onsuccess?.());return request;}};
+}
+function boot(live=false,recovery){
  const nodes=new Map(),events={},timers=[],uploads=[],originals=new Map(),received=[],devices=[],activities=[];
  const document={hidden:false,addEventListener(name,fn){events[name]=fn;},querySelector(name){if(!nodes.has(name))nodes.set(name,{hidden:false,disabled:false,textContent:'',handlers:{},setAttribute(k,v){this[k]=v;},addEventListener(n,f){this.handlers[n]=f;}});return nodes.get(name);}};
- let mediaFailure,visual,visualFailure,mediaRequests=0,confirmDiscard=true;const confirmations=[];
+ let fileReferences,mediaFailure,visual,visualFailure,mediaRequests=0,confirmDiscard=true;const confirmations=[];
  let captureQuestions,playback,selection, binding='original-binding',mode,permission,receiptHold,uploadHold,capturePhase='preparing',captureRetired=false,paused=0,unauthorized=0;
  class Recorder{
   static isTypeSupported(type){return type==='audio/webm;codecs=opus';}
@@ -15,13 +25,14 @@ function boot(live=false){
   stop(){if(this.state==='inactive')return;this.state='inactive';queueMicrotask(()=>{this.events.dataavailable({data:new Blob(['synthetic finalized audio'])});this.events.stop();});}
  }
  const media=()=>({stopped:0,getTracks(){return [{stop:()=>this.stopped++}];}});
- const window={confirm(message){confirmations.push(message);return confirmDiscard;},isSecureContext:true,MediaRecorder:Recorder,crypto,addEventListener(n,fn){events[n]=fn;},navigator:{mediaDevices:{async getUserMedia(){mediaRequests++;if(mediaFailure)throw mediaFailure;if(permission)return permission.promise;return media();}}}};
+ const window={indexedDB:recovery,confirm(message){confirmations.push(message);return confirmDiscard;},isSecureContext:true,MediaRecorder:Recorder,crypto,addEventListener(n,fn){events[n]=fn;},navigator:{mediaDevices:{async getUserMedia(){mediaRequests++;if(mediaFailure)throw mediaFailure;if(permission)return permission.promise;return media();}}}};
  async function fetch(_route,options){
   uploads.push(options);const id=options.headers['X-Input-Id'];
   if(mode==='before'){mode=undefined;throw Error('Offline before capture');}
   if(mode==='visual-refusal'){mode=undefined;return {ok:false,status:400,json:async()=>({code:'visual_reselection',submission_attempted:false})};}
   if(mode==='denied'){mode=undefined;return {ok:false,status:403,json:async()=>({})};}
   const result={id,phase:capturePhase,retired:captureRetired,visual:options.headers['X-Visual-Reference']?JSON.parse(options.headers['X-Visual-Reference']):undefined,voice:{audio_sha256:options.headers['X-Audio-Sha256']}};if(mode==='visual-extra'){mode=undefined;result.visual.push({source_id:'unexpected-third-image'});}
+  if(options.headers['X-File-References']){result.files=JSON.parse(decodeURIComponent(options.headers['X-File-References'])).map(f=>({size:f.size,name:f.name,mime:f.mime,sha256:f.sha256,file_id:f.file_id}));if(mode==='files-changed'){mode=undefined;result.files[0].size++;}}
   originals.set(id,result);
   if(uploadHold)await uploadHold.promise;
   if(mode==='after'){mode=undefined;throw Error('Lost acknowledgement');}
@@ -32,9 +43,9 @@ function boot(live=false){
  const context=vm.createContext({window,document,Blob,Uint8Array,fetch,AbortController,
   setTimeout(fn,ms){const t={fn,ms};timers.push(t);return t;},clearTimeout(t){if(t)t.closed=true;}});
  vm.runInContext(fs.readFileSync('dashboard/web/microphone.js','utf8'),context);
- let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,getPlayback:()=>playback,getCaptureQuestions:()=>captureQuestions,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
+ let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,getPlayback:()=>playback,getCaptureQuestions:()=>captureQuestions,getFiles:()=>fileReferences,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
  ui.configure(true,live);
- return {ui,nodes,uploads,originals,received,devices,events,timers,media,activities,questions:value=>{captureQuestions=value;},playback:value=>{playback=value;},preparation:()=>preparation,
+ return {files:value=>{fileReferences=value;},ui,nodes,uploads,originals,received,devices,events,timers,media,activities,questions:value=>{captureQuestions=value;},playback:value=>{playback=value;},preparation:()=>preparation,
   confirmation:value=>{confirmDiscard=value;},confirmations,
   button:()=>nodes.get('#conversation-talk'),state:()=>nodes.get('#conversation-voice-state').textContent,
   click:()=>nodes.get('#conversation-talk').handlers.click(),cancel:()=>nodes.get('#conversation-voice-discard').handlers.click(),check:()=>nodes.get('#conversation-voice-check').handlers.click(),
@@ -89,8 +100,28 @@ function boot(live=false){
  assert.equal(f.uploads.length,1);assert.equal(f.uploads[0].body.type,'audio/webm;codecs=opus');assert.equal(f.devices[0].stream.stopped,1);
  assert.equal(f.button().textContent,'🎙');assert(f.received[0].voice.audio_sha256);
  assert.equal(f.activities.at(-1),true,'Audio replies wait until the transcript is ready');f.ui.observe({...f.received[0],phase:'accepted'},'Sent');assert.equal(f.activities.at(-1),false);
+ const originalFiles=[{file_id:'11111111-1111-4111-8111-111111111111',sha256:'a'.repeat(64),name:'scan.pdf',mime:'application/pdf',size:17}];
+ const withFiles=boot();withFiles.files(originalFiles);await withFiles.click();withFiles.click();await until(()=>withFiles.received.length===1);
+ assert.equal(withFiles.uploads.length,1,'Reordered server object keys cannot invalidate a receipt');
+ const changedFiles=boot();changedFiles.files(originalFiles);changedFiles.mode('files-changed');await changedFiles.click();changedFiles.click();await until(()=>changedFiles.state().startsWith('Recording unconfirmed'));assert.equal(changedFiles.received.length,0,'Changed original metadata must stay unconfirmed');
  const lost=boot();lost.mode('after');await lost.click();lost.click();await until(()=>lost.state().startsWith('Recording unconfirmed'));
  assert.equal(lost.originals.size,1);await lost.check();assert.equal(lost.uploads.length,1,'Status inspection must not upload again');assert.equal(lost.received.length,1);
+ const storage=memoryRecovery(),beforeReload=boot(false,storage);
+ await until(()=>!beforeReload.button().disabled);beforeReload.mode('before');await beforeReload.click();beforeReload.click();
+ await until(()=>beforeReload.state().startsWith('Recording unconfirmed'));
+ assert.equal(storage.values.size,1);assert.equal(beforeReload.button().hidden,false,'Unconfirmed original keeps explicit retry reachable');
+ assert.equal(beforeReload.nodes.get('#conversation-voice-discard').hidden,false,'Unconfirmed capture must have an exit without reloading');
+ const retained=storage.values.get('pending'),afterReload=boot(false,storage);
+ await until(()=>afterReload.state().startsWith('An unfinished recording was recovered'));
+ assert.equal(afterReload.uploads.length,0);assert.equal(afterReload.mediaRequests(),0,'Recovery does not capture, dispatch or retry');
+ await afterReload.check();assert.equal(afterReload.uploads.length,0);assert.match(afterReload.state(),/local audio is kept/);
+ await afterReload.click();await until(()=>afterReload.received.length===1);
+ assert.equal(afterReload.uploads[0].headers['X-Input-Id'],retained.id);assert.equal(afterReload.uploads[0].body,retained.blob);
+ assert.equal(storage.values.size,0,'Only a matching receipt retires local recovery');
+ const discarded=boot();discarded.mode('before');await discarded.click();discarded.click();await until(()=>discarded.state().startsWith('Recording unconfirmed'));
+ discarded.confirmation(false);discarded.cancel();assert.equal(discarded.nodes.get('#conversation-voice-check').hidden,false);
+ discarded.confirmation(true);discarded.cancel();assert.equal(discarded.ui.ownsSend(),false);assert.equal(discarded.button()['aria-label'],'Record a voice message');
+ assert.equal(discarded.uploads.length,1,'Discard of an uncertain local copy cannot resend or cancel server work');
  const offline=boot();offline.mode('before');await offline.click();offline.click();await until(()=>offline.state().startsWith('Recording unconfirmed'));
  assert.equal(offline.originals.size,0);await offline.click();await until(()=>offline.received.length===1);
  assert.equal(offline.uploads.length,2);assert.deepEqual(offline.uploads[0].headers,offline.uploads[1].headers);assert.equal(offline.uploads[0].body,offline.uploads[1].body,'Explicit retry preserves the exact original bytes');

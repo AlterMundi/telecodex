@@ -621,6 +621,66 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn internal_task_detail_and_dismiss_share_ledger_without_widening_for_you() {
+        let (_root, store, worker, turn) = fixture();
+        let entry = SessionKey::new(100, Some(9));
+        store
+            .ensure_session(entry, 100, &super::super::tests::defaults())
+            .unwrap();
+        store.set_session_codex_thread(entry, "integrator").unwrap();
+        store.record_turn_native_thread(turn, "source").unwrap();
+        store
+            .save_human_tasks(
+                worker,
+                &[("direct-action".into(), task("direct-action", turn))],
+            )
+            .unwrap();
+        assert!(
+            store
+                .conversation_human_task(100, entry, "direct-action")
+                .is_err()
+        );
+        assert!(
+            store
+                .internal_human_task(101, entry, "direct-action")
+                .is_err()
+        );
+        let selected = store
+            .internal_human_task(100, entry, "direct-action")
+            .unwrap();
+        let binding = selected["binding"].as_str().unwrap();
+        let revision = selected["revision"].as_str().unwrap();
+        assert!(
+            store
+                .internal_dismiss_human_task(100, entry, binding, "direct-action", &"0".repeat(64))
+                .is_err()
+        );
+        let result = store
+            .internal_dismiss_human_task(100, entry, binding, "direct-action", revision)
+            .unwrap();
+        assert_eq!(result["state"], "cancelled");
+        assert_eq!(result["human_completion"], false);
+        assert_eq!(result["work_cancelled"], false);
+        assert_eq!(
+            store
+                .internal_dismiss_human_task(100, entry, binding, "direct-action", revision)
+                .unwrap()["new_dismissal"],
+            false
+        );
+        assert!(
+            store
+                .conversation_human_task(100, entry, "direct-action")
+                .is_err()
+        );
+        assert!(
+            store.internal_pending_page(100, entry, 0).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn internal_pending_pages_do_not_drop_or_repeat_items() {
         let (_root, store, worker, turn) = fixture();
         let entry = SessionKey::new(100, Some(9));

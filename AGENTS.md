@@ -67,3 +67,15 @@ claim full coverage. Reuse owner-scoped pending ledgers/responders, current
 revisions and real destinations; direct-topic ingress remains direct. Opening a
 pending is never approval, completion, cancellation or input replay. See #61 and
 the pending-navigation section of docs/interaction-v02.md; full roadmap #301.
+
+## Routing ownership — human correction, 2026-10-27
+
+One implementation owner per distinct task. Preserve the exact human original;
+do not treat an integrator commentary as an encoded per-worker task scope. The
+current dispatch schema has no such field. Multi-target routing requires clearly
+distinct clauses addressed to those workers. A scope correction is an integrator
+selection, not a request for several workers to arbitrate ownership. Preserve
+existing checkpoints and inspect actual recipient acceptance. A bounded
+`session_request` consultation does not transfer the original request or its
+return responsibility; do not mark unfinished work complete to simulate transfer.
+See docs/interaction-routing-ownership.md for the verified gap and qualification.

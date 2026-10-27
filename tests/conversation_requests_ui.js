@@ -2,7 +2,7 @@
 const assert=require('node:assert/strict'), fs=require('node:fs'), vm=require('node:vm');
 const clone=value=>JSON.parse(JSON.stringify(value));
 const deferred=()=>{let release,enter;return {promise:new Promise(yes=>{release=yes;}),entered:new Promise(yes=>{enter=yes;}),release:()=>release(),enter:()=>enter()};};
-function boot(count=1, mayDecide=true) {
+function boot(count=1, mayDecide=true,maxCards=200) {
   const nodes=new Map();
   const element=tag=>({tag,children:[],handlers:{},dataset:{},textContent:'',value:'',hidden:false,disabled:false,
     setAttribute(key,value){this[key]=value;},addEventListener(name,fn){this.handlers[name]=fn;},
@@ -55,7 +55,7 @@ function boot(count=1, mayDecide=true) {
   }
   const context=vm.createContext({window:{},document,TextEncoder,URL,URLSearchParams});
   vm.runInContext(fs.readFileSync('dashboard/web/requests.js','utf8'),context);
-  let ui;ui=context.window.RequestControls.mount({api,getBinding:()=>binding,setCsrf(){},unauthorized(){ui.reset();},onReply:(reference,label)=>replies.push({reference:clone(reference),label}),onListen:source=>listens.push(clone(source)),getCanListen:()=>canListen,getCanDecide:()=>mayDecide});
+  let ui;ui=context.window.RequestControls.mount({api,getBinding:()=>binding,setCsrf(){},unauthorized(){ui.reset();},onReply:(reference,label)=>replies.push({reference:clone(reference),label}),onListen:source=>listens.push(clone(source)),getCanListen:()=>canListen,getCanDecide:()=>mayDecide,maxCards});
   const all=(el,predicate)=>[...(predicate(el)?[el]:[]),...el.children.flatMap(child=>all(child,predicate))];
   const button=(card,text)=>all(card,el=>el.tag==='button'&&el.textContent===text)[0];
   return {ui,nodes,sources,receipts,calls,replies,listens,button,all,tasks:args=>context.window.HumanTaskControls.mount({getBinding:()=>binding,...args}),goals:args=>context.window.GoalControls.mount({getBinding:()=>binding,...args}),speech(value){canListen=value;},
@@ -66,6 +66,18 @@ function boot(count=1, mayDecide=true) {
   };
 }
 (async()=>{
+  const bounded=boot(3,true,2);await bounded.ui.refresh();
+  assert.equal(bounded.cards().length,2);
+  assert.match(bounded.nodes.get('#conversation-request-state').textContent,/up to 2 loaded/);
+  assert.equal(bounded.nodes.get('#conversation-requests-more').hidden,false);
+  const first=bounded.cards()[0];await bounded.read(first);
+  const boundedDraft=bounded.all(first,v=>v.tag==='textarea')[0];boundedDraft.value='Keep my draft';
+  await bounded.ui.refresh();assert.equal(boundedDraft.value,'Keep my draft');
+  bounded.sources.get('request-2').state='expired';await bounded.ui.refresh();
+  await bounded.button(bounded.cards()[1],'Dismiss').handlers.click();
+  await bounded.nodes.get('#conversation-requests-more').handlers.click();
+  assert.equal(bounded.cards().length,2,'The skipped page must remain reachable after a card is dismissed');
+  assert(bounded.ui.attentionItems().some(v=>v.id==='request:request-3'));
   const limits=boot(0),template={binding:'bound',state:'pending',kind:'question',actionable:true,title:'Scope',body:'Choose scope',choices:[],revision:'public-revision',capture_version:'b'.repeat(64)};
   limits.sources.set('a'.repeat(32),{...template,id:'a'.repeat(32),sequence:1});
   limits.sources.set('c'.repeat(32),{...template,id:'c'.repeat(32),sequence:2,kind:'approval'});

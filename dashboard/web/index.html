@@ -11,6 +11,7 @@
     <script src="assets/voice-stream.js" defer></script>
     <script src="assets/microphone.js" defer></script>
     <script src="assets/visual.js" defer></script>
+    <script src="assets/files.js" defer></script>
     <script src="assets/routing_graph.js" defer></script>
     <script src="assets/companion.js" defer></script>
     <script src="assets/sonic.js" defer></script>
@@ -89,6 +90,7 @@
         <form id="conversation-compose" aria-label="Message your conversation">
           <div id="conversation-compose-status">
           <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
+          <div id="conversation-recording-review" class="conversation-tools" aria-label="Recording recovery" hidden><button id="conversation-voice-check" type="button" hidden>Check recording</button><button id="conversation-voice-save" type="button" hidden aria-label="Save a local copy of this recording" title="Save recording copy">Save audio</button></div>
           <p id="conversation-send-state" role="status" aria-live="polite"></p>
           </div>
           <div id="conversation-focus" class="conversation-tools" hidden><span id="conversation-focus-label"></span><button id="conversation-focus-clear" type="button">Back to conversation</button></div>
@@ -100,6 +102,8 @@
             <div id="conversation-attachment-sheet">
             <p class="note">Choose photos or take one. Marking a point is optional.</p>
             <div class="image-choices"><label class="image-choice" for="conversation-image"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m21 15-5-5L6 21M3 15l4-4 4 4"/></svg><span>Gallery</span><input id="conversation-image" type="file" accept="image/*" multiple></label><label class="image-choice" for="conversation-camera"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m8 7 1.5-3h5L16 7"/><rect x="3" y="7" width="18" height="14" rx="3"/><circle cx="12" cy="14" r="3.5"/></svg><span>Camera</span><input id="conversation-camera" type="file" accept="image/*" capture="environment"></label></div>
+            <label class="image-choice" for="conversation-files">Files<input id="conversation-files" type="file" multiple></label>
+            <div id="conversation-files-list" hidden></div><p id="conversation-files-state" role="status" aria-live="polite"></p>
             <div id="conversation-image-list" class="image-attachments" aria-label="Attached images in send order" hidden></div>
             <div class="visual-preview"><canvas id="conversation-image-view" tabindex="0" role="img" aria-label="Selected image. Optionally click a point, use arrow keys, or enter X and Y below." hidden></canvas></div>
             <div id="conversation-image-coordinates" class="conversation-tools" hidden><label>X <input id="conversation-image-x" type="number" min="0" step="1" disabled></label><label>Y <input id="conversation-image-y" type="number" min="0" step="1" disabled></label></div><button id="conversation-image-clear" type="button" hidden>Remove image</button>
@@ -107,7 +111,7 @@
             </div>
           </details>
         <section id="conversation-voice" hidden aria-label="Speak to your conversation">
-          <div class="conversation-tools"><button id="conversation-voice-replies" class="voice-output-toggle" type="button" data-voice-state="off" aria-pressed="false" aria-label="Enable spoken replies" title="Enable spoken replies"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 9h4l5-4v14l-5-4H3z"/><path class="voice-waves" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="voice-muted" d="m17 10 4 4m0-4-4 4"/><path class="voice-paused" d="M17 9v6m4-6v6"/></svg></button><button id="conversation-talk" type="button" aria-pressed="false" disabled aria-label="Record a voice message" title="Record a voice message"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg></button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
+          <div class="conversation-tools"><button id="conversation-voice-replies" class="voice-output-toggle" type="button" data-voice-state="off" aria-pressed="false" aria-label="Enable spoken replies" title="Enable spoken replies"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 9h4l5-4v14l-5-4H3z"/><path class="voice-waves" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="voice-muted" d="m17 10 4 4m0-4-4 4"/><path class="voice-paused" d="M17 9v6m4-6v6"/></svg></button><button id="conversation-talk" type="button" aria-pressed="false" disabled aria-label="Record a voice message" title="Record a voice message"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg></button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button></div>
         </section>
 <button id="conversation-send" type="submit" disabled>Send</button></div>
         </form>

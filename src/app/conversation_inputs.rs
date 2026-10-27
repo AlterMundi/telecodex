@@ -13,6 +13,8 @@ struct Submit {
     #[serde(default)]
     visual: Option<crate::visual::VisualSelection>,
     #[serde(default)]
+    files: Vec<crate::files::FileReference>,
+    #[serde(default)]
     reply: Option<crate::store::ConversationReply>,
     #[serde(default)]
     playback: Option<crate::store::ConversationPlayback>,
@@ -20,7 +22,7 @@ struct Submit {
 
 fn outcome(input: &ConversationInput, fresh: bool) -> Value {
     json!({"schema":"telecodex.conversation-input/v1","id":input.id,"phase":input.phase,
-        "new_input":fresh,"retired":input.retired,"text":input.text,"visual":input.visual,"voice":input.voice,"routing":input.routing,"playback":input.playback,"capture_questions":input.capture_questions,
+        "new_input":fresh,"retired":input.retired,"text":input.text,"files":input.files,"visual":input.visual,"voice":input.voice,"routing":input.routing,"playback":input.playback,"capture_questions":input.capture_questions,
         "entry_binding":[input.human,input.entry,input.session,input.native],"native_acceptance":if input.phase=="accepted" {"observed"}else{"unconfirmed"},
         "incorporation":"Not established by input retention or native acceptance"})
 }
@@ -152,7 +154,7 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         }
         let voice = input.voice.context("Original voice capture unavailable")?;
         let payload = json!({"binding":selected.binding,"id":selected.id,
-            "audio_sha256":voice.audio_sha256,"mime":voice.mime,"visual":input.visual,"reply":input.reply,"playback":input.playback,"capture_questions":input.capture_questions});
+            "audio_sha256":voice.audio_sha256,"mime":voice.mime,"files":input.files,"visual":input.visual,"reply":input.reply,"playback":input.playback,"capture_questions":input.capture_questions});
         return voice_submit(app, human, cfg.entry(), &payload.to_string(), true).await;
     }
     if let Some(body) = args.strip_prefix("retry ") {
@@ -317,7 +319,7 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
     }
     let interruption_targets = super::voice::snapshot(app).await;
     let _ingress = app.shared.conversation_ingress.lock().await;
-    let (input, fresh) = app.shared.store.conversation_input_capture_visual(
+    let (input, fresh) = app.shared.store.conversation_input_capture_files(
         human,
         cfg.entry(),
         &request.binding,
@@ -326,6 +328,7 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         request.reply,
         request.visual,
         request.playback,
+        request.files,
     )?;
     if fresh && input.phase == "retained" {
         if let Err(error) = super::voice::INTERRUPT_TARGETS
@@ -476,6 +479,11 @@ async fn submit(app: App, input: ConversationInput) -> Result<()> {
     let shared = app.shared.clone();
     let id = input.id.clone();
     let human = input.human;
+    let retained_text = format!(
+        "{}{}",
+        input.rendered(),
+        crate::files::rendered(&app.shared.config.db_path, &input.files)?
+    );
     let packet = CodexSteerRequest {
         observation: None,
         images: crate::visual::attachments(&app.shared.config.db_path, input.visual.as_ref())?
@@ -487,12 +495,10 @@ async fn submit(app: App, input: ConversationInput) -> Result<()> {
         })),
         client_message_id: Some(format!("conversation:{}", input.id)),
         text: match &active.controller_hint {
-            Some(hint) => format!(
-                "{}\n\n[Controller access for this execution]{}",
-                input.rendered(),
-                hint
-            ),
-            None => input.rendered(),
+            Some(hint) => {
+                format!("{retained_text}\n\n[Controller access for this execution]{hint}")
+            }
+            None => retained_text,
         },
         goal: None,
         response: send,
@@ -571,12 +577,22 @@ fn enqueue(
             request: TurnRequest {
                 session_key: input.entry,
                 from_user_id: input.human,
-                prompt: input.rendered(),
+                prompt: format!(
+                    "{}{}",
+                    input.rendered(),
+                    crate::files::rendered(&app.shared.config.db_path, &input.files)?
+                ),
                 runtime_instructions: None,
                 attachments: crate::visual::attachments(
                     &app.shared.config.db_path,
                     input.visual.as_ref(),
-                )?,
+                )?
+                .into_iter()
+                .chain(crate::files::attachments(
+                    &app.shared.config.db_path,
+                    &input.files,
+                )?)
+                .collect(),
                 review_mode: None,
                 override_search_mode: None,
             },
@@ -604,6 +620,8 @@ struct VoiceSubmit {
     mime: String,
     #[serde(default)]
     visual: Option<crate::visual::VisualSelection>,
+    #[serde(default)]
+    files: Vec<crate::files::FileReference>,
     #[serde(default)]
     reply: Option<crate::store::ConversationReply>,
     #[serde(default)]
@@ -684,7 +702,7 @@ async fn voice_submit(
     if recover && permit.is_none() {
         bail!("Voice preparation busy; recovery was not started");
     }
-    let (mut input, mut fresh) = app.shared.store.conversation_voice_capture_reply(
+    let (mut input, mut fresh) = app.shared.store.conversation_voice_capture_files(
         human,
         entry,
         &request.binding,
@@ -695,6 +713,7 @@ async fn voice_submit(
         request.visual,
         request.playback,
         request.capture_questions,
+        request.files,
     )?;
     if recover {
         (input, fresh) = app.shared.store.conversation_voice_resume(

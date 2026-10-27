@@ -152,3 +152,18 @@ native ThreadStore summary preserves the actual final agent item without
 hydrating every tool item from many turns. Explicit full-history reconciliation
 retains its established path. A summary or missing final is never synthesized
 into a reply. The process fixture asserts the bounded summary-view request.
+
+### One recovery after proven uncommitted dispatch
+
+A dispatch helper failure can leave a request remotely queued before any native
+input was possible. The poller may recover that same request once only after a
+fresh owner inspection reports queued/no dispatch and current route/identity,
+worker and maintenance checks pass. The local record must show no dispatch,
+collector, native turn or echo, and the exact dispatch-acknowledgement failure.
+A retained marker bounds recovery even when the helper fails again. Changed
+source/binding, a committed dispatch or missing native acknowledgement never
+qualifies. Uncertainty is retained; no new request ID or human input is invented.
+The first local receipt also freezes the current human Stop admission epoch.
+Recovery cannot cross that epoch, including a stop arriving across worker lookup.
+Legacy entries without this evidence remain retained for explicit review; a
+later active session alone never proves an old input should resume.

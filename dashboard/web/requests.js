@@ -252,21 +252,21 @@ window.RequestControls = (() => {
       try {
         const page = await api(`interaction/requests?after=${after}`);
         if (owned !== generation) return false;
-        const seen = new Set();
+        const seen = new Set();let limited=false;
         const apply = value => {
           if (value.binding !== getBinding()) throw new Error("Conversation changed. Refresh before responding.");
           setCsrf(value.csrf);
-          for (const item of value.items) {seen.add(item.id); if(!cards.has(item.id)&&cards.size>=maxCards)continue; metadata(cards.get(item.id) || create(item),item,observed);}
-          cursor = Math.max(cursor,value.cursor);
+          for (const item of value.items) {seen.add(item.id); if(!cards.has(item.id)&&cards.size>=maxCards){limited=true;continue;} metadata(cards.get(item.id) || create(item),item,observed);}
+          if(!limited)cursor = Math.max(cursor,value.cursor);
           return value;
         };
         let last = apply(page);
-        if (after === 0 && cursor > page.cursor) {
+        if (!limited && after === 0 && cursor > page.cursor) {
           const tail = await api(`interaction/requests?after=${cursor}`);
           if (owned !== generation) return false;
           last = apply(tail);
         }
-        more.hidden = !last.more;
+        more.hidden = !last.more && !limited;
         // Recheck loaded requests absent from these pages, including ones that
         // another surface answered or the native source retired meanwhile.
         const candidates = [...cards.values()].filter(card => !seen.has(card.id) && !terminal(card.meta) && !card.loading && !card.busy);
@@ -291,7 +291,7 @@ window.RequestControls = (() => {
         }));
         if (owned !== generation) return false;
         section.hidden = !cards.size;
-        state.textContent = last.more ? "More requests are available." : "You can keep writing while sessions wait for a response.";
+        state.textContent = limited ? `Showing up to ${maxCards} loaded requests. Dismiss closed cards to load more, or open Sessions for other pending items.` : last.more ? "More requests are available." : "You can keep writing while sessions wait for a response.";
         return current;
       } catch(e) {
         if (owned !== generation) return false;
@@ -486,12 +486,12 @@ window.HumanTaskControls = (() => {
       try{
         const page=await api(`interaction/tasks?after=${after}`);if(token!==generation)return;
         if(page.binding!==getBinding())throw Error('Conversation changed');setCsrf(page.csrf);
-        const seen=new Set();for(const v of page.items){seen.add(v.id);if(!cards.has(v.id)&&cards.size>=maxCards)continue;metadata(cards.get(v.id)||create(v),v);}
-        cursor=Math.max(cursor,page.cursor);more.hidden=!page.more;
+        const seen=new Set();let limited=false;for(const v of page.items){seen.add(v.id);if(!cards.has(v.id)&&cards.size>=maxCards){limited=true;continue;}metadata(cards.get(v.id)||create(v),v);}
+        if(!limited)cursor=Math.max(cursor,page.cursor);more.hidden=!page.more&&!limited;
         const absent=[...cards.values()].filter(c=>!seen.has(c.id)&&!terminal(c.view));
         const selected=absent.length?Array.from({length:Math.min(8,absent.length)},(_,n)=>absent[(probe+n)%absent.length]):[];probe+=selected.length;
         await Promise.all(selected.map(c=>detail(c)));if(token!==generation)return;
-        section.hidden=!cards.size;state.textContent='You can respond here while sessions keep working.';
+        section.hidden=!cards.size;state.textContent=limited?`Showing up to ${maxCards} loaded actions. Dismiss closed cards to load more, or open Sessions for other pending items.`:'You can respond here while sessions keep working.';
       }catch(e){if(token===generation){for(const card of cards.values()){card.unavailable=true;controls(card);}section.hidden=false;state.textContent='Human actions unavailable. Refresh to reconnect.';if([401,403].includes(e.status))unauthorized(e);}}
       finally{if(token===generation){reading=false;more.disabled=false;}}
     }
