@@ -172,7 +172,7 @@ impl Store {
         // The integrator has already handed this exact original to the target.
         // A second worker must not manufacture a parallel task and callback.
         let already_routed: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM interaction_instructions WHERE input_id=?1 AND session_id=?2 AND phase NOT IN ('rejected','cancelled'))",
+            "SELECT EXISTS(SELECT 1 FROM interaction_instructions WHERE input_id=?1 AND session_id=?2)",
             params![p.input_id, target_id], |r| r.get(0),
         )?;
         if existing.is_none() && already_routed {
@@ -722,6 +722,32 @@ mod tests {
                 .interaction_admit(&source, b.key, RequestRelation::New)
                 .unwrap()
                 .0;
+            // A retired or known-unsent direct route is not permission to
+            // recreate the same work under another worker's dependency ID.
+            for phase in ["rejected", "cancelled", "retained_unsent"] {
+                s.conn
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE interaction_instructions SET phase=?2 WHERE id=?1",
+                        params![direct.id, phase],
+                    )
+                    .unwrap();
+                assert!(
+                    send("not-a-recovery")
+                        .unwrap_err()
+                        .to_string()
+                        .contains("Destination already received this original input")
+                );
+            }
+            s.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE interaction_instructions SET phase='queued' WHERE id=?",
+                    [&direct.id],
+                )
+                .unwrap();
             let physical = "mixed-result-turn";
             let (root, steered) = if helper_first {
                 (&helper, &direct)
