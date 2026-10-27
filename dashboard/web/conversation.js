@@ -151,6 +151,65 @@ window.Conversation = (() => {
     }
     let graphCursor=0;
     const cards = new Map(),progressCards=new Map(),settledProgress=new Map();
+    // Device-local audio attention, scoped to this conversation binding. No
+    // transcript, labels, native work state or playback backlog is persisted.
+    const mutedSessions=new Set();let muteBinding;
+    function sessionKey(source){
+      const target=source.target;
+      if(!["worker_progress","worker_result"].includes(source.kind) || !target
+        || !Number.isSafeInteger(target.chat_id) || target.thread_id!=null && !Number.isSafeInteger(target.thread_id))return;
+      return JSON.stringify([target.chat_id,target.thread_id??null]);
+    }
+    const sessionMuted=source=>mutedSessions.has(sessionKey(source));
+    function loadSessionMutes(){
+      if(muteBinding===binding)return;muteBinding=binding;mutedSessions.clear();
+      try{
+        const raw=window.localStorage?.getItem("interaction-session-mutes:"+binding);
+        if(!raw || raw.length>32768)return;
+        const saved=JSON.parse(raw);if(!Array.isArray(saved)||saved.length>256)return;
+        for(const key of saved){
+          if(typeof key!=="string" || key.length>64)continue;
+          const pair=JSON.parse(key);
+          if(Array.isArray(pair)&&pair.length===2&&Number.isSafeInteger(pair[0])&&(pair[1]===null||Number.isSafeInteger(pair[1]))
+            &&JSON.stringify(pair)===key)mutedSessions.add(key);
+        }
+      }catch{}
+    }
+    function muteButtonState(card){
+      if(!card.mute)return;
+      const muted=sessionMuted(card.muteSource),label=card.muteSource.label||"this session";
+      card.mute.setAttribute("aria-pressed",String(muted));
+      card.mute.setAttribute("aria-label",`${muted?"Unmute":"Mute"} automatic audio updates from ${label}`);
+      card.mute.title=card.mute.getAttribute?.("aria-label") || `${muted?"Unmute":"Mute"} automatic audio updates from ${label}`;
+      card.mute.disabled=!muted&&mutedSessions.size>=256;
+      if(card.mute.disabled)card.mute.title="Session mute limit reached. Unmute another session first.";
+      // Static vector paths avoid platform-specific emoji or missing glyphs.
+      card.mute.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4Z"/>'+
+        (muted?'<path d="m16 9 5 6m0-6-5 6"/>':'<path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>')+'</svg>';
+    }
+    function sessionTitle(card,source,label){
+      card.muteSource=source;
+      const key=sessionKey(source);
+      if(readOnly || !key){card.title.textContent=label;card.titleLabel=undefined;card.muteAttached=false;return;}
+      // Refresh the label without detaching a focused keyboard control.
+      if(!card.titleLabel){card.title.textContent="";card.titleLabel=node("span");card.title.append(card.titleLabel);}
+      card.titleLabel.textContent=label;
+      if(!card.mute){
+        card.mute=node("button",undefined,"session-audio-mute");card.mute.type="button";
+        card.mute.addEventListener("click",()=>{
+          const selected=sessionKey(card.muteSource);if(!selected)return;
+          if(mutedSessions.has(selected))mutedSessions.delete(selected);
+          else {if(mutedSessions.size>=256)return;mutedSessions.add(selected);}
+          try{window.localStorage?.setItem("interaction-session-mutes:"+binding,JSON.stringify([...mutedSessions]));}catch{}
+          for(const other of [...cards.values(),...progressCards.values()])muteButtonState(other);
+          for(let n=voiceQueue.length-1;n>=0;n--)if(sessionMuted(voiceQueue[n]))voiceQueue.splice(n,1);
+          if(active?.queued && sessionMuted(active.source))stop("Automatic audio muted for this session. Its updates remain visible.");
+          voiceStatus();Promise.resolve().then(drainVoice);
+        });
+      }
+      muteButtonState(card);
+      if(!card.muteAttached){card.title.append(card.mute);card.muteAttached=true;}
+    }
     function clearProgress(){for(const card of progressCards.values())card.box.remove();progressCards.clear();settledProgress.clear();}
     const replyText=body=>window.ConversationMarkdown?.source(body) ?? body.textContent;
     const setReplyText=(body,text)=>window.ConversationMarkdown?window.ConversationMarkdown.render(body,text):(body.textContent=text);
@@ -170,7 +229,7 @@ window.Conversation = (() => {
         inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
       }
       const changed=card.source!==source.id || card.revision!==source.revision;
-      card.source=source.id;card.revision=source.revision;card.stamp=stamp;card.title.textContent=`Update from ${source.label}`;
+      card.source=source.id;card.revision=source.revision;card.stamp=stamp;sessionTitle(card,source,`Update from ${source.label}`);
       card.box.dataset.sourceId=source.id;
       const original=cards.get(source.id);
       setReplyText(card.body,original?.expanded && original.source.revision===source.revision?replyText(original.body):source.preview);
@@ -803,6 +862,7 @@ window.Conversation = (() => {
       const observed=Date.parse(source.observed_at)||0;
       if(source.kind.endsWith("_progress") && observed && observed<=(voiceFinalTimes.get(speaker(source))||0))return;
       rememberFinal(source);
+      if(sessionMuted(source))return;
       const sameSpeaker=other=>source.kind.startsWith("integrator_")?other.kind==="integrator_progress":
         other.kind==="worker_progress" && JSON.stringify(other.target)===JSON.stringify(source.target);
       if(source.kind.endsWith("_progress") || ["worker_result","integrator_answer"].includes(source.kind)){
@@ -841,6 +901,7 @@ window.Conversation = (() => {
     }
     async function drainVoice() {
       if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || !enabled || !canListen || !playbackAllowed())return;
+      while(voiceQueue.length&&sessionMuted(voiceQueue[0]))voiceQueue.shift();
       const next=voiceQueue.shift();voiceStatus();if(!next)return;
       voiceBusy=true;
       const result=await listenTo(next,0,{queued:true});
@@ -970,7 +1031,7 @@ window.Conversation = (() => {
       messageTime(card.time,source.observed_at);card.box.append(card.time);
       const integrator=source.kind.startsWith("integrator_");
       const progress=source.kind.endsWith("_progress");
-      card.title.textContent = integrator ? "Conversation" : source.label;
+      sessionTitle(card,source,integrator ? "Conversation" : source.label);
       card.status.textContent = progress ? "Progress update." : source.kind === "integrator_answer" ? "Reply from this conversation."
         : source.correction_pending ? "A later correction is pending."
         : !source.native_binding_current ? "From an earlier session."
@@ -1007,7 +1068,7 @@ window.Conversation = (() => {
       }
       companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
-      binding = value.binding;loadPositions();canReportPlayback=value.can_report_playback===true;
+      binding = value.binding;loadPositions();loadSessionMutes();canReportPlayback=value.can_report_playback===true;
       canFiles=!readOnly && value.can_download_files===true;
       if(!canFiles)clearFiles();
       else if(value.artifacts?.state==="unavailable")filesConnected=false;

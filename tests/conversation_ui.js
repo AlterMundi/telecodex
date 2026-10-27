@@ -27,7 +27,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
       addEventListener(name, fn) { this.handlers[name] = fn; },
-      append(...children) { for(const child of children){const at=this.children.indexOf(child);if(at>=0)this.children.splice(at,1);this.children.push(child);} },
+      append(...children) { this.appendCalls=(this.appendCalls||0)+1;for(const child of children){const at=this.children.indexOf(child);if(at>=0)this.children.splice(at,1);this.children.push(child);} },
       replaceChildren(...children) { this.children = children; },
       insertBefore(child, before) {
         const previous = this.children.indexOf(child);
@@ -537,7 +537,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const updateLane=updatesFollow.nodes.get('#conversation-timeline');let updateScrolls=0;
   updateLane.contains=card=>updateLane.children.includes(card);updateLane.getBoundingClientRect=()=>({top:100});updateLane.scrollTop=0;
   updateLane.scrollTo=()=>{updateScrolls++;};
-  const updateCard=updateLane.children.find(card=>card.children[0]?.textContent==='Update from Alpha');assert(updateCard);
+  const updateCard=updateLane.children.find(card=>card.children[0]?.children[0]?.textContent==='Update from Alpha');assert(updateCard);
   updateCard.getBoundingClientRect=()=>({top:350});
   const hiddenUpdate=updatesFollow.nodes.get('#conversation-results').children.find(card=>card.dataset.sourceId==='native:8');
   await hiddenUpdate.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen').handlers.click();
@@ -672,6 +672,35 @@ function boot(readOnly=false,standalone=false,options={}) {
   compactVoice.addReplies(1);await compactVoice.ui.refresh();
   assert.equal(compactVoice.audioCalls.length,1,'Late history paging cannot speak old progress after the final answer');
   compactVoice.ui.stop();
+  const muteStorage=new Map(),muted=boot(false,true,{clock:true,followStorage:muteStorage});muted.audio();
+  const worker=(thread,label)=>({kind:'worker_result',label,target:{chat_id:100,thread_id:thread},current:true,native_binding_current:true});
+  muted.overrideSource(8,{...worker(7,'Alpha'),kind:'worker_progress'});await muted.ui.refresh();
+  const muteControl=(fixture,id)=>fixture.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id&&!c.removed).children[0].children.find(c=>c.className==='session-audio-mute');
+  const alphaMute=muteControl(muted,'native:8');assert(alphaMute);alphaMute.handlers.click();
+  assert.equal(alphaMute['aria-pressed'],'true');assert.match(alphaMute['aria-label'],/Unmute.*Alpha/);
+  const muteHeading=muted.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8').children[0],attached=muteHeading.appendCalls;
+  await muted.ui.refresh();assert.equal(muteHeading.appendCalls,attached,'Live refresh never detaches/re-appends the focused mute button');
+  muted.nodes.get('#conversation-voice-replies').handlers.click();
+  muted.overrideSource(9,worker(7,'Alpha'));muted.overrideSource(10,worker(8,'Beta'));muted.addReplies(2);await muted.ui.refresh();
+  const mutedPlayer=muted.nodes.get('#conversation-audio');await until(()=>muted.audioCalls.length===1&&!mutedPlayer.paused);
+  assert.equal(muted.audioCalls[0].source,'native:10','Muted Alpha stays visible while Beta is spoken');
+  assert(muted.nodes.get('#conversation-timeline').children.some(c=>c.dataset.sourceId==='native:9'));
+  muteControl(muted,'native:9').handlers.click();mutedPlayer.ended=true;await mutedPlayer.handlers.ended();muted.clock.fire(450);
+  await Promise.resolve();assert.equal(muted.audioCalls.length,1,'Unmuting does not replay the silent backlog');
+  muted.overrideSource(11,worker(7,'Renamed Alpha'));muted.addReplies(1);await muted.ui.refresh();
+  await until(()=>muted.audioCalls.length===2&&!mutedPlayer.paused);
+  muteControl(muted,'native:11').handlers.click();assert.equal(mutedPlayer.paused,true,'Mute stops the selected automatic playback');
+  assert.equal(muted.nodes.get('#conversation-voice-replies').dataset.voiceState,'on','Mute does not pause global Voice or native work');
+  muted.overrideSource(12,worker(7,'Renamed Alpha'));muted.overrideSource(13,worker(8,'Beta'));muted.addReplies(2);await muted.ui.refresh();
+  await until(()=>muted.audioCalls.length===3&&!mutedPlayer.paused);assert.equal(muted.audioCalls[2].source,'native:13');
+  const manualCard=muted.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:12');
+  manualCard.children[3].children[1].handlers.click();await until(()=>muted.audioCalls.length===4&&!mutedPlayer.paused);
+  assert.equal(muted.audioCalls[3].source,'native:12','Explicit Listen remains available for a muted session');muted.ui.stop();
+  const restoredMute=boot(false,true,{followStorage:muteStorage});restoredMute.overrideSource(8,{...worker(7,'New label'),kind:'worker_progress'});await restoredMute.ui.refresh();
+  assert.equal(muteControl(restoredMute,'native:8')['aria-pressed'],'true','Stable session identity and binding-scoped preference survive reload');restoredMute.ui.stop();
+  const otherBinding=boot(false,true,{followStorage:new Map([['interaction-session-mutes:another-binding',JSON.stringify(['[100,7]'])]])});
+  otherBinding.overrideSource(8,{...worker(7,'Alpha'),kind:'worker_progress'});await otherBinding.ui.refresh();
+  assert.equal(muteControl(otherBinding,'native:8')['aria-pressed'],'false','Another conversation binding cannot mute this one');otherBinding.ui.stop();
   const autoQuestion=boot();autoQuestion.audio();await autoQuestion.ui.refresh();
   autoQuestion.nodes.get('#conversation-voice-replies').handlers.click();autoQuestion.nativeRequest();await autoQuestion.ui.refresh();
   const questionPlayer=autoQuestion.nodes.get('#conversation-audio');
