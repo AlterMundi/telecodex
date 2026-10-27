@@ -405,9 +405,13 @@ all sessions: global attention needs its own owner-scoped read/navigation contra
 
 Local draft branch `fix/interaction-pending-navigation` adds a permanent For you
 header control and readable panel over the same retained card nodes. Existing
-request/conversation state tests pass; a synthetic Chromium390px fixture verifies
-open/close, reply-to-composer, preserved draft and empty state without horizontal
-overflow. This is component verification, not full receiving acceptance. Global
-session data/navigation, full app phone/keyboard layout, carousel drag/focus,
-exact reported Review-item diagnosis, CI and deployment remain unfinished.
+request/conversation state tests pass. A synthetic Chromium component verifies
+open/close, reply-to-composer, preserved draft and explicit empty access. The full
+shipped HTML/JS with synthetic read-only HTTP verifies Escape/draft preservation,
+question/task reply preparation and scrollable dialogs at320/390/1040px. A found
+desktop header overflow was corrected; inspected screenshots and updated metrics
+show contained44px header access and no horizontal overflow. These fixtures send
+no native decisions, models or capture. Global session data/navigation, carousel
+drag/focus, exact reported Review-item diagnosis, final CI and receiving deployment
+remain unfinished.
 Owning task #61; stage4 attention and native repair remain in plan #301/milestone9.
