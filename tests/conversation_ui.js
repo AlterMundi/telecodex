@@ -450,6 +450,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   background.failPage('AbortError');await background.ui.refresh();
   assert.equal(background.nodes.get('#conversation-voice-replies').dataset.voiceState,'on','The API request deadline cannot become a human pause');
   background.mediaActions.get('pause')();assert.equal(bgPlayer.paused,true);assert.equal(background.mediaSession.playbackState,'paused');
+  assert.equal(background.nodes.get('#conversation-voice-replies').dataset.lastPauseReason,'media-session','Retain the actual pause entry point locally for device diagnosis');
   background.show();assert.equal(bgPlayer.paused,true,'OS Pause is explicit human intent');
   background.mediaActions.get('play')();await until(()=>!bgPlayer.paused);
   background.ui.pause();background.hide();background.show();
