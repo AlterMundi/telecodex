@@ -84,5 +84,44 @@ const deadline=setTimeout(()=>{throw Error("Live speech test did not settle");},
      assert.equal((await mapping).resume,outcome==='match'?20:0);
    }
  }
+ // Reload before canonical confirmation retains an unsaid gap without storing
+ // text or automatically repeating a possibly synthesized/played prefix.
+ const disk=new Map(),storage={read:key=>disk.get(key),write:(key,value)=>disk.set(key,value)};
+ const beforeReload=context.window.LiveSpeech.mount(storage);
+ beforeReload.observe({...key,text:'First private sentence. Another sentence. Unfinished'},'saved-binding');
+ const firstSaved=await beforeReload.next();assert(beforeReload.admit(firstSaved));
+ beforeReload.checkpoint(firstSaved,0,8);beforeReload.interrupt(firstSaved);
+ assert(![...disk.values()].join('').includes('private sentence'),'Local continuity must not retain provisional text');
+ const restored=context.window.LiveSpeech.mount(storage);
+ restored.observe({...key,text:'First private sentence. Another sentence. Still writing'},'saved-binding');
+ assert.equal(await restored.next(),undefined,'Reload must not repeat a possibly paid prefix');
+ let validations=0;
+ const restoredMapping=await restored.reconcile(canonical,async selected=>{validations++;assert.equal(selected.id,firstSaved.id);});
+ assert.equal(validations,1);assert.equal(restoredMapping.skip,true);assert.equal(restoredMapping.resume,8);
+ assert.equal(restored.resume(canonical),8);
+ assert.equal(JSON.parse(disk.get('interaction-live-speech:saved-binding')).length,1,'Keep the provisional checkpoint until canonical persistence confirms success');
+ const afterFailedSave=context.window.LiveSpeech.mount(storage);afterFailedSave.observe(null,'saved-binding');
+ assert.equal((await afterFailedSave.reconcile(canonical,async()=>{})).resume,8,'A failed canonical write leaves the durable provisional boundary intact');
+ restored.canonicalSaved(canonical);
+ assert.equal(JSON.parse(disk.get('interaction-live-speech:saved-binding')).length,0,'Successful canonical persistence retires the provisional checkpoint');
+ assert.equal(restored.checkpoint(canonical,20,40),undefined,'Canonical playback cannot jump across an earlier unsaid gap');
+ assert.equal(restored.checkpoint(canonical,8,40).resume,40,'Explicit canonical playback extends the validated contiguous cursor');
+ assert.equal(restored.checkpoint(canonical,8,12).resume,12,'Backward canonical seeking replaces the cursor');
+ const otherBinding=context.window.LiveSpeech.mount(storage);
+ otherBinding.observe({...key,text:'First private sentence. Unfinished'},'another-binding');
+ assert((await otherBinding.next()),'A different binding does not inherit attempts');
+ // A failed canonical read leaves the retained selector available for a later
+ // reload; a definite changed prefix clears its old cursor.
+ const offline=context.window.LiveSpeech.mount(storage);
+ offline.observe({...key,text:'First private sentence. Unfinished'},'offline-binding');
+ const offlinePrefix=await offline.next();assert(offline.admit(offlinePrefix));offline.checkpoint(offlinePrefix,0,9);
+ await assert.rejects(offline.reconcile(canonical,async()=>{throw new TypeError('Offline');}),/Offline/);
+ const afterOffline=context.window.LiveSpeech.mount(storage);afterOffline.observe(null,'offline-binding');
+ const changedReload=await afterOffline.reconcile(canonical,async()=>{throw Object.assign(Error('Changed'),{status:409});});
+ assert.equal(changedReload.resume,0);assert.equal(changedReload.changed,true);assert.equal(changedReload.skip,true,'Changed restored prefixes still require explicit Listen');
+ for(const raw of ['not JSON',JSON.stringify([{}]),'x'.repeat(32769)]){
+   const invalid=context.window.LiveSpeech.mount({read:()=>raw});invalid.observe(null,'bad');
+   assert.equal((await invalid.reconcile(canonical,async()=>assert.fail('Invalid storage cannot select a source'))).resume,undefined);
+ }
  clearTimeout(deadline);console.log('PASS live prefixes: useful boundary, Unicode hash, one owned attempt, canonical handover, manual cursor, changed source, network uncertainty, code and entry fences; zero media/providers.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

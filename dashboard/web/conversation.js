@@ -128,7 +128,9 @@ window.Conversation = (() => {
       else {const nextReply=voiceQueue.findIndex(value=>value.kind!=="native_question");voiceQueue.splice(nextReply<0?voiceQueue.length:nextReply,0,source);}
     }
 
-    const liveSpeech=window.LiveSpeech?.mount();let canSpeakLive=false;
+    const liveSpeech=window.LiveSpeech?.mount(standalone?{
+      read:key=>window.localStorage?.getItem(key),write:(key,value)=>window.localStorage?.setItem(key,value)
+    }:undefined);let canSpeakLive=false;
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
     const taskControls=window.HumanTaskControls?.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,canReply:()=>!readOnly,onReply:task=>{
       if(readOnly || posting || draft.value.trim())return false;
@@ -859,8 +861,8 @@ window.Conversation = (() => {
       card.listen.title=saved?.revision===card.source.revision?"Resume from the saved word or segment boundary; part of a word may repeat":"Listen to this reply";
     }
     function savePositions(){
-      if(!standalone || !binding)return;
-      try{window.localStorage?.setItem(positionKey(),JSON.stringify([...speechPositions.values()]));}catch{}
+      if(!standalone || !binding)return false;
+      try{const storage=window.localStorage;if(!storage)return false;storage.setItem(positionKey(),JSON.stringify([...speechPositions.values()]));return true;}catch{return false;}
     }
     function loadPositions(){
       if(positionBinding===binding)return;positionBinding=binding;speechPositions.clear();
@@ -875,7 +877,7 @@ window.Conversation = (() => {
       }catch{}
     }
     function forgetPosition(source){
-      if(speechPositions.delete(source.id)){savePositions();const card=cards.get(source.id);if(card)positionLabel(card);}
+      if(speechPositions.delete(source.id)){if(savePositions())liveSpeech?.canonicalSaved(source);const card=cards.get(source.id);if(card)positionLabel(card);}
     }
     function rememberPosition(){
       if(!active || active.verifying || !blobUrl)return;
@@ -887,7 +889,7 @@ window.Conversation = (() => {
         return;
       }
       const normal=active.segmentEnded?(Number.isSafeInteger(active.next)?active.next:active.textEnd):(word??active.offset);
-      const contiguous=liveSpeech?.resume(source);
+      const contiguous=liveSpeech?.checkpoint(source,active.offset,normal)?.resume ?? liveSpeech?.resume(source);
       // A provider word cursor can refine this segment, but cannot hide an
       // earlier interrupted/failed live prefix. No duration interpolation.
       const offset=contiguous===undefined || contiguous>=active.offset?normal:Math.min(normal,contiguous);
@@ -896,14 +898,16 @@ window.Conversation = (() => {
       }
       speechPositions.delete(source.id);speechPositions.set(source.id,{source:source.id,revision:source.revision,offset});
       while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
-      savePositions();const card=cards.get(source.id);if(card)positionLabel(card);
+      if(savePositions())liveSpeech?.canonicalSaved(source);
+      const card=cards.get(source.id);if(card)positionLabel(card);
     }
     function rememberLiveCursor(cursor){
       if(!cursor)return;
       if(cursor.resume>=cursor.source.text_characters){forgetPosition(cursor.source);return;}
       speechPositions.delete(cursor.source.id);speechPositions.set(cursor.source.id,{source:cursor.source.id,revision:cursor.source.revision,offset:cursor.resume});
       while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
-      savePositions();const card=cards.get(cursor.source.id);if(card)positionLabel(card);
+      if(savePositions())liveSpeech?.canonicalSaved(cursor.source);
+      const card=cards.get(cursor.source.id);if(card)positionLabel(card);
     }
     function alignedPosition(){
       if(!canReportWordPosition || !active || !Number.isFinite(audio.currentTime) || audio.currentTime<0 || audio.currentTime>3600)return;
@@ -1138,7 +1142,7 @@ window.Conversation = (() => {
         reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
         read.addEventListener("click",()=>readCard(card));
         listen.hidden=readOnly;listen.addEventListener("click", () => {
-          if(readOnly || captureBusy)return;
+          if(readOnly || captureBusy || listen.disabled)return;
           const saved=speechPositions.get(card.source.id);
           if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended && (!saved || saved.offset>=active.offset)){
             voiceSuspended=false;voiceStatus();return startPlayback();
@@ -1215,19 +1219,29 @@ window.Conversation = (() => {
       else liveSpeech?.observe(value.response_draft,binding);
       if(!canListen && (voiceEnabled || active || speechWait))pause("capability");
       $("#conversation-voice-replies").disabled=!canListen;
-      for (const source of value.items)upsert(source);
+      for (const source of value.items){
+        upsert(source);
+        const card=cards.get(source.id);
+        if(card)card.listen.disabled=canSpeakLive && liveSpeech?.needsReconcile(source)===true;
+      }
       if(direction==="after")for(const source of value.items)companion?.reply(source);
-      if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0))){
+      for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0))){
         if(active?.source.kind==="integrator_live" && active.source.native_turn===source.native_turn && active.source.native_item===source.native_item)rememberPosition();
-        const reconciled=canSpeakLive?await liveSpeech?.reconcile(source,part):undefined;
+        const reconciled=canSpeakLive && (direction==="after" || liveSpeech?.needsReconcile(source))?await liveSpeech?.reconcile(source,part):undefined;
         if(reconciled?.changed)cancelPreparedMessage(source);
         if(reconciled?.changed && active?.source.kind==="integrator_live" && active.source.native_turn===source.native_turn && active.source.native_item===source.native_item)
           stop("The confirmed response changed. Its updated text remains available.");
         if(reconciled?.resume!==undefined){
-          speechPositions.set(source.id,{source:source.id,revision:source.revision,offset:reconciled.resume});savePositions();
+          speechPositions.set(source.id,{source:source.id,revision:source.revision,offset:reconciled.resume});
+          if(savePositions())liveSpeech?.canonicalSaved(source);
           const card=cards.get(source.id);if(card)positionLabel(card);
         }
-        if(reconciled?.skip)voiceSeen.add(voiceKey(source));else offerVoice(reconciled?.source||source);
+        const card=cards.get(source.id);
+        if(card?.source.revision===source.revision)card.listen.disabled=false;
+        // Initial/history pages can contain a response confirmed while the
+        // view was closed. Transfer its retained cursor without speaking history.
+        if(reconciled?.skip)voiceSeen.add(voiceKey(source));
+        else if(direction==="after")offerVoice(reconciled?.source||source);
       }
       showResponseDraft(value.response_draft);
       if(active?.auto && !audio.paused && !active.verifying)prefetchNext(active);

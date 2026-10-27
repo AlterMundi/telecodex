@@ -48,7 +48,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     },
   };
   let presentationProfile="simple";
-  let count = 8, arriveDuringRecent = false, heldValidation, renderAudio=false, multipart=false,audioFailures=0;
+  let count = 8, arriveDuringRecent = false, heldValidation, validationPending=false, renderAudio=false, multipart=false,audioFailures=0;
   const source = n => ({id:`native:${n}`, kind:standalone&&n===1?"integrator_progress":"integrator_answer", sequence:n, observed_at:new Date(1704067200000+n*1000).toISOString(),
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`,...sourceOverrides.get(n)});
   const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), humanTasks=new Map(), nativePosts = [],taskPosts=[];
@@ -125,7 +125,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       return snapshot;
     }
     if (url.pathname.endsWith("/part")) {
-      if (heldValidation) { heldValidation.started = true; return heldValidation.promise; }
+      if (heldValidation) { const held=heldValidation;heldValidation=undefined;held.started = true;validationPending=true; return held.promise.finally(()=>{validationPending=false;}); }
       const sourceId=url.searchParams.get('source'),offset=Number(url.searchParams.get('offset'));
       partReads.push({source:sourceId,offset});
       if(sourceId.startsWith('live:')){
@@ -249,7 +249,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     posting() {return !!heldPost?.started;},
     holdPost() {let release; const promise = new Promise(yes=>{release=yes;}); heldPost={promise}; return release;},
     arrive() { count = 58; arriveDuringRecent = true; },
-    validating() { return !!heldValidation?.started; },
+    validating() { return validationPending; },
     hold() {
       let reject;
       const promise = new Promise((_, no) => { reject = no; });
@@ -560,6 +560,60 @@ function boot(readOnly=false,standalone=false,options={}) {
       assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture')).find(row=>row.source==='native:9').offset,Number(partial.audioCalls[0].source.split(':')[4]),'A completed prefix keeps its full boundary with missing or shorter word timing');
     }
     partial.ui.stop();
+  }
+
+  for(const failedCanonicalWrite of [false,true]){
+    const storage=new Map();let rejectPositionWrite=false;
+    const set=storage.set.bind(storage);storage.set=(key,value)=>{
+      if(rejectPositionWrite && key==='interaction-speech-position:fixture')throw new Error('Synthetic storage quota');
+      return set(key,value);
+    };
+    const options={liveSpeech:true,clock:true,capture:true,playback:true,progressive:true,incremental:true,wordTiming:true,followStorage:storage,
+      wordPosition:(seconds,offset)=>offset+(seconds>=4?20:0),responseDraft:{provisional:true,native_turn:'reload-live',native_item:'reload-item',text:'A useful spoken sentence with words. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
+    const original=boot(false,true,options);original.audio();await original.ui.refresh();original.nodes.get('#conversation-voice-replies').handlers.click();await original.ui.refresh();
+    const player=original.nodes.get('#conversation-audio');await until(()=>original.audioCalls.length===1&&!player.paused&&!player.muted);
+    player.currentTime=5;original.capture();original.finishCapture();original.ui.stop();
+    assert.equal(JSON.parse(storage.get('interaction-live-speech:fixture'))[0].partial.end,20);
+    const text='A useful spoken sentence with words. The confirmed remainder.';
+    rejectPositionWrite=failedCanonicalWrite;
+    const reloaded=boot(false,true,{...options,responseDraft:null,liveText:text});reloaded.audio();reloaded.addReplies(1);
+    reloaded.overrideSource(9,{native_turn:'reload-live',native_item:'reload-item',text_characters:text.length,preview:text});reloaded.replyTexts.set('native:9',text);
+    const validation=failedCanonicalWrite?undefined:reloaded.holdPart();
+    const refresh=reloaded.ui.refresh();
+    if(validation){
+      await validation.entered;
+      const pendingCard=reloaded.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:9');
+      const listen=pendingCard.children[3].children[1];assert.equal(listen.disabled,true);
+      await listen.handlers.click();assert.equal(reloaded.audioCalls.length,0,'Explicit Listen waits for exact restored-source validation');
+      validation.release({text:'A useful spoken sentence with words. ',offset:0,next_offset:null});
+    }
+    await refresh;
+    assert.equal(reloaded.audioCalls.length,0,'Restoring a cursor on the initial history page must not speak history');
+    assert(validation || reloaded.partReads.some(row=>row.source.startsWith('live:')),'Initial canonical page revalidates the retained prefix');
+    assert.equal(JSON.parse(storage.get('interaction-live-speech:fixture')).length,failedCanonicalWrite?1:0,'Retirement requires a successful canonical write');
+    const card=reloaded.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:9');await card.children[3].children[1].handlers.click();
+    assert.equal(reloaded.audioCalls.at(-1).offset,20,'Reload before confirmation preserves the unsaid boundary when canonical text arrives on the first page');
+    {
+      rejectPositionWrite=false;
+      const resumedPlayer=reloaded.nodes.get('#conversation-audio');await until(()=>!resumedPlayer.paused&&!resumedPlayer.muted);
+      resumedPlayer.currentTime=5;reloaded.ui.pause();
+      assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture')).find(row=>row.source==='native:9').offset,40);
+      assert.equal(JSON.parse(storage.get('interaction-live-speech:fixture')).length,0,'A successful later canonical save retires the older backup');
+      await reloaded.ui.refresh();
+      assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture')).find(row=>row.source==='native:9').offset,40,'Repeated history observation cannot rewind later canonical progress');
+      reloaded.ui.stop();await card.children[3].children[1].handlers.click();
+      assert.equal(reloaded.audioCalls.at(-1).offset,40,'Explicit Resume keeps progress after history refresh');
+      resumedPlayer.currentTime=0;
+    }
+    reloaded.ui.stop();
+    if(failedCanonicalWrite){
+      rejectPositionWrite=false;
+      const recovered=boot(false,true,{...options,responseDraft:null,liveText:text});recovered.audio();recovered.addReplies(1);
+      recovered.overrideSource(9,{native_turn:'reload-live',native_item:'reload-item',text_characters:text.length,preview:text});recovered.replyTexts.set('native:9',text);
+      await recovered.ui.refresh();
+      assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture')).find(row=>row.source==='native:9').offset,40,'Reload retains newer playback after storage recovers in the same view');
+      assert.equal(recovered.audioCalls.length,0);recovered.ui.stop();
+    }
   }
 
   const gapOptions={liveSpeech:true,clock:true,progressive:true,incremental:true,wordTiming:true,wordPosition:(_seconds,offset)=>offset+10,responseDraft:{provisional:true,native_turn:'gap-physical',native_item:'gap-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
@@ -1018,8 +1072,9 @@ function boot(readOnly=false,standalone=false,options={}) {
   const second = cards.find(card => card.dataset.sequence === "2");
   first.children[3].children[1].handlers.click();
   const refresh = fixture.ui.refresh();
-  // The refresh awaits its bounded list reads before validating A.
-  for (let n = 0; n < 20; n++) await Promise.resolve();
+  // Wait for the actual held validation, rather than a microtask count tied to
+  // the number of bounded source/cursor observations in refresh.
+  await until(()=>fixture.validating());
   assert(fixture.validating(), "The regression must actually hold A's validation");
   second.children[3].children[1].handlers.click();
   rejectOld(new Error("Old source changed"));
