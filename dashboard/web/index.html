@@ -80,6 +80,7 @@
         <form id="conversation-compose" aria-label="Message your conversation">
           <div id="conversation-compose-status">
           <p id="conversation-voice-state" class="note" role="status" aria-live="polite"></p>
+          <div id="conversation-recording-review" class="conversation-tools" aria-label="Recording recovery" hidden><button id="conversation-voice-check" type="button" hidden>Check recording</button><button id="conversation-voice-save" type="button" hidden aria-label="Save a local copy of this recording" title="Save recording copy">Save audio</button></div>
           <p id="conversation-send-state" role="status" aria-live="polite"></p>
           </div>
           <div id="conversation-focus" class="conversation-tools" hidden><span id="conversation-focus-label"></span><button id="conversation-focus-clear" type="button">Back to conversation</button></div>
@@ -100,7 +101,7 @@
             </div>
           </details>
         <section id="conversation-voice" hidden aria-label="Speak to your conversation">
-          <div class="conversation-tools"><button id="conversation-voice-replies" class="voice-output-toggle" type="button" data-voice-state="off" aria-pressed="false" aria-label="Enable spoken replies" title="Enable spoken replies"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 9h4l5-4v14l-5-4H3z"/><path class="voice-waves" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="voice-muted" d="m17 10 4 4m0-4-4 4"/><path class="voice-paused" d="M17 9v6m4-6v6"/></svg></button><button id="conversation-talk" type="button" aria-pressed="false" disabled aria-label="Record a voice message" title="Record a voice message"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg></button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button><button id="conversation-voice-check" type="button" hidden>Check recording</button></div>
+          <div class="conversation-tools"><button id="conversation-voice-replies" class="voice-output-toggle" type="button" data-voice-state="off" aria-pressed="false" aria-label="Enable spoken replies" title="Enable spoken replies"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 9h4l5-4v14l-5-4H3z"/><path class="voice-waves" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="voice-muted" d="m17 10 4 4m0-4-4 4"/><path class="voice-paused" d="M17 9v6m4-6v6"/></svg></button><button id="conversation-talk" type="button" aria-pressed="false" disabled aria-label="Record a voice message" title="Record a voice message"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg></button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button></div>
         </section>
 <button id="conversation-send" type="submit" disabled>Send</button></div>
         </form>
