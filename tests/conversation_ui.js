@@ -54,7 +54,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
-    if(pageFailure && url.pathname==="/interaction"){pageFailure=false;throw new TypeError("Synthetic network suspension");}
+    if(pageFailure && url.pathname==="/interaction"){const name=pageFailure;pageFailure=false;throw Object.assign(Error("Synthetic network suspension"),{name});}
     if(url.pathname==='/interaction/telegram-inputs'){
       if(options.telegramDenied)throw Object.assign(Error('Telegram observation denied'),{status:403});
       const before=Number(url.searchParams.get('before')),after=url.searchParams.get('direction')==='after';
@@ -191,7 +191,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     capture(){capture.pauseAudio();capture.onActivity(true);},
     finishCapture(){capture.onActivity(false);},
     capturedInput(value){capture.onInput(value);},
-    failPage(){pageFailure=true;},failAudio(n=1){audioFailures=n;},
+    failPage(name="TypeError"){pageFailure=name;},failAudio(n=1){audioFailures=n;},
     closeNativeRequest(){Object.assign(nativeRequests.get('native-request'),{state:'answered',actionable:false});},
     overrideSource(n,value){sourceOverrides.set(n,value);},addReplies(n){count+=n;},audio(parts=false){renderAudio=true;multipart=parts;},
     nativeRequest() {
@@ -447,6 +447,8 @@ function boot(readOnly=false,standalone=false,options={}) {
   background.show();
   await until(()=>!background.nodes.get('#conversation-refresh').disabled);background.failPage();await background.ui.refresh();
   assert.equal(background.nodes.get('#conversation-voice-replies').dataset.voiceState,'on','A transient refresh failure cannot become a human pause');
+  background.failPage('AbortError');await background.ui.refresh();
+  assert.equal(background.nodes.get('#conversation-voice-replies').dataset.voiceState,'on','The API request deadline cannot become a human pause');
   background.mediaActions.get('pause')();assert.equal(bgPlayer.paused,true);assert.equal(background.mediaSession.playbackState,'paused');
   background.show();assert.equal(bgPlayer.paused,true,'OS Pause is explicit human intent');
   background.mediaActions.get('play')();await until(()=>!bgPlayer.paused);

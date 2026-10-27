@@ -328,3 +328,9 @@ view still honors the preference; persistence across reload is then unavailable.
 At the limit, unmute an existing session before muting another. This does not
 claim cross-device synchronization or hearing acceptance. Owning issue: #339;
 attention coordination: #304; full executable plan: #301.
+
+Standalone Voice intent also survives API request deadlines (`AbortError`), as
+well as network failures/server outages. A timeout must not become a human
+pause. Explicit player/OS Pause, Stop, access revocation and leaving the ordinary
+non-standalone view retain their existing behavior. This fixes a reproduced
+timeout path; it does not identify the cause of every reported device pause.
