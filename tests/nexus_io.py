@@ -10,7 +10,9 @@ p=argparse.ArgumentParser();p.add_argument('--workspace');p.add_argument('--stat
 marker=pathlib.Path(a.state)/'fail-before-dispatch'
 if a.op=='dispatch' and marker.exists():
  mode=marker.read_text();calls=pathlib.Path(a.state)/'failed-dispatch-calls';calls.write_text(calls.read_text()+'x' if calls.exists() else 'x')
- if mode=='once':marker.unlink()
+ if mode in ('once','stop_once'):marker.unlink()
+ if mode=='stop_once':
+  with sqlite3.connect(pathlib.Path(a.workspace)/'state.sqlite') as bridge:bridge.execute("INSERT OR REPLACE INTO bot_state(key,value) VALUES('stop_admission_epoch:100','later-human-stop')")
  sys.exit(1)
 db=sqlite3.connect(pathlib.Path(a.state)/'operator.sqlite',timeout=5);db.row_factory=sqlite3.Row;db.execute('BEGIN IMMEDIATE')
 root_binding=json.loads(db.execute("SELECT doc FROM binding").fetchone()[0])
@@ -305,10 +307,8 @@ def undispatched_recovery(binary):
     j=Nexus(binary)
     try:
         j.prepare();starts=j.native_turns
-        (j.state/'fail-before-dispatch').write_text('once');j.enqueue()
+        (j.state/'fail-before-dispatch').write_text('stop_once');j.enqueue()
         j.wait(lambda:j.row("SELECT phase FROM nexus_requests WHERE id='request'")==[('undetermined',)])
-        with sqlite3.connect(j.root/'state.sqlite') as db:
-            db.execute("INSERT OR REPLACE INTO bot_state(key,value) VALUES('stop_admission_epoch:100','later-human-stop')")
         time.sleep(2.2)
         assert (j.state/'failed-dispatch-calls').read_text()=='x'
         assert j.native_turns==starts and j.state_of()[0]=='queued'
