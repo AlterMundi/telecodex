@@ -311,3 +311,20 @@ transcript provenance retains it separately as optional `actual_transcriber`.
 Older receipts without that field remain readable; never infer actual provider
 from the static configured label or rewrite history. Receiving adoption of this
 additive provenance follow-up is recorded separately from PR341 input delivery.
+
+## Per-session automatic audio attention
+
+Worker update/result titles expose a speaker toggle. Muting uses the stable
+session target, never its display name: text stays visible, queued automatic
+updates are removed and current automatic playback from that session stops.
+Explicit Listen remains available, live questions keep their existing priority,
+and neither native work nor global Voice is paused. Unmuting admits future
+updates without speaking a backlog.
+
+The preference is local to the browser and conversation binding. At most256
+session identities are retained, without transcript text, labels or audio.
+Other bindings do not inherit it. If browser storage is unavailable, the current
+view still honors the preference; persistence across reload is then unavailable.
+At the limit, unmute an existing session before muting another. This does not
+claim cross-device synchronization or hearing acceptance. Owning issue: #339;
+attention coordination: #304; full executable plan: #301.
