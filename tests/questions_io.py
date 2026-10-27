@@ -102,6 +102,11 @@ class Journey:
                     result = {'file_id': file_id, 'file_unique_id': file_id, 'file_path': 'voice/'+file_id, 'file_size': len(owner.media_files[file_id])}
                 elif method == 'createForumTopic' and hasattr(owner, 'created_topic'):
                     result = owner.created_topic(payload)
+                elif method == 'editMessageText':
+                    with owner.lock:
+                        previous=next(m for m,_ in reversed(owner.messages) if m['message_id']==payload['message_id'])
+                        result=dict(previous,text=html.unescape(payload['text']))
+                        owner.messages.append((dict(result),payload))
                 elif method == 'sendMessage':
                     with owner.lock:
                         owner.message_id += 1

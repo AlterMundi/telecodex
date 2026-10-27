@@ -4,6 +4,9 @@
 All accounts, Telegram, native peers and output are synthetic; zero model calls.
 """
 import json
+import errno
+import os
+import time
 import re
 from pathlib import Path
 import subprocess
@@ -219,8 +222,77 @@ def late_artifact_return(binary):
         journey.close()
 
 
+def canonical_turn_skips_unused_limits_history(binary):
+    """A slow quota source must not hold web dialogue; legacy previews still read it."""
+    journey=Inputs(binary);opened=threading.Event();release=threading.Event();done=threading.Event();writer=None
+    try:
+        journey.config.write_text(journey.config.read_text().replace('show_unfinished_messages=false','show_unfinished_messages=true').replace('[interaction]\n','[interaction]\ntelegram_projection=false\ntelegram_entry_projection=false\n'))
+        journey.start();journey.admit('Seed the selected entry.',topic=1)
+        journey.wait(lambda:journey.has('Initial goal turn delivered.',1));journey.idle()
+        journey.wait_control_socket(journey.socket)
+        binding=journey.read('presentation','list','0','0')['result']['binding']
+        history=journey.root/'codex-home'/'sessions';history.mkdir(parents=True,exist_ok=True)
+        fifo=history/'blocked-limits.jsonl';os.mkfifo(fifo,0o600)
+        def delayed_history():
+            while not done.is_set():
+                try:fd=os.open(fifo,os.O_WRONLY|os.O_NONBLOCK)
+                except OSError as error:
+                    if error.errno!=errno.ENXIO:raise
+                    done.wait(.01);continue
+                opened.set();fifo.unlink()
+                try:
+                    release.wait(10)
+                    os.write(fd,(json.dumps({'timestamp':'2026-10-27T07:00:00Z','payload':{'type':'token_count','rate_limits':{'secondary':{'used_percent':17,'window_minutes':10080,'resets_at':1793200000}}}})+'\n').encode())
+                except BrokenPipeError:pass
+                finally:os.close(fd)
+                return
+        writer=threading.Thread(target=delayed_history,daemon=True);writer.start()
+        journey.packets.clear()
+        original,_=journey.submit(binding,'Answer in the web conversation without waiting for a quota banner.')
+        journey.wait(lambda:opened.is_set()or bool(journey.packets),seconds=4)
+        assert not opened.is_set(),'Canonical web turn opened blocking quota history before native admission'
+        journey.wait(lambda:journey.row('SELECT phase FROM conversation_inputs WHERE id=?',(original['id'],))==[('accepted',)])
+        journey.finish(journey.web_thread,journey.web_turn);journey.idle();journey.stop()
+        # The legacy unfinished-preview path still has a visible quota banner.
+        fake=journey.root/'codex';body=fake.read_text()
+        marker="if sys.argv[1:]!=['app-server','proxy']: sys.exit(7)"
+        replacement="""if sys.argv[1:]==['app-server']:
+    import json
+    def emit(value):print(json.dumps(value),flush=True)
+    for raw in sys.stdin:
+        message=json.loads(raw);method=message.get('method');ident=message.get('id')
+        if ident is None:continue
+        result={}
+        if method in ('thread/start','thread/resume'):result={'thread':{'id':'legacy-limits-thread'},'model':'fixture-model','modelProvider':'fixture'}
+        elif method=='thread/goal/get':result={'goal':None}
+        elif method=='turn/start':result={'turn':{'id':'legacy-limits-turn'}}
+        emit({'id':ident,'result':result})
+        if method=='turn/start':
+            emit({'method':'turn/started','params':{'threadId':'legacy-limits-thread','turn':{'id':'legacy-limits-turn','status':'inProgress'}}})
+            emit({'method':'item/completed','params':{'threadId':'legacy-limits-thread','turnId':'legacy-limits-turn','item':{'id':'legacy-answer','type':'agentMessage','phase':'final_answer','text':'Legacy quota preview completed.'}}})
+            emit({'method':'turn/completed','params':{'threadId':'legacy-limits-thread','turn':{'id':'legacy-limits-turn','status':'completed'}}})
+    sys.exit(0)
+"""+marker
+        assert marker in body;fake.write_text(body.replace(marker,replacement))
+        legacy=journey.config.read_text().split('\n[interaction]\n',1)[0]
+        legacy=re.sub(r'\[session_control\]\n.*?(?=\[telegram\])','',legacy,flags=re.S)
+        legacy=legacy.replace('shared_app_server=true','shared_app_server=false').replace('[telegram]\n','[telegram]\nuse_message_drafts=false\n')
+        journey.config.write_text(legacy)
+        journey.start();journey.admit('Keep the legacy preview quota.',topic=7)
+        journey.wait(lambda:opened.is_set(),seconds=5)
+        release.set();journey.wait(lambda:journey.has('Legacy quota preview completed.',7))
+        assert any('83%'in message['text']for message,_ in journey.messages),'Legacy quota banner disappeared'
+        journey.idle()
+        print('PASS canonical web admission bypasses blocked quota history; legacy unfinished preview still reads and displays the quota; zero models.')
+    finally:
+        release.set();done.set()
+        if writer:writer.join(2)
+        journey.close()
+
+
 if __name__=='__main__':
     binary=str(Path(sys.argv[1]).resolve())
     qualify(binary)
     mixed_origin_returns(binary)
     late_artifact_return(binary)
+    canonical_turn_skips_unused_limits_history(binary)

@@ -455,14 +455,25 @@ pub(super) async fn process_turn(
             cancel.clone(),
         ))
     };
-    let limits_inline = latest_limits_snapshot_from_shared(&shared)
-        .await
-        .map_err(|error| {
-            tracing::warn!("failed to read latest limits snapshot: {error:#}");
-            error
-        })
-        .ok()
-        .and_then(|snapshot| snapshot.and_then(|snapshot| format_limits_inline(&snapshot)));
+    // The quota banner is only part of the legacy unfinished preview. Canonical
+    // app/topic returns never render it; scanning rollout history here delays
+    // native admission without producing any visible information.
+    let needs_limits_preview = shared.config.telegram.enabled
+        && shared.config.telegram.show_unfinished_messages
+        && !canonical_return
+        && !shared.store.topic_projection_active(turn_id)?;
+    let limits_inline = if needs_limits_preview {
+        latest_limits_snapshot_from_shared(&shared)
+            .await
+            .map_err(|error| {
+                tracing::warn!("failed to read latest limits snapshot: {error:#}");
+                error
+            })
+            .ok()
+            .and_then(|snapshot| snapshot.and_then(|snapshot| format_limits_inline(&snapshot)))
+    } else {
+        None
+    };
     let turn_banner = turn_start_banner(limits_inline, &session);
     let thinking_text = "⏳";
     let placeholder_text = render_placeholder_html(thinking_text, turn_banner.as_deref());

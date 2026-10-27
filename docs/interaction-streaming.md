@@ -383,3 +383,43 @@ the reduction in local completion work; it is not a speed guarantee, a complete
 conversation latency distribution or physical-device/hearing acceptance. Useful
 foreground response latency, semantic heard/remaining coordination and full
 stage2–4 acceptance remain unfinished under milestone9 and #301/#303/#304.
+
+## Selected-stack response measurements — 2026-10-27
+
+Three short Spanish questions were submitted through authenticated HTTP originals,
+owner control and actual native Sol6.1/medium, then the existing source-bound Qwen
+TTS adapter (`qwen-audio-3.0-tts-plus`, `longanlufeng`). The functional tag used its
+retained native6eff7b4/batch speech code; current used native352/web353 with
+progressive MP3 output. Each path used one new isolated conversation: one cold
+turn, then two warm turns. Runtime control storage matched the receiving layout;
+the earlier probe with different storage was retained and excluded from this
+comparison. No production session, hardware capture or physical playback changed.
+
+| Path / sample | Native request sent | First model text delta | Canonical reply visible | First audio payload available |
+| --- | ---: | ---: | ---: | ---: |
+| Functional baseline, cold | 12.85 s | 17.79 s | 18.50 s | 22.85 s |
+| Functional baseline, warm1 | 1.62 s | 6.01 s | 7.08 s | 11.27 s |
+| Functional baseline, warm2 | 3.24 s | 8.45 s | 9.20 s | 14.48 s |
+| Current, cold | 13.32 s | 18.56 s | 19.36 s | 26.60 s |
+| Current, warm1 | 1.90 s | 7.58 s | 8.65 s | 10.07 s |
+| Current, warm2 | 1.57 s | 5.45 s | 6.25 s | 7.55 s |
+
+Times start at HTTP submission. Current's first payload is an encoded MP3 frame;
+the baseline exposes its complete WAV. These are not speech-end-to-intelligible
+sound, WAN/browser-decoding or real-device measurements. ASR is excluded, answers
+vary naturally, and sequential samples share uncontrolled provider/host load.
+Three samples are not an SLO or a provider ranking. In particular, the cold
+progressive sample was slower; do not claim a blanket improvement. Warm TTS's
+own first-frame preparation measured1.29–1.38 s, versus4.18–5.26 s for complete
+baseline audio. Source completion followed the first text delta by0.62–0.99 s.
+Full continuous-voice/attention and end-to-end qualification remain #301/#303/#304.
+
+The roughly13 s cold gap before native admission led to a concrete avoidable
+step: quota-banner preparation scans up to200 recent/archived rollout files even
+when canonical app/topic delivery never displays that legacy preview. A
+model-free blocked-history fixture reproduced the admission dependency. Native
+turn setup now fetches that quota only for an enabled, visible legacy unfinished
+preview. Canonical returns, projected topics and disabled previews bypass it;
+explicit limits inspection and actual legacy quota banners retain their existing
+behavior. The fix removes the unnecessary dependency, without attributing every
+measured cold second to it or changing model, effort, routing or journals.
