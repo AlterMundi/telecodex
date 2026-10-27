@@ -67,12 +67,15 @@ def live_return(binary):
         provenance=json.loads(next(l.removeprefix('Transport provenance: ') for l in packet.splitlines() if l.startswith('Transport provenance: ')))
         assert provenance['original_human_author'] is None and provenance['author']['kind']=='session_result'
         assert len(j.runs)==2
+        assert not j.has('Selected dependency completed.',1), 'An internal helper result must not be spoken/projected as another human reply'
+        assert j.row("SELECT count(*) FROM interaction_deliveries WHERE phase='internal'")==[(1,)]
         ok,status=j.tool(7,'session_requests',{});assert ok and status['requests'][0]['phase']=='returned'
         ok,status=j.tool(7,'session_receive',{'request_id':admitted['request']['id']});assert ok and status['new_return_instruction'] is None
         j.answer(7,'Original task completed with the attributed dependency.')
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered'")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')[0][0]>=2,seconds=25)
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase NOT IN ('delivered','internal')")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')[0][0]>=2,seconds=25)
         j.idle()
         assert len(j.instructions(8))==1 and len(j.instructions(7))==2
+        assert sum('Original task completed with the attributed dependency.' in m['text'] for m,_ in j.messages)==1
         print('PASS attributed local request, immutable retry, self/recursive refusal, live context return, original request correlation and committed human returns')
     finally:j.close()
 
@@ -93,7 +96,7 @@ def one_slot_deferred_return(binary):
         j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
         assert len([r for r in j.rpc if r.get('method')=='turn/start' and r['params']['threadId']=='native-topic-7'])==source_starts+2
         j.answer(7,'Original logical task resumed using returned evidence.')
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered'")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')[0][0]>=3,seconds=25)
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase NOT IN ('delivered','internal')")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')[0][0]>=3,seconds=25)
         j.idle()
         assert j.row('SELECT phase FROM interaction_session_requests WHERE id=?',(admitted['request']['id'],))==[('returned',)]
         print('PASS one worker slot: nonblocking dependency admission, deferred parent completion, helper execution, correlated automatic continuation without capacity deadlock')
@@ -112,7 +115,7 @@ def cancelled_caller(binary):
         j.admit('#Alpha /interrupt',topic=1)
         j.wait(lambda:j.row('SELECT phase FROM interaction_session_requests WHERE id=?',(admitted['request']['id'],))==[('withdrawn',)])
         j.answer(8,'Completed already accepted helper work after caller interruption.')
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase!='delivered'")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')[0][0]>=1,seconds=25)
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_deliveries WHERE phase NOT IN ('delivered','internal')")==[(0,)] and j.row('SELECT count(*) FROM interaction_deliveries')[0][0]>=1,seconds=25)
         j.idle()
         assert len(j.instructions(7))==1
         assert len([r for r in j.rpc if r.get('method')=='turn/start' and r['params']['threadId']=='native-topic-7'])==source_starts+1
