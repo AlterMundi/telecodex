@@ -187,7 +187,9 @@ def continuous_overlap(binary):
         assert not j.native_answers
         j.call('route-continuous-alpha-answer','answer_question',{'input_ref':capture,'question':{k:alpha[k]for k in('id','revision')}})
         j.wait(lambda:len(j.native_answers)==1)
-        assert j.native_answers[0]['result']['answers']['scope']['answers']==[transcript]
+        spoken=j.native_answers[0]['result']['answers']['scope']['answers']
+        assert len(spoken)==1 and spoken[0].endswith('\n\n'+transcript),spoken
+        assert '[Committed voice input]'in spoken[0] and capture in spoken[0]
         assert b.status(capture)['phase']=='answered'
         j.answer_worker(7,'Alpha preserved its work and used the small scope.')
         j.wait(lambda:any('Alpha preserved'in item['preview']for item in b.get('/api/interaction')['items']))
