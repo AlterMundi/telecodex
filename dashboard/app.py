@@ -168,7 +168,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             if request.headers.get('origin') not in allowed:
                 return JSONResponse({'detail': 'Wrong request origin'}, status_code=403)
             # Bound chunked bodies as well as Content-Length before parsing them.
-            if request.url.path in ('/api/interaction/voice','/api/interaction/visual'):
+            if request.url.path in ('/api/interaction/voice','/api/interaction/visual','/api/interaction/files'):
                 try:
                     selected = await authorize_async(request)
                     if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), selected['csrf']):
@@ -283,7 +283,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 body = body.replace('    <script src="assets/app.js" defer></script>',
                     '    <script src="/access-client.js" defer></script>\n    <script src="assets/app.js" defer></script>')
             body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
-        for name in ('app.js', 'live.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'live-speech.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'attention.js', 'style.css'):
+        for name in ('app.js', 'live.js', 'requests.js', 'microphone.js', 'visual.js', 'files.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'live-speech.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'attention.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         standalone_entry = (request.query_params.get('view') == 'conversation'
@@ -354,7 +354,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             computer_health.assert_binding()
             data, media = computer_health.assets[name]
             return Response(data, media_type=media)
-        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'voice-stream.js', 'voice-pcm.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'live-speech.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'attention.js', 'style.css', 'markdown-it.LICENSE', 'markdown-it.SOURCE', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'voice-stream.js', 'voice-pcm.js', 'visual.js', 'files.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'live-speech.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'attention.js', 'style.css', 'markdown-it.LICENSE', 'markdown-it.SOURCE', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -567,6 +567,36 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         await authorize_async(request)
         return result
 
+    @app.post('/api/interaction/files')
+    async def conversation_file_upload(request: Request):
+        session=await authorize_async(request)
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf',''),session['csrf']):raise HTTPException(403,'Action token missing')
+        from .files import MAX_BYTES
+        from urllib.parse import unquote
+        try:
+            ref=json.loads(unquote(request.headers.get('x-file-reference',''),errors='strict'))
+            chunks=[];size=0
+            async for chunk in request.stream():
+                size+=len(chunk)
+                if size>MAX_BYTES:raise ValueError('File exceeds twenty MiB')
+                chunks.append(chunk)
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.conversation_file_upload,b''.join(chunks),ref)
+        except (ValueError,UnicodeError):raise HTTPException(400,'Original file unavailable, changed or above twenty MiB') from None
+        except (ProviderUnavailable,OSError):raise HTTPException(503,'File upload unconfirmed; no work was admitted') from None
+        await authorize_async(request)
+        return result
+
+    @app.get('/api/interaction/inputs/{ident}/files/{index}')
+    async def conversation_file_download(request: Request,ident:str,index:int):
+        await authorize_async(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            ref,data=await run_in_threadpool(provider.conversation_file_read,ident,index)
+        except (ValueError,ProviderUnavailable,OSError):raise HTTPException(404,'Original file unavailable') from None
+        from urllib.parse import quote
+        return Response(content=data,media_type='application/octet-stream',headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Disposition':"attachment; filename*=UTF-8''"+quote(ref['name'],safe='')})
+
     @app.post('/api/interaction/visual')
     async def conversation_visual(request: Request):
         session=await authorize_async(request)
@@ -625,6 +655,13 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         if visual is not None:
             try:metadata['visual']=json.loads(visual)
             except (ValueError,TypeError):raise HTTPException(400,'Select one captured visual reference') from None
+        files=request.headers.get('x-file-references')
+        if files is not None:
+            try:
+                from urllib.parse import unquote
+                if len(files)>32000:raise ValueError('File metadata exceeds bound')
+                metadata['files']=json.loads(unquote(files,errors='strict'))
+            except (ValueError,TypeError,UnicodeError):raise HTTPException(400,'Select original files again') from None
         try:
             data = await request.body()
             from starlette.concurrency import run_in_threadpool

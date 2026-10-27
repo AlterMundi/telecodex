@@ -493,7 +493,7 @@ class Provider:
         return value
 
     def conversation_input_submit(self, body):
-        if not isinstance(body, dict) or not {'binding','id','text'} <= set(body) or set(body)-{'binding','id','text','reply','visual','playback'}:
+        if not isinstance(body, dict) or not {'binding','id','text'} <= set(body) or set(body)-{'binding','id','text','reply','visual','playback','files'}:
             raise ValueError('Select the conversation and provide one original message')
         self.input_id(body['id'])
         self.check_reply(body.get('reply'))
@@ -501,9 +501,10 @@ class Provider:
         from .visual import check_reference
         check_reference(body.get('visual'))
         self.check_visual_original(body.get('visual'),body['id'])
+        self.check_files_original(body.get('files'),body['id'])
         import re
         if (not isinstance(body['binding'], str) or not re.fullmatch('[a-f0-9]{64}', body['binding'])
-                or not isinstance(body['text'], str) or not body['text'].strip()
+                or not isinstance(body['text'], str) or not body['text'].strip() and not body.get('files')
                 or '\0' in body['text'] or len(body['text'].encode('utf-8')) > 32768):
             raise ValueError('A message must contain text and fit within 32 KiB')
         # The Rust journal owns idempotency and exact-source checks. No retry.
@@ -524,6 +525,30 @@ class Provider:
                     data=read_png(path,image['image_sha256'])
                     if png_dimensions(data)!=(image['width'],image['height']):raise ValueError('Selected dimensions changed')
                 except (ValueError,OSError):raise VisualSelectionInvalid('Selected image unavailable. Select it again.') from None
+
+    def check_files_original(self,files,ident):
+        from .files import check_reference,read_file
+        check_reference(files)
+        if not files:return
+        self.assert_binding()
+        if not self.authorized(self.human):raise ProviderUnavailable('Conversation unavailable')
+        for ref in files:read_file(self.receiver['db_path'],ref)
+
+    def conversation_file_upload(self,data,ref):
+        self.assert_binding()
+        if not self.receiver.get('interaction') or not self.authorized(self.human):raise ProviderUnavailable('Conversation unavailable')
+        from .files import retain_file
+        result=retain_file(self.receiver['db_path'],data,ref)
+        self.assert_binding()
+        if not self.authorized(self.human):raise ProviderUnavailable('Conversation grant changed')
+        return result
+
+    def conversation_file_read(self,ident,index):
+        original=self.conversation_input_status(ident)
+        files=original.get('files',[])
+        if type(index) is not int or not 0<=index<len(files):raise ValueError('No selected file')
+        from .files import read_file
+        return files[index],read_file(self.receiver['db_path'],files[index])
 
     def conversation_visual_upload(self, data, expected):
         import re
@@ -624,7 +649,7 @@ class Provider:
 
     def conversation_voice_submit(self, metadata, data):
         import re
-        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual','playback','capture_questions'}:
+        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual','playback','capture_questions','files'}:
             raise ValueError('Select one original voice recording')
         self.input_id(metadata['id'])
         self.check_reply(metadata.get('reply'))
@@ -633,6 +658,7 @@ class Provider:
         from .visual import check_reference
         check_reference(metadata.get('visual'))
         self.check_visual_original(metadata.get('visual'),metadata['id'])
+        self.check_files_original(metadata.get('files'),metadata['id'])
         if (not isinstance(data, bytes) or not 0 < len(data) <= 20*1024*1024
                 or any(not isinstance(metadata[k], str) or not re.fullmatch('[a-f0-9]{64}', metadata[k]) for k in ('binding', 'audio_sha256'))
                 or metadata['mime'] not in ('audio/webm', 'audio/webm;codecs=opus', 'audio/ogg', 'audio/ogg;codecs=opus', 'audio/mp4', 'audio/wav', 'audio/mpeg')

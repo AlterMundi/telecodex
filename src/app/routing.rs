@@ -857,11 +857,16 @@ fn packet(shared: &AppShared, i: &Instruction, preparing_local: Option<i64>) -> 
         .store
         .interaction_original_provenance(&i.id, i.human_id)?;
     let visual = shared.store.interaction_visual(&i.id, i.human_id)?;
+    let file_context = crate::files::rendered(
+        &shared.config.db_path,
+        &shared.store.interaction_files(&i.id, i.human_id)?,
+    )?;
     let visual_context = visual
         .as_ref()
         .map(|value| value.rendered())
         .unwrap_or_default();
-    let mut provenance = serde_json::json!({"visual":visual,"input_ref":original["input_ref"],"capture_order":original["capture_order"],"selection":original["selection"],"via":"interaction-controller","original_human_author":if author.is_none(){Some(i.human_id)}else{None},"authorized_human":i.human_id,"author":author,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id,"transcription":source.transcription});
+    let media_context = format!("{visual_context}{file_context}");
+    let mut provenance = serde_json::json!({"files":shared.store.interaction_files(&i.id,i.human_id)?,"visual":visual,"input_ref":original["input_ref"],"capture_order":original["capture_order"],"selection":original["selection"],"via":"interaction-controller","original_human_author":if author.is_none(){Some(i.human_id)}else{None},"authorized_human":i.human_id,"author":author,"source_channel":source.channel,"source_message":source.origin,"target":i.target,"target_label":label(shared,i.target),"original_ingress_update":source.update_id,"transcription":source.transcription});
     if !original["task_context"].is_null() {
         provenance["task_context"] = original["task_context"].clone();
     }
@@ -945,7 +950,7 @@ fn packet(shared: &AppShared, i: &Instruction, preparing_local: Option<i64>) -> 
         i.id,
         serde_json::to_string(&i.relation)?,
         serde_json::to_string(&i.requests)?,
-        visual_context,
+        media_context,
         i.text,
         context
     ))
@@ -1100,7 +1105,13 @@ fn queue_root(
                 attachments: crate::visual::attachments(
                     &shared.config.db_path,
                     shared.store.interaction_visual(&i.id, i.human_id)?.as_ref(),
-                )?,
+                )?
+                .into_iter()
+                .chain(crate::files::attachments(
+                    &shared.config.db_path,
+                    &shared.store.interaction_files(&i.id, i.human_id)?,
+                )?)
+                .collect(),
                 review_mode: None,
                 override_search_mode: None,
             },

@@ -145,8 +145,9 @@ window.Conversation = (() => {
       line:$("header .header-tools"),panel:$("#conversation-attention"),localOnly:true,
       getItems:()=>[...(requestControls.attentionItems?.()||[]),...(taskControls?.attentionItems?.()||[]),...(goalControls?.attentionItems?.()||[])]
     });
+    const attachedFiles = readOnly ? undefined : window.FileInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getPlayback:()=>playbackContext(true),getCaptureQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getPlayback:()=>playbackContext(true),getCaptureQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,getFiles:()=>attachedFiles?.capture(),onFilesSent:refs=>attachedFiles?.consumed(refs),getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -548,7 +549,7 @@ window.Conversation = (() => {
           const owned = inputGeneration, observation = ++inputObservation;
           card.retryBusy=true;retry.disabled = true;
           try {
-            const result = recovery ? await api(`interaction/inputs/${card.value.id}/retry`,{binding:card.value.binding,instruction:recovery.instruction}) : await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{}),...(card.value.playback?{playback:card.value.playback}:{})});
+            const result = recovery ? await api(`interaction/inputs/${card.value.id}/retry`,{binding:card.value.binding,instruction:recovery.instruction}) : await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{}),...(card.value.files?.length?{files:card.value.files}:{}),...(card.value.playback?{playback:card.value.playback}:{})});
             if (owned === inputGeneration) inputCard(result, observation);
           } catch(e) {
             if (owned !== inputGeneration) return;
@@ -595,6 +596,8 @@ window.Conversation = (() => {
       // Preserve full original text after reading it, and an unknown POST's text.
       card.value = {...card.value, ...value};
       messageTime(card.time,card.value.received_at);
+      if(card.fileList)card.fileList.remove();
+      if(card.value.files?.length){card.fileList=node('div');card.fileList.className='input-files';card.value.files.forEach((file,index)=>{const link=node('a',file.name);link.href=`api/interaction/inputs/${encodeURIComponent(card.value.id)}/files/${index}`;link.download=file.name;card.fileList.append(link);});card.imageButton.parentNode.append(card.fileList);}
       card.imageButton.hidden=!card.value.visual;
       if(card.imageView.hidden)card.imageButton.textContent=Array.isArray(card.value.visual)?`Show images (${card.value.visual.length})`:"Show selected image";
       card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
@@ -620,7 +623,7 @@ window.Conversation = (() => {
       const result = await api(`interaction/inputs?before=${before}&direction=${direction}`);
       if (owned !== inputGeneration) return;
       if (result.binding !== binding) throw new Error("Conversation changed. Refresh before sending.");
-      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();}
+      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();}
       inputBinding = result.binding;
       setCsrf(result.csrf);routingChoices=result.routing_choices||[];
       for (const value of result.items) inputCard(value, observation);
@@ -676,28 +679,28 @@ window.Conversation = (() => {
       if(microphone?.ownsSend?.())return microphone.submit();
       if (readOnly || posting || !ready || !binding || inputBinding !== binding) return;
       const text = draft.value;
-      if (!text.trim() || text.includes("\0") || new TextEncoder().encode(text).length > 32768) {
+      if (!text.trim() && !attachedFiles?.hasFiles() || text.includes("\0") || new TextEncoder().encode(text).length > 32768) {
         composerNotice("Write a message of at most 32 KiB."); return;
       }
       if ([...inputs.values()].some(card => !card.value.phase && card.value.text === text)) {
         composerNotice("This message has an unconfirmed submission. Use Check status before sending it again.");
         $("#conversation-sent").open = true; return;
       }
-      let selectedVisual;
+      let selectedVisual,selectedFiles;
       posting=true;send.disabled=true;
-      try {if(visual)selectedVisual=await visual.capture();}
+      try {if(visual)selectedVisual=await visual.capture();if(attachedFiles)selectedFiles=await attachedFiles.capture();}
       catch(e){posting=false;send.disabled=!inputBinding;microphone?.syncControls?.();composerNotice(e.message||"Select your image again.");return;}
       const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation, focusAtSubmit=focusVersion;
       const context=replyFocus?.reference||voiceContext;
       const reply=context&&JSON.parse(JSON.stringify(context)),playback=playbackContext();
       posting = true; send.disabled = true; latestComposerId = id;
-      inputCard({id,text,binding,reply,playback,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); if(timeline)timeline.scrollTop=timeline.scrollHeight; $("#conversation-sent").open = true;
+      inputCard({id,text,binding,reply,playback,visual:selectedVisual,files:selectedFiles,focusVersion:focusAtSubmit}, observation); if(timeline)timeline.scrollTop=timeline.scrollHeight; $("#conversation-sent").open = true;
       composerNotice("Sending…",false);
       try {
-        const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{}),...(selectedVisual?{visual:selectedVisual}:{}),...(playback?{playback}:{})});
+        const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{}),...(selectedVisual?{visual:selectedVisual}:{}),...(selectedFiles?.length?{files:selectedFiles}:{}),...(playback?{playback}:{})});
         if (owned !== inputGeneration) return;
         const confirmed = inputCard(result, observation);
-        visual?.consumed(selectedVisual);
+        visual?.consumed(selectedVisual);attachedFiles?.consumed(selectedFiles);
         if(focusAtSubmit===focusVersion)clearFocus();
         if (draft.value === text) draft.value = "";
         inputNotice(confirmed.value);
@@ -1112,7 +1115,7 @@ window.Conversation = (() => {
       if (error.status === 401 || error.status === 403) {
         onUnauthorized?.(error);
         clearFiles();
-        pause("access");stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
+        pause("access");stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else if(!(standalone && voiceEnabled && !voiceSuspended && transientConnectionError(error)))pause("observation");
@@ -1195,7 +1198,7 @@ window.Conversation = (() => {
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        clearVoiceQueue();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
+        clearVoiceQueue();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();
         newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
