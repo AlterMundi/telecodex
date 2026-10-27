@@ -423,3 +423,38 @@ preview. Canonical returns, projected topics and disabled previews bypass it;
 explicit limits inspection and actual legacy quota banners retain their existing
 behavior. The fix removes the unnecessary dependency, without attributing every
 measured cold second to it or changing model, effort, routing or journals.
+
+## Selected Qwen word timing and robot-style direction — 2026-10-27
+
+The current [HTTP API](https://www.alibabacloud.com/help/en/model-studio/qwen-audio-tts-http-api)
+accepts `input.word_timestamp_enabled=true` for streaming synthesis. The
+[voice list](https://www.alibabacloud.com/help/en/model-studio/qwen-audio-tts-voice-list)
+explicitly lists instruction control and timestamps for the selected
+`qwen-audio-3.0-tts-plus` / `longanlufeng`. Changing the voice is unnecessary to
+investigate timed interruption context.
+
+One distinct synthetic Spanish/English request on the actual selected account
+returned MP3 audio and15 unique timed word entries in2.51seconds, without
+physical playback or native dispatch. Provider events contained cumulative
+snapshots: summing their array lengths counts83 entries and is incorrect.
+`sentence-end` retained the complete15-entry snapshot. In this observed response,
+`begin_index`/`end_index` advanced once per word, despite documentation describing
+character positions; punctuation/spacing also differed (`.Podemos` versus
+`. Podemos`). Never use these indices as canonical Unicode offsets. Any integration
+must reconcile provider word text to the actual Markdown-projected spoken text,
+retain exact source/revision/chunk binding, handle repeated snapshots and seek,
+and keep unknown alignment explicit. A device cursor still does not prove hearing.
+The application does not yet transport or use these word timings: current Follow
+and interruption reports remain segment/media-position based. Full semantic
+heard/remaining coordination remains unfinished under #304.
+
+Under the human's robot-voice request, two new bounded synthesis trials retained
+the same model and voice: a calm, measured onboard-computer direction
+(rate0.92, pitch0.95), and a bright, formal protocol-robot direction
+(rate1.04, pitch1.04). Both returned verified24kHz mono PCM samples. The first
+is receiving-selected through the existing hot-read speech binding; no native
+model or process changed. These are descriptive style directions, not verified
+replicas or hearing acceptance. An alternative `qwen-audio-3.1-tts-plus` /
+`xunanchuan_v3.1` trial was explicitly rejected on this account/route; no automatic
+retry or fallback request was made. Documentation of a voice is not proof of
+receiving account access. The functional Qwen voice remains selected.
