@@ -173,7 +173,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.()};}};
   if(options.progressive)context.window.SpeechStream={available:()=>true,open(_response,signal){
-    const value={url:'blob:fixture-stream',signal,position:seconds=>options.wordPosition?.(seconds),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
+    const value={url:'blob:fixture-stream',signal,position:seconds=>options.wordPosition?.(seconds,Number(_response.headers.get("x-presentation-offset"))),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
   }};
   if(options.liveSpeech)vm.runInContext(fs.readFileSync("dashboard/web/live-speech.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
@@ -472,7 +472,7 @@ function boot(readOnly=false,standalone=false,options={}) {
 
   interruptedLive.ui.stop();
 
-  const gapOptions={liveSpeech:true,clock:true,responseDraft:{provisional:true,native_turn:'gap-physical',native_item:'gap-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
+  const gapOptions={liveSpeech:true,clock:true,progressive:true,incremental:true,wordTiming:true,wordPosition:(_seconds,offset)=>offset+10,responseDraft:{provisional:true,native_turn:'gap-physical',native_item:'gap-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
   const gapVoice=boot(false,true,gapOptions);gapVoice.audio();await gapVoice.ui.refresh();gapVoice.failAudio();
   gapVoice.nodes.get('#conversation-voice-replies').handlers.click();await gapVoice.ui.refresh();await until(()=>gapVoice.clock.pending().includes(450));
   gapOptions.responseDraft.text='First sentence. Second sentence. Unfinished';await gapVoice.ui.refresh();gapVoice.clock.fire(450);
@@ -481,7 +481,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const gapText='First sentence. Second sentence. The confirmed tail.';gapOptions.liveText=gapText;gapOptions.responseDraft=null;gapVoice.addReplies(1);
   gapVoice.overrideSource(9,{native_turn:'gap-physical',native_item:'gap-item',text_characters:gapText.length,preview:gapText});gapVoice.replyTexts.set('native:9',gapText);
   await gapVoice.ui.refresh();gapVoice.clock.fire(180);await until(()=>gapVoice.audioCalls.length===3&&!gapPlayer.paused);
-  gapVoice.ui.pause();
+  gapPlayer.currentTime=5;gapVoice.ui.pause();
   const gapCard=gapVoice.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:9');
   await gapCard.children[3].children[1].handlers.click();
   await until(()=>gapVoice.audioCalls.length===4);
@@ -708,6 +708,25 @@ function boot(readOnly=false,standalone=false,options={}) {
     assert.equal(timed.playbackContext().word_offset,capable?20:undefined,'New cursor requires actual native capability');
     audio.currentTime=1;assert.equal(timed.playbackContext().word_offset,capable?0:undefined,'Backward seeking must not retain the maximum reported word');
     timed.capture();assert.equal(audio.paused,true);timed.finishCapture();timed.ui.stop();
+  }
+  // Explicit Resume uses the provider word cursor, never a duration estimate.
+  for(const aligned of [true,false,'invalid']){
+    const storage=new Map(),options={capture:true,playback:true,progressive:true,incremental:true,wordTiming:true,followStorage:storage,wordPosition:(seconds,offset)=>aligned==='invalid'?offset+9000:aligned?offset+(seconds>=4?20:0):undefined};
+    const resumed=boot(false,true,options);resumed.audio();const text='A retained canonical response. '.repeat(20);resumed.replyTexts.set('native:8',text);resumed.overrideSource(8,{text_characters:text.length});await resumed.ui.refresh();
+    const card=resumed.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');await listenButton(card).handlers.click();
+    const player=resumed.nodes.get('#conversation-audio');player.currentTime=5;player.duration=10;resumed.ui.stop();
+    const checkpoint=JSON.parse(storage.get('interaction-speech-position:fixture'))[0];
+    assert.equal(checkpoint.offset,aligned===true?20:0,'Use only an available bounded provider word-end position');
+    const reloaded=boot(false,true,{...options,followStorage:storage});reloaded.audio();reloaded.replyTexts.set('native:8',text);reloaded.overrideSource(8,{text_characters:text.length});await reloaded.ui.refresh();
+    const nextCard=reloaded.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');await listenButton(nextCard).handlers.click();
+    assert.equal(reloaded.audioCalls[0].offset,checkpoint.offset,'Reload and explicit Resume retain the exact selected source boundary');
+    reloaded.ui.stop();
+  }
+  {
+    const storage=new Map(),seek=boot(false,true,{progressive:true,incremental:true,wordTiming:true,followStorage:storage,wordPosition:seconds=>seconds>=4?20:0});seek.audio();seek.replyTexts.set('native:8','A source with aligned words. '.repeat(10));await seek.ui.refresh();
+    const card=seek.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');await listenButton(card).handlers.click();const player=seek.nodes.get('#conversation-audio');
+    player.currentTime=5;seek.ui.pause();assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture'))[0].offset,20);
+    player.currentTime=1;seek.ui.stop();assert.equal(JSON.parse(storage.get('interaction-speech-position:fixture'))[0].offset,0,'A backward seek keeps the current word cursor rather than its old high-water mark');
   }
   const updatesFollow=boot(false,true);updatesFollow.audio();
   updatesFollow.overrideSource(8,{kind:'worker_progress',target:{chat_id:100,thread_id:77},label:'Alpha'});
