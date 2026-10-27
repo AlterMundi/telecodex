@@ -152,6 +152,8 @@ window.Conversation = (() => {
     let graphCursor=0;
     const cards = new Map(),progressCards=new Map(),settledProgress=new Map();
     function clearProgress(){for(const card of progressCards.values())card.box.remove();progressCards.clear();settledProgress.clear();}
+    const replyText=body=>window.ConversationMarkdown?.source(body) ?? body.textContent;
+    const setReplyText=(body,text)=>window.ConversationMarkdown?window.ConversationMarkdown.render(body,text):(body.textContent=text);
     function sessionProgress(source){
       if(!timeline || !source.target || !["worker_progress","worker_result"].includes(source.kind))return;
       const key=`${source.target.chat_id}:${source.target.thread_id??""}`,stamp=Date.parse(source.observed_at)||0,previous=progressCards.get(key);
@@ -169,7 +171,7 @@ window.Conversation = (() => {
       }
       card.source=source.id;card.revision=source.revision;card.stamp=stamp;card.title.textContent=`Update from ${source.label}`;
       const original=cards.get(source.id);
-      card.body.textContent=original?.expanded && original.source.revision===source.revision?original.body.textContent:source.preview;
+      setReplyText(card.body,original?.expanded && original.source.revision===source.revision?replyText(original.body):source.preview);
       messageTime(card.time,source.observed_at);
       placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
     }
@@ -203,9 +205,9 @@ window.Conversation = (() => {
     function clearText(){textQueue.length=0;textObserver?.disconnect();}
     function appendTextPart(card,result){
       const following=atTimelineEnd();
-      card.body.textContent=(card.expanded?card.body.textContent:"")+result.text;
+      setReplyText(card.body,(card.expanded?replyText(card.body):"")+result.text);
       card.expanded=true;card.offset=result.next_offset;
-      for(const visible of progressCards.values())if(visible.source===card.source.id && visible.revision===card.source.revision)visible.body.textContent=card.body.textContent;
+      for(const visible of progressCards.values())if(visible.source===card.source.id && visible.revision===card.source.revision)setReplyText(visible.body,replyText(card.body));
       card.read.hidden=card.offset===null;card.read.textContent="Continue reading";
       if(following && timeline)timeline.scrollTop=timeline.scrollHeight;
     }
@@ -220,8 +222,8 @@ window.Conversation = (() => {
           if(cards.get(selected.id)!==card || card.source.revision!==selected.revision)return;
           appendTextPart(card,result);
           parts++;
-        }while(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && enabled && !document.hidden && card.textVisible);
-        if(automatic && card.offset!==null && parts<12 && card.body.textContent.length<16000 && (!enabled || document.hidden || !card.textVisible)){
+        }while(automatic && card.offset!==null && parts<12 && replyText(card.body).length<16000 && enabled && !document.hidden && card.textVisible);
+        if(automatic && card.offset!==null && parts<12 && replyText(card.body).length<16000 && (!enabled || document.hidden || !card.textVisible)){
           card.autoRevision=undefined;card.autoWanted=true;
         }
       }catch(error){
@@ -654,10 +656,10 @@ window.Conversation = (() => {
       // Reuse the canonical reader, keeping one bounded request chain per segment.
       for(let n=0;n<12 && active===selected && followingSpeech()
         && card.source.revision===selected.source.revision
-        && (!card.expanded || Array.from(card.body.textContent).length<selected.textEnd);n++){
-        const before=card.body.textContent;
+        && (!card.expanded || Array.from(replyText(card.body)).length<selected.textEnd);n++){
+        const before=replyText(card.body);
         await readCard(card);
-        if(card.body.textContent===before || card.offset===null)break;
+        if(replyText(card.body)===before || card.offset===null)break;
       }
       if(active===selected && !followingSpeech())selected.followTextRequested=false;
       if(active===selected)followPlayback();
@@ -675,7 +677,7 @@ window.Conversation = (() => {
       }
       if(!Number.isSafeInteger(selected.textEnd))return;
       const original=cards.get(selected.source.id);
-      if(!original.expanded || Array.from(original.body.textContent).length<selected.textEnd){
+      if(!original.expanded || Array.from(replyText(original.body)).length<selected.textEnd){
         void loadFollowText(selected);return;
       }
       if(!card.body.firstChild || !document.createRange)return;
@@ -683,12 +685,15 @@ window.Conversation = (() => {
       const timed=Number.isFinite(audio.duration) && audio.duration>0 && Number.isFinite(audio.currentTime);
       if(!timed && selected.followed && !force)return;
       const fraction=timed?Math.max(0,Math.min(1,audio.currentTime/audio.duration)):0;
-      const characters=Array.from(card.body.textContent);
+      const characters=Array.from(replyText(card.body));
       const position=Math.min(characters.length-1,selected.offset+Math.floor(Math.max(0,selected.textEnd-selected.offset-1)*fraction));
       if(position<0)return;
       const start=characters.slice(0,position).join("").length;
-      const range=document.createRange();range.setStart(card.body.firstChild,start);
-      range.setEnd(card.body.firstChild,start+characters[position].length);
+      const range=window.ConversationMarkdown?window.ConversationMarkdown.range(card.body,position):(()=>{
+        const result=document.createRange();result.setStart(card.body.firstChild,start);
+        result.setEnd(card.body.firstChild,start+characters[position].length);return result;
+      })();
+      if(!range)return;
       const point=range.getBoundingClientRect();
       if(!point.height || !viewport.height)return;
       if(force || point.top<viewport.top || point.bottom>viewport.bottom-24)
@@ -920,7 +925,7 @@ window.Conversation = (() => {
         const box = node("article", undefined, "reply");
         const title = node("h3");
         const status = node("p", "", "reply-status");
-        const body = node("div", source.preview, "reply-text");
+        const body = node("div", undefined, "reply-text");setReplyText(body,source.preview);
         const actions = node("div", undefined, "reply-actions");
         const read = node("button", "Read reply"); read.type = "button";
         const listen = node("button", "Listen"); listen.type = "button";
@@ -944,7 +949,7 @@ window.Conversation = (() => {
           return listenTo(card.source,saved?.revision===card.source.revision?saved.offset:0);
         });
       } else if (card.source.text_sha256 !== source.text_sha256) {
-        card.body.textContent = source.preview;
+        setReplyText(card.body,source.preview);
         card.autoRevision=undefined;card.autoWanted=false;
         card.offset = 0; card.expanded = false; card.read.hidden = false;
         card.read.textContent = "Read reply";

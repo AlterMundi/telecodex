@@ -1,0 +1,4 @@
+markdown-it 15.0.3 (MIT)
+https://registry.npmjs.org/markdown-it/-/markdown-it-15.0.3.tgz
+sha512-+Az7Ojz3iRGu8KYMvJ6xVhvrxP3eE+vEtJX75Ow88XBpcQNV/0lGX5ZynIIBftREo4DC2jsveAMDaeltmm8QvQ==
+Vendored browser bundle, no runtime CDN or plugins. Application disables raw HTML, external images and linkification.

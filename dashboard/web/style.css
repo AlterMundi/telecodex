@@ -10,12 +10,18 @@
   --bg: var(--dm-background, #090e17);
   --panel: var(--dm-surface, #111925);
   --ink: var(--dm-text, #f5f0e6);
-  --muted: color-mix(in srgb, var(--ink) 78%, var(--bg));
+  --muted: #bec0c5;
   --accent: var(--dm-accent, #87d7ee);
-  --line: color-mix(in srgb, var(--ink) 30%, var(--bg));
+  --line: #505660;
   --warn: var(--dm-accent, #f4c283);
   --secondary: var(--dm-accent, #dcb3c3);
   --good: var(--dm-accent, #a8dac6);
+}
+@supports (color: color-mix(in srgb, black, white)) {
+  :root {
+    --muted: color-mix(in srgb, var(--ink) 78%, var(--bg));
+    --line: color-mix(in srgb, var(--ink) 30%, var(--bg));
+  }
 }
 * {
   box-sizing: border-box;
@@ -579,7 +585,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-sound label { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
 #conversation-sound-score { padding-inline-start:1.4em; overflow-wrap:anywhere; }
 
-.standalone-conversation { background:radial-gradient(ellipse at 50% 0%,color-mix(in srgb,var(--accent) 7%,var(--bg)),var(--bg) 65%); }
+.standalone-conversation { background:radial-gradient(ellipse at 50% 0%,color-mix(in srgb,var(--accent) 7%,var(--bg)),var(--bg) 65%); background-color:var(--bg); }
 .standalone-conversation main { max-width:960px; gap:8px; padding-inline:24px; }
 .standalone-conversation header { border:0; padding:8px 0; margin:0; }
 .standalone-conversation .identity h1 { font-size:16px; font-weight:500; letter-spacing:.02em; }
@@ -785,7 +791,6 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-voice-replies[data-voice-state="paused"] { color:var(--accent); border-color:var(--accent); }
 .image-choice .control-icon { flex:none; width:28px; height:28px; }
 .standalone-conversation #conversation-compose #conversation-talk { display:grid; place-items:center; padding:0; font-size:0; }
-.standalone-conversation #conversation-talk::before { content:""; display:block; width:24px; height:24px; background:currentColor; mask:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%229%22%20y%3D%222%22%20width%3D%226%22%20height%3D%2213%22%20rx%3D%223%22%2F%3E%3Cpath%20d%3D%22M5%2010v2a7%207%200%200%200%2014%200v-2M12%2019v3m-4%200h8%22%2F%3E%3C%2Fsvg%3E") center / contain no-repeat; }
 .standalone-conversation #conversation-compose #conversation-talk,.standalone-conversation #conversation-compose #conversation-voice-discard { width:44px; height:44px; min-width:44px; min-height:44px; padding:6px; }
 .standalone-conversation #conversation-send { width:64px; min-width:64px; height:44px; padding:8px; }
 .standalone-conversation #conversation-compose-status { height:auto; flex-basis:auto; overflow:visible; }
@@ -908,3 +913,17 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 #conversation-visual > summary { position:relative; }
 #conversation-visual > summary:not([data-count="0"])[data-count]::after { content:attr(data-count); position:absolute; top:1px; right:0; min-width:14px; height:14px; border-radius:7px; background:var(--accent); color:var(--bg); font-size:10px; line-height:14px; text-align:center; }
 #conversation-voice-state[data-live-caption="true"] { white-space:nowrap; overflow:hidden; text-overflow:clip; max-width:100%; }
+
+/* Parsed reply typography; raw originals remain separate from this projection. */
+.reply-text.markdown-text { white-space:normal; overflow-wrap:anywhere; }
+.markdown-text > :first-child { margin-top:0; }
+.markdown-text > :last-child { margin-bottom:0; }
+.markdown-text p,.markdown-text ul,.markdown-text ol,.markdown-text pre,.markdown-text blockquote { margin:.65em 0; }
+.markdown-text li > p { margin:.3em 0; }
+.markdown-text a { color:var(--accent); text-decoration:underline; text-underline-offset:.16em; }
+.markdown-text code { font-size:.9em; padding:.1em .25em; border-radius:4px; background:rgba(130,150,170,.12); }
+.markdown-text pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:.65em; background:rgba(130,150,170,.08); border-radius:8px; }
+.markdown-text pre code { padding:0; background:none; }
+.markdown-text blockquote { border-left:2px solid var(--line); padding-left:.8em; color:var(--muted); }
+.markdown-text table { display:block; overflow-x:auto; border-collapse:collapse; }
+.markdown-text th,.markdown-text td { padding:.3em .6em; border:1px solid var(--line); }

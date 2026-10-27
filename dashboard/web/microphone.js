@@ -7,6 +7,7 @@ window.VoiceInput = (() => {
     function notice(text,attention=false){state.removeAttribute?.('data-live-caption');state.setAttribute('aria-live','polite');state.textContent=text;state.setAttribute('data-attention',String(attention));}
     let available=false, liveAvailable=false, liveMode='prepared', generation=0, recorder, stream, parts=[], bytes=0, timer, pending, latestSaved, uploading=false, controller;
     let phase='idle', commit=false, readySelection;
+    const microphoneIcon=button.querySelector?.('svg')?.cloneNode(true);
     const supported=()=>!!(window.isSecureContext && window.MediaRecorder && typeof window.MediaRecorder.isTypeSupported==='function' && window.navigator?.mediaDevices?.getUserMedia && window.crypto?.subtle);
     const ownsSend=()=>['permission','recording','ready','finalizing'].includes(phase) || uploading || !!pending;
     let ownedSend=false;
@@ -18,7 +19,8 @@ window.VoiceInput = (() => {
     }
     function controls() {
       box.hidden=!available;
-      button.textContent=phase==='recording'||phase==='ready'?'↑':pending?'↻':['permission','finalizing'].includes(phase)||uploading?'…':'🎙';
+      if(phase==='idle' && !pending && microphoneIcon)button.replaceChildren(microphoneIcon.cloneNode(true));
+      else button.textContent=phase==='recording'||phase==='ready'?'↑':pending?'↻':['permission','finalizing'].includes(phase)||uploading?'…':'🎙';
       button.setAttribute('aria-label',phase==='recording'?'Send voice message':phase==='ready'?'Send recording':pending?'Retry this recording':'Record a voice message');
       button.disabled=!available || !getBinding() || !supported() || uploading || phase==='permission' || phase==='finalizing';
       button.setAttribute('aria-pressed',String(phase==='recording'));
@@ -138,7 +140,14 @@ window.VoiceInput = (() => {
         current.addEventListener('stop',()=>finish(owned,binding,mime,frozenSelection));
         current.start(250);phase='recording';notice('Listening. Press Send when you finish.');controls();
         timer=setTimeout(()=>{if(owned===generation && current.state==='recording'){phase='finalizing';current.stop();stopTracks();controls();}},120000);
-      } catch(_) {if(owned===generation)cancelRecording('Microphone unavailable. You can keep writing.');}
+      } catch(error) {
+        const reason={NotAllowedError:'Microphone permission was denied. Check this browser’s site permissions.',
+          NotFoundError:'This browser could not find an accessible microphone.',
+          NotReadableError:'The microphone could not be opened. It may be busy or unavailable to this browser.',
+          NotSupportedError:'Audio recording is not supported by this browser.',
+          SecurityError:'Microphone access is blocked by this browser.'}[error?.name];
+        if(owned===generation)cancelRecording(reason || 'Microphone unavailable. You can keep writing.');
+      }
     }
     function submit(){
       if(uploading)return;

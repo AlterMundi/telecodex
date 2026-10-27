@@ -31,6 +31,14 @@ def speech_part(source):
     end = boundaries[-1] if boundaries else window.rfind(' ')
     if end < 60:
         end = bound
+    # Keep ordinary links/code/emphasis together rather than feeding a TTS
+    # segment half a label or URL. This is a conservative boundary preference;
+    # Markdown interpretation itself belongs to the standard parser.
+    spans = r'!?\[[^\]\n]*\]\([^\n]*?\)|(`+)[^`]*\1|\*\*[^*]*\*\*|__[^_]*__'
+    for match in re.finditer(spans, text):
+        if match.start() < end < match.end():
+            end = match.start() if match.start() >= 60 else match.end()
+            break
     return {**source, 'text':text[:end], 'next_offset':source['offset']+end}
 
 

@@ -156,6 +156,17 @@ class Companion(unittest.TestCase):
         question={**self.provider.source,'kind':'native_question','text':text[:1500]}
         self.assertIs(speech_part(question),question,'Synthetic question labels retain their established offsets')
 
+    def test_incremental_part_does_not_cut_link_label_or_destination(self):
+        text='A sentence explaining the result. '*6+'[the official documentation](https://example.org/'+'path/'*80+'). Continue.'
+        part={'text':text,'offset':0,'next_offset':None,'kind':'integrator_answer'}
+        segments=[]
+        while part['text']:
+            chosen=speech_part(part);segments.append(chosen['text'])
+            self.assertEqual(chosen['text'].count('['),chosen['text'].count(']'))
+            used=len(chosen['text']);self.assertGreater(used,0)
+            part={**part,'text':part['text'][used:],'offset':part['offset']+used}
+        self.assertEqual(''.join(segments),text)
+
     def test_incremental_audio_is_an_exact_canonical_prefix(self):
         self.config['speech']['incremental_segments']=True
         self.provider.source['text']=('A complete sentence with Unicode 🙂 and a command git status. '*30)

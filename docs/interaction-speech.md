@@ -353,3 +353,32 @@ than replaying work. Keep a compatible native writer after new originals exist:
 an older writer can ignore unknown optional JSON fields and lose them when
 rewriting retained documents. Roll back presentation/feature use while preserving
 that compatible native reader/writer and all original journals.
+
+
+## Markdown presentation and spoken projection
+
+Conversation replies render standard Markdown locally using the vendored MIT
+markdown-it browser bundle (version and upstream integrity in its SOURCE file).
+Raw HTML is escaped, image syntax displays its label without fetching external
+images, and links open with noopener/noreferrer. Formatting is a view: immutable
+original text, revisions, hashes and source offsets remain unchanged.
+
+Follow retains canonical source lengths and maps positions into rendered blocks;
+within-block movement is approximate media progress, never word alignment.
+Partial reads append canonical text before rerendering, so formatting does not
+change pagination, audio validation or resumed segment offsets.
+
+Both batch and streaming synthesis use the pinned Python Markdown parser to
+read visible labels and code rather than delimiters or link destinations. An
+unlabelled URL is spoken as “link” (or “enlace” for the selected Spanish route).
+Literal code remains literal. Provider render identity distinguishes changed
+spoken projections and original source hashes; returned canonical text digests
+still authenticate the original, not the spoken projection. Plain text and its
+edge whitespace retain the existing identity. Ordinary complete inline Markdown
+constructs are kept together when choosing incremental segment boundaries.
+The configured provider, voice, raw-media retention and native work are unchanged.
+
+Install the maintained scripts/requirements-speech.lock alongside the renderer;
+the dashboard lock includes it. No runtime CDN or extra model performs rendering.
+Tests cover unsafe markup/URL rejection, no image fetch, source preservation,
+batch/streaming provider payloads and immutable digests/cache behavior.

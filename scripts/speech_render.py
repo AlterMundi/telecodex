@@ -37,6 +37,35 @@ class RenderError(Exception):
     """Controlled error codes only; provider payloads and URLs never escape."""
 
 
+def spoken_markdown(text, language):
+    """Project source Markdown to speech, retaining labels and literal code.
+
+    This never changes the canonical text/hash returned to the owning client.
+    URL destinations and formatting delimiters are not spoken instructions.
+    """
+    from markdown_it import MarkdownIt
+    parser = MarkdownIt('default', {'html': False, 'linkify': False,
+                                    'typographer': False, 'maxNesting': 20})
+    link_word = 'enlace' if language.split('-')[0] == 'es' else 'link'
+    def visible(tokens):
+        out = []
+        for token in tokens:
+            if token.children is not None:
+                out.append(visible(token.children))
+            elif token.type == 'text':
+                # An ordinary URL/autolink has no useful spoken label.
+                out.append(re.sub(r'https?://[^\s<>]+', link_word, token.content))
+            elif token.type in ('code_inline', 'code_block', 'fence'):
+                out.append(token.content)
+            elif token.type in ('softbreak', 'hardbreak', 'hr') or (token.block and token.nesting == -1):
+                out.append('\n')
+        return ''.join(out)
+    result = visible(parser.parse(text)).strip()
+    if not result:
+        raise RenderError('empty-spoken-text')
+    return re.match(r'^\s*', text).group() + result + re.search(r'\s*$', text).group()
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
 
@@ -327,17 +356,21 @@ def render(binding, request):
             or len(request['text']) > 1800 or '\0' in request['text']):
         raise RenderError('invalid-speech-request')
     config = route(binding)
-    fields = {'text': request['text'], 'language': config['language'], 'voice': config['voice'],
+    spoken = spoken_markdown(request['text'], config['language'])
+    fields = {'text': spoken, 'language': config['language'], 'voice': config['voice'],
               'encoding': 'LINEAR_PCM', 'sample_rate_hz': '22050'}
     identity = {'schema': 'telecodex.speech-render/v1', 'scope': request['scope'],
                 'provider': config['provider'], 'endpoint': config['endpoint'], 'fields': fields}
     if config['provider'] == 'qwen-tts':
         fields = {'model': config['model'], 'input': {
-            'text': request['text'], 'voice': config['voice'], 'format': 'wav', 'sample_rate': 24000,
+            'text': spoken, 'voice': config['voice'], 'format': 'wav', 'sample_rate': 24000,
             'language_hints': [config['language'].split('-')[0]],
             'rate': config.get('rate', 1.0), 'pitch': config.get('pitch', 1.0),
             'instruction': config.get('instruction', '')}}
         identity['fields'] = fields
+    if spoken != request['text']:
+        identity['source_text_sha256'] = sha(request['text'].encode())
+        identity['text_projection'] = 'markdown-v1'
     ident = sha(canonical(identity))
     job = directory(directory(config['cache_root']) / ident)
     prune_audio(config, exclude=ident)
@@ -465,12 +498,17 @@ def stream_render(binding, request, emit):
     config = route(binding)
     if config['provider'] != 'qwen-tts':
         raise RenderError('streaming-provider-unavailable')
+    spoken = spoken_markdown(request['text'], config['language'])
     fields = {'model': config['model'], 'input': {
-        'text': request['text'], 'voice': config['voice'], 'format': 'mp3', 'sample_rate': 24000,
+        'text': spoken, 'voice': config['voice'], 'format': 'mp3', 'sample_rate': 24000,
         'language_hints': [config['language'].split('-')[0]], 'rate': config.get('rate', 1.0),
         'pitch': config.get('pitch', 1.0), 'instruction': config.get('instruction', '')}}
-    ident = sha(canonical({'mode':'sse-mp3-v1', 'scope':request['scope'],
-        'endpoint':config['endpoint'], 'fields':fields}))
+    identity = {'mode':'sse-mp3-v1', 'scope':request['scope'],
+        'endpoint':config['endpoint'], 'fields':fields}
+    if spoken != request['text']:
+        identity['source_text_sha256'] = sha(request['text'].encode())
+        identity['text_projection'] = 'markdown-v1'
+    ident = sha(canonical(identity))
     job = directory(directory(config['cache_root']) / ident)
     state_file = job / 'state.json'; audio_file = job / 'audio.mp3'
     sequence = 0; accumulated = bytearray()
