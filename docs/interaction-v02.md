@@ -415,3 +415,10 @@ no native decisions, models or capture. Global session data/navigation, carousel
 drag/focus, exact reported Review-item diagnosis, final CI and receiving deployment
 remain unfinished.
 Owning task #61; stage4 attention and native repair remain in plan #301/milestone9.
+
+## Original generic files — #380
+
+The Files composer increment carries unchanged PDFs and other original bytes
+through the retained conversation and native/routed attachment path. This remains
+milestone8 base-experience work. See [the contract and qualification boundary](conversation-files.md).
+A PNG-only selector or an upload receipt does not close native file delivery.

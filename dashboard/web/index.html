@@ -11,6 +11,7 @@
     <script src="assets/voice-stream.js" defer></script>
     <script src="assets/microphone.js" defer></script>
     <script src="assets/visual.js" defer></script>
+    <script src="assets/files.js" defer></script>
     <script src="assets/routing_graph.js" defer></script>
     <script src="assets/companion.js" defer></script>
     <script src="assets/sonic.js" defer></script>
@@ -90,6 +91,8 @@
             <div id="conversation-attachment-sheet">
             <p class="note">Choose photos or take one. Marking a point is optional.</p>
             <div class="image-choices"><label class="image-choice" for="conversation-image"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m21 15-5-5L6 21M3 15l4-4 4 4"/></svg><span>Gallery</span><input id="conversation-image" type="file" accept="image/*" multiple></label><label class="image-choice" for="conversation-camera"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m8 7 1.5-3h5L16 7"/><rect x="3" y="7" width="18" height="14" rx="3"/><circle cx="12" cy="14" r="3.5"/></svg><span>Camera</span><input id="conversation-camera" type="file" accept="image/*" capture="environment"></label></div>
+            <label class="image-choice" for="conversation-files">Files<input id="conversation-files" type="file" multiple></label>
+            <div id="conversation-files-list" hidden></div><p id="conversation-files-state" role="status" aria-live="polite"></p>
             <div id="conversation-image-list" class="image-attachments" aria-label="Attached images in send order" hidden></div>
             <div class="visual-preview"><canvas id="conversation-image-view" tabindex="0" role="img" aria-label="Selected image. Optionally click a point, use arrow keys, or enter X and Y below." hidden></canvas></div>
             <div id="conversation-image-coordinates" class="conversation-tools" hidden><label>X <input id="conversation-image-x" type="number" min="0" step="1" disabled></label><label>Y <input id="conversation-image-y" type="number" min="0" step="1" disabled></label></div><button id="conversation-image-clear" type="button" hidden>Remove image</button>

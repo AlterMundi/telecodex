@@ -966,3 +966,5 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 @media(min-width:481px) {
  .standalone-conversation header .header-tools.has-for-you { max-width:200px; flex-wrap:nowrap; }
 }
+
+#conversation-files-list>div{display:flex;align-items:center;gap:12px;padding:6px 0}#conversation-files-list span{overflow-wrap:anywhere;flex:1}#conversation-files-list button{min-width:44px;min-height:44px}#conversation-files-state{font-size:14px}.input-files{display:flex;flex-direction:column;gap:8px;padding:8px 0}.input-files a{overflow-wrap:anywhere}

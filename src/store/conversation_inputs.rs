@@ -66,6 +66,8 @@ pub struct ConversationInput {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visual: Option<crate::visual::VisualSelection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<crate::files::FileReference>,
     /// Bounded owned question versions present before capture/ASR, not device hints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_versions: Option<std::collections::BTreeMap<String, String>>,
@@ -323,6 +325,10 @@ pub(super) fn eligible_on(conn: &Connection, input: &ConversationInput) -> Resul
     {
         bail!("Original conversation input binding or admission generation retired");
     }
+    crate::files::attachments(
+        std::path::Path::new(conn.path().context("File storage unavailable")?),
+        &input.files,
+    )?;
     if let Some(visual) = input.visual.as_ref() {
         crate::visual::attachments(
             std::path::Path::new(conn.path().context("Image storage unavailable")?),
@@ -430,7 +436,18 @@ impl Store {
         reply: Option<ConversationReply>,
     ) -> Result<(ConversationInput, bool)> {
         self.capture_original(
-            human, entry, binding, id, text, None, true, reply, None, None, None,
+            human,
+            entry,
+            binding,
+            id,
+            text,
+            None,
+            true,
+            reply,
+            None,
+            None,
+            None,
+            Vec::new(),
         )
     }
 
@@ -460,9 +477,11 @@ impl Store {
             None,
             None,
             None,
+            Vec::new(),
         )
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn conversation_voice_capture_reply(
         &self,
@@ -476,6 +495,36 @@ impl Store {
         visual: Option<crate::visual::VisualSelection>,
         playback: Option<ConversationPlayback>,
         capture_questions: Option<std::collections::BTreeMap<String, String>>,
+    ) -> Result<(ConversationInput, bool)> {
+        self.conversation_voice_capture_files(
+            human,
+            entry,
+            binding,
+            id,
+            voice,
+            can_prepare,
+            reply,
+            visual,
+            playback,
+            capture_questions,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn conversation_voice_capture_files(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        voice: ConversationVoice,
+        can_prepare: bool,
+        reply: Option<ConversationReply>,
+        visual: Option<crate::visual::VisualSelection>,
+        playback: Option<ConversationPlayback>,
+        capture_questions: Option<std::collections::BTreeMap<String, String>>,
+        files: Vec<crate::files::FileReference>,
     ) -> Result<(ConversationInput, bool)> {
         voice.validate()?;
         if voice.transcription.is_some() {
@@ -493,9 +542,11 @@ impl Store {
             visual,
             playback,
             capture_questions,
+            files,
         )
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn conversation_input_capture_visual(
         &self,
@@ -509,7 +560,36 @@ impl Store {
         playback: Option<ConversationPlayback>,
     ) -> Result<(ConversationInput, bool)> {
         self.capture_original(
-            human, entry, binding, id, text, None, true, reply, visual, playback, None,
+            human,
+            entry,
+            binding,
+            id,
+            text,
+            None,
+            true,
+            reply,
+            visual,
+            playback,
+            None,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn conversation_input_capture_files(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        text: &str,
+        reply: Option<ConversationReply>,
+        visual: Option<crate::visual::VisualSelection>,
+        playback: Option<ConversationPlayback>,
+        files: Vec<crate::files::FileReference>,
+    ) -> Result<(ConversationInput, bool)> {
+        self.capture_original(
+            human, entry, binding, id, text, None, true, reply, visual, playback, None, files,
         )
     }
 
@@ -527,11 +607,12 @@ impl Store {
         visual: Option<crate::visual::VisualSelection>,
         playback: Option<ConversationPlayback>,
         capture_questions: Option<std::collections::BTreeMap<String, String>>,
+        files: Vec<crate::files::FileReference>,
     ) -> Result<(ConversationInput, bool)> {
         if Uuid::parse_str(id)
             .ok()
             .is_none_or(|uuid| uuid.to_string() != id)
-            || voice.is_none() && text.trim().is_empty()
+            || voice.is_none() && text.trim().is_empty() && files.is_empty()
             || text.len() > 32 * 1024
             || text.contains('\0')
         {
@@ -570,6 +651,7 @@ impl Store {
             let input = read_on(&tx, id, human)?;
             if input.entry != entry
                 || input.visual != visual
+                || input.files != files
                 || input.reply != reply
                 || input.playback != playback
                 || input.capture_questions != capture_questions
@@ -590,6 +672,10 @@ impl Store {
                 Some(reference),
             )?;
         }
+        crate::files::attachments(
+            std::path::Path::new(tx.path().context("File storage unavailable")?),
+            &files,
+        )?;
         let question_override = voice.is_none()
             && crate::interaction::explicit_selector(text).is_some()
             && reply
@@ -624,6 +710,7 @@ impl Store {
             epoch: super::stopping::admission_epoch_on(&tx, entry)?,
             text: text.into(),
             visual,
+            files,
             question_versions: Some(question_versions),
             capture_questions,
             voice: voice.clone(),
@@ -984,7 +1071,7 @@ impl Store {
             )?;
             items.push(serde_json::json!({
                 "received_at":received_at,"id":id,"sequence":sequence,"capture_order":capture,"ordering_unknown":capture.is_none(),"preview":input.text.chars().take(1000).collect::<String>(),
-                "phase":input.phase,"retired":input.retired,"visual":input.visual,"voice":input.voice,"routing":input.routing,"playback":input.playback,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
+                "phase":input.phase,"retired":input.retired,"files":input.files,"visual":input.visual,"voice":input.voice,"routing":input.routing,"playback":input.playback,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
                 "clarifiable":input.phase=="awaiting_target" && eligible_on(&conn,&input).is_ok(),
                 "native_binding_current":input.native==native,
             }));

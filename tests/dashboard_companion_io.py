@@ -326,6 +326,16 @@ class Companion(unittest.TestCase):
         for route in ('/api/stop','/api/state'):
             self.assertEqual(self.client.get(route,headers=self.headers).status_code,403)
 
+    def test_original_files_are_scoped_to_the_conversation_grant(self):
+        from dashboard.companion import permitted
+        path='/api/interaction/inputs/'+str(uuid.uuid4())+'/files/0'
+        self.assertTrue(permitted('POST','/api/interaction/files'))
+        self.assertTrue(permitted('GET',path))
+        self.assertFalse(permitted('POST',path))
+        self.assertFalse(permitted('GET',path.replace('/files/0','/files/8')))
+        self.assertFalse(permitted('POST','/api/interaction/files','monitor_readonly'))
+        self.assertFalse(permitted('GET',path,'monitor_readonly'))
+
     def test_monitor_grant_is_read_only_and_never_inherits_ambient_owner(self):
         from dashboard.companion import permitted
         output=self.root/'monitor.json'
