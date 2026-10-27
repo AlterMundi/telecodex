@@ -142,7 +142,7 @@ def foreground_steered_reference(binary):
         assert j.input_ref==original
         follow=j.admit('Discuss a separate point here; do not route this later message.',topic=1)
         j.wait(lambda:j.has('Foreground incorporated later steering without a new dispatch.',1))
-        assert j.steered['clientUserMessageId']=='telegram:'+str(follow)
+        assert j.steered['clientUserMessageId']=='telegram:100:100:'+str(follow),j.steered
         assert follow!=original and j.input_ref==original
         assert 'Discuss a separate point here' in j.steered['input'][0]['text']
         assert all(len(j.instructions(t))==1 for t in(7,8))
