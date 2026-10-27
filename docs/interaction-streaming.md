@@ -511,3 +511,35 @@ Earlier functional tags remain immutable. This checkpoint includes current strea
 ASR, progressive TTS and optional final word timing; it does not claim completion
 of the continuous-voice milestone. Roll back software/configuration only, retaining
 compatible readers, current journals, goals, grants and uncertain effects.
+
+## Provisional native response text
+
+The collector can expose `response_draft` alongside presentation metadata while
+an owned integrating native item is still generating. This is separate from
+canonical `items`: it has no source/revision for Listen, replies, artifacts,
+question decisions or publication. Completion replaces it with the ordinary
+confirmed source, which may differ. This advances useful text display, not early
+spoken response or completion of the stage2/3/4 goal.
+
+The actual native thread/physical-turn/item correlation is required. Only the
+configured entry/human writes this bounded64KiB replaceable snapshot. A lifecycle
+start owns the current physical producer without changing native recovery's
+first-turn boundary; late deltas from a preceding physical turn are refused.
+The existing store bounds it to one snapshot per entry and at most five writes
+per second per item. Reads recheck ownership, native binding/generation, active
+local execution and canonical-item retirement. Empty item completion retires
+only that draft; terminal events and process startup retire ephemeral state.
+No partial result gains canonical request coverage or Telegram publication.
+The browser uses existing timeline placement and follows growing text only when
+already at the bottom; older manual reading keeps its position. Observation
+failure hides the provisional card. Reconnect reads current state without native
+input, synthesis or recovery replay. Older clients/readers ignore the optional
+field; rollback does not restore old journals or change native work.
+
+The PR357 final aggregate40473421537 failed in the direct-topic projection
+fixture waiting for a reply. That fixture observed a peer request before the
+native acknowledgment, which leaves an explicit scheduling race. The fixture
+now waits for the actual matching native-input receipt before publishing its
+synthetic completion; the complete projection journey passes against the existing
+receiving357 executable. This is verifier evidence, not a claimed production
+routing repair or a reason to replay an original. Other final357 checks passed.

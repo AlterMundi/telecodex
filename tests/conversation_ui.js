@@ -135,7 +135,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", can_listen:true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
+    return {binding:"fixture", csrf:"synthetic", response_draft:options.responseDraft, can_listen:true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
@@ -238,6 +238,24 @@ function boot(readOnly=false,standalone=false,options={}) {
 }
 
 (async () => {
+  const liveOptions={responseDraft:{provisional:true,text:"Useful early answer.",observed_at:"2100-01-01T00:00:00Z"}};
+  const earlyDraft=boot(false,true,liveOptions);await earlyDraft.ui.refresh();
+  const draftCard=earlyDraft.nodes.get('#conversation-timeline').children.find(c=>c.id==='conversation-response-draft');
+  assert(draftCard && !draftCard.hidden);
+  assert.equal(draftCard.children[1].textContent,"Useful early answer.");
+  assert.equal(draftCard.children.length,2,"No Listen, reply or action controls on a provisional draft");
+  assert.equal(earlyDraft.audioCalls.length,0);
+  const draftTimeline=earlyDraft.nodes.get('#conversation-timeline');
+  assert.equal(draftCard.dataset.timelineKey,"response-draft");
+  assert.equal(draftTimeline.children.at(-1),draftCard,"Older canonical history stays before the draft");
+  draftTimeline.scrollHeight=5000;draftTimeline.clientHeight=1000;draftTimeline.scrollTop=4000;
+  liveOptions.responseDraft.text+=" More useful text.";await earlyDraft.ui.refresh();
+  assert.equal(draftTimeline.scrollTop,5000,"A reader at the bottom follows growing text");
+  draftTimeline.scrollTop=1000;liveOptions.responseDraft.text+=" Further text.";await earlyDraft.ui.refresh();
+  assert.equal(draftTimeline.scrollTop,1000,"Reading older text preserves the viewport");
+  liveOptions.responseDraft=null;await earlyDraft.ui.refresh();assert(draftCard.hidden);
+  liveOptions.responseDraft={provisional:true,text:"Next draft"};await earlyDraft.ui.refresh();assert(!draftCard.hidden);
+  earlyDraft.failPage("TypeError");await earlyDraft.ui.refresh();assert(draftCard.hidden,"Connection failure hides unconfirmed live display");
   for(const [language,day] of [["en","mon"]]) {
     const localized=boot(false,true,{language});
     const stamp=new Date(2026,9,26,23,40).toISOString();

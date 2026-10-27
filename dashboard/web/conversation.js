@@ -127,6 +127,21 @@ window.Conversation = (() => {
     document.body.classList.toggle("standalone-conversation",standalone);
     if(graph){$("#conversation-flow").hidden=false;$("#conversation-flow").open=readOnly;}
     const timeline = standalone ? $("#conversation-timeline") : undefined;
+    const responseDraft=node("article",undefined,"reply response-draft");
+    const responseDraftBody=node("div",undefined,"reply-text");
+    responseDraft.id="conversation-response-draft";responseDraft.hidden=true;
+    responseDraft.setAttribute("aria-label","Response being written");
+    responseDraft.append(node("h3","Writing…"),responseDraftBody);
+    function showResponseDraft(value){
+      const text=value?.provisional===true && typeof value.text==="string" && value.text.length<=65536?value.text:"";
+      const follow=atTimelineEnd();
+      responseDraft.hidden=!text.trim();
+      if(responseDraftBody.dataset.text!==text){setReplyText(responseDraftBody,text);responseDraftBody.dataset.text=text;}
+      if(!responseDraft.hidden){
+        if(timeline)placeInTimeline(responseDraft,"response-draft",value.observed_at,follow);
+        else $("#conversation-answers").append(responseDraft);
+      }
+    }
     const historyTools=timeline?node("div",undefined,"conversation-tools timeline-history"):undefined;
     if(timeline){
       const diagnostics=$("#conversation-diagnostics");
@@ -368,6 +383,7 @@ window.Conversation = (() => {
         routing:[...inputs.values()].some(c=>["requested","queued","submitting","steering"].includes(c.value.routing?.phase))});
     }
     function resetInputs() {
+      showResponseDraft();
       companion?.reset();sound?.reset();goalControls?.reset();presentationProfile=undefined;
       disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren();
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
@@ -997,6 +1013,7 @@ window.Conversation = (() => {
     // not an explicit decision to pause spoken replies.
     const transientConnectionError=error=>["TypeError","AbortError"].includes(error.name) || error.status>=500;
     function failed(error) {
+      showResponseDraft();
       presentState({connected:false});
       if (error.status === 401 || error.status === 403) {
         onUnauthorized?.(error);
@@ -1113,6 +1130,7 @@ window.Conversation = (() => {
       for (const source of value.items)upsert(source);
       if(direction==="after")for(const source of value.items)companion?.reply(source);
       if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0)))offerVoice(source);
+      showResponseDraft(value.response_draft);
       for (const card of cards.values()) card.listen.hidden = !canListen;
       if (direction === "before" && rememberHistory) {
         oldest = value.cursor;

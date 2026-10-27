@@ -174,6 +174,7 @@ pub struct RunSummary {
     pub codex_thread_id: Option<String>,
     pub assistant_text: String,
     pub stderr_text: String,
+    pub(crate) draft_item: Option<(String, String, String)>,
 }
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct AvailableModel {
@@ -191,6 +192,15 @@ pub enum CodexEvent {
     AssistantText(String),
     CommentaryCompleted(String),
     FinalAnswerCompleted(String),
+    /// Revisable display only; never a canonical answer or a publication receipt.
+    NativeMessageDraft {
+        started: bool,
+        completed: bool,
+        thread_id: String,
+        turn_id: String,
+        item_id: String,
+        text: String,
+    },
     /// Canonical native identity, before the legacy text-only presentation event.
     NativeMessageCompleted {
         thread_id: String,
@@ -1303,6 +1313,7 @@ where
         codex_thread_id: Some(thread_id.clone()),
         assistant_text: String::new(),
         stderr_text: String::new(),
+            draft_item: None,
     };
     let _ = on_event(CodexEvent::ThreadStarted(thread_id.clone())).await?;
     if let Some(profile) = profile {
@@ -2053,6 +2064,7 @@ where
                 .and_then(Value::as_str)
             {
                 *active_turn_id = Some(turn_id.to_string());
+                summary.draft_item = None;
                 let _ = on_event(CodexEvent::NativeTurnStarted(turn_id.to_string())).await?;
                 *assistant_message_completed = false;
             }
@@ -2117,7 +2129,34 @@ where
         }
         "item/agentMessage/delta" => {
             if let Some(delta) = params.get("delta").and_then(Value::as_str) {
+                let identity = (
+                    params["threadId"].as_str(),
+                    params["turnId"].as_str(),
+                    params["itemId"].as_str(),
+                );
+                if let (Some(thread), Some(turn), Some(item)) = identity
+                    && let Some((active_thread, active_turn, active_item)) = &summary.draft_item
+                    && (thread != active_thread || turn != active_turn || item != active_item)
+                {
+                    return Ok(());
+                }
                 summary.assistant_text.push_str(delta);
+                if let (Some(thread), Some(turn), Some(item)) = (
+                    params["threadId"].as_str(),
+                    params["turnId"].as_str(),
+                    params["itemId"].as_str(),
+                ) && summary.draft_item.is_some()
+                {
+                    let _ = on_event(CodexEvent::NativeMessageDraft {
+                        started: false,
+                        completed: false,
+                        thread_id: thread.into(),
+                        turn_id: turn.into(),
+                        item_id: item.into(),
+                        text: summary.assistant_text.clone(),
+                    })
+                    .await?;
+                }
                 let _ = on_event(CodexEvent::AssistantText(summary.assistant_text.clone())).await?;
             }
         }
@@ -2125,7 +2164,24 @@ where
             if let Some(item) = params.get("item") {
                 if item.get("type").and_then(Value::as_str) == Some("agentMessage") {
                     summary.assistant_text.clear();
+                    summary.draft_item = None;
                     *assistant_message_completed = false;
+                    if let (Some(thread), Some(turn), Some(id)) = (
+                        params["threadId"].as_str(),
+                        params["turnId"].as_str(),
+                        item["id"].as_str(),
+                    ) {
+                        summary.draft_item = Some((thread.into(), turn.into(), id.into()));
+                        let _ = on_event(CodexEvent::NativeMessageDraft {
+                            started: true,
+                            completed: false,
+                            thread_id: thread.into(),
+                            turn_id: turn.into(),
+                            item_id: id.into(),
+                            text: String::new(),
+                        })
+                        .await?;
+                    }
                 }
                 if item.get("type").and_then(Value::as_str) == Some("commandExecution") {
                     let command = item
@@ -2146,7 +2202,22 @@ where
                             .unwrap_or_default()
                             .to_string();
                         if text.trim().is_empty() {
-                            // A blank item cannot qualify assistant output or idle completion.
+                            // Retire an exact provisional item without creating a blank answer.
+                            if let (Some(thread), Some(turn), Some(id)) = (
+                                params["threadId"].as_str(),
+                                params["turnId"].as_str(),
+                                item["id"].as_str(),
+                            ) {
+                                let _ = on_event(CodexEvent::NativeMessageDraft {
+                                    started: false,
+                                    completed: true,
+                                    thread_id: thread.into(),
+                                    turn_id: turn.into(),
+                                    item_id: id.into(),
+                                    text: String::new(),
+                                })
+                                .await?;
+                            }
                             return Ok(());
                         }
                         if let (Some(thread), Some(turn), Some(id)) = (
@@ -2279,11 +2350,12 @@ where
         codex_thread_id: None,
         assistant_text: String::new(),
         stderr_text: String::new(),
+        draft_item: None,
     };
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeModelConfigured { .. }|CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::NativeGoalBlocked { .. }|CodexEvent::NativeTurnFailure { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeModelConfigured { .. }|CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageDraft { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::NativeGoalBlocked { .. }|CodexEvent::NativeTurnFailure { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -4380,6 +4452,7 @@ model = "ignored-tui-field"
             codex_thread_id: Some("thread".into()),
             assistant_text: String::new(),
             stderr_text: String::new(),
+            draft_item: None,
         };
         let mut active = Some("turn".into());
         let mut error = None;
@@ -4405,6 +4478,93 @@ model = "ignored-tui-field"
         );
         assert!(matches!(&events[3], CodexEvent::FinalAnswerCompleted(text) if text == "Answer B"));
         assert!(!terminal);
+    }
+
+    #[tokio::test]
+    async fn draft_lifecycle_keeps_whitespace_and_rejects_other_item_before_accumulation() {
+        let mut summary = RunSummary {
+            codex_thread_id: Some("thread".into()),
+            assistant_text: String::new(),
+            stderr_text: String::new(),
+            draft_item: None,
+        };
+        let mut active = Some("turn".into());
+        let mut error = None;
+        let mut terminal = false;
+        let mut completed = false;
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let capture = observed.clone();
+        let mut callback = move |event| {
+            capture.lock().unwrap().push(event);
+            async { Ok(CodexEventOutcome::None) }
+        };
+        for (method, mut params) in [
+            (
+                "item/started",
+                json!({"item":{"id":"A","type":"agentMessage"}}),
+            ),
+            ("item/agentMessage/delta", json!({"itemId":"A","delta":" "})),
+            (
+                "item/agentMessage/delta",
+                json!({"itemId":"A","delta":"Useful A"}),
+            ),
+            (
+                "item/completed",
+                json!({"item":{"id":"A","type":"agentMessage","text":""}}),
+            ),
+            (
+                "item/started",
+                json!({"item":{"id":"B","type":"agentMessage"}}),
+            ),
+            (
+                "item/agentMessage/delta",
+                json!({"itemId":"A","delta":"STALE"}),
+            ),
+            (
+                "item/agentMessage/delta",
+                json!({"itemId":"B","delta":"Useful B"}),
+            ),
+            (
+                "item/completed",
+                json!({"item":{"id":"B","type":"agentMessage","phase":"final_answer","text":"Confirmed B"}}),
+            ),
+        ] {
+            params["threadId"] = json!("thread");
+            params["turnId"] = json!("turn");
+            handle_notification(
+                method,
+                &params,
+                &mut summary,
+                &mut active,
+                &mut error,
+                &mut terminal,
+                &mut completed,
+                &mut callback,
+            )
+            .await
+            .unwrap();
+        }
+        let events = observed.lock().unwrap();
+        let deltas: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                CodexEvent::NativeMessageDraft {
+                    started: false,
+                    completed: false,
+                    item_id,
+                    text,
+                    ..
+                } => Some((item_id.as_str(), text.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec![("A", " "), ("A", " Useful A"), ("B", "Useful B")]
+        );
+        assert_eq!(events.iter().filter(|event|matches!(event,CodexEvent::NativeMessageDraft{completed:true,item_id,..} if item_id=="A")).count(),1);
+        assert!(events.iter().any(|event|matches!(event,CodexEvent::NativeMessageCompleted{item_id,text,..} if item_id=="B" && text=="Confirmed B")));
+        assert_eq!(summary.assistant_text, "Confirmed B");
     }
 
     #[test]
@@ -4489,6 +4649,7 @@ model = "ignored-tui-field"
             codex_thread_id: None,
             assistant_text: String::new(),
             stderr_text: String::new(),
+            draft_item: None,
         };
         let mut active_turn_id = Some("turn-1".to_string());
         let mut turn_error = None;
@@ -4546,6 +4707,7 @@ model = "ignored-tui-field"
             codex_thread_id: None,
             assistant_text: String::new(),
             stderr_text: String::new(),
+            draft_item: None,
         };
         let mut active_turn_id = Some("turn-1".to_string());
         let mut turn_error = None;
@@ -4580,6 +4742,7 @@ model = "ignored-tui-field"
             codex_thread_id: None,
             assistant_text: String::new(),
             stderr_text: String::new(),
+            draft_item: None,
         };
         let mut active_turn_id = Some("turn-1".to_string());
         let mut turn_error = None;
@@ -4619,6 +4782,7 @@ model = "ignored-tui-field"
             codex_thread_id: None,
             assistant_text: String::new(),
             stderr_text: String::new(),
+            draft_item: None,
         };
         let mut active_turn_id = Some("turn-1".to_string());
         let mut turn_error = None;
@@ -4677,6 +4841,7 @@ model = "ignored-tui-field"
             codex_thread_id: None,
             assistant_text: String::new(),
             stderr_text: String::new(),
+            draft_item: None,
         };
         let mut active_turn_id = Some("turn-1".to_string());
         let mut turn_error = None;
