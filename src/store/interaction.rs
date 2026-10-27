@@ -26,13 +26,20 @@ pub(super) fn record_native_message_on(
     if !bound {
         return Err(anyhow!("native output does not match the owning execution"));
     }
+    // A return binding can belong to an earlier human turn on this native
+    // thread. It does not authorize progress from an internal-only execution.
+    let internal_only: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM interaction_instructions i JOIN interaction_session_authors a ON a.input_id=i.input_id WHERE json_extract(i.doc,'$.local_turn')=?1)
+         AND NOT EXISTS(SELECT 1 FROM interaction_instructions i WHERE json_extract(i.doc,'$.local_turn')=?1 AND NOT EXISTS(SELECT 1 FROM interaction_session_authors a WHERE a.input_id=i.input_id))",
+        [local_turn], |r|r.get(0),
+    )?;
     let inserted = conn.execute(
         "INSERT OR IGNORE INTO interaction_native_messages
              (native_thread,native_turn,item_id,local_turn,phase,text,observed_at,presentation_input)
              VALUES(?1,?2,?3,?4,?5,?6,?7,(SELECT p.source_input FROM conversation_returns p
                JOIN conversation_inputs c ON c.id=p.source_input AND c.human_id=p.human_id
-               JOIN turns t ON t.id=?4 WHERE p.native_thread=?1 AND p.human_id=t.from_user_id))",
-        params![thread, turn, item, local_turn, phase, text, now_string()],
+               JOIN turns t ON t.id=?4 WHERE p.native_thread=?1 AND p.human_id=t.from_user_id AND ?8=0))",
+        params![thread, turn, item, local_turn, phase, text, now_string(),internal_only],
     )? == 1;
     if !inserted {
         let matches: bool = conn.query_row(

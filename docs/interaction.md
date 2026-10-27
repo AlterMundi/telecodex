@@ -703,6 +703,22 @@ A declaration covering only the most recent message does not establish cumulativ
 coverage. Missing or unresolved constraints remain visible rather than being
 inferred from a prior answer or native history.
 
+Local requests, helper answers and return-only caller wakeups retain their original
+provenance but do not inherit permission to publish into that human conversation.
+The backend freezes an internal audience per canonical delivery. Such records
+remain available for dependency return/inspection, but are excluded from ordinary
+presentation reads, direct source reads and final transport reservation. Returning
+context does not publish a helper answer or request an unsolicited caller narration.
+A current covered human input in the caller's actual execution can still produce
+one ordinary human-facing answer incorporating that evidence. A genuinely deferred
+logical human task can also complete once across physical turns when its cumulative
+human/context coverage is current and complete; a previously completed human request
+is not re-announced merely because internal context arrived. Unreported or partial
+helper coverage stays internal and cannot reserve a completed return. Internal-only
+executions also do not inherit an older native progress return binding. Legacy
+records use retained session authorship/coverage without erasing any delivery or
+uncertain-send receipt. Later corrections keep their existing freshness semantics.
+
 A local dependency is a single level: another session's request or result cannot
 serve as a human parent. An accepted original human instruction can authorize at
 most four dependencies. Self-addressing is rejected. Reusing a request ID retains

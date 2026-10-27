@@ -10,7 +10,10 @@ use tokio_util::sync::CancellationToken;
 const NATIVE_VISIBILITY: &str = "t.from_user_id=?3 AND s.creator_user_id=?3 AND
     ((t.session_id=?2 AND m.native_thread=?4 AND (m.phase IN ('commentary','final_answer') OR m.phase IS NULL))
       OR (EXISTS(SELECT 1 FROM conversation_inputs c
-          WHERE c.id=m.presentation_input AND c.human_id=?3 AND c.session_id=?2)
+          WHERE c.id=m.presentation_input AND c.human_id=?3 AND c.session_id=?2
+          AND NOT (EXISTS(SELECT 1 FROM interaction_instructions i JOIN interaction_session_authors a ON a.input_id=i.input_id WHERE json_extract(i.doc,'$.local_turn')=m.local_turn)
+            AND NOT EXISTS(SELECT 1 FROM interaction_instructions i WHERE json_extract(i.doc,'$.local_turn')=m.local_turn
+                AND NOT EXISTS(SELECT 1 FROM interaction_session_authors a WHERE a.input_id=i.input_id))))
           AND (m.phase='commentary' OR (m.phase='final_answer' AND EXISTS(
               SELECT 1 FROM interaction_goal_controls g WHERE g.human_id=?3
               AND g.phase='acknowledged' AND json_extract(g.doc,'$.worker_execution.local')=m.local_turn
@@ -240,7 +243,7 @@ impl Store {
             after_native
         };
         let mut stmt = conn.prepare(&format!(
-            "SELECT d.rowid,d.id FROM interaction_deliveries d
+            "SELECT d.rowid,d.id FROM interaction_public_deliveries d
             JOIN interaction_requests r ON r.id=d.request_id
             JOIN interaction_sources x ON x.id=r.input_id
             JOIN sessions s ON s.id=r.session_id
@@ -385,7 +388,7 @@ pub(super) fn source_on(
         source
     } else if let Some(id) = id.strip_prefix("delivery:") {
         let row:Option<(String,String,Option<String>,String,bool,String)>=conn.query_row(
-            "SELECT d.doc,d.phase,s.codex_thread_id,o.native_thread,s.force_fresh_thread,d.result_id FROM interaction_deliveries d
+            "SELECT d.doc,d.phase,s.codex_thread_id,o.native_thread,s.force_fresh_thread,d.result_id FROM interaction_public_deliveries d
              JOIN interaction_requests r ON r.id=d.request_id JOIN interaction_sources x ON x.id=r.input_id
              JOIN sessions s ON s.id=r.session_id JOIN interaction_results o ON o.id=d.result_id
              WHERE d.id=?1 AND d.human_id=?2 AND r.human_id=?2 AND x.human_id=?2 AND s.creator_user_id=?2
@@ -432,7 +435,7 @@ pub(super) fn source_on(
     };
     if let Some(delivery) = id.strip_prefix("delivery:") {
         let observed: Option<String> = conn.query_row(
-            "SELECT m.observed_at FROM interaction_deliveries d JOIN interaction_results r ON r.id=d.result_id JOIN interaction_native_messages m ON m.native_thread=r.native_thread AND m.native_turn=r.native_turn AND m.item_id=r.item_id WHERE d.id=?1",
+            "SELECT m.observed_at FROM interaction_public_deliveries d JOIN interaction_results r ON r.id=d.result_id JOIN interaction_native_messages m ON m.native_thread=r.native_thread AND m.native_turn=r.native_turn AND m.item_id=r.item_id WHERE d.id=?1",
             [delivery], |r| r.get(0)).optional()?;
         source["observed_at"] = json!(observed);
     }

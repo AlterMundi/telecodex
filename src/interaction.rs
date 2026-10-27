@@ -596,6 +596,9 @@ pub struct Delivery {
     pub completed: bool,
     pub current: bool,
     pub correction_pending: bool,
+    /// Frozen by the backend; absence uses retained-author compatibility rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal: Option<bool>,
     pub phase: String,
 }
 
