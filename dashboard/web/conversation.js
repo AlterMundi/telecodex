@@ -878,10 +878,14 @@ window.Conversation = (() => {
       if(speechPositions.delete(source.id)){savePositions();const card=cards.get(source.id);if(card)positionLabel(card);}
     }
     function rememberPosition(){
-      if(!active || active.source.kind==="integrator_live" || active.verifying || !blobUrl)return;
+      if(!active || active.verifying || !blobUrl)return;
       const source=active.source;
       if(source.current===false || source.correction_pending || source.native_binding_current===false)return;
       const word=alignedPosition();
+      if(source.kind==="integrator_live"){
+        if(!active.segmentEnded)rememberLiveCursor(liveSpeech?.checkpoint(source,active.offset,word??active.offset));
+        return;
+      }
       const normal=active.segmentEnded?(Number.isSafeInteger(active.next)?active.next:active.textEnd):(word??active.offset);
       const contiguous=liveSpeech?.resume(source);
       // A provider word cursor can refine this segment, but cannot hide an
@@ -893,6 +897,13 @@ window.Conversation = (() => {
       speechPositions.delete(source.id);speechPositions.set(source.id,{source:source.id,revision:source.revision,offset});
       while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
       savePositions();const card=cards.get(source.id);if(card)positionLabel(card);
+    }
+    function rememberLiveCursor(cursor){
+      if(!cursor)return;
+      if(cursor.resume>=cursor.source.text_characters){forgetPosition(cursor.source);return;}
+      speechPositions.delete(cursor.source.id);speechPositions.set(cursor.source.id,{source:cursor.source.id,revision:cursor.source.revision,offset:cursor.resume});
+      while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
+      savePositions();const card=cards.get(cursor.source.id);if(card)positionLabel(card);
     }
     function alignedPosition(){
       if(!canReportWordPosition || !active || !Number.isFinite(audio.currentTime) || audio.currentTime<0 || audio.currentTime>3600)return;
@@ -1199,6 +1210,7 @@ window.Conversation = (() => {
       for (const source of value.items)upsert(source);
       if(direction==="after")for(const source of value.items)companion?.reply(source);
       if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0))){
+        if(active?.source.kind==="integrator_live" && active.source.native_turn===source.native_turn && active.source.native_item===source.native_item)rememberPosition();
         const reconciled=canSpeakLive?await liveSpeech?.reconcile(source,part):undefined;
         if(reconciled?.changed)cancelPreparedMessage(source);
         if(reconciled?.changed && active?.source.kind==="integrator_live" && active.source.native_turn===source.native_turn && active.source.native_item===source.native_item)
@@ -1461,11 +1473,7 @@ window.Conversation = (() => {
       if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || !playbackAllowed() || !enabled) return;
       presentState({playback:undefined});
       const selected=active, owned=generation;selected.segmentEnded=true;
-      const cursor=liveSpeech?.ended(selected.source,selected.offset,selected.textEnd);
-      if(cursor){
-        if(cursor.resume>=cursor.source.text_characters)forgetPosition(cursor.source);
-        else {speechPositions.set(cursor.source.id,{source:cursor.source.id,revision:cursor.source.revision,offset:cursor.resume});savePositions();const card=cards.get(cursor.source.id);if(card)positionLabel(card);}
-      }
+      rememberLiveCursor(liveSpeech?.ended(selected.source,selected.offset,selected.textEnd));
       rememberPosition();
       if (selected.next !== null) {
         audioState("A short pause before continuing…");
