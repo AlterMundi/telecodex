@@ -146,7 +146,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   };
   const context = vm.createContext({window:{navigator:{mediaSession},localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
-    URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:options.hashHold?{...require("node:crypto"),subtle:{digest:(algorithm,bytes)=>options.hashHold.active?new Promise(resolve=>options.hashHold.releases.push(()=>resolve(require("node:crypto").createHash('sha256').update(bytes).digest()))):require("node:crypto").subtle.digest(algorithm,bytes)}}:require("node:crypto"),
+    URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:options.immediateHash?{...require("node:crypto"),subtle:{digest:(_algorithm,bytes)=>Promise.resolve(require("node:crypto").createHash('sha256').update(new Uint8Array(bytes)).digest())}}:options.hashHold?{...require("node:crypto"),subtle:{digest:(algorithm,bytes)=>options.hashHold.active?new Promise(resolve=>options.hashHold.releases.push(()=>resolve(require("node:crypto").createHash('sha256').update(bytes).digest()))):require("node:crypto").subtle.digest(algorithm,bytes)}}:require("node:crypto"),
     fetch:(_route, options) => {
       if(_route.startsWith('api/interaction/artifacts/'))return Promise.resolve(new Response('Actual fixture file',{headers:{'X-Artifact-Sha256':require('node:crypto').createHash('sha256').update('Actual fixture file').digest('hex')}}));
       audioCalls.push(JSON.parse(options.body));
@@ -400,6 +400,26 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(selectionRace.audioCalls.length,0,'Capture invalidates an awaited prefix even after recording finishes');
   hashHold.active=false;await selectionRace.ui.refresh();await until(()=>selectionRace.audioCalls.length===1);
   selectionRace.ui.stop();
+  const interruptionOptions={liveSpeech:true,clock:true,capture:true,immediateHash:true,responseDraft:{provisional:true,native_turn:'interruption-physical',native_item:'interruption-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
+  const interruptedLive=boot(false,true,interruptionOptions);interruptedLive.audio();await interruptedLive.ui.refresh();
+  interruptedLive.nodes.get('#conversation-voice-replies').handlers.click();await interruptedLive.ui.refresh();
+  const interruptedPlayer=interruptedLive.nodes.get('#conversation-audio');await until(()=>interruptedLive.audioCalls.length===1&&!interruptedPlayer.paused);
+  interruptionOptions.responseDraft.text='First sentence. Second sentence. Unfinished';await interruptedLive.ui.refresh();
+  interruptedLive.capture();interruptedLive.finishCapture();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(interruptedLive.audioCalls.length,1,'Finishing capture cannot automatically speak the next prefix of the interrupted answer');
+  const interruptedText='First sentence. Second sentence. Confirmed tail.';interruptionOptions.liveText=interruptedText;interruptionOptions.responseDraft=null;interruptedLive.addReplies(1);
+  interruptedLive.overrideSource(9,{native_turn:'interruption-physical',native_item:'interruption-item',text_characters:interruptedText.length,preview:interruptedText});interruptedLive.replyTexts.set('native:9',interruptedText);
+  await interruptedLive.ui.refresh();assert.equal(interruptedLive.audioCalls.length,1,'Unchanged canonical confirmation does not resume interrupted narration');
+  assert.equal(interruptedPlayer.paused,true);
+  await interruptedPlayer.beforeNodes[0].handlers.click();await until(()=>!interruptedPlayer.paused&&!interruptedPlayer.muted);
+  assert.equal(interruptedLive.audioCalls.length,1,'Explicit Play reuses the interrupted media');
+  interruptedPlayer.ended=true;await interruptedPlayer.handlers.ended();interruptedLive.clock.fire(450);
+  await until(()=>interruptedLive.audioCalls.length===2&&!interruptedPlayer.paused);
+  assert.equal(interruptedLive.audioCalls[1].source,'native:9');
+  assert.equal(interruptedLive.audioCalls[1].offset,Number(interruptedLive.audioCalls[0].source.split(':')[4]),'Explicit resume continues the matching canonical tail once');
+
+  interruptedLive.ui.stop();
+
   const gapOptions={liveSpeech:true,clock:true,responseDraft:{provisional:true,native_turn:'gap-physical',native_item:'gap-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
   const gapVoice=boot(false,true,gapOptions);gapVoice.audio();await gapVoice.ui.refresh();gapVoice.failAudio();
   gapVoice.nodes.get('#conversation-voice-replies').handlers.click();await gapVoice.ui.refresh();await until(()=>gapVoice.clock.pending().includes(450));

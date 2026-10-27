@@ -3,6 +3,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const context={window:{},crypto,TextEncoder};vm.runInNewContext(fs.readFileSync('dashboard/web/live-speech.js','utf8'),context);
 const deadline=setTimeout(()=>{throw Error("Live speech test did not settle");},10000);
 (async()=>{
+ const empty=context.window.LiveSpeech.mount();empty.unsent(undefined);
  const state=context.window.LiveSpeech.mount(),turn='native-turn',item='native-item',key={native_turn:turn,native_item:item};
  state.observe({...key,text:'Hola Nicolás. Incomplete',provisional:true},'binding');
  const first=await state.next();assert(state.admit(first));assert.equal(first.speech_start,0);assert.equal(first.preview,'Hola Nicolás. ');
@@ -31,6 +32,11 @@ const deadline=setTimeout(()=>{throw Error("Live speech test did not settle");},
  const pending=raced.next();await raced.reconcile(canonical,()=>assert.fail('No paid prefix existed'));
  releases.shift()();await new Promise(resolve=>setImmediate(resolve));assert.equal(releases.length,1);releases.shift()();assert.equal(await pending,undefined);
  assert.equal(await raced.next(),undefined,'Canonical answer cannot race a late prefix');
+ const interruptedState=context.window.LiveSpeech.mount();interruptedState.observe({...key,text:'One useful sentence. Next'},'binding');
+ const owned=await interruptedState.next();assert(interruptedState.admit(owned));interruptedState.interrupt(owned);
+ interruptedState.observe({...key,text:'One useful sentence. Another sentence. More'},'binding');assert.equal(await interruptedState.next(),undefined);
+ const held=await interruptedState.reconcile(canonical,async()=>{});assert.equal(held.skip,true);
+ const continuation=interruptedState.continueSource(owned);assert.equal(continuation.speech_start,owned.speech_end);
  const gap=context.window.LiveSpeech.mount();gap.observe({...key,text:'First sentence. Second sentence. Still'},'binding');
  const interrupted=await gap.next();assert(gap.admit(interrupted));
  gap.observe({...key,text:'First sentence. Second sentence. Still another sentence. More'},'binding');

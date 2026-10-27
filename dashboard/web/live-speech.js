@@ -17,7 +17,7 @@ window.LiveSpeech=(()=>{
       draft={value,record};
     }
     async function next(){
-      if(!draft || draft.record.canonical || draft.record.pending)return;
+      if(!draft || draft.record.canonical || draft.record.pending || draft.record.interrupted)return;
       const {value,record}=draft,chars=Array.from(value.text),start=record.attempted;
       const window=chars.slice(start,start+(start?640:240)).join("");
       // A complete sentence/paragraph is useful speech; incomplete punctuation,
@@ -48,7 +48,18 @@ window.LiveSpeech=(()=>{
     }
     function unsent(source){
       const record=source && records.get(identity(source));
-      if(record?.pending?.source===source)record.pending=undefined;
+      if(record && record.pending?.source===source)record.pending=undefined;
+    }
+    function interrupt(source){
+      const record=source && records.get(identity(source));
+      if(record)record.interrupted=true;
+    }
+    function continueSource(source){
+      const record=source && records.get(identity(source));
+      if(!record)return;
+      record.interrupted=false;
+      if(source.kind==="integrator_live" && record.canonicalSource && !record.changed && record.attempted<record.canonicalSource.text_characters)
+        return {...record.canonicalSource,speech_start:record.attempted};
     }
     function resume(source){
       const record=records.get(identity(source));
@@ -79,9 +90,9 @@ window.LiveSpeech=(()=>{
       }
       if(changed){record.changed=true;record.completed=0;record.finished.clear();}
       return {source:{...source,speech_start:changed?0:record.attempted},changed,
-        resume:changed?0:record.completed,skip:!changed && record.attempted>=source.text_characters};
+        resume:changed?0:record.completed,skip:!changed && (record.interrupted || record.attempted>=source.text_characters)};
     }
-    return {observe,next,admit,reconcile,ended,resume,unsent,reset};
+    return {observe,next,admit,reconcile,ended,resume,unsent,interrupt,continueSource,reset};
   }
   return {mount};
 })();

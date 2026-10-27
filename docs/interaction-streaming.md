@@ -568,3 +568,35 @@ resume cursor, so later playback cannot erase an earlier interrupted gap. Live
 completion after canonical arrival updates the same cursor. The option is not
 receiving-enabled until integrated interruption/context and HTTP/native
 qualification are complete.
+
+
+## First live-prefix timing — 2026-10-27
+
+Three distinct isolated text originals used actual Sol6.1/medium, the shipped
+LiveSpeech selector, owned native prefix reads and the current Qwen3.0 /
+longanlufeng streaming adapter. Each requested useful content without tools or
+dispatch. The second question matches an earlier warm baseline question; response
+lengths and current provider/host load differ, so these are observations rather
+than a controlled speedup or latency distribution.
+
+| Turn | First model delta | Frozen prefix available | First encoded audio | Native message complete | Audio lead over completion |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Four useful sentences, cold | 6.39s | 7.38s | 9.73s | 10.66s | 0.93s |
+| One sentence, warm | 5.31s | canonical at6.36s | 7.68s | 6.27s | none; audio1.41s later |
+| About150 words, warm | 6.59s | 7.79s | 9.10s | 14.28s | 5.18s |
+
+Times start at HTTP submission. One prefix request per turn returned confirmed
+encoded audio; all three native turns completed and dispatched zero work. Qwen's
+own first frame took2.32s cold and1.30–1.31s warm. This verifies real synthesis
+overlapping native generation on multi-sentence replies; a short single sentence
+used the ordinary canonical fallback. It does not establish speech-end-to-sound,
+ASR/WAN/browser decode, hearing or a subsecond target. The remaining model wait
+still dominates short turns. The isolated originals/provider outcomes are retained
+without replay, and production sessions/model/voice were not changed.
+
+Input capture owns an interruption: an unchanged interrupted live item and its
+matching canonical tail remain available for explicit Resume/Listen, rather than
+restarting automatically when capture ends. Explicit Play reuses loaded media
+and queues its matching canonical remainder once; another native question keeps
+queue priority. A definitely empty/unsent selection can be released without a
+playback error. Native jobs and global Voice intent remain independent.

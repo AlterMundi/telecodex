@@ -887,6 +887,7 @@ window.Conversation = (() => {
         position_millis:position,duration_millis:duration>0?duration:null,state:interrupted?'interrupted':audio.paused?'paused':'playing'};
     }
     function beginVoiceCapture() {
+      liveSpeech?.interrupt(active?.source);
       draft.blur?.();enableVoice();voiceBusy=false;cancelSpeechWait();
       if(active && blobUrl && !active.verifying){
         rememberPosition();active.generation=++generation;active.auto=false;active.interrupted=true;
@@ -960,6 +961,12 @@ window.Conversation = (() => {
       if(result?.failed && result.generation===generation && !active)
         nextSpokenReply("reply",next);
     }
+    function continueSpeech(){
+      const remaining=liveSpeech?.continueSource(active?.source);
+      if(!remaining || voiceQueue.some(source=>source.id===remaining.id && source.revision===remaining.revision))return;
+      const nextReply=voiceQueue.findIndex(source=>source.kind!=="native_question");
+      voiceQueue.splice(nextReply<0?voiceQueue.length:nextReply,0,remaining);
+    }
     function disableVoice() {
       voiceEnabled=false;voiceBusy=false;voiceQueue.length=0;voiceFinalTimes.clear();voiceContext=undefined;voiceStatus();stop();
     }
@@ -968,7 +975,7 @@ window.Conversation = (() => {
         enableVoice();
         if(captureBusy){voiceBusy=false;return;}
         if(active && blobUrl && !audio.ended){
-          voiceBusy=true;void startPlayback();
+          continueSpeech();voiceBusy=true;void startPlayback();
         }else{
           // A cancelled preparation or ended segment cannot own the queue
           // forever. Release it without retrying its synthesis automatically.
@@ -1358,7 +1365,7 @@ window.Conversation = (() => {
       if(captureBusy)return;
       const prepared=prefetched && prefetched.source.id===source.id && prefetched.source.revision===source.revision && prefetched.offset===offset?prefetched:undefined;
       if(prepared)prefetched=undefined;
-      if(!chain?.queued)voiceSuspended=false;
+      if(!chain?.queued){liveSpeech?.continueSource(source);voiceSuspended=false;}
       stop();
       if(voiceEnabled)voiceBusy=true;
       const owned = generation;
@@ -1429,7 +1436,7 @@ window.Conversation = (() => {
     });
     toggle.addEventListener("click", () => {
       if(captureBusy)return;
-      if (audio.paused) { cancelSpeechWait();voiceSuspended=false;voiceStatus();if (audio.ended) audio.currentTime = 0; startPlayback(); }
+      if (audio.paused) { cancelSpeechWait();continueSpeech();voiceSuspended=false;voiceStatus();if (audio.ended) audio.currentTime = 0; startPlayback(); }
       else pause("player");
     });
     $("#conversation-stop").addEventListener("click",()=>{sound?.disable();disableVoice();});
