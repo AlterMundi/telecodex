@@ -1303,7 +1303,7 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
                     P::Uncertain,
                     None,
                 );
-                if matches!(app.shared.store.interaction_author(&i.id, human), Ok(None)) {
+                if matches!(app.shared.store.interaction_author(&i.id, i.human_id), Ok(None)) {
                     notice(app.shared.clone(),i.origin,"The worker may have received this input; acceptance is unconfirmed. It was retained without replay.".into());
                 }
             }
