@@ -181,6 +181,36 @@ def deferred_logical_completion(binary):
     finally:j.close()
 
 
+def completed_group_not_renarrated(binary,mixed=False):
+    j=Sessions(binary)
+    try:
+        j.prepare()
+        j.admit('#Alpha First independently requested task.',topic=1)
+        j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='accepted')
+        j.admit('#Alpha Second independently requested task.',topic=1)
+        j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
+        _,admitted=j.request()
+        j.wait(lambda:j.instructions(8) and j.instructions(8)[0][1]=='accepted')
+        rows=j.instructions(7);requests=[json.loads(row[2])['requests'][0] for row in rows]
+        assert requests[0]!=requests[1]
+        claim={'requests':requests,'covered':[r[0] for r in rows],'completed':requests[:1] if mixed else requests}
+        j.broadcast('native-topic-7','item/completed',{'turnId':j.runs['native-topic-7'],'item':{'id':'grouped-human','type':'agentMessage','phase':'final_answer','text':'Original grouped human answer.\n<daimon-result>'+json.dumps(claim)+'</daimon-result>'}})
+        j.broadcast('native-topic-7','turn/completed',{'turn':{'id':j.runs['native-topic-7'],'status':'completed'}})
+        j.wait(lambda:j.has('Original grouped human answer.',1))
+        prior=j.row("SELECT d.request_id,d.doc FROM interaction_public_deliveries d JOIN interaction_results r ON r.id=d.result_id WHERE r.body='Original grouped human answer.'")
+        assert len(prior)==1 and prior[0][0]==requests[1],'Exercise the non-primary first request'
+        assert json.loads(prior[0][1])['completed'] is (not mixed)
+        j.answer(8,'Helper finished after original human work completed.')
+        j.wait(lambda:len(j.instructions(7))==3 and j.instructions(7)[2][1]=='accepted')
+        j.answer(7,'Unwanted repeated completion of the first original task.',item='unwanted-repeat')
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_results WHERE body='Unwanted repeated completion of the first original task.'")==[(1,)])
+        j.internal_delivery('Unwanted repeated completion of the first original task.')
+        j.idle()
+        assert sum('Original grouped human answer.' in m['text'] for m,_ in j.messages)==1
+        print('PASS already completed secondary human request stays internal after helper return; mixed completion='+str(mixed))
+    finally:j.close()
+
+
 def cancelled_caller(binary):
     j=Sessions(binary)
     try:
@@ -207,4 +237,6 @@ if __name__=='__main__':
     live_return(binary)
     one_slot_deferred_return(binary)
     deferred_logical_completion(binary)
+    completed_group_not_renarrated(binary)
+    completed_group_not_renarrated(binary,mixed=True)
     cancelled_caller(binary)

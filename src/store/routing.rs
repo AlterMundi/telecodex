@@ -299,11 +299,11 @@ impl Store {
             {
                 let (fresh, pending) = freshness(&tx, &request, &covered, true)?;
                 let already_completed: bool=tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM interaction_deliveries prior WHERE prior.request_id=?1 AND json_extract(prior.doc,'$.completed')=1 AND COALESCE(json_extract(prior.doc,'$.internal'),0)=0
+                    "SELECT EXISTS(SELECT 1 FROM interaction_deliveries prior JOIN interaction_delivery_requests member ON member.delivery_id=prior.id JOIN interaction_results z ON z.id=prior.result_id WHERE member.request_id=?1 AND prior.human_id=?2 AND EXISTS(SELECT 1 FROM json_each(z.claim,'$.completed') done WHERE done.value=?1) AND COALESCE(json_extract(prior.doc,'$.internal'),0)=0
                      AND NOT EXISTS(SELECT 1 FROM interaction_request_links l JOIN interaction_instructions i ON i.id=l.instruction_id WHERE l.request_id=?1 AND i.phase='accepted'
                        AND NOT EXISTS(SELECT 1 FROM interaction_session_authors a WHERE a.input_id=i.input_id)
                        AND NOT EXISTS(SELECT 1 FROM json_each(prior.doc,'$.covered') cov WHERE cov.value=i.id)))",
-                    [&request],|r|r.get(0),
+                    params![request,human],|r|r.get(0),
                 )?;
                 human_input = fresh && !pending && !already_completed;
             }
