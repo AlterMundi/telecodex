@@ -66,6 +66,100 @@ class Dialogue(Observer):
         return super().handle_extra_rpc(request,send)
 
 
+class Portfolio(Dialogue):
+    def __init__(self,binary):
+        self.goal_state='blocked';self.portfolio_reads=[];self.rebind_on_goal=False
+        super().__init__(binary)
+
+    def tool_request(self,send,ident,mode,selectors,*,namespace=None):
+        thread,turn=self.tool_context
+        params={'threadId':thread,'turnId':turn,'callId':ident,'tool':'interaction_controller',
+                'namespace':namespace,'arguments':{'operation':'candidates','arguments':{'mode':mode,'selectors':selectors}}}
+        send({'id':'foreign-'+ident,'method':'item/tool/call','params':{**params,'threadId':'foreign'}})
+        send({'id':ident,'method':'item/tool/call','params':params})
+        send({'id':ident,'method':'item/tool/call','params':params})
+
+    def handle_extra_rpc(self,request,send):
+        method=request.get('method');p=request.get('params',{});ident=request.get('id')
+        if method in ('thread/goal/get','thread/goal/snapshot') and p.get('threadId')=='native-topic-7':
+            if self.rebind_on_goal and method=='thread/goal/snapshot':
+                import sqlite3
+                with sqlite3.connect(self.root/'state.sqlite') as db:
+                    db.execute("UPDATE sessions SET codex_thread_id='replacement-native' WHERE thread_id=7")
+            if self.goal_state=='unknown':
+                send({'id':ident,'error':{'code':-32000,'message':'Synthetic goal metadata unavailable'}})
+                return True
+            send({'id':ident,'result':{'revision':'goal-'+self.goal_state,'goal':{'threadId':'native-topic-7','objective':'Resolve the selected task after the human supplies the missing measurement.','status':self.goal_state,'tokenBudget':None,'tokensUsed':12,'timeUsedSeconds':3,'createdAt':100,'updatedAt':200}}})
+            return True
+        if self.tool_journey=='portfolio' and method is None and ident in ('inventory','inspect','support'):
+            self.tool_outputs.append(request);value=request['result']
+            if ident=='inspect' and self.rebind_on_goal:
+                assert value['success'] is False,'A rebound worker must invalidate the entire inspection'
+                thread,turn=self.tool_context
+                send({'method':'item/completed','params':{'threadId':thread,'turnId':turn,'item':{'id':'rebound-answer','type':'agentMessage','phase':'final_answer','text':'Changed source refused.'}}})
+                send({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':turn,'status':'completed'}}})
+                self.tool_journey=None
+                return True
+            assert value['success'],value
+            text=value['contentItems'][0]['text']
+            if ident=='inventory':
+                inventory=json.loads(text);assert len(inventory['candidates'])==2
+                self.tool_request(send,'inspect','inspect',['Alpha'])
+            elif ident=='inspect':
+                result=json.loads(text);assert result['kind']=='observer_portfolio_inspection'
+                assert len(result['candidates'])==1
+                evidence=result['candidates'][0]['evidence'];self.portfolio_reads.append(evidence)
+                assert evidence['live_status']['availability']==('unknown' if self.goal_state=='unknown' else 'observed')
+                assert evidence['live_status']['goal']['state']==self.goal_state
+                assert evidence['live_status']['native_thread']=='native-topic-7'
+                assert evidence['semantic']['needs_source_check'] is True
+                assert evidence['semantic']['source_observed_at'].startswith('2001-')
+                assert evidence['last_local_turn']['at'] and evidence['sampled_at']
+                self.tool_request(send,'support','support',['Alpha'])
+            else:
+                assert 'Original support for #Alpha' in text and '[Source entry ' in text
+                thread,turn=self.tool_context
+                send({'method':'item/completed','params':{'threadId':thread,'turnId':turn,'item':{'id':'portfolio-answer','type':'agentMessage','phase':'final_answer','text':'Selected portfolio evidence inspected without waking workers.'}}})
+                send({'method':'turn/completed','params':{'threadId':thread,'turn':{'id':turn,'status':'completed'}}})
+                self.tool_journey=None
+            return True
+        return super().handle_extra_rpc(request,send)
+
+
+def portfolio_inspection(binary):
+    j=Portfolio(binary)
+    try:
+        j.prepare();j.admit('/interaction observe #Alpha',topic=1)
+        j.wait(lambda:j.card() is not None);j.idle()
+        # Old content can remain useful; expired source checking and freshly read
+        # goal metadata are distinct. Inspection must not synthesize or resume.
+        import sqlite3
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            raw=db.execute('SELECT doc FROM interaction_observer_cards').fetchone()[0]
+            card=json.loads(raw);card['observed_at']='2001-01-01T00:00:00Z'
+            db.execute('UPDATE interaction_observer_cards SET doc=?',(json.dumps(card),))
+            db.execute("UPDATE interaction_observer_checks SET checked_at='2001-01-01T00:00:00Z'")
+        before=j.row('SELECT count(*) FROM turns')[0][0];summaries=j.summaries
+        source_starts=lambda:len([r for r in j.rpc if r.get('method') in ('turn/start','thread/resume') and r.get('params',{}).get('threadId')=='native-topic-7'])
+        starts=source_starts()
+        for state in ('blocked','active','unknown'):
+            j.goal_state=state;j.tool_journey='portfolio';j.tool_outputs.clear()
+            j.admit('Inspect current goals and retained work evidence; do not resume anything.',topic=1)
+            j.wait(lambda:len(j.tool_outputs)==3);j.idle()
+        assert [r['live_status']['goal']['state'] for r in j.portfolio_reads]==['blocked','active','unknown']
+        assert j.portfolio_reads[0]['semantic']['revision']==j.portfolio_reads[1]['semantic']['revision']
+        assert j.summaries==summaries and source_starts()==starts
+        assert j.row('SELECT count(*) FROM turns')==[(before+3,)]
+        j.tool_outputs.clear();j.rebind_on_goal=True;j.goal_state='active';j.tool_journey='portfolio'
+        j.admit('Inspect the selected session while its binding changes.',topic=1)
+        j.wait(lambda:len(j.tool_outputs)==2);j.idle()
+        assert j.row("SELECT codex_thread_id FROM sessions WHERE thread_id=7")==[('replacement-native',)]
+        assert j.summaries==summaries and source_starts()==starts
+        assert not [r for r in j.rpc if r.get('method') in ('turn/start','thread/resume') and r.get('params',{}).get('threadId')=='replacement-native']
+        print('PASS on-demand selected portfolio, independent live goal changes, explicit stale source checks, bounded retained support, no source resume/work or extra synthesis; zero models')
+    finally:j.close()
+
+
 def integrating_tool(binary):
     j=Dialogue(binary)
     try:
@@ -135,5 +229,6 @@ def resolved_tool_is_retired(binary):
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
+    portfolio_inspection(binary)
     integrating_tool(binary)
     resolved_tool_is_retired(binary)

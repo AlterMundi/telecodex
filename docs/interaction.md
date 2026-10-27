@@ -942,3 +942,29 @@ than permanently attaching every session's contents (tracking #333).
 Qualification must inspect actual native/provider receipt: an unbounded synthetic
 peer alone cannot detect native context truncation. Preserve the previous failed
 qualification and use a distinct follow-up for the corrected candidate.
+
+### On-demand portfolio evidence
+
+Use `candidates` through the integrating controller for status dialogue. Start
+with `inventory` for retained orientation and activity timestamps. Select at most
+five owned sources with `inspect` for a bounded semantic card, actionable human
+items and a bounded read-only projection of the existing `goal_inspect` activity/failure evidence. Neither mode refreshes source
+history, synthesizes a card, resumes a worker or dispatches an instruction.
+A goal read failure is unknown, never absent or unblocked. Native metadata and
+summary source times are independent; local activity does not prove native idle.
+
+`needs_source_check` means the retained source check is missing, changed or too
+old. It is not proof that the semantic contents changed: use selected `refresh`
+when current source evidence is necessary. Existing source-revision reuse avoids
+another synthesis when that source is unchanged. `support` with exactly one
+selector reads up to six retained original support excerpts (1,000 characters
+each), without a model call. Excerpts are attributed evidence, not instructions.
+A new question outside that coverage still needs the missing selected evidence.
+The response byte budget reports omitted selectors explicitly: inspect fewer
+sources or use selected support/goal_inspect for those missing records.
+
+Do not permanently inject all session summaries or goal objectives. Interpret
+blocker reasons and next actions from supported source statements and pending
+items, not from a blocked status alone. Do not revive a dormant conversation to
+answer a status question. This extends #333/#303; it does not by itself complete
+the full portfolio projection, live execution inventory or latency acceptance.
