@@ -106,6 +106,28 @@ window.Conversation = (() => {
     const speechGaps={chunk:180,reply:450,question:1200};
     let speechWait;
     const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
+    const queuedPreparations=new Map();
+    const preparationKey=(source,offset=source?.speech_start||0)=>JSON.stringify([source?.id,source?.revision,offset]);
+    const sameNative=(a,b)=>a && b && typeof a.native_turn==="string" && typeof a.native_item==="string" && a.native_turn===b.native_turn && a.native_item===b.native_item;
+    function removeQueued(index){
+      const [source]=voiceQueue.splice(index,1),key=preparationKey(source),prepared=queuedPreparations.get(key);
+      prepared?.controller.abort();queuedPreparations.delete(key);return source;
+    }
+    function clearVoiceQueue(){for(const prepared of queuedPreparations.values())prepared.controller.abort();queuedPreparations.clear();voiceQueue.length=0;}
+    function cancelPreparedMessage(source){
+      if(sameNative(prefetched?.source||prefetched?.owner,source)){prefetched.controller.abort();prefetched=undefined;}
+      for(let n=voiceQueue.length-1;n>=0;n--)if(sameNative(voiceQueue[n],source) && queuedPreparations.has(preparationKey(voiceQueue[n])))removeQueued(n);
+    }
+    function parkPrepared(){
+      if(!prefetched?.ahead)return;
+      const prepared=prefetched;prefetched=undefined;
+      if(!prepared.source || active?.interrupted){prepared.controller.abort();return;}
+      const source={...prepared.source,speech_start:prepared.offset};queuedPreparations.set(preparationKey(source),prepared);
+      const existing=voiceQueue.findIndex(value=>value.id===source.id && value.revision===source.revision);
+      if(existing>=0)voiceQueue[existing]=source;
+      else {const nextReply=voiceQueue.findIndex(value=>value.kind!=="native_question");voiceQueue.splice(nextReply<0?voiceQueue.length:nextReply,0,source);}
+    }
+
     const liveSpeech=window.LiveSpeech?.mount();let canSpeakLive=false;
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
     const taskControls=window.HumanTaskControls?.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,canReply:()=>!readOnly,onReply:task=>{
@@ -218,7 +240,7 @@ window.Conversation = (() => {
           else {if(mutedSessions.size>=256)return;mutedSessions.add(selected);}
           try{window.localStorage?.setItem("interaction-session-mutes:"+binding,JSON.stringify([...mutedSessions]));}catch{}
           for(const other of [...cards.values(),...progressCards.values()])muteButtonState(other);
-          for(let n=voiceQueue.length-1;n>=0;n--)if(sessionMuted(voiceQueue[n]))voiceQueue.splice(n,1);
+          for(let n=voiceQueue.length-1;n>=0;n--)if(sessionMuted(voiceQueue[n]))removeQueued(n);
           if(active?.queued && sessionMuted(active.source))stop("Automatic audio muted for this session. Its updates remain visible.");
           voiceStatus();Promise.resolve().then(drainVoice);
         });
@@ -888,6 +910,8 @@ window.Conversation = (() => {
     }
     function beginVoiceCapture() {
       liveSpeech?.interrupt(active?.source);
+      for(const prepared of queuedPreparations.values())liveSpeech?.interrupt(prepared.source);
+      for(let n=voiceQueue.length-1;n>=0;n--)if(queuedPreparations.has(preparationKey(voiceQueue[n])))removeQueued(n);
       draft.blur?.();enableVoice();voiceBusy=false;cancelSpeechWait();
       if(active && blobUrl && !active.verifying){
         rememberPosition();active.generation=++generation;active.auto=false;active.interrupted=true;
@@ -915,7 +939,7 @@ window.Conversation = (() => {
       const sameSpeaker=other=>source.kind.startsWith("integrator_")?other.kind==="integrator_progress":
         other.kind==="worker_progress" && JSON.stringify(other.target)===JSON.stringify(source.target);
       if(source.kind.endsWith("_progress") || ["worker_result","integrator_answer"].includes(source.kind)){
-        for(let n=voiceQueue.length-1;n>=0;n--)if(sameSpeaker(voiceQueue[n]))voiceQueue.splice(n,1);
+        for(let n=voiceQueue.length-1;n>=0;n--)if(sameSpeaker(voiceQueue[n]))removeQueued(n);
       }
       if(source.kind==="native_question"){
         const nextReply=voiceQueue.findIndex(item=>item.kind!=="native_question");
@@ -950,14 +974,24 @@ window.Conversation = (() => {
     }
     async function drainVoice() {
       if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || !enabled || !canListen || !playbackAllowed())return;
-      while(voiceQueue.length&&sessionMuted(voiceQueue[0]))voiceQueue.shift();
+      while(voiceQueue.length&&sessionMuted(voiceQueue[0]))removeQueued(0);
       voiceBusy=true;const selectionGeneration=generation;
-      const next=voiceQueue.shift() || (canSpeakLive?await liveSpeech?.next():undefined);
+      if(prefetched?.ahead && !active?.interrupted)await prefetched.selection;
+      if(generation!==selectionGeneration)return;
+      if(voiceQueue[0]?.kind==="native_question")parkPrepared();
+      let next,prepared;
+      if(voiceQueue[0]?.kind!=="native_question" && prefetched?.ahead && prefetched.source && !active?.interrupted){
+        prepared=prefetched;next=prepared.source;
+        const duplicate=voiceQueue.findIndex(source=>source.id===next.id && source.revision===next.revision);
+        if(duplicate>=0)voiceQueue.splice(duplicate,1);
+      }else next=voiceQueue.shift() || (canSpeakLive?await liveSpeech?.next():undefined);
       if(generation!==selectionGeneration){liveSpeech?.unsent(next);return;}
       voiceStatus();if(!next){voiceBusy=false;return;}
+      const offset=next.speech_start||0;
+      prepared ||= queuedPreparations.get(preparationKey(next,offset));
       if(!voiceEnabled || voiceSuspended || captureBusy || !enabled || !playbackAllowed()){liveSpeech?.unsent(next);voiceBusy=false;return;}
-      if(next.kind==="integrator_live" && !liveSpeech?.admit(next)){voiceBusy=false;return;}
-      const result=await listenTo(next,next.speech_start||0,{queued:true});
+      if(next.kind==="integrator_live" && !prepared && !liveSpeech?.admit(next)){voiceBusy=false;return;}
+      const result=await listenTo(next,offset,{queued:true});
       if(result?.failed && result.generation===generation && !active)
         nextSpokenReply("reply",next);
     }
@@ -968,7 +1002,7 @@ window.Conversation = (() => {
       voiceQueue.splice(nextReply<0?voiceQueue.length:nextReply,0,remaining);
     }
     function disableVoice() {
-      voiceEnabled=false;voiceBusy=false;voiceQueue.length=0;voiceFinalTimes.clear();voiceContext=undefined;voiceStatus();stop();
+      voiceEnabled=false;voiceBusy=false;clearVoiceQueue();voiceFinalTimes.clear();voiceContext=undefined;voiceStatus();stop();
     }
     $("#conversation-voice-replies").addEventListener("click",()=>{
       if(voiceEnabled && !voiceSuspended)disableVoice();else {
@@ -1008,7 +1042,7 @@ window.Conversation = (() => {
       }
       rememberPosition();
       presentState({playback:undefined});
-      cancelSpeechWait();voiceBusy=false;voiceQueue.length=0;
+      cancelSpeechWait();voiceBusy=false;clearVoiceQueue();
       voiceSuspended=true;voiceStatus();
       if(mediaSession)try{mediaSession.playbackState="paused";}catch{}
       generation++;
@@ -1097,7 +1131,7 @@ window.Conversation = (() => {
         card.read.textContent = "Read reply";
       }
       for(let n=voiceQueue.length-1;n>=0;n--)
-        if(voiceQueue[n].id===source.id && voiceQueue[n].revision!==source.revision)voiceQueue.splice(n,1);
+        if(voiceQueue[n].id===source.id && voiceQueue[n].revision!==source.revision)removeQueued(n);
       if (active?.source.id === source.id && active.source.revision !== source.revision)
         stop("This reply changed. Refresh before listening.");
       const textChanged=card.source.revision!==source.revision;
@@ -1131,7 +1165,7 @@ window.Conversation = (() => {
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
+        clearVoiceQueue();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
         newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
@@ -1164,6 +1198,7 @@ window.Conversation = (() => {
       if(direction==="after")for(const source of value.items)companion?.reply(source);
       if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0))){
         const reconciled=canSpeakLive?await liveSpeech?.reconcile(source,part):undefined;
+        if(reconciled?.changed)cancelPreparedMessage(source);
         if(reconciled?.changed && active?.source.kind==="integrator_live" && active.source.native_turn===source.native_turn && active.source.native_item===source.native_item)
           stop("The confirmed response changed. Its updated text remains available.");
         if(reconciled?.resume!==undefined){
@@ -1173,6 +1208,7 @@ window.Conversation = (() => {
         if(reconciled?.skip)voiceSeen.add(voiceKey(source));else offerVoice(reconciled?.source||source);
       }
       showResponseDraft(value.response_draft);
+      if(active?.auto && !audio.paused && !active.verifying)prefetchNext(active);
       for (const card of cards.values()) card.listen.hidden = !canListen;
       if (direction === "before" && rememberHistory) {
         oldest = value.cursor;
@@ -1237,7 +1273,7 @@ window.Conversation = (() => {
           presentState({question:questions.length>0});
           const current=source=>questions.some(q=>q.id===source.id && q.revision===source.revision);
           for(let n=voiceQueue.length-1;n>=0;n--)
-            if(voiceQueue[n].kind==="native_question" && !current(voiceQueue[n]))voiceQueue.splice(n,1);
+            if(voiceQueue[n].kind==="native_question" && !current(voiceQueue[n]))removeQueued(n);
           if(active?.source.kind==="native_question" && !current(active.source))
             stop("This question is no longer current. Refresh before answering.");
         }
@@ -1354,17 +1390,33 @@ window.Conversation = (() => {
       }finally{clearTimeout(deadline);}
     }
     function prefetchNext(selected){
-      if(!selected.prefetch || selected.next===null || voiceSuspended || active!==selected || prefetched)return;
-      const controller=new AbortController(),source=selected.source,offset=selected.next;
-      const waiting={controller,source,offset};prefetched=waiting;
-      // Retain the single attempt, including a failed/uncertain outcome. Consuming
-      // it must never silently repeat an ambiguous provider preparation.
-      waiting.result=requestAudio(source,offset,controller).then(value=>({value}),error=>({error}));
+      if(!selected.prefetch || voiceSuspended || captureBusy || active!==selected || prefetched || queuedPreparations.size)return;
+      if(selected.source.kind!=="integrator_live"){
+        if(selected.next===null)return;
+        const controller=new AbortController(),source=selected.source,offset=selected.next;
+        const waiting={controller,source,offset};prefetched=waiting;
+        waiting.result=requestAudio(source,offset,controller).then(value=>({value}),error=>({error}));return;
+      }
+      if(!voiceEnabled || !canSpeakLive || !selected.auto || selected.interrupted || selected.segmentEnded)return;
+      const owned=generation,waiting={controller:new AbortController(),owner:selected.source,ahead:true};prefetched=waiting;
+      waiting.selection=(async()=>{
+        const source=await liveSpeech?.next() || liveSpeech?.continuation(selected.source);
+        if(!source || prefetched!==waiting || active!==selected || generation!==owned || voiceSuspended || captureBusy || selected.interrupted){
+          liveSpeech?.unsent(source);waiting.controller.abort();if(prefetched===waiting)prefetched=undefined;return;
+        }
+        if(source.kind==="integrator_live" && !liveSpeech?.admit(source)){prefetched=undefined;return;}
+        waiting.source=source;waiting.offset=source.speech_start||0;
+        // Own exactly one preparation, including its failed/uncertain result.
+        waiting.result=requestAudio(source,waiting.offset,waiting.controller).then(value=>({value}),error=>({error}));
+      })().catch(()=>{waiting.controller.abort();if(prefetched===waiting)prefetched=undefined;});
     }
     async function listenTo(source, offset = 0, chain) {
       if(captureBusy)return;
-      const prepared=prefetched && prefetched.source.id===source.id && prefetched.source.revision===source.revision && prefetched.offset===offset?prefetched:undefined;
-      if(prepared)prefetched=undefined;
+      const key=preparationKey(source,offset);
+      const prepared=queuedPreparations.get(key) || (prefetched?.source?.id===source.id && prefetched.source.revision===source.revision && prefetched.offset===offset?prefetched:undefined);
+      if(prepared===prefetched)prefetched=undefined;
+      queuedPreparations.delete(key);
+      if(!chain?.queued){cancelPreparedMessage(source);for(let n=voiceQueue.length-1;n>=0;n--)if(sameNative(voiceQueue[n],source))removeQueued(n);}
       if(!chain?.queued){liveSpeech?.continueSource(source);voiceSuspended=false;}
       stop();
       if(voiceEnabled)voiceBusy=true;
@@ -1372,7 +1424,7 @@ window.Conversation = (() => {
       active = {source, offset, generation:owned, auto:false, focusVersion:chain?.focusVersion ?? focusVersion,queued:!!chain?.queued};
       const selected = active;
       $("#conversation-player").hidden = false;
-      $("#conversation-playing").textContent = source.kind === "integrator_answer" ? "Conversation reply" : source.label;
+      $("#conversation-playing").textContent = source.kind.startsWith("integrator_") ? "Conversation reply" : source.label;
       presentState({playback:"preparing"});
       audioState("Preparing audio…"); toggle.disabled = true;
       requestAbort = prepared?.controller||new AbortController();
@@ -1422,7 +1474,7 @@ window.Conversation = (() => {
         return;
       }
       audioState("End of reply."); playLabel("Play audio again");
-      if(selected.source.kind!=="native_question" || selected.finished){nextSpokenReply("reply",selected.source);return;}
+      if(selected.source.kind!=="native_question" || selected.finished){nextSpokenReply(selected.source.kind==="integrator_live"?"chunk":"reply",selected.source);return;}
       selected.finished=true;
       try {
         await part(selected.source, selected.offset);

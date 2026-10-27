@@ -600,3 +600,20 @@ restarting automatically when capture ends. Explicit Play reuses loaded media
 and queues its matching canonical remainder once; another native question keeps
 queue priority. A definitely empty/unsent selection can be released without a
 playback error. Native jobs and global Voice intent remain independent.
+
+
+## One-ahead live speech preparation
+
+While a live prefix plays, the client may prepare one next useful prefix or its
+matching canonical remainder. Preparation never replaces the audible media
+element. The same-reply transition uses the existing180ms chunk pause; provider
+and network delays can still extend it. This does not promise a measured device
+gap or lower first-response latency.
+
+A pending native question keeps priority. The prepared reply moves into the
+existing queue with its single provider attempt, including failed/uncertain
+outcomes, and is consumed without a second synthesis afterward. Capture holds
+interrupted narration; explicit Play can reuse loaded media and its existing
+prepared prefix. Changed confirmation, binding replacement and explicit Stop
+release obsolete preparations. Completed-range tracking still preserves any
+unsaid gap; preparation is neither playback nor evidence of hearing.
