@@ -26,6 +26,7 @@ pub(super) fn retain(
     local: i64,
     human: i64,
     workspace: &TurnWorkspace,
+    output: Option<serde_json::Value>,
 ) -> Result<bool> {
     if !shared
         .config
@@ -35,7 +36,7 @@ pub(super) fn retain(
     {
         return Ok(false);
     }
-    let Some(output) = shared.store.artifact_output(local, human)? else {
+    let Some(mut output) = output.or(shared.store.artifact_output(local, human)?) else {
         return Ok(false);
     };
     if fs::read_dir(&workspace.out_dir)?.next().is_none() {
@@ -49,6 +50,31 @@ pub(super) fn retain(
             .as_ref()
             .context("Missing output directory anchor")?
             .metadata()?;
+        // Freeze a bounded selection at this canonical final. Later goal cycles
+        // must not add or replace files attributed to this response.
+        let entries = fs::read_dir(&workspace.out_dir)?.collect::<std::io::Result<Vec<_>>>()?;
+        if entries.len() > 10 {
+            bail!("At most ten generated files per execution are supported");
+        }
+        let mut files = serde_json::Map::new();
+        for entry in entries {
+            let meta = fs::symlink_metadata(entry.path())?;
+            if let Some(name) = entry.file_name().to_str() {
+                files.insert(
+                    name.to_owned(),
+                    serde_json::json!([
+                        meta.dev(),
+                        meta.ino(),
+                        meta.len(),
+                        meta.mtime(),
+                        meta.mtime_nsec(),
+                        meta.ctime(),
+                        meta.ctime_nsec()
+                    ]),
+                );
+            }
+        }
+        output["files"] = serde_json::Value::Object(files);
         let source_key = shared.store.native_interaction_source(local, human)?.0;
         let publish_files = super::topic_publications::enabled(&shared, source_key, human)
             && shared.store.topic_projection_active(local)?;
@@ -85,7 +111,7 @@ pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
         .expect("checked file configuration");
     // At most four independent byte jobs, even when many sessions finish together.
     for _ in 0..4 {
-        let Some((local, doc)) = shared.store.artifact_job_claim(human)? else {
+        let Some((job, local, doc)) = shared.store.artifact_job_claim(human)? else {
             break;
         };
         let shared = shared.clone();
@@ -132,7 +158,7 @@ pub(super) fn recover(shared: Arc<AppShared>) -> Result<()> {
                 }
                 Err(_) => "partial",
             };
-            if shared.store.artifact_job_finish(local, phase).is_err() || result.is_err() {
+            if shared.store.artifact_job_finish(&job, phase).is_err() || result.is_err() {
                 tracing::warn!(
                     "Generated files remain pending or partially unavailable; native text is unaffected"
                 );
@@ -296,8 +322,19 @@ pub(super) fn snapshot(
         }
         shared.store.artifact_blob_removed(&sha)?;
     }
-    let mut entries = fs::read_dir(out)?.collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|e| e.file_name());
+    let mut entries: Vec<std::ffi::OsString> = if let Some(files) = output.get("files") {
+        files
+            .as_object()
+            .context("Invalid response file selection")?
+            .keys()
+            .map(std::ffi::OsString::from)
+            .collect()
+    } else {
+        fs::read_dir(out)?
+            .map(|entry| entry.map(|v| v.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?
+    };
+    entries.sort();
     if entries.len() > 10 {
         bail!("At most ten generated files per execution are supported")
     }
@@ -306,7 +343,6 @@ pub(super) fn snapshot(
     let mut failed = 0;
     for (index, entry) in entries.into_iter().enumerate() {
         let label = entry
-            .file_name()
             .to_str()
             .filter(|s| {
                 !s.is_empty()
@@ -317,14 +353,22 @@ pub(super) fn snapshot(
             .unwrap_or_else(|| format!("Unsupported output {}", index + 1));
         let result = (|| -> Result<()> {
             let name = entry
-                .file_name()
                 .into_string()
                 .map_err(|_| anyhow!("Unsupported output filename"))?;
             if name.is_empty()
                 || name.chars().count() > 128
-                || name.chars().any(|c| c.is_control() || c == '\\')
+                || name
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, '/' | '\\'))
+                || matches!(name.as_str(), "." | "..")
             {
                 bail!("Unsupported output filename")
+            }
+            if output
+                .get("files")
+                .is_some_and(|files| files.get(&name).is_none())
+            {
+                return Ok(());
             }
             let component = CString::new(name.as_bytes())?;
             let fd = unsafe {
@@ -339,6 +383,21 @@ pub(super) fn snapshot(
             }
             let mut file = unsafe { fs::File::from_raw_fd(fd) };
             let initial = file.metadata()?;
+            if let Some(expected) = output.get("files").and_then(|files| files.get(&name)) {
+                if *expected
+                    != serde_json::json!([
+                        initial.dev(),
+                        initial.ino(),
+                        initial.len(),
+                        initial.mtime(),
+                        initial.mtime_nsec(),
+                        initial.ctime(),
+                        initial.ctime_nsec()
+                    ])
+                {
+                    bail!("Response output changed before copying");
+                }
+            }
             if !initial.is_file() || initial.nlink() != 1 || initial.len() > cfg.max_file_bytes {
                 bail!("Unsupported or oversized output")
             }
@@ -390,6 +449,12 @@ pub(super) fn snapshot(
                 bail!("Output changed while being retained")
             }
             let sha = format!("{:x}", hash.finalize());
+            if shared
+                .store
+                .artifact_already_retained(local, human, &name, &sha)?
+            {
+                return Ok(());
+            }
             let destination = cfg.directory.join(&sha);
             match fs::OpenOptions::new()
                 .read(true)

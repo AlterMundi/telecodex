@@ -77,7 +77,7 @@ class Retention(unittest.TestCase):
     def test_exact_completed_stream_skips_file_provider_and_retains_recovery(self):
         record,_=self.streaming_fixture()
         result=asr.process(self.source,self.binding,include_retention=True)
-        self.assertEqual(result,{'text':'Live final words','final':True,'preparation_audio_deleted':True})
+        self.assertEqual(result,{'text':'Live final words','final':True,'preparation_audio_deleted':True,'streaming_model':'qwen-audio-3.0-realtime-plus'})
         self.assertEqual(self.calls(),0)
         record.unlink()
         self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Live final words')
@@ -90,9 +90,9 @@ class Retention(unittest.TestCase):
     def test_gemini_manual_final_reuses_completed_text_without_file_asr(self):
         record,value=self.streaming_fixture()
         value['model']='gemini-3.5-transcribe-live';record.write_text(json.dumps(value))
-        self.assertEqual(self.run_asr(),{'text':'Live final words','final':True})
+        self.assertEqual(self.run_asr(),{'text':'Live final words','final':True,'streaming_model':'gemini-3.5-transcribe-live'})
         record.unlink()
-        self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Live final words')
+        self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['streaming_model'],'gemini-3.5-transcribe-live')
         self.assertEqual(self.calls(),0)
     def test_unselected_stream_model_is_not_a_trusted_transcript(self):
         record,value=self.streaming_fixture()
