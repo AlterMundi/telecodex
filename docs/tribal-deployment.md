@@ -163,3 +163,7 @@ collector, native turn or echo, and the exact dispatch-acknowledgement failure.
 A retained marker bounds recovery even when the helper fails again. Changed
 source/binding, a committed dispatch or missing native acknowledgement never
 qualifies. Uncertainty is retained; no new request ID or human input is invented.
+The first local receipt also freezes the current human Stop admission epoch.
+Recovery cannot cross that epoch, including a stop arriving across worker lookup.
+Legacy entries without this evidence remain retained for explicit review; a
+later active session alone never proves an old input should resume.

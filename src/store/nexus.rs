@@ -88,7 +88,12 @@ impl Store {
     }
     /// One recovery only when a fresh owner inspection proves dispatch never
     /// committed. Missing native acknowledgement is explicitly excluded.
-    pub fn nexus_recover_undispatched(&self, id: &str, observed: &Value) -> Result<bool> {
+    pub fn nexus_recover_undispatched(
+        &self,
+        id: &str,
+        observed: &Value,
+        admission_epoch: &str,
+    ) -> Result<bool> {
         if observed["request"]["request_id"] != id
             || observed["request"]["status"] != "queued"
             || !observed["dispatch_id"].is_null()
@@ -98,7 +103,10 @@ impl Store {
         let Some(previous) = self.nexus_request(id)? else {
             return Ok(false);
         };
-        if previous["phase"] != "undetermined" || !previous["_known_unsent_recovery"].is_null() {
+        if previous["phase"] != "undetermined"
+            || !previous["_known_unsent_recovery"].is_null()
+            || previous["_admission_epoch"] != admission_epoch
+        {
             return Ok(false);
         }
         // The whole frozen request and route must match, including response mode
@@ -650,6 +658,7 @@ mod tests {
         let mut fresh = doc("unsent");
         fresh["dispatch_id"] = Value::Null;
         fresh["request"]["status"] = json!("queued");
+        fresh["_admission_epoch"] = json!("initial");
         store.nexus_receive("unsent", &fresh).unwrap();
         store.nexus_begin_claim("unsent").unwrap();
         store
@@ -659,36 +668,62 @@ mod tests {
                 "Dispatch acknowledgement missing; no automatic native replay",
             )
             .unwrap();
+        assert!(
+            !store
+                .nexus_recover_undispatched("unsent", &fresh, "later-stop")
+                .unwrap()
+        );
+        let mut legacy = fresh.clone();
+        legacy["request"]["request_id"] = json!("legacy");
+        legacy.as_object_mut().unwrap().remove("_admission_epoch");
+        store.nexus_receive("legacy", &legacy).unwrap();
+        store.nexus_begin_claim("legacy").unwrap();
+        store
+            .nexus_phase(
+                "legacy",
+                "undetermined",
+                "Dispatch acknowledgement missing; no automatic native replay",
+            )
+            .unwrap();
+        assert!(
+            !store
+                .nexus_recover_undispatched("legacy", &legacy, "initial")
+                .unwrap()
+        );
         let mut dispatched = fresh.clone();
         dispatched["request"]["status"] = json!("handed_off");
         dispatched["dispatch_id"] = json!("remote-committed");
         assert!(
             !store
-                .nexus_recover_undispatched("unsent", &dispatched)
+                .nexus_recover_undispatched("unsent", &dispatched, "initial")
                 .unwrap()
         );
         let mut changed = fresh.clone();
         changed["request"]["contribution"]["text"] = json!("Changed source");
         assert!(
             store
-                .nexus_recover_undispatched("unsent", &changed)
+                .nexus_recover_undispatched("unsent", &changed, "initial")
                 .is_err()
         );
         let mut changed_mode = fresh.clone();
         changed_mode["request"]["response_mode"] = json!("another_mode");
         assert!(
             store
-                .nexus_recover_undispatched("unsent", &changed_mode)
+                .nexus_recover_undispatched("unsent", &changed_mode, "initial")
                 .is_err()
         );
         let mut changed_context = fresh.clone();
         changed_context["request"]["return_context"] = json!({"playback_ms":999});
         assert!(
             store
-                .nexus_recover_undispatched("unsent", &changed_context)
+                .nexus_recover_undispatched("unsent", &changed_context, "initial")
                 .is_err()
         );
-        assert!(store.nexus_recover_undispatched("unsent", &fresh).unwrap());
+        assert!(
+            store
+                .nexus_recover_undispatched("unsent", &fresh, "initial")
+                .unwrap()
+        );
         assert_eq!(
             store.nexus_request("unsent").unwrap().unwrap()["request"]["contribution"],
             fresh["request"]["contribution"]
@@ -701,7 +736,11 @@ mod tests {
                 "Dispatch acknowledgement missing; no automatic native replay",
             )
             .unwrap();
-        assert!(!store.nexus_recover_undispatched("unsent", &fresh).unwrap());
+        assert!(
+            !store
+                .nexus_recover_undispatched("unsent", &fresh, "initial")
+                .unwrap()
+        );
         assert!(store.nexus_outbox().unwrap().is_empty());
     }
     #[test]

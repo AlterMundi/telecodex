@@ -302,6 +302,18 @@ def undispatched_recovery(binary):
         assert j.native_turns==starts and j.state_of()[0]=='queued'
         print('PASS repeated uncommitted dispatch failure is bounded to one recovery and retains the request')
     finally:j.close()
+    j=Nexus(binary)
+    try:
+        j.prepare();starts=j.native_turns
+        (j.state/'fail-before-dispatch').write_text('once');j.enqueue()
+        j.wait(lambda:j.row("SELECT phase FROM nexus_requests WHERE id='request'")==[('undetermined',)])
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            db.execute("INSERT OR REPLACE INTO bot_state(key,value) VALUES('stop_admission_epoch:100','later-human-stop')")
+        time.sleep(2.2)
+        assert (j.state/'failed-dispatch-calls').read_text()=='x'
+        assert j.native_turns==starts and j.state_of()[0]=='queued'
+        print('PASS later human Stop epoch prevents recovery of an earlier undispatched request')
+    finally:j.close()
 
 
 def automatic_missing_terminal(binary):
