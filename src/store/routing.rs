@@ -85,6 +85,25 @@ impl Store {
         Ok(())
     }
 
+    pub(super) fn init_delivery_audiences(&self) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        // Original return coordinates are provenance, not a publication grant.
+        // The fallback qualifies old records without rewriting receipts/history.
+        conn.execute_batch(r#"CREATE VIEW IF NOT EXISTS interaction_public_deliveries AS
+          SELECT d.rowid AS rowid,d.* FROM interaction_deliveries d
+          WHERE COALESCE(json_extract(d.doc,'$.internal'),
+            EXISTS(SELECT 1 FROM interaction_requests q JOIN interaction_session_authors a ON a.input_id=q.input_id WHERE q.id=d.request_id)
+            OR (EXISTS(SELECT 1 FROM interaction_results z JOIN interaction_instructions i ON json_extract(i.doc,'$.local_turn')=z.local_turn
+                  JOIN interaction_session_authors a ON a.input_id=i.input_id JOIN json_each(i.doc,'$.requests') req
+                  WHERE z.id=d.result_id AND req.value=d.request_id)
+                AND NOT EXISTS(SELECT 1 FROM interaction_results z JOIN interaction_instructions i ON json_extract(i.doc,'$.local_turn')=z.local_turn
+                  JOIN json_each(i.doc,'$.requests') req WHERE z.id=d.result_id AND req.value=d.request_id
+                  AND NOT EXISTS(SELECT 1 FROM interaction_session_authors a WHERE a.input_id=i.input_id)
+                  AND (z.claim IS NULL OR EXISTS(SELECT 1 FROM json_each(z.claim,'$.covered') cov WHERE cov.value=i.id))))
+          )=0;"#)?;
+        Ok(())
+    }
+
     /// Reserve a canonical result before any external publication. The worker can
     /// report request coverage, but cannot supply a different recipient or scope.
     #[cfg(test)]
@@ -233,7 +252,7 @@ impl Store {
                 }
             }
             candidates.sort_by_key(|(order, sequence, _, _)| (*order, *sequence));
-            let Some((order, sequence, input, source)) = candidates.pop() else {
+            let Some((order, sequence, _input, source)) = candidates.pop() else {
                 // Historical unfinished work is not an unanswered current input.
                 // Its declarations remain in the canonical native result.
                 continue;
@@ -250,11 +269,34 @@ impl Store {
             };
             // Session dependencies retain their own correlation/return behavior;
             // human requests share one response per actual requesting carrier.
-            let authored =
-                super::session_requests::author_on(&tx, &input.input_id)?.map(|_| request.clone());
-            selected.push((order, sequence, origin, authored, request));
+            // A helper request always stays internal. A return-only wakeup may
+            // address the parent's IDs, but needs an actual covered human input
+            // in this execution before producing another human-facing answer.
+            let original_internal = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM interaction_requests q JOIN interaction_session_authors a ON a.input_id=q.input_id WHERE q.id=?1)",
+                [&request], |r|r.get::<_,bool>(0),
+            )?;
+            let mut internal_input = false;
+            let mut human_input = false;
+            for (candidate, _) in &inputs {
+                if candidate.requests.contains(&request) {
+                    let internal =
+                        super::session_requests::author_on(&tx, &candidate.input_id)?.is_some();
+                    internal_input |= internal;
+                    human_input |=
+                        !internal && (claim.is_none() || covered.contains(&candidate.id));
+                }
+            }
+            let internal = original_internal || (internal_input && !human_input);
+            let authored = if internal {
+                Some(request.clone())
+            } else {
+                None
+            };
+            selected.push((order, sequence, origin, authored, internal, request));
         }
-        selected.sort_by_key(|(order, sequence, _, _, _)| std::cmp::Reverse((*order, *sequence)));
+        selected
+            .sort_by_key(|(order, sequence, _, _, _, _)| std::cmp::Reverse((*order, *sequence)));
         // An explicitly shared entry is one requesting conversation across both carriers.
         let shared_entry: Option<(i64, i64)> = tx
             .query_row(
@@ -264,24 +306,27 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let mut groups: Vec<(ReturnRoute, Option<String>, Vec<String>)> = Vec::new();
-        for (_, _, origin, authored, request) in selected {
-            if let Some((_, _, requests)) = groups.iter_mut().find(|(prior, kind, _)| {
-                prior.chat_id == origin.chat_id
-                    && prior.thread_id == origin.thread_id
-                    && (prior.message_id.is_some() == origin.message_id.is_some()
-                        || shared_entry == Some((origin.chat_id, origin.thread_id)))
-                    && *kind == authored
-            }) {
+        let mut groups: Vec<(ReturnRoute, Option<String>, bool, Vec<String>)> = Vec::new();
+        for (_, _, origin, authored, internal, request) in selected {
+            if let Some((_, _, _, requests)) =
+                groups.iter_mut().find(|(prior, kind, audience, _)| {
+                    prior.chat_id == origin.chat_id
+                        && prior.thread_id == origin.thread_id
+                        && (prior.message_id.is_some() == origin.message_id.is_some()
+                            || shared_entry == Some((origin.chat_id, origin.thread_id)))
+                        && *kind == authored
+                        && *audience == internal
+                })
+            {
                 if !requests.contains(&request) {
                     requests.push(request);
                 }
             } else {
-                groups.push((origin, authored, vec![request]));
+                groups.push((origin, authored, internal, vec![request]));
             }
         }
         let mut deliveries = Vec::new();
-        for (origin, _, requests) in groups {
+        for (origin, _, internal, requests) in groups {
             let request = requests[0].clone();
             let id = Uuid::new_v5(
                 &Uuid::NAMESPACE_URL,
@@ -301,6 +346,7 @@ impl Store {
                 current: false,
                 correction_pending: false,
                 phase: "reserved".into(),
+                internal: Some(internal),
             };
             delivery.completed = claim.as_ref().is_some_and(|c| {
                 delivery
@@ -326,7 +372,7 @@ impl Store {
     pub fn interaction_begin_delivery(&self, id: &str, human: i64) -> Result<Option<Delivery>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let raw:Option<String>=tx.query_row("SELECT d.doc FROM interaction_deliveries d JOIN users u ON u.tg_user_id=d.human_id WHERE d.id=?1 AND d.human_id=?2 AND u.allowed=1 AND d.phase='reserved' AND NOT EXISTS(SELECT 1 FROM interaction_delivery_parts p WHERE p.delivery_id=d.id)",params![id,human],|r|r.get(0)).optional()?;
+        let raw:Option<String>=tx.query_row("SELECT d.doc FROM interaction_public_deliveries d JOIN users u ON u.tg_user_id=d.human_id WHERE d.id=?1 AND d.human_id=?2 AND u.allowed=1 AND d.phase='reserved' AND NOT EXISTS(SELECT 1 FROM interaction_delivery_parts p WHERE p.delivery_id=d.id)",params![id,human],|r|r.get(0)).optional()?;
         let Some(raw) = raw else {
             return Ok(None);
         };
@@ -437,7 +483,7 @@ impl Store {
     ) -> Result<Option<(Delivery, String)>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let raw:Option<String>=tx.query_row("SELECT doc FROM interaction_deliveries WHERE id=?1 AND human_id=?2 AND phase IN ('preparing','sending') AND EXISTS(SELECT 1 FROM users WHERE tg_user_id=?2 AND allowed=1)",params![id,human],|r|r.get(0)).optional()?;
+        let raw:Option<String>=tx.query_row("SELECT doc FROM interaction_public_deliveries WHERE id=?1 AND human_id=?2 AND phase IN ('preparing','sending') AND EXISTS(SELECT 1 FROM users WHERE tg_user_id=?2 AND allowed=1)",params![id,human],|r|r.get(0)).optional()?;
         let Some(raw) = raw else {
             return Ok(None);
         };

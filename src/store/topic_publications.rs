@@ -234,6 +234,9 @@ pub(super) fn accepted_on(
     conn: &Connection,
     input: &crate::interaction::Instruction,
 ) -> Result<()> {
+    if super::session_requests::author_on(conn, &input.input_id)?.is_some() {
+        return Ok(());
+    }
     if input.origin.chat_id == input.target.chat_id
         && input.origin.thread_id == input.target.thread_id
     {

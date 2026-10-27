@@ -136,6 +136,7 @@ impl Store {
         store.init_interaction_creation()?;
         store.init_routing()?;
         store.init_session_requests()?;
+        store.init_delivery_audiences()?;
         store.init_nexus()?;
         store.init_merging()?;
         store.init_stopping()?;

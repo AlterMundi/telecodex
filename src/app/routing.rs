@@ -1303,7 +1303,9 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
                     P::Uncertain,
                     None,
                 );
-                notice(app.shared.clone(),i.origin,"The worker may have received this input; acceptance is unconfirmed. It was retained without replay.".into());
+                if matches!(app.shared.store.interaction_author(&i.id, human), Ok(None)) {
+                    notice(app.shared.clone(),i.origin,"The worker may have received this input; acceptance is unconfirmed. It was retained without replay.".into());
+                }
             }
         }
     });
@@ -1458,6 +1460,9 @@ pub(super) fn finished(shared: &Arc<AppShared>, key: SessionKey, root: &str, hum
 pub(super) fn failure(shared: Arc<AppShared>, root: &str, human: i64, error: &str) {
     if let Ok(Some(i)) = shared.store.interaction_instruction(root, human) {
         let _ = shared.store.interaction_unfinished(root, human);
+        if !matches!(shared.store.interaction_author(root, human), Ok(None)) {
+            return;
+        }
         let message = if error.contains("cancelled") {
             format!(
                 "#{}: turn interrupted. Completed effects remain; goal/child state is separate.",
@@ -1502,6 +1507,7 @@ pub(super) fn result(
             .as_ref()
             .is_some_and(|c| c.covered.iter().any(|id| id == root))
         && deliveries.is_empty()
+        && shared.store.interaction_author(root, human)?.is_none()
         && let Some(i) = shared.store.interaction_instruction(root, human)?
     {
         notice(shared.clone(),i.origin,"An answer from earlier work was retained in the native conversation. It does not report addressing your routed input, which remains unresolved.".into());
@@ -1528,7 +1534,7 @@ fn relevance(d: &crate::interaction::Delivery) -> &'static str {
 }
 
 fn publish(shared: Arc<AppShared>, delivery: crate::interaction::Delivery, human: i64) {
-    if !shared.config.telegram.enabled {
+    if delivery.internal == Some(true) || !shared.config.telegram.enabled {
         // Preserve canonical results as unsent; disabling a transport is not
         // an uncertain HTTP attempt and must not consume publication claims.
         return;
@@ -1639,6 +1645,9 @@ fn publish(shared: Arc<AppShared>, delivery: crate::interaction::Delivery, human
 
 pub(super) fn retained_artifacts(shared: Arc<AppShared>, root: &str, human: i64) {
     if let Ok(Some(i)) = shared.store.interaction_instruction(root, human) {
+        if !matches!(shared.store.interaction_author(root, human), Ok(None)) {
+            return;
+        }
         let text = if shared
             .config
             .interaction
@@ -1655,6 +1664,9 @@ pub(super) fn retained_artifacts(shared: Arc<AppShared>, root: &str, human: i64)
 
 pub(super) fn declaration(shared: Arc<AppShared>, root: &str, human: i64, registered: bool) {
     if let Ok(Some(i)) = shared.store.interaction_instruction(root, human) {
+        if !matches!(shared.store.interaction_author(root, human), Ok(None)) {
+            return;
+        }
         let text = if registered {
             format!(
                 "Human-action declaration recorded in #{}. Use /pending in that worker conversation to inspect it.",
