@@ -366,6 +366,18 @@ mod diagnostic_tests {
     use super::failure_code;
 
     #[test]
+    fn portfolio_budget_reports_omitted_unicode_evidence_without_partial_records() {
+        let first = serde_json::json!({"selector":"t7","evidence":"🦉".repeat(15_000)});
+        let second = serde_json::json!({"selector":"t8","evidence":"🦉".repeat(15_000)});
+        let output = super::portfolio_response(vec![first.clone(), second]).unwrap();
+        assert_eq!(output["candidates"], serde_json::json!([first]));
+        assert_eq!(output["omitted_selectors"], serde_json::json!(["t8"]));
+        assert_eq!(output["selected_count"], 2);
+        assert_eq!(output["response_bounded"], true);
+        assert!(serde_json::to_vec(&output).unwrap().len() < 96 * 1024);
+    }
+
+    #[test]
     fn observer_diagnostics_are_fixed_labels_without_private_error_text() {
         let error = anyhow::anyhow!("private provider response or source excerpt")
             .context("handoff summary must be structured JSON");
@@ -549,13 +561,38 @@ async fn portfolio_inspection(
     let mut result = portfolio_evidence(o, true);
     // Never disguise a shortened objective as an exact CAS snapshot. A future
     // goal mutation must obtain its full preconditions through goal_inspect.
+    let history = &live["historical_failure_evidence"];
+    let history_items = history["items"].as_array().cloned().unwrap_or_default();
+    let history_view = serde_json::json!({"items":history_items.iter().take(2).collect::<Vec<_>>(),
+        "more":history["more"].as_bool().unwrap_or(false) || history_items.len()>2,"historical":true});
     result["live_status"] = serde_json::json!({"availability":live["availability"],"goal":goal_view,
         "native_thread":live["native_thread"],"native_activity":live["native_activity"],"receiver_busy":live["receiver_busy"],
         "stop_held":live["stop_held"],"maintenance_held":live["maintenance_held"],
-        "historical_failure_evidence":live["historical_failure_evidence"],
+        "historical_failure_evidence":history_view,
         "observation_started_at":live["observation_started_at"],"observation_finished_at":live["observation_finished_at"],
         "meaning":"Read-only bounded projection of goal_inspect. Historical failures are not proof of a current blocker. Goal-control preconditions require a separate full goal_inspect; this excerpt is not a native snapshot."});
     Ok(result)
+}
+
+fn portfolio_response(items: Vec<serde_json::Value>) -> Result<serde_json::Value> {
+    // The owner socket has a 256KiB reply limit. Leave ample envelope headroom
+    // and report omissions instead of silently truncating selected evidence.
+    let selected_count = items.len();
+    let mut candidates = Vec::new();
+    let mut omitted = Vec::new();
+    for item in items {
+        candidates.push(item);
+        if serde_json::to_vec(&candidates)?.len() > 90 * 1024 {
+            if let Some(row) = candidates.pop() {
+                omitted.push(row["selector"].clone());
+            }
+        }
+    }
+    Ok(
+        serde_json::json!({"kind":"observer_portfolio_inspection","candidates":candidates,
+        "selected_count":selected_count,"response_bounded":!omitted.is_empty(),"omitted_selectors":omitted,
+        "attribution":"Selected read-only evidence, not a request to resume or dispatch. Native status and semantic freshness/question coverage are independent. Blocker reasons and next actions require attributed evidence. Use support for missing originals and selected refresh for source reconciliation. Omitted selectors mean this response is partial; inspect fewer selectors or use support/goal_inspect for the missing evidence."}),
+    )
 }
 
 /// Native integrating dialogue uses the same observer consumer as text queries.
@@ -635,8 +672,7 @@ pub(super) fn tool_call(
                             Ok::<_,anyhow::Error>(serde_json::json!({"selector":format!("t{}",target.thread_id),"label":name,"evidence":evidence}))
                         }
                     })).buffered(2).collect::<Vec<_>>().await.into_iter().collect::<Result<Vec<_>>>()?;
-                    serde_json::json!({"kind":"observer_portfolio_inspection","candidates":items,
-                        "attribution":"Selected read-only evidence, not a request to resume or dispatch. Goal status is a fresh independent metadata read; semantic freshness and question coverage must be evaluated separately. Blocker reasons and next actions are attributed source statements, never inferred solely from a blocked status. Use support for missing evidence and refresh only selected sources needing reconciliation."}).to_string()
+                    portfolio_response(items)?.to_string()
                 },
                 "support" if selected.len()==1 => {
                     let target=selected[0];
