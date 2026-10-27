@@ -52,7 +52,11 @@ impl Store {
         );
         let conn = self.conn.lock().expect("store mutex poisoned");
         let mut doc = doc.clone();
-        if let Some(files) = doc["output"]["files"].as_object_mut() {
+        if let Some(files) = doc
+            .get_mut("output")
+            .and_then(|v| v.get_mut("files"))
+            .and_then(Value::as_object_mut)
+        {
             let mut previous=conn.prepare("SELECT EXISTS(SELECT 1 FROM interaction_artifact_jobs j,json_each(j.doc,'$.output.files') f WHERE j.local=?1 AND j.human=?2 AND j.job!=?3 AND f.key=?4 AND json(f.value)=json(?5))")?;
             let mut duplicate = Vec::new();
             for (name, metadata) in files.iter() {
