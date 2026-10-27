@@ -291,7 +291,7 @@ window.RequestControls = (() => {
       } finally {if (owned === generation) {reading = false; more.disabled = false;}}
     }
     more.addEventListener("click", () => refresh(cursor));
-    return {refresh,reset,audioSources:()=>[...cards.values()].map(c=>audioSource(c.meta)).filter(Boolean)};
+    return {refresh,reset,captureQuestions:()=>Object.fromEntries([...cards.values()].map(card=>card.meta).filter(value=>audioSource(value) && value.binding===getBinding() && /^[a-f0-9]{32}$/.test(value.id) && /^[a-f0-9]{64}$/.test(value.capture_version)).slice(0,32).map(value=>[value.id,value.capture_version])),audioSources:()=>[...cards.values()].map(c=>audioSource(c.meta)).filter(Boolean)};
   }
   return {mount};
 })();

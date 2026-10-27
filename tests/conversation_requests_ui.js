@@ -66,6 +66,15 @@ function boot(count=1, mayDecide=true) {
   };
 }
 (async()=>{
+  const limits=boot(0),template={binding:'bound',state:'pending',kind:'question',actionable:true,title:'Scope',body:'Choose scope',choices:[],revision:'public-revision',capture_version:'b'.repeat(64)};
+  limits.sources.set('a'.repeat(32),{...template,id:'a'.repeat(32),sequence:1});
+  limits.sources.set('c'.repeat(32),{...template,id:'c'.repeat(32),sequence:2,kind:'approval'});
+  limits.sources.set('d'.repeat(32),{...template,id:'d'.repeat(32),sequence:3,binding:'other'});
+  limits.sources.set('e'.repeat(32),{...template,id:'e'.repeat(32),sequence:4,capture_version:'invalid'});
+  await limits.ui.refresh();const beforeQuestionChange=clone(limits.ui.captureQuestions());
+  assert.deepEqual(beforeQuestionChange,{['a'.repeat(32)]:'b'.repeat(64)},'Only observed current owned questions contribute a capture restriction');
+  limits.sources.get('a'.repeat(32)).capture_version='f'.repeat(64);await limits.ui.refresh();
+  assert.equal(limits.ui.captureQuestions()['a'.repeat(32)],'f'.repeat(64));assert.equal(beforeQuestionChange['a'.repeat(32)],'b'.repeat(64),'Previously frozen question data cannot mutate on refresh');
   const f=boot();await f.ui.refresh();const card=f.cards()[0];
   await f.button(card,'Read request').handlers.click();
   const option=f.button(card,'Selected scope');assert(option.disabled,'A partial proposal cannot be approved/answered');

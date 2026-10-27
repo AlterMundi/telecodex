@@ -612,6 +612,13 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 metadata['playback']=json.loads(playback)
                 Provider.check_playback(metadata['playback'])
             except (ValueError,TypeError):raise HTTPException(400,'Invalid device playback context') from None
+        capture_questions=request.headers.get('x-capture-questions')
+        if capture_questions is not None:
+            try:
+                if len(capture_questions.encode())>4096:raise ValueError('Capture questions exceed bound')
+                metadata['capture_questions']=json.loads(capture_questions)
+                Provider.check_capture_questions(metadata['capture_questions'])
+            except (ValueError,TypeError):raise HTTPException(400,'Invalid capture question restriction') from None
         visual=request.headers.get('x-visual-reference')
         if visual is not None:
             try:metadata['visual']=json.loads(visual)

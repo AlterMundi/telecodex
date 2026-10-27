@@ -494,7 +494,7 @@ impl Store {
             }
         }
         let mut result = json!({"schema":"telecodex.presentation-list/v1",
-            "binding":entry_binding(&conn,human,entry,session)?,"items":items,"can_report_playback":true,"can_report_word_position":true,
+            "binding":entry_binding(&conn,human,entry,session)?,"items":items,"can_report_playback":true,"can_report_word_position":true,"can_limit_capture_questions":true,
             "cursor":{"delivery":deliveries.iter().take(8).next_back().map_or(after_delivery,|r|r.0),
                       "native":natives.iter().take(8).next_back().copied().unwrap_or(after_native)},
             "newest":{"delivery":deliveries.iter().take(8).map(|r|r.0).max().unwrap_or(0),

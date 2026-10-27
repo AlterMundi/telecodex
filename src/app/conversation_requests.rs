@@ -72,6 +72,7 @@ fn response(snapshot: &ConversationRequest, payload: &Value, offset: usize) -> R
     result["schema"] = json!("telecodex.conversation-request/v1");
     result["id"] = json!(snapshot.item.id);
     result["revision"] = json!(revision(snapshot, payload));
+    result["capture_version"] = json!(snapshot.capture_version);
     result["binding"] = json!(snapshot.binding);
     result["entry_binding"] = snapshot.entry_binding.clone();
     result["state"] = json!(snapshot.item.state);

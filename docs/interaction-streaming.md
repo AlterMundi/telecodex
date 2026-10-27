@@ -635,3 +635,37 @@ A saved word-end cursor is device playback evidence, not proof of hearing; a
 partly spoken word may repeat. Provisional live prefixes still retain completed
 segment ranges until canonical confirmation; this change refines canonical
 Resume and does not establish complete semantic heard/unsaid coordination.
+
+
+## Capture-time question eligibility
+
+A voice recording freezes the currently observed native question versions before
+microphone permission and streaming recognition begin. The updated receiver
+advertises `can_limit_capture_questions`; the client sends at most32 opaque
+`capture_version` values through `X-Capture-Questions` on the finalized original.
+An empty object explicitly excludes all questions from automatic interpretation
+of that recording. Missing capability keeps the legacy voice contract. No extra
+read or provider operation delays capture. Captions still cannot submit work.
+
+This is an untrusted restriction, not a grant: native admission independently
+captures current owned question versions and intersects that set with the frozen
+limit. A supplied ID/version can never add an unrelated, unavailable or changed
+question. The limit stays immutable for that original UUID through upload retry
+and completed-only recovery. A later question or a later step of the same
+question cannot become eligible merely because the person is still recording.
+A distinct later original may answer it. Unknown/not-observed questions require
+clarification or the existing explicit question controls; client timing is not
+proof of hearing or human intent.
+
+The integrated native/HTTP/WebSocket/SQLite fixture in
+`tests/conversation_live_response_http_io.py` combines two active workers, early
+speech, revised streaming ASR, question arrival during capture, exact original
+answers, reconnection and independent returns. Its baseline reproduced a late
+question reported as available for earlier speech. Providers/native model peers
+are synthetic; this does not measure real hearing, ASR quality or device latency.
+
+The optional field uses the existing input document and requires no SQLite
+migration. Deploy the compatible native reader before the updated web scripts;
+roll back UI/configuration while preserving that reader, current journals,
+prepared ASR receipts and uncertain originals. Never restore an old database or
+resend an original to change its capture-time question set.
