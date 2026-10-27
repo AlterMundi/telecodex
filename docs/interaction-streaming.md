@@ -782,8 +782,11 @@ actual selected provider/model/effort, event ownership and current native jobs.
 New automatic speech waits for the current native-question registry before
 selection admission, including a selection whose asynchronous hash or prepared
 slot completes during a refresh. Current questions retain queue priority.
-Registry refreshes share their in-flight outcome; failed or superseded reads do
-not open the speech gate. Explicit listening and already active playback retain
+Registry refreshes share their in-flight outcome; failed or superseded list reads
+do not open the speech gate. An older cached question that is absent from the
+current list and returns404 stays visibly unknown and is excluded from automatic
+audio and capture context; that one unavailable source does not silence other
+current replies. Fresh accepted metadata can make the question available again. Explicit listening and already active playback retain
 their existing controls.
 
 After that question observation, input history, task cards, Telegram projection

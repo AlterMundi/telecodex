@@ -83,9 +83,10 @@ function boot(readOnly=false,standalone=false,options={}) {
     if (url.pathname === "/interaction/requests") {
       if(options.requestFailure)throw new TypeError("Synthetic question registry outage");
       if(heldRequests){const held=heldRequests;heldRequests=undefined;held.started();await held.promise;}
-      return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
+      return {binding:"fixture",items:options.omitRequests?[]:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
     }
     if (url.pathname.startsWith("/interaction/requests/")) {
+      if(options.questionDetailFailure)throw Object.assign(Error("Request no longer available"),{status:404});
       if (body) {nativePosts.push(JSON.parse(JSON.stringify(body)));throw new TypeError("Lost decision acknowledgement");}
       return {...nativeRequests.get(url.pathname.split("/").at(-1)),offset:0,next_offset:null};
     }
@@ -422,6 +423,21 @@ function boot(readOnly=false,standalone=false,options={}) {
     await new Promise(resolve=>setImmediate(resolve));
     if(finishHashWhileReading){assert.equal(race.audioCalls.length,0,'An in-flight hash cannot bypass the question observation gate');questions.release();await refresh;}
     await until(()=>race.audioCalls.length===1);assert.equal(race.audioCalls[0].source,'request:native-request','A newly observed question precedes an asynchronously selected prefix');race.ui.stop();
+  }
+  {
+    const options={liveSpeech:true,immediateHash:true,clock:true};
+    const stale=boot(false,true,options);stale.addReplies(-8);stale.audio();await stale.ui.refresh();
+    stale.nodes.get('#conversation-voice-replies').handlers.click();await stale.ui.refresh();await until(()=>!stale.nodes.get('#conversation-refresh').disabled);await new Promise(resolve=>setImmediate(resolve));stale.nativeRequest();await stale.ui.refresh();const player=stale.nodes.get('#conversation-audio');
+    await until(()=>stale.audioCalls.length===1&&!player.paused&&!player.muted);player.ended=true;await player.handlers.ended();stale.clock.fire(1200);await new Promise(resolve=>setImmediate(resolve));
+    options.omitRequests=true;options.questionDetailFailure=true;
+    options.responseDraft={provisional:true,native_turn:'available-physical',native_item:'available-item',text:'A new useful answer. More',observed_at:'2100-01-01T00:00:00Z'};
+    await stale.ui.refresh();
+    try{
+      assert.equal(stale.nodes.get('#conversation-voice-replies').dataset.voiceState,'on','Voice intent remains enabled during an absent old question');
+      await until(()=>stale.audioCalls.length===2&&!player.paused&&!player.muted);assert(stale.audioCalls[1].source.startsWith('live:'),'One unavailable old question cannot silence the whole conversation');
+      player.ended=true;await player.handlers.ended();stale.clock.fire(180);await new Promise(resolve=>setImmediate(resolve));options.omitRequests=false;options.questionDetailFailure=false;stale.advanceNativeRequest();await stale.ui.refresh();
+      await until(()=>stale.audioCalls.length===3);assert.equal(stale.audioCalls[2].source,'request:native-request');assert.equal(stale.audioCalls[2].revision,'native-revision-2','Fresh registry metadata restores an available question without reviving an absent source');
+    }finally{stale.ui.stop();}
   }
   const liveOptionsAudio={liveSpeech:true,clock:true,playback:true,capture:true,responseDraft:{provisional:true,native_turn:'physical',native_item:'early',text:'First useful sentence. Remaining text',observed_at:'2100-01-01T00:00:00Z'}};
   const liveVoice=boot(false,true,liveOptionsAudio);liveVoice.audio();await liveVoice.ui.refresh();

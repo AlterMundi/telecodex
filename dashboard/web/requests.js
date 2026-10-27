@@ -84,7 +84,7 @@ window.RequestControls = (() => {
           card.note.textContent = "Earlier choice unconfirmed; this request changed. Review the current request before choosing again.";
         }
       }
-      card.meta = value;
+      card.unavailable=false;card.meta = value;
       card.title.textContent = `${value.label || "Conversation"} · ${value.title || (value.kind === "approval" ? "Approval" : "Question")}`;
       card.status.textContent = statusText(value) + (!getCanDecide() && value.state==='pending' ? value.kind==='approval' ? ' Open Sessions to review this approval.' : ' Reply through the conversation to answer.' : '');
       updateControls(card);
@@ -281,7 +281,9 @@ window.RequestControls = (() => {
             if (card.expanded) {showDetail(card,value,false,0); updateControls(card);}
           } catch(e) {
             if (!owns(card,owned) || version !== card.readVersion || observed < card.observed) return;
-            current=false;card.unavailable = true; updateControls(card);
+            // An absent old request is not a failure of the current registry.
+            // Keep its unknown card, but never offer its stale audio/context.
+            if(e.status!==404)current=false;card.unavailable = true; updateControls(card);
             card.note.textContent = "Request unavailable. Check its current state before responding.";
             if (e.status === 401 || e.status === 403) unauthorized(e);
           }
@@ -298,7 +300,7 @@ window.RequestControls = (() => {
       } finally {if (owned === generation) {reading = false; more.disabled = false;}}
     }
     more.addEventListener("click", () => refresh(cursor));
-    return {refresh,reset,captureQuestions:()=>Object.fromEntries([...cards.values()].map(card=>card.meta).filter(value=>audioSource(value) && value.binding===getBinding() && /^[a-f0-9]{32}$/.test(value.id) && /^[a-f0-9]{64}$/.test(value.capture_version)).slice(0,32).map(value=>[value.id,value.capture_version])),audioSources:()=>[...cards.values()].map(c=>audioSource(c.meta)).filter(Boolean)};
+    return {refresh,reset,captureQuestions:()=>Object.fromEntries([...cards.values()].filter(card=>!card.unavailable).map(card=>card.meta).filter(value=>audioSource(value) && value.binding===getBinding() && /^[a-f0-9]{32}$/.test(value.id) && /^[a-f0-9]{64}$/.test(value.capture_version)).slice(0,32).map(value=>[value.id,value.capture_version])),audioSources:()=>[...cards.values()].filter(c=>!c.unavailable).map(c=>audioSource(c.meta)).filter(Boolean)};
   }
   return {mount};
 })();
