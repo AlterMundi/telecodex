@@ -11,14 +11,17 @@ from routing_io import Routing
 
 
 class Sessions(Routing):
-    def __init__(self,binary):
+    def __init__(self,binary,*,control=False):
         self.outputs={};self.calls=0
         super().__init__(binary)
+        self.audience_checks=control
+        if not control:return
         self.socket=self.root/'control.sock'
         self.config.write_text(self.config.read_text().replace('[telegram]',f'[session_control]\nsocket_path="{self.socket}"\nhuman_id=100\n[telegram]'))
 
     def prepare(self,**kwargs):
         super().prepare(**kwargs)
+        if not self.audience_checks:return
         self.wait_control_socket(self.socket)
         self.admit('/status',topic=1)
         self.wait(lambda:bool(self.row('SELECT id FROM sessions WHERE thread_id=1')))
@@ -34,11 +37,21 @@ class Sessions(Routing):
         for ident,_ in rows:
             assert self.row('SELECT count(*) FROM interaction_public_deliveries WHERE id=?',(ident,))==[(0,)]
             assert self.row('SELECT count(*) FROM interaction_delivery_parts WHERE delivery_id=?',(ident,))==[(0,)]
-            refused=self.read('presentation','part','delivery:'+ident,'not-a-public-revision','0',ok=False)
-            assert 'Presentation source unavailable' in refused['error'],'Must reject the source before revision checking'
+            # Simulate a client that retained this source's valid public
+            # revision before the scope correction. Only this synthetic fixture
+            # mutates its own document; the runtime never exposes an override.
+            with sqlite3.connect(self.root/'state.sqlite') as db:
+                db.execute("UPDATE interaction_deliveries SET doc=json_set(doc,'$.internal',json('false')) WHERE id=?",(ident,))
+            try:
+                before=self.read('presentation','list','0','0')['result']
+                cached=next(i for i in before['items'] if i['id']=='delivery:'+ident)
+            finally:
+                with sqlite3.connect(self.root/'state.sqlite') as db:
+                    db.execute("UPDATE interaction_deliveries SET doc=json_set(doc,'$.internal',json('true')) WHERE id=?",(ident,))
+            self.read('presentation','part','delivery:'+ident,cached['revision'],'0',ok=False)
         assert not self.has(text,1)
         page=self.read('presentation','list','0','0')['result']
-        assert not any(text in i.get('text','') for i in page['items'])
+        assert not any(text in i.get('preview','') for i in page['items'])
         return rows
 
     def handle_extra_rpc(self,m,send):
@@ -71,7 +84,7 @@ class Sessions(Routing):
 
 
 def live_return(binary):
-    j=Sessions(binary)
+    j=Sessions(binary,control=True)
     try:
         j.prepare()
         j.admit('/self#Alpha Work on the selected task and consult Beta if useful.',topic=1)
@@ -114,14 +127,14 @@ def live_return(binary):
         assert len(j.instructions(8))==1 and len(j.instructions(7))==2
         assert sum('Original task completed with the attributed dependency.' in m['text'] for m,_ in j.messages)==1
         page=j.read('presentation','list','0','0')['result']
-        public=[i for i in page['items'] if 'Original task completed with the attributed dependency.' in i.get('text','')]
+        public=[i for i in page['items'] if 'Original task completed with the attributed dependency.' in i.get('preview','')]
         assert len(public)==1 and public[0]['sequence']>0
         print('PASS attributed local request, immutable retry, self/recursive refusal, live context return, original request correlation and committed human returns')
     finally:j.close()
 
 
 def one_slot_deferred_return(binary):
-    j=Sessions(binary)
+    j=Sessions(binary,control=True)
     try:
         j.prepare(max_active_workers=1)
         source_starts=len([r for r in j.rpc if r.get('method')=='turn/start' and r['params']['threadId']=='native-topic-7'])
@@ -142,7 +155,7 @@ def one_slot_deferred_return(binary):
         hidden=j.internal_delivery('Original logical task resumed using returned evidence.')
         # A genuine later human correction keeps its own public reply. Retained
         # internal evidence must stay hidden even after this input joins the turn.
-        j.admit('Correct the selected original requirement.',topic=1,reply=original)
+        j.admit('#Alpha Correct the selected original requirement.',topic=1,reply=original)
         j.wait(lambda:len(j.instructions(7))==3 and j.instructions(7)[2][1]=='accepted')
         j.internal_delivery('Original logical task resumed using returned evidence.')
         j.answer(7,'Corrected original task completed using internal evidence.',item='corrected-final')
@@ -159,13 +172,13 @@ def one_slot_deferred_return(binary):
                 db.execute("UPDATE interaction_deliveries SET doc=json_remove(doc,'$.internal') WHERE id=?",(ident,))
         assert all(j.row('SELECT count(*) FROM interaction_public_deliveries WHERE id=?',(ident,))==[(0,)] for ident,_ in hidden)
         page=j.read('presentation','list','0','0')['result']
-        assert any('Corrected original task completed using internal evidence.' in i.get('text','') for i in page['items'])
+        assert any('Corrected original task completed using internal evidence.' in i.get('preview','') for i in page['items'])
         print('PASS one worker slot: nonblocking dependency admission, deferred parent completion, helper execution, correlated automatic continuation without capacity deadlock')
     finally:j.close()
 
 
 def deferred_logical_completion(binary):
-    j=Sessions(binary)
+    j=Sessions(binary,control=True)
     try:
         j.prepare(max_active_workers=1)
         j.admit('#Alpha Complete the original work after consulting Beta.',topic=1)
@@ -183,7 +196,7 @@ def deferred_logical_completion(binary):
 
 
 def completed_group_not_renarrated(binary,mixed=False):
-    j=Sessions(binary)
+    j=Sessions(binary,control=True)
     try:
         j.prepare()
         j.admit('#Alpha First independently requested task.',topic=1)
@@ -213,7 +226,7 @@ def completed_group_not_renarrated(binary,mixed=False):
 
 
 def cancelled_caller(binary):
-    j=Sessions(binary)
+    j=Sessions(binary,control=True)
     try:
         j.prepare()
         source_starts=len([r for r in j.rpc if r.get('method')=='turn/start' and r['params']['threadId']=='native-topic-7'])
