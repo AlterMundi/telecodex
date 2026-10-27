@@ -986,11 +986,12 @@ window.Conversation = (() => {
       if(await waitForSpeech(kind,source)){voiceBusy=false;drainVoice();}
     }
     async function drainVoice() {
-      if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || !enabled || !canListen || !playbackAllowed())return;
+      if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || questionRefreshPending || !enabled || !canListen || !playbackAllowed())return;
       while(voiceQueue.length&&sessionMuted(voiceQueue[0]))removeQueued(0);
       voiceBusy=true;const selectionGeneration=generation;
       if(prefetched?.ahead && !active?.interrupted)await prefetched.selection;
       if(generation!==selectionGeneration)return;
+      if(questionRefreshPending){voiceBusy=false;return;}
       if(voiceQueue[0]?.kind==="native_question")parkPrepared();
       let next,prepared;
       if(voiceQueue[0]?.kind!=="native_question" && prefetched?.ahead && prefetched.source && !active?.interrupted){
@@ -999,6 +1000,13 @@ window.Conversation = (() => {
         if(duplicate>=0)voiceQueue.splice(duplicate,1);
       }else next=voiceQueue.shift() || (canSpeakLive?await liveSpeech?.next():undefined);
       if(generation!==selectionGeneration){liveSpeech?.unsent(next);return;}
+      if(questionRefreshPending || (next?.kind!=="native_question" && voiceQueue[0]?.kind==="native_question")){
+        if(next && !prepared){
+          if(next.kind==="integrator_live")liveSpeech?.unsent(next);
+          else {const afterQuestions=voiceQueue.findIndex(source=>source.kind!=="native_question");voiceQueue.splice(afterQuestions<0?voiceQueue.length:afterQuestions,0,next);}
+        }
+        voiceBusy=false;if(!questionRefreshPending)drainVoice();return;
+      }
       voiceStatus();if(!next){voiceBusy=false;return;}
       const offset=next.speech_start||0;
       prepared ||= queuedPreparations.get(preparationKey(next,offset));
@@ -1236,12 +1244,12 @@ window.Conversation = (() => {
       }
       return value;
     }
-    let refreshAgain = false;
+    let refreshAgain = false, questionRefreshPending = false;
     async function refresh(force = false) {
       if(reading){refreshAgain ||= force;return;}
       if (!enabled || !ready || (!playbackAllowed() && !force)) return;
       drainText();
-      reading = true;
+      reading = true;questionRefreshPending=!readOnly;
       $("#conversation-refresh").disabled = true;
       $("#conversation-older").disabled = true;
       try {
@@ -1259,6 +1267,19 @@ window.Conversation = (() => {
           }
           if (enabled && playbackAllowed()) await page({delivery:0,native:0,matrix:0}, "before", false);
         }
+        // Resolve current questions before starting newly observed speech. Input
+        // history, Telegram and inspector reads do not gate useful playback.
+        const questionsCurrent=readOnly || await requestControls.refresh();
+        if(!readOnly && questionsCurrent){
+          const questions=requestControls.audioSources?.()||[];
+          presentState({question:questions.length>0});
+          const current=source=>questions.some(q=>q.id===source.id && q.revision===source.revision);
+          for(let n=voiceQueue.length-1;n>=0;n--)
+            if(voiceQueue[n].kind==="native_question" && !current(voiceQueue[n]))removeQueued(n);
+          if(active?.source.kind==="native_question" && !current(active.source))
+            stop("This question is no longer current. Refresh before answering.");
+        }
+        questionRefreshPending=!questionsCurrent;drainVoice();
         if (active && enabled && playbackAllowed()) {
           const selected = active, owned = generation;
           try { await part(selected.source, selected.offset); }
@@ -1280,17 +1301,7 @@ window.Conversation = (() => {
           }
           await inputPage(0,"before",false);
         }
-        if(!readOnly){
-          await requestControls.refresh();
-          await taskControls?.refresh();
-          const questions=requestControls.audioSources?.()||[];
-          presentState({question:questions.length>0});
-          const current=source=>questions.some(q=>q.id===source.id && q.revision===source.revision);
-          for(let n=voiceQueue.length-1;n>=0;n--)
-            if(voiceQueue[n].kind==="native_question" && !current(voiceQueue[n]))removeQueued(n);
-          if(active?.source.kind==="native_question" && !current(active.source))
-            stop("This question is no longer current. Refresh before answering.");
-        }
+        if(!readOnly)await taskControls?.refresh();
         await refreshTelegram();
         void sound?.refresh({observeOnly:standalone});
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);

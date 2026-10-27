@@ -775,3 +775,20 @@ skip native profile/binding verification. It did not exercise resume, alter a
 thread or submit a model input. Inspect the supported loaded-thread/profile
 semantics before attempting to shorten the measured binding path; preserve
 actual selected provider/model/effort, event ownership and current native jobs.
+
+
+### Question-aware playback refresh
+
+New automatic speech waits for the current native-question registry before
+selection admission, including a selection whose asynchronous hash or prepared
+slot completes during a refresh. Current questions retain queue priority.
+Registry refreshes share their in-flight outcome; failed or superseded reads do
+not open the speech gate. Explicit listening and already active playback retain
+their existing controls.
+
+After that question observation, input history, task cards, Telegram projection
+and inspector reads no longer gate starting a ready live prefix. A synthetic
+shipped-player regression delays those reads and the question registry, fails
+and recovers the registry, and resolves hashes on either side of question
+arrival. It checks source order and no replay of prepared attempts. This is
+scheduling evidence, not a measured device or provider latency improvement.
