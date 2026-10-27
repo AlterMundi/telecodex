@@ -944,3 +944,22 @@ body.conversation-mode #operations[data-conversation-overlay="true"] > summary {
 #conversation-alerts-close { position:sticky; top:0; float:right; min-width:40px; min-height:40px; margin-top:-36px; font-size:24px; z-index:1; }
 
 body.conversation-mode #operations[data-conversation-overlay="true"] #incidents { max-height:none; overflow:visible; }
+
+/* The same pending cards open in a readable panel from the fixed status line. */
+.pending-carousel { display:flex; align-items:center; gap:4px; width:100%; min-width:0; }
+.pending-carousel[hidden] { display:none; }
+.pending-carousel button { min-height:32px; padding:2px 8px; margin:0; font-size:14px; }
+.pending-current { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; touch-action:pan-y; }
+.pending-all { flex:none; }
+#conversation-presence[data-pending="true"] { height:auto; min-height:32px; overflow:visible; }
+#conversation-presence[data-pending="true"] > .companion-status-track { display:none; }
+.pending-panel { width:min(760px,calc(100vw - 24px)); max-height:calc(100dvh - 32px); padding:20px; overflow:auto; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:var(--radius,12px); }
+.pending-panel::backdrop { background:rgba(0,0,0,.65); }
+.pending-panel > h2 { display:inline-block; margin:0 12px 12px 0; }
+.pending-panel > button { float:right; }
+.pending-panel #conversation-attention,.pending-panel #conversation-requests { display:block; max-height:none; overflow:visible; min-height:0; }
+.pending-panel #conversation-attention[hidden],.pending-panel #conversation-attention > section[hidden] { display:none; }
+.pending-panel .reply { overflow-wrap:anywhere; }
+.for-you-navigation { display:inline-flex; }
+.for-you-navigation button { display:inline-flex; align-items:center; justify-content:center; gap:2px; min-width:36px; min-height:36px; padding:4px; }
+.pending-count { font-size:12px; }

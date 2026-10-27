@@ -54,3 +54,16 @@ Voice capture freezes observed question versions before permission/streaming.
 owned question snapshot; it cannot add scope or become an answer. Keep it frozen
 through exact-original retry/recovery. Questions first observed later require a
 later original or explicit controls. See docs/interaction-streaming.md.
+
+
+## Pending navigation — human correction, 2026-10-27
+
+Preserve the separation between canonical integrator **For you** and the header
+carousel for pending internal-session items. For you has permanent explicit
+access even when empty. The carousel rotates slowly and supports drag/click and
+keyboard selection, pausing while the human interacts or reduced motion applies.
+Do not populate an all-session carousel with only canonical routed cards and
+claim full coverage. Reuse owner-scoped pending ledgers/responders, current
+revisions and real destinations; direct-topic ingress remains direct. Opening a
+pending is never approval, completion, cancellation or input replay. See #61 and
+the pending-navigation section of docs/interaction-v02.md; full roadmap #301.
