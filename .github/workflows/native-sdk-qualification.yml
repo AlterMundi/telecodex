@@ -8,6 +8,6 @@ permissions:
   contents: read
 jobs:
   native:
-    uses: compaii/codex/.github/workflows/native-maintenance.yml@a62e3a881ed283f1f324310c4364260fb0ecdbb9
+    uses: compaii/codex/.github/workflows/native-maintenance.yml@d8cc4b33e284835e73479bdaa80f973f11110757
     with:
-      source_ref: a62e3a881ed283f1f324310c4364260fb0ecdbb9
+      source_ref: d8cc4b33e284835e73479bdaa80f973f11110757
