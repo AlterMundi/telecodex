@@ -1,0 +1,13 @@
+name: Interaction native SDK qualification
+on:
+  pull_request:
+    paths:
+      - .github/workflows/native-sdk-qualification.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    uses: compaii/codex/.github/workflows/native-maintenance.yml@cf2bb53281c8dd3023abb50cba52ef80df160379
+    with:
+      source_ref: cf2bb53281c8dd3023abb50cba52ef80df160379
