@@ -472,6 +472,12 @@ function boot(readOnly=false,standalone=false,options={}) {
   await until(()=>emptyResume.audioCalls.length===2&&!emptyResume.nodes.get('#conversation-audio').paused);
   assert.equal(emptyResume.audioCalls[1].source,'native:10','An aborted preparation cannot hold the resumed voice queue');
   assert.equal(emptyResume.audioCalls.filter(call=>call.source==='native:9').length,1,'Resuming never automatically retries the cancelled/uncertain synthesis');emptyResume.ui.stop();
+  const captureResume=boot(false,true,{clock:true,capture:true});captureResume.audio();await captureResume.ui.refresh();captureResume.nodes.get('#conversation-voice-replies').handlers.click();captureResume.addReplies(1);await captureResume.ui.refresh();
+  const crPlayer=captureResume.nodes.get('#conversation-audio');await until(()=>captureResume.audioCalls.length===1&&!crPlayer.paused);
+  captureResume.capture();captureResume.mediaActions.get('pause')();captureResume.nodes.get('#conversation-voice-replies').handlers.click();
+  captureResume.addReplies(1);await captureResume.ui.refresh();assert.equal(crPlayer.paused,true,'Resuming Voice cannot play output during recording');
+  captureResume.finishCapture();await until(()=>captureResume.audioCalls.length===2&&!crPlayer.paused);
+  assert.equal(captureResume.audioCalls[1].source,'native:10','Recording release drains the resumed queue without a Stop cycle');captureResume.ui.stop();
 
   for(const action of ['pause','stop','hide','disable','capture','offline','pagehide']){
     const gap=boot(false,false,{clock:true,capture:true});gap.audio(true);await gap.ui.refresh();
