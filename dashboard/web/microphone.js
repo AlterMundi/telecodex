@@ -54,12 +54,12 @@ window.VoiceInput = (() => {
       if(pending!==frozen || frozen.binding!==getBinding())return;
       if(value.id!==frozen.id || value.voice?.audio_sha256!==frozen.audio_sha256)throw Error('Voice capture does not match this recording.');
       if(!!frozen.visual!==!!value.visual||Array.isArray(frozen.visual)!==Array.isArray(value.visual)||Array.isArray(frozen.visual)&&frozen.visual.length!==value.visual.length||frozen.visual&&Object.keys(frozen.visual).some(k=>JSON.stringify(frozen.visual[k])!==JSON.stringify(value.visual[k])))throw Error('Visual capture does not match this recording.');
-      latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256,phase:value.phase};
+      latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256,phase:value.phase,preparedText:frozen.preparedText};
       onInput(value,frozen.focusVersion);onVisualSent(frozen.visual);pending=undefined;phase='idle';
       notice(value.phase==='answered'?'Recording and automatic transcript saved; answer recorded for the selected question.':value.retired?'This saved recording is no longer eligible to start work.':
         value.phase==='retained_unsent'?'Recording saved; no work was submitted. You can keep writing.':
         value.phase==='preparation_unconfirmed'?'Recording saved; transcription unconfirmed. Nothing was resubmitted.':
-        value.phase==='preparing'?'Recording saved; confirming its transcript and delivery.':
+        value.phase==='preparing'?'Confirming transcript…':
         'Recording and automatic transcript saved. Work may continue.',value.retired || ['retained_unsent','preparation_unconfirmed'].includes(value.phase));
       if(value.phase==='preparing'&&frozen.preparedText)caption(frozen.preparedText);
       controls();
@@ -68,7 +68,8 @@ window.VoiceInput = (() => {
       if(!latestSaved || pending || phase!=='idle' || latestSaved.binding!==getBinding()
         || latestSaved.id!==value.id || latestSaved.audio_sha256!==value.voice?.audio_sha256)return;
       latestSaved.phase=value.phase;controls();
-      notice('Recording saved. '+message);
+      if(value.phase==='preparing'&&latestSaved.preparedText)caption(latestSaved.preparedText);
+      else notice('');
     }
     async function upload() {
       if(!pending || uploading || pending.binding!==getBinding())return;
