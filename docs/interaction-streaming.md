@@ -7,14 +7,16 @@ The full horizon remains [the maintained roadmap](interaction-roadmap.md).
 
 ## Current implementation boundary
 
-CompAII's selected receiver currently enables `streaming_transcription` in
-`captions` mode, `speech.streaming_output` and `speech.incremental_segments`.
-This was read back from the receiving configuration on 27 October 2026. The
-portable defaults remain off. Captions are revisable previews; Groq file-ASR
-still supplies the committed transcript. Streaming output is source-bound and
-uses the existing HTML audio player. These flags do not establish canonical
-streaming recognition, measured end-to-end latency or complete v0.3 acceptance.
-Current receiving software, health and rollback are recorded through
+CompAII's selected receiver enables `streaming_transcription` in `prepared`
+mode with Gemini `gemini-3.5-transcribe-live`, plus `speech.streaming_output` and
+`speech.incremental_segments`. PR341 was receiving-adopted on 27 October 2026,
+with successful CI40449397345. Final input text is reused for its exact original
+WAV; Groq file-ASR remains the fallback. The private streaming credential never
+reaches the browser. Sol remains the integrating model and Qwen remains TTS.
+Portable defaults remain off. Streaming output is source-bound and uses the
+existing HTML audio player. These flags do not establish measured end-to-end
+latency or complete v0.3 acceptance. Current receiving software, health and
+rollback are recorded through
 [Shared Resources](https://github.com/compaii/shared-resources/blob/main/docs/services/interaction-receiving.md).
 
 
@@ -28,8 +30,8 @@ the accepted final transcriber's mixed-language command quality; it does not
 claim faster final recognition. Preview connection, backpressure or audio-graph
 startup failure closes only the preview and preserves the recording.
 
-The earlier `prepared` mode remains available for explicitly qualified receiving
-profiles: it prepares server-derived text for an exact finalized WAV. The selected
+The selected `prepared` mode prepares server-derived text for an exact finalized
+WAV. The alternative `captions` mode retains compressed file-ASR originals. The selected
 mode is server configuration, checked before opening the provider. A stale client
 cannot choose the other contract. Both modes remain disabled by default.
 
@@ -37,7 +39,7 @@ Output streaming is separately delivered through the existing HTML audio element
 (see below). Neither this input slice nor output streaming completes endpointing,
 barge-in, foreground separation or the continuous-voice milestone.
 
-The selected experiment uses Qwen Audio3.0's **input transcription only** with
+The retained alternative Qwen Audio3.0 route uses **input transcription only** with
 explicit manual mode. It never sends `response.create`, tools, conversation
 history or a native prompt. Sol remains the conversational/integrating model.
 Unexpected generated-response events fail the stream and are never played.
@@ -51,7 +53,7 @@ response. This is evidence for the tested account/route, not global model access
 or a provider-quality ranking. Mixed-language command recognition remains imperfect;
 do not silently replace the accepted final transcriber on this evidence alone.
 
-## Gemini transcription option (not yet deployed)
+## Gemini transcription route
 
 The adapter also accepts `provider = "gemini"` with the exact endpoint shown in
 `dashboard/config.example.toml`. It uses the dedicated
@@ -73,7 +75,9 @@ WebSocket and production adapter preserved a two-second pause, routing negation,
 spoken self-correction and `git status` / `git diff`. Final preparation arrived
 425 ms after Send; the exact original WAV reused its durable transcript without
 file-ASR or native dispatch. These two journeys qualify this input slice only;
-receiving deployment and human-device acceptance remain separate.
+receiving adoption verified the successor process, selected configuration and public
+assets while preserving native work, shared-auth binding and TTS. Human-device
+acceptance and end-to-end latency remain separate.
 See Google's [transcription guide](https://ai.google.dev/gemini-api/docs/live-api/live-transcribe)
 and [Live API contract](https://ai.google.dev/api/live).
 
@@ -292,3 +296,15 @@ returned first bytes at1.57s and completed at3.73s. Those server observations an
 muted browser decoding are not phone sound latency, background execution or
 human hearing acceptance. Full foreground separation, heard/remaining attention
 and streaming input quality remain unfinished under milestone9.
+
+## Gemini receiving rollback
+
+The selected immutable release contains dashboard and scripts from PR341. Its
+prepared-transcript cache is shared with the existing native ASR adapter binding.
+For UI/provider rollback, select the retained previous dashboard with PR341's
+compatible scripts reader, restore the previous dashboard configuration and keep
+the streaming-cache reference in the ASR adapter until retained prepared originals
+are consumed. Restart only the web unit. Never erase completed/uncertain receipts
+or restore native history. The native configured transcriber label still describes
+the Groq file fallback; completed prepared receipts separately retain the actual
+Gemini model. No new per-message provider claim is inferred from that static label.
