@@ -219,6 +219,12 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         bail!("Conversation request owner mismatch");
     }
     let entry = cfg.entry();
+    if let Some(after) = args.strip_prefix("internal list ") {
+        return app
+            .shared
+            .store
+            .internal_pending_page(human, entry, after.parse()?);
+    }
     if let Some(raw) = args.strip_prefix("tasks dismiss ") {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]

@@ -403,7 +403,7 @@ responders; reading never approves, completes, cancels or resends anything.
 Direct-topic ingress stays direct. Canonical For you scope must never be labelled
 all sessions: global attention needs its own owner-scoped read/navigation contract.
 
-Local draft branch `fix/interaction-pending-navigation` adds a permanent For you
+PR377 (source800ae05f81edda02330d6817f2aced457800f4c3) delivered a permanent For you
 header control and readable panel over the same retained card nodes. Existing
 request/conversation state tests pass. A synthetic Chromium component verifies
 open/close, reply-to-composer, preserved draft and explicit empty access. The full
@@ -412,6 +412,16 @@ question/task reply preparation and scrollable dialogs at320/390/1040px. A found
 desktop header overflow was corrected; inspected screenshots and updated metrics
 show contained44px header access and no horizontal overflow. These fixtures send
 no native decisions, models or capture. Global session data/navigation, carousel
-drag/focus, exact reported Review-item diagnosis, final CI and receiving deployment
-remain unfinished.
+drag/focus and the exact reported Review-item diagnosis remain unfinished.
+PR377 CI40587818579 passed; its web-only release was receiving-verified against
+local/public assets and the successor web process, preserving the existing native
+listener and daemon. This is digital verification, not new device acceptance.
+
+The next backend slice adds `requests internal list CURSOR`: a bounded, owner-only
+read of existing pending/answering/unknown ledger items in current internal native
+sessions, excluding the integrating entry. It retains source dates, target and
+revision, checks session/turn ownership and current native binding, and never
+creates a responder or widens canonical For you. Ledger visibility does not
+establish an available live native response channel. This slice is not a deployed
+carousel: device permission, fresh detail/actions and UI wiring are still required.
 Owning task #61; stage4 attention and native repair remain in plan #301/milestone9.
