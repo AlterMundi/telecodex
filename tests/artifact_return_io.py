@@ -24,6 +24,7 @@ class ArtifactRouting(CanonicalRouting):
         if self.routing and message.get('method')=='turn/start' and p.get('threadId')=='native-topic-7':
             context=''.join(v['value'] for k,v in sorted(p['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
             out=Path(re.search(r'\n([^\n]+/out)\n',context).group(1))
+            self.artifact_out=out
             self.expected={'alpha.txt':b'Exact native generated requirement17\n',
                 'image.png':base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGQAAAABJRU5ErkJggg==')}
             for name,data in self.expected.items():(out/name).write_bytes(data)
@@ -44,6 +45,30 @@ def prepare(j,projection=False):
     j.start();j.wait_control_socket(j.socket);j.routing=True
     binding=j.read('presentation','list','0','0')['result']['binding']
     return retained,binding
+
+
+def files_before_execution_ends(binary):
+    j=ArtifactRouting(str(Path(binary).resolve()))
+    try:
+        _,binding=prepare(j)
+        j.submit(binding,'#Alpha Return files while keeping the native execution active.')
+        j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='accepted')
+        native=j.row('SELECT codex_thread_id FROM sessions WHERE thread_id=7')[0][0]
+        j.answer_worker(7,'First response with files, work continues.',item='checkpoint-one',finish=False)
+        j.wait(lambda:len(j.read('presentation','artifacts','list')['result']['items'])==3)
+        assert j.row("SELECT COUNT(*) FROM turns WHERE status='running'")[0][0]>0
+        first=j.read('presentation','artifacts','list')['result']['items']
+        out=j.artifact_out
+        (out/'second.txt').write_bytes(b'Second response deliverable')
+        j.answer_worker(7,'Second response adds a file without repeating the first.',item='checkpoint-two',finish=False)
+        j.wait(lambda:any(v['name']=='second.txt' for v in j.read('presentation','artifacts','list')['result']['items']))
+        after=j.read('presentation','artifacts','list')['result']['items']
+        assert len([v for v in after if v['name']=='alpha.txt'])==1,'Prior file was reattributed/repeated'
+        assert all(any(v['id']==old['id'] for v in after) for old in first)
+        j.broadcast(native,'turn/completed',{'turn':{'id':j.workers[native],'status':'completed'}})
+        j.idle()
+        print('PASS files arrive during running execution; later response adds files without reattribution or repeated native work')
+    finally:j.close()
 
 
 def same_session_progress(binary):
@@ -132,5 +157,6 @@ def qualify(binary):
 
 
 if __name__=='__main__':
+    files_before_execution_ends(sys.argv[1])
     same_session_progress(sys.argv[1])
     qualify(sys.argv[1])

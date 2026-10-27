@@ -324,6 +324,7 @@ struct PendingApproval {
     responder: oneshot::Sender<CodexApprovalDecision>,
 }
 
+#[derive(Clone)]
 struct TurnWorkspace {
     root: PathBuf,
     out_dir: PathBuf,

@@ -735,6 +735,7 @@ pub(super) async fn process_turn(
                 let shared = shared.clone();
                 let approval_cancel = cancel.clone();
                 let capacity_failure=capacity_failure.clone();
+                let artifact_workspace = turn_workspace.clone();
                 let requester_user_id = queued.request.from_user_id;
                 let session_key = session.key;
                 let voice_update = queued.update_id;
@@ -753,6 +754,7 @@ pub(super) async fn process_turn(
                 let routing_app=app.clone();
                 let presentation_tx=presentation_tx.clone();
                 move |event| {
+                    let artifact_workspace = artifact_workspace.clone();
                     let initial_binding=initial_binding.clone();
                     let sink = sink.clone();
                     let capacity_failure=capacity_failure.clone();
@@ -878,6 +880,9 @@ pub(super) async fn process_turn(
                                     super::routing::result(routing_app.clone(),id,requester_user_id,turn_id,&thread_id,&native_turn,&item_id,&text,result_root.is_some())?;
                                 } else {
                                     shared.store.record_native_message(turn_id, &thread_id, &native_turn, &item_id, phase.as_deref(), &text)?;
+                                }
+                                if phase.as_deref()==Some("final_answer") && super::artifact_outputs::retain(shared.clone(),turn_id,requester_user_id,&artifact_workspace).is_err() {
+                                    tracing::warn!("Response files remain unavailable; output is preserved");
                                 }
                                 super::topic_publications::wake(shared.clone(),session_key);
                                 Ok(CodexEventOutcome::None)

@@ -18,23 +18,42 @@ pub struct ArtifactRecord {
 
 impl Store {
     pub(super) fn init_artifacts(&self) -> Result<()> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute_batch("CREATE TABLE IF NOT EXISTS interaction_artifact_blobs(sha256 TEXT PRIMARY KEY,bytes INTEGER NOT NULL,present INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS interaction_artifacts(id TEXT PRIMARY KEY,source_local INTEGER NOT NULL REFERENCES turns(id),source_session INTEGER NOT NULL REFERENCES sessions(id),human_id INTEGER NOT NULL,native_thread TEXT NOT NULL,native_turn TEXT NOT NULL,native_item TEXT NOT NULL,name TEXT NOT NULL,sha256 TEXT REFERENCES interaction_artifact_blobs(sha256),bytes INTEGER,expires_at TEXT NOT NULL,phase TEXT NOT NULL,UNIQUE(native_thread,native_turn,native_item,name));
             CREATE TABLE IF NOT EXISTS interaction_artifact_audiences(artifact TEXT NOT NULL REFERENCES interaction_artifacts(id),session_id INTEGER NOT NULL REFERENCES sessions(id),human_id INTEGER NOT NULL,PRIMARY KEY(artifact,session_id,human_id));")?;
         conn.execute_batch("CREATE INDEX IF NOT EXISTS artifact_audience_entry ON interaction_artifact_audiences(session_id,human_id,artifact);
             CREATE INDEX IF NOT EXISTS artifact_blob_refs ON interaction_artifacts(sha256,phase,expires_at);
             CREATE INDEX IF NOT EXISTS artifact_expiry ON interaction_artifacts(phase,expires_at);")?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS interaction_artifact_jobs(local INTEGER PRIMARY KEY REFERENCES turns(id),human INTEGER NOT NULL,doc TEXT NOT NULL,phase TEXT NOT NULL,instance_id TEXT NOT NULL);")?;
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS interaction_artifact_jobs(job TEXT PRIMARY KEY,local INTEGER NOT NULL REFERENCES turns(id),human INTEGER NOT NULL,doc TEXT NOT NULL,phase TEXT NOT NULL,instance_id TEXT NOT NULL);")?;
+        let has_job: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('interaction_artifact_jobs') WHERE name='job')", [], |r|r.get(0))?;
+        if !has_job {
+            let tx = conn.transaction()?;
+            tx.execute_batch("ALTER TABLE interaction_artifact_jobs RENAME TO interaction_artifact_jobs_legacy;
+                CREATE TABLE interaction_artifact_jobs(job TEXT PRIMARY KEY,local INTEGER NOT NULL REFERENCES turns(id),human INTEGER NOT NULL,doc TEXT NOT NULL,phase TEXT NOT NULL,instance_id TEXT NOT NULL);
+                INSERT INTO interaction_artifact_jobs SELECT 'legacy:'||local,local,human,doc,phase,instance_id FROM interaction_artifact_jobs_legacy;
+                DROP TABLE interaction_artifact_jobs_legacy;")?;
+            tx.commit()?;
+        }
         conn.execute("UPDATE interaction_artifact_jobs SET phase='pending' WHERE phase='running' AND instance_id!=?", [&self.instance_id])?;
         Ok(())
     }
 
     pub fn artifact_job_stage(&self, local: i64, human: i64, doc: &Value) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        let output = &doc["output"];
+        let job = format!(
+            "{local}:{:x}",
+            Sha256::digest(serde_json::to_vec(&json!([
+                output["native"],
+                output["turn"],
+                output["item"]
+            ]))?)
+        );
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute(
-            "INSERT OR IGNORE INTO interaction_artifact_jobs VALUES(?1,?2,?3,'pending','')",
-            params![local, human, doc.to_string()],
+            "INSERT OR IGNORE INTO interaction_artifact_jobs VALUES(?1,?2,?3,?4,'pending','')",
+            params![job, local, human, doc.to_string()],
         )?;
         Ok(())
     }
@@ -45,7 +64,7 @@ impl Store {
     }
 
     /// Byte copying is retryable; native inputs and publication effects are not.
-    pub fn artifact_job_claim(&self, human: i64) -> Result<Option<(i64, Value)>> {
+    pub fn artifact_job_claim(&self, human: i64) -> Result<Option<(String, i64, Value)>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let running: i64 = tx.query_row(
@@ -56,24 +75,24 @@ impl Store {
         if running >= 4 {
             return Ok(None);
         }
-        let selected:Option<(i64,String)>=tx.query_row("SELECT j.local,j.doc FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE j.phase='pending' AND j.human=?1 AND s.creator_user_id=?1 AND t.from_user_id=?1 AND u.allowed=1 ORDER BY j.local LIMIT 1",[human],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
-        let Some((local, doc)) = selected else {
+        let selected:Option<(String,i64,String)>=tx.query_row("SELECT j.job,j.local,j.doc FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE j.phase='pending' AND j.human=?1 AND s.creator_user_id=?1 AND t.from_user_id=?1 AND u.allowed=1 ORDER BY j.local LIMIT 1",[human],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let Some((job, local, doc)) = selected else {
             return Ok(None);
         };
         let doc = serde_json::from_str(&doc)?;
         tx.execute(
-            "UPDATE interaction_artifact_jobs SET phase='running',instance_id=?2 WHERE local=?1",
-            params![local, &self.instance_id],
+            "UPDATE interaction_artifact_jobs SET phase='running',instance_id=?2 WHERE job=?1",
+            params![job, &self.instance_id],
         )?;
         tx.commit()?;
-        Ok(Some((local, doc)))
+        Ok(Some((job, local, doc)))
     }
 
-    pub fn artifact_job_finish(&self, local: i64, phase: &str) -> Result<()> {
+    pub fn artifact_job_finish(&self, job: &str, phase: &str) -> Result<()> {
         if !matches!(phase, "done" | "partial" | "pending") {
             return Err(anyhow!("Invalid file job phase"));
         }
-        self.conn.lock().expect("store mutex poisoned").execute("UPDATE interaction_artifact_jobs SET phase=?2 WHERE local=?1 AND phase='running' AND instance_id=?3",params![local,phase,&self.instance_id])?;
+        self.conn.lock().expect("store mutex poisoned").execute("UPDATE interaction_artifact_jobs SET phase=?2 WHERE job=?1 AND phase='running' AND instance_id=?3",params![job,phase,&self.instance_id])?;
         Ok(())
     }
 
@@ -270,6 +289,17 @@ impl Store {
         conn.execute("UPDATE interaction_artifact_blobs SET present=0 WHERE sha256=?1 AND NOT EXISTS(SELECT 1 FROM interaction_artifacts WHERE sha256=?1 AND phase='ready')",[sha])?;
         Ok(())
     }
+    pub fn artifact_already_retained(
+        &self,
+        local: i64,
+        human: i64,
+        name: &str,
+        sha: &str,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM interaction_artifacts a JOIN interaction_artifact_blobs b ON b.sha256=a.sha256 WHERE a.source_local=?1 AND a.human_id=?2 AND a.name=?3 AND a.sha256=?4 AND a.phase='ready' AND b.present=1 AND julianday(a.expires_at)>julianday('now'))",params![local,human,name,sha],|r|r.get(0))?)
+    }
+
     pub fn artifact_output(&self, local: i64, human: i64) -> Result<Option<Value>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         Ok(conn.query_row("SELECT m.native_thread,m.native_turn,m.item_id FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE m.local_turn=?1 AND t.from_user_id=?2 AND s.creator_user_id=?2 AND u.allowed=1 AND m.phase='final_answer' ORDER BY m.rowid DESC LIMIT 1",params![local,human],|r|Ok(json!({"native":r.get::<_,String>(0)?,"turn":r.get::<_,String>(1)?,"item":r.get::<_,String>(2)?}))).optional()?)
@@ -628,21 +658,50 @@ mod tests {
         );
     }
     #[test]
+    fn artifact_checkpoints_are_distinct_and_legacy_jobs_survive_migration() {
+        let (file, s, local, _, _) = setup();
+        let first = json!({"out":"owned","output":{"native":"old-native","turn":"physical","item":"first"}});
+        {
+            let conn = s.conn.lock().unwrap();
+            conn.execute_batch("DROP TABLE interaction_artifact_jobs; CREATE TABLE interaction_artifact_jobs(local INTEGER PRIMARY KEY REFERENCES turns(id),human INTEGER NOT NULL,doc TEXT NOT NULL,phase TEXT NOT NULL,instance_id TEXT NOT NULL);").unwrap();
+            conn.execute(
+                "INSERT INTO interaction_artifact_jobs VALUES(?1,100,?2,'pending','')",
+                params![local, first.to_string()],
+            )
+            .unwrap();
+        }
+        s.release_instance_lock().unwrap();
+        drop(s);
+        let s = Store::open(file.path(), &[100, 101], &super::super::tests::defaults()).unwrap();
+        let (job, actual, doc) = s.artifact_job_claim(100).unwrap().unwrap();
+        assert_eq!((actual, doc), (local, first));
+        s.artifact_job_finish(&job, "done").unwrap();
+        let second = json!({"out":"owned","output":{"native":"old-native","turn":"physical","item":"second"}});
+        s.artifact_job_stage(local, 100, &second).unwrap();
+        s.artifact_job_stage(local, 100, &second).unwrap();
+        let (next, actual, doc) = s.artifact_job_claim(100).unwrap().unwrap();
+        assert_ne!(next, job);
+        assert_eq!((actual, doc), (local, second));
+        assert!(s.artifact_job_claim(100).unwrap().is_none());
+    }
+
+    #[test]
     fn artifact_jobs_resume_only_file_work_after_restart() {
         let (file, s, local, _, _) = setup();
         let doc = json!({"out":"owned-output","device":1,"inode":2,"output":{"native":"old-native","turn":"physical","item":"final"}});
         s.artifact_job_stage(local, 100, &doc).unwrap();
         assert!(s.artifact_job_claim(101).unwrap().is_none());
-        assert_eq!(
-            s.artifact_job_claim(100).unwrap().unwrap(),
-            (local, doc.clone())
-        );
+        let (job, claimed_local, claimed_doc) = s.artifact_job_claim(100).unwrap().unwrap();
+        assert_eq!((claimed_local, claimed_doc), (local, doc.clone()));
         assert!(s.artifact_job_claim(100).unwrap().is_none());
         s.release_instance_lock().unwrap();
         drop(s);
         let s = Store::open(file.path(), &[100, 101], &super::super::tests::defaults()).unwrap();
-        assert_eq!(s.artifact_job_claim(100).unwrap().unwrap(), (local, doc));
-        s.artifact_job_finish(local, "done").unwrap();
+        assert_eq!(
+            s.artifact_job_claim(100).unwrap().unwrap(),
+            (job.clone(), local, doc)
+        );
+        s.artifact_job_finish(&job, "done").unwrap();
         assert!(s.artifact_job_claim(100).unwrap().is_none());
         assert_eq!(
             s.conn
