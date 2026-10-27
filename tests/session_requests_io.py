@@ -17,6 +17,12 @@ class Sessions(Routing):
         self.socket=self.root/'control.sock'
         self.config.write_text(self.config.read_text().replace('[telegram]',f'[session_control]\nsocket_path="{self.socket}"\nhuman_id=100\n[telegram]'))
 
+    def prepare(self,**kwargs):
+        super().prepare(**kwargs)
+        self.wait_control_socket(self.socket)
+        self.admit('/status',topic=1)
+        self.wait(lambda:bool(self.row('SELECT id FROM sessions WHERE thread_id=1')))
+
     def read(self,*args,ok=True):
         p=subprocess.run([self.binary,'--control',str(self.config),*args],capture_output=True,text=True,timeout=15)
         assert (p.returncode==0)==ok,p.stderr
@@ -128,7 +134,9 @@ def one_slot_deferred_return(binary):
         j.answer(8,'Dependency returned after the original turn ended.')
         j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
         assert len([r for r in j.rpc if r.get('method')=='turn/start' and r['params']['threadId']=='native-topic-7'])==source_starts+2
-        j.answer(7,'Original logical task resumed using returned evidence.',item='internal-narration',finish=False)
+        rows=j.instructions(7);returned=rows[-1][0]
+        claim={'requests':json.loads(rows[0][2])['requests'],'covered':[returned],'completed':[],'deferred':json.loads(rows[0][2])['requests']}
+        j.broadcast('native-topic-7','item/completed',{'turnId':j.runs['native-topic-7'],'item':{'id':'internal-narration','type':'agentMessage','phase':'final_answer','text':'Original logical task resumed using returned evidence.\n<daimon-result>'+json.dumps(claim)+'</daimon-result>'}})
         j.wait(lambda:j.row("SELECT count(*) FROM interaction_results WHERE body='Original logical task resumed using returned evidence.'")==[(1,)])
         hidden=j.internal_delivery('Original logical task resumed using returned evidence.')
         # A genuine later human correction keeps its own public reply. Retained
@@ -152,6 +160,24 @@ def one_slot_deferred_return(binary):
         page=j.read('presentation','list','0','0')['result']
         assert any('Corrected original task completed using internal evidence.' in i.get('text','') for i in page['items'])
         print('PASS one worker slot: nonblocking dependency admission, deferred parent completion, helper execution, correlated automatic continuation without capacity deadlock')
+    finally:j.close()
+
+
+def deferred_logical_completion(binary):
+    j=Sessions(binary)
+    try:
+        j.prepare(max_active_workers=1)
+        j.admit('#Alpha Complete the original work after consulting Beta.',topic=1)
+        j.wait(lambda:j.instructions(7) and j.instructions(7)[0][1]=='accepted')
+        _,admitted=j.request();j.defer(7)
+        j.wait(lambda:j.instructions(8) and j.instructions(8)[0][1]=='accepted')
+        j.answer(8,'Internal completed dependency for unfinished human work.')
+        j.wait(lambda:len(j.instructions(7))==2 and j.instructions(7)[1][1]=='accepted')
+        j.answer(7,'The original human task is now complete with cumulative coverage.')
+        j.wait(lambda:j.has('The original human task is now complete with cumulative coverage.',1));j.idle()
+        assert sum('The original human task is now complete with cumulative coverage.' in m['text'] for m,_ in j.messages)==1
+        j.internal_delivery('Internal completed dependency for unfinished human work.')
+        print('PASS a genuinely unfinished human task can complete once after an internal return, covering original and returned instructions across physical executions')
     finally:j.close()
 
 
@@ -180,4 +206,5 @@ if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
     live_return(binary)
     one_slot_deferred_return(binary)
+    deferred_logical_completion(binary)
     cancelled_caller(binary)

@@ -96,7 +96,7 @@ impl Store {
             OR (EXISTS(SELECT 1 FROM interaction_results z JOIN interaction_instructions i ON json_extract(i.doc,'$.local_turn')=z.local_turn
                   JOIN interaction_session_authors a ON a.input_id=i.input_id JOIN json_each(i.doc,'$.requests') req
                   WHERE z.id=d.result_id AND req.value=d.request_id)
-                AND NOT EXISTS(SELECT 1 FROM interaction_results z JOIN interaction_instructions i ON json_extract(i.doc,'$.local_turn')=z.local_turn
+                AND NOT EXISTS(SELECT 1 FROM interaction_results z JOIN interaction_instructions i ON (json_extract(i.doc,'$.local_turn')=z.local_turn OR EXISTS(SELECT 1 FROM json_each(z.claim,'$.completed') done WHERE done.value=d.request_id))
                   JOIN json_each(i.doc,'$.requests') req WHERE z.id=d.result_id AND req.value=d.request_id
                   AND NOT EXISTS(SELECT 1 FROM interaction_session_authors a WHERE a.input_id=i.input_id)
                   AND (z.claim IS NULL OR EXISTS(SELECT 1 FROM json_each(z.claim,'$.covered') cov WHERE cov.value=i.id))))
@@ -286,6 +286,26 @@ impl Store {
                     human_input |=
                         !internal && (claim.is_none() || covered.contains(&candidate.id));
                 }
+            }
+            // A deferred logical task can genuinely finish after its original
+            // physical turn. It must complete current cumulative human coverage,
+            // rather than merely narrating the returned context or re-announcing
+            // a human request already completed before this wakeup.
+            if !human_input
+                && !original_internal
+                && claim
+                    .as_ref()
+                    .is_some_and(|c| c.completed.contains(&request))
+            {
+                let (fresh, pending) = freshness(&tx, &request, &covered, true)?;
+                let already_completed: bool=tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM interaction_deliveries prior WHERE prior.request_id=?1 AND json_extract(prior.doc,'$.completed')=1 AND COALESCE(json_extract(prior.doc,'$.internal'),0)=0
+                     AND NOT EXISTS(SELECT 1 FROM interaction_request_links l JOIN interaction_instructions i ON i.id=l.instruction_id WHERE l.request_id=?1 AND i.phase='accepted'
+                       AND NOT EXISTS(SELECT 1 FROM interaction_session_authors a WHERE a.input_id=i.input_id)
+                       AND NOT EXISTS(SELECT 1 FROM json_each(prior.doc,'$.covered') cov WHERE cov.value=i.id)))",
+                    [&request],|r|r.get(0),
+                )?;
+                human_input = fresh && !pending && !already_completed;
             }
             let internal = original_internal || (internal_input && !human_input);
             let authored = if internal {

@@ -710,7 +710,10 @@ remain available for dependency return/inspection, but are excluded from ordinar
 presentation reads, direct source reads and final transport reservation. Returning
 context does not publish a helper answer or request an unsolicited caller narration.
 A current covered human input in the caller's actual execution can still produce
-one ordinary human-facing answer incorporating that evidence. Unreported or partial
+one ordinary human-facing answer incorporating that evidence. A genuinely deferred
+logical human task can also complete once across physical turns when its cumulative
+human/context coverage is current and complete; a previously completed human request
+is not re-announced merely because internal context arrived. Unreported or partial
 helper coverage stays internal and cannot reserve a completed return. Internal-only
 executions also do not inherit an older native progress return binding. Legacy
 records use retained session authorship/coverage without erasing any delivery or
