@@ -6,7 +6,7 @@ const vm = require("node:vm");
 const source = fs.readFileSync("dashboard/web/app.js", "utf8");
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf"})}), mode=false, shared=false) {
+function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async () => ({state:"not_configured", csrf:"fixture-csrf",attention:{schema:"telecodex.alert-attention/v1",level:"unknown",count:0,symbol:"⚪"}})}), mode=false, shared=false) {
   const monitor=mode===true, standalone=mode==='conversation', device=monitor||standalone;
   const nodes = new Map(), requests = [], timers = new Map();
   let nextTimer = 0, monitorHeaders, signIns=0, unauthorized;
@@ -43,6 +43,8 @@ function boot(fetchImpl, alertsImpl = () => Promise.resolve({ok:true, json:async
       requests.push({ route, options });
       if (route === "api/traffic") return Promise.resolve({ok:true,json:async () => ({state:"not_configured"})});
       if (route === "api/alerts") return alertsImpl(route, options);
+      if (route === "api/interaction/alerts") return shared ? alertsImpl(route,options)
+        : Promise.resolve({ok:false,status:403,json:async()=>({detail:"No alert read grant"})});
       return fetchImpl(route, options);
     },
     setTimeout(callback, milliseconds) {
@@ -71,6 +73,49 @@ const hung = (options) => new Promise((resolve, reject) => {
 });
 
 (async () => {
+  const alertAccess=()=>Promise.resolve({ok:true,json:async()=>({csrf:'shared-csrf',label:'Human'})});
+  const conversationIncident={projection:{producer_id:'fixture',incident_id:'case',phase:'pending',summary:'A safe incident',action:'Inspect the retained attempt',processing_state:'open',severity:'error'},acknowledgments:[],deliveries:[],freshness:'fresh'};
+  let alertSnapshot={state:'available',observer_state:'healthy',incidents:[conversationIncident],resolved_incidents:[],
+    attention:{schema:'telecodex.alert-attention/v1',level:'error',count:1,symbol:'🔴'}};
+  let alertFailure;
+  const alertView=boot(alertAccess,()=>alertFailure ? Promise.resolve({ok:false,status:alertFailure,json:async()=>({detail:'Unavailable'})})
+    : Promise.resolve({ok:true,json:async()=>alertSnapshot}),'conversation',true);
+  await settle();await settle();
+  const badge=alertView.nodes.get('#conversation-alerts-toggle'),panel=alertView.nodes.get('#operations');
+  assert.equal(badge.hidden,false);assert.equal(badge.textContent,'🔴');assert.equal(badge.dataset.level,'error');
+  assert.notEqual(panel.open,true,'An incident notification must not open a layer without human navigation');
+  const texts=node=>[node.textContent,...(node.children||[]).flatMap(texts)];
+  assert(!texts(alertView.nodes.get('#incidents')).includes('Acknowledge'),'Conversation list grants no acknowledgment control');
+  badge.handlers.click();await settle();
+  assert.equal(panel.open,true);assert.equal(panel.dataset.conversationOverlay,'true');assert.equal(badge['aria-expanded'],'true');
+  alertView.nodes.get('#conversation-alerts-close').handlers.click();assert.equal(panel.open,false);
+  const draft=alertView.context.document.querySelector('#conversation-message');draft.value='Unsent correction';
+  alertFailure=503;await vm.runInContext('refreshConversationAlerts()',alertView.context);
+  assert.equal(badge.dataset.level,'unknown');assert.equal(draft.value,'Unsent correction');
+  assert.equal(vm.runInContext('authenticated',alertView.context),true,'Optional observation failures preserve the conversation');
+  alertFailure=403;await vm.runInContext('refreshConversationAlerts()',alertView.context);
+  assert.equal(badge.hidden,true);assert.equal(alertView.nodes.get('#incidents').children.length,0);
+  const deniedCalls=alertView.requests.length;await vm.runInContext('refreshConversationAlerts()',alertView.context);
+  assert.equal(alertView.requests.length,deniedCalls,'A known missing optional grant must not create a request loop');
+  assert.equal(draft.value,'Unsent correction');assert.equal(vm.runInContext('authenticated',alertView.context),true);
+  let finishOld;
+  const staleAlert=boot(alertAccess,()=>new Promise(resolve=>finishOld=resolve),'conversation',true);
+  await settle();staleAlert.expire();
+  finishOld({ok:true,json:async()=>alertSnapshot});await settle();await settle();
+  assert.equal(staleAlert.nodes.get('#conversation-alerts-toggle').hidden,true,'A delayed response cannot restore a cleared alert view after sign-in expiry');
+  assert.equal(staleAlert.nodes.get('#incidents').children.length,0);
+  // A previously authorized Sessions action cannot repaint the Conversation list.
+  let finishAck;
+  const lateAck=boot((route)=>route==='api/session'?ok():route==='api/alerts/acknowledge'
+    ?new Promise(resolve=>finishAck=resolve):unavailable(),()=>Promise.resolve({ok:true,json:async()=>alertSnapshot}));
+  await settle();await settle();
+  const ackCard=lateAck.nodes.get('#incidents').children.find(n=>n.dataset.processingState==='open');
+  const pendingAck=ackCard.children.at(-1).handlers.click();
+  vm.runInContext('conversationMode=true;clearConversationAlerts()',lateAck.context);
+  finishAck({ok:true,json:async()=>({request_id:'accepted-before-mode-change'})});await pendingAck;
+  assert.equal(lateAck.nodes.get('#incidents').children.length,0,'Late Sessions completion cannot restore a cleared list');
+  vm.runInContext('alerts('+JSON.stringify(alertSnapshot)+')',lateAck.context);
+  assert(!texts(lateAck.nodes.get('#incidents')).includes('Acknowledge'),'Conversation remains read-only even for an unrestricted old snapshot');
   const shared=boot(()=>Promise.resolve({ok:true,json:async()=>({csrf:'shared-csrf',label:'Human'})}),undefined,'conversation',true);
   await settle();
   assert.equal(shared.requests[0].route,'api/interaction/access');

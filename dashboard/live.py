@@ -5,7 +5,7 @@ import os
 import struct
 
 
-async def changes(paths, heartbeat=15):
+async def changes(paths, heartbeat=15, subscribe=None):
     """Watch owned sources, including SQLite WAL and atomic observer replacement.
 
     Notifications only invalidate a view. Canonical cursors remain in the existing
@@ -18,6 +18,7 @@ async def changes(paths, heartbeat=15):
     loop = asyncio.get_running_loop()
     wake = asyncio.Event()
     selected = {}
+    unsubscribe = None
     try:
         directories = {}
         for path in paths:
@@ -40,6 +41,8 @@ async def changes(paths, heartbeat=15):
                 if mask & (0x4000 | 0x400 | 0x800) or name in selected.get(wd, ()):
                     wake.set()
         loop.add_reader(fd, readable)
+        if subscribe is not None:
+            unsubscribe = subscribe(lambda: loop.call_soon_threadsafe(wake.set))
         # Watches are installed before initial catch-up, closing the startup gap.
         yield True
         while True:
@@ -52,5 +55,7 @@ async def changes(paths, heartbeat=15):
             except asyncio.TimeoutError:
                 yield False
     finally:
+        if unsubscribe is not None:
+            unsubscribe()
         loop.remove_reader(fd)
         os.close(fd)

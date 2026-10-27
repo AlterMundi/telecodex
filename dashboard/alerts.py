@@ -235,6 +235,7 @@ class Receiver:
         self.lock = threading.Lock()
         self.tick_lock = threading.Lock()
         self.thread = None
+        self.listeners = set()
         self.view = {'state': 'checking', 'observed_at': None, 'incidents': [], 'observers': [],
                      'observer_state': 'unobserved', 'truncated': False, 'delivery_enabled': self.deliver}
 
@@ -276,6 +277,25 @@ class Receiver:
         if self.thread is None:
             self.thread = threading.Thread(target=self.run, name='telecodex-alerts', daemon=True)
             self.thread.start()
+
+    def subscribe(self, listener):
+        """Invalidate an authorized browser view; never start observation or work."""
+        with self.lock:
+            self.listeners.add(listener)
+        def unsubscribe():
+            with self.lock:
+                self.listeners.discard(listener)
+        return unsubscribe
+
+    def notify_views(self):
+        with self.lock:
+            listeners = tuple(self.listeners)
+        for listener in listeners:
+            try:
+                listener()
+            except RuntimeError:
+                # A closing browser loop cannot turn producer recovery into failure.
+                pass
 
     def close(self):
         self.closed.set()
@@ -333,6 +353,7 @@ class Receiver:
                 with self.lock:
                     self.view['menu_attention_state'] = state
             self.tick_lock.release()
+            self.notify_views()
 
     def receipt(self, delivery_id, value):
         result = self.client.call('PUT', f'/v1/deliveries/{identifier(delivery_id)}/receipt', 'Delivery', value)
