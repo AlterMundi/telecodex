@@ -58,7 +58,11 @@ window.LiveSpeech=(()=>{
       const record=source && records.get(identity(source));
       if(!record)return;
       record.interrupted=false;
-      if(source.kind==="integrator_live" && record.canonicalSource && !record.changed && record.attempted<record.canonicalSource.text_characters)
+      return continuation(source);
+    }
+    function continuation(source){
+      const record=source && records.get(identity(source));
+      if(record && !record.interrupted && source.kind==="integrator_live" && record.canonicalSource && !record.changed && record.attempted<record.canonicalSource.text_characters)
         return {...record.canonicalSource,speech_start:record.attempted};
     }
     function resume(source){
@@ -92,7 +96,7 @@ window.LiveSpeech=(()=>{
       return {source:{...source,speech_start:changed?0:record.attempted},changed,
         resume:changed?0:record.completed,skip:!changed && (record.interrupted || record.attempted>=source.text_characters)};
     }
-    return {observe,next,admit,reconcile,ended,resume,unsent,interrupt,continueSource,reset};
+    return {observe,next,admit,reconcile,ended,resume,unsent,interrupt,continueSource,continuation,reset};
   }
   return {mount};
 })();

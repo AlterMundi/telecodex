@@ -387,8 +387,8 @@ function boot(readOnly=false,standalone=false,options={}) {
   const confirmedText='First useful sentence. Remaining text is now confirmed.';
   liveOptionsAudio.liveText=confirmedText;liveOptionsAudio.responseDraft=null;liveVoice.addReplies(1);
   liveVoice.overrideSource(9,{native_turn:'physical',native_item:'early',text_characters:Array.from(confirmedText).length,preview:confirmedText});liveVoice.replyTexts.set('native:9',confirmedText);
-  await liveVoice.ui.refresh();assert.equal(liveVoice.audioCalls.length,1,'Confirmation cannot overlap or repeat the active prefix');
-  livePlayer.ended=true;await livePlayer.handlers.ended();liveVoice.clock.fire(450);
+  const liveMedia=livePlayer.src;await liveVoice.ui.refresh();await until(()=>liveVoice.audioCalls.length===2);assert.equal(livePlayer.src,liveMedia,'Preparing the canonical tail cannot replace the active prefix');
+  livePlayer.ended=true;await livePlayer.handlers.ended();liveVoice.clock.fire(180);
   await until(()=>liveVoice.audioCalls.length===2&&!livePlayer.paused);
   assert.equal(liveVoice.audioCalls[1].source,'native:9');assert.equal(liveVoice.audioCalls[1].offset,liveEnd,'Canonical speech starts after the reserved prefix');
   liveVoice.ui.stop();
@@ -400,23 +400,75 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(selectionRace.audioCalls.length,0,'Capture invalidates an awaited prefix even after recording finishes');
   hashHold.active=false;await selectionRace.ui.refresh();await until(()=>selectionRace.audioCalls.length===1);
   selectionRace.ui.stop();
+  const aheadOptions={liveSpeech:true,clock:true,immediateHash:true,responseDraft:{provisional:true,native_turn:'ahead-physical',native_item:'ahead-item',text:'First sentence. Waiting',observed_at:'2100-01-01T00:00:00Z'}};
+  const ahead=boot(false,true,aheadOptions);ahead.audio();await ahead.ui.refresh();ahead.nodes.get('#conversation-voice-replies').handlers.click();await ahead.ui.refresh();
+  const aheadPlayer=ahead.nodes.get('#conversation-audio');await until(()=>ahead.audioCalls.length===1&&!aheadPlayer.paused);
+  const firstMedia=aheadPlayer.src;
+  aheadOptions.responseDraft.text='First sentence. Second useful sentence. Waiting';await ahead.ui.refresh();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ahead.audioCalls.length,2,'The next live prefix is prepared while the first media still plays');
+  assert.equal(aheadPlayer.src,firstMedia,'Preparation cannot replace the audible element');
+  ahead.nativeRequest();await ahead.ui.refresh();
+  aheadPlayer.ended=true;await aheadPlayer.handlers.ended();ahead.clock.fire(180);
+  await until(()=>ahead.audioCalls.length===3&&!aheadPlayer.paused);
+  assert.equal(ahead.audioCalls[2].source,'request:native-request','A pending question precedes the prepared live prefix');
+  const questionMedia=aheadPlayer.src;
+  aheadPlayer.ended=true;await aheadPlayer.handlers.ended();ahead.clock.fire(1200);
+  await until(()=>aheadPlayer.src!==questionMedia&&!aheadPlayer.paused);
+  assert.equal(ahead.audioCalls.length,3,'Returning from a question reuses the existing preparation');
+  ahead.ui.stop();
+  // A failed paid preparation is also retained across question priority. It is
+  // consumed once, without silently retrying the same provider intent.
+  const failedAheadOptions={liveSpeech:true,clock:true,immediateHash:true,responseDraft:{provisional:true,native_turn:'failed-ahead',native_item:'item',text:'First sentence. Waiting',observed_at:'2100-01-01T00:00:00Z'}};
+  const failedAhead=boot(false,true,failedAheadOptions);failedAhead.audio();await failedAhead.ui.refresh();failedAhead.nodes.get('#conversation-voice-replies').handlers.click();await failedAhead.ui.refresh();
+  const failedPlayer=failedAhead.nodes.get('#conversation-audio');await until(()=>failedAhead.audioCalls.length===1&&!failedPlayer.paused);
+  failedAhead.failAudio();failedAheadOptions.responseDraft.text='First sentence. Second sentence. Waiting';await failedAhead.ui.refresh();await until(()=>failedAhead.audioCalls.length===2);
+  failedAhead.nativeRequest();await failedAhead.ui.refresh();failedPlayer.ended=true;await failedPlayer.handlers.ended();failedAhead.clock.fire(180);
+  await until(()=>failedAhead.audioCalls.length===3&&!failedPlayer.paused);
+  failedPlayer.ended=true;await failedPlayer.handlers.ended();failedAhead.clock.fire(1200);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(failedAhead.audioCalls.length,3,'An unsuccessful prepared prefix is not synthesized again after a question');
+  assert.equal(failedPlayer.paused,true);failedAhead.ui.stop();
+  for(const invalidate of ['capture','changed','stop']){
+    const pendingOptions={liveSpeech:true,clock:true,capture:true,immediateHash:true,responseDraft:{provisional:true,native_turn:'parked-'+invalidate,native_item:'item',text:'First sentence. Waiting',observed_at:'2100-01-01T00:00:00Z'}};
+    const pending=boot(false,true,pendingOptions);pending.audio();await pending.ui.refresh();pending.nodes.get('#conversation-voice-replies').handlers.click();await pending.ui.refresh();
+    const player=pending.nodes.get('#conversation-audio');await until(()=>pending.audioCalls.length===1&&!player.paused);
+    pendingOptions.responseDraft.text='First sentence. Second sentence. Waiting';await pending.ui.refresh();await until(()=>pending.audioCalls.length===2);
+    pending.nativeRequest();await pending.ui.refresh();player.ended=true;await player.handlers.ended();pending.clock.fire(180);
+    await until(()=>pending.audioCalls.length===3&&!player.paused);
+    if(invalidate==='capture'){
+      pending.capture();pending.finishCapture();await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(player.paused,true,'Capture pauses the question and holds the parked live item');
+    }else if(invalidate==='stop'){
+      pending.nodes.get('#conversation-stop').handlers.click();
+    }else {
+      pendingOptions.responseDraft=null;pendingOptions.liveText='A changed canonical response.';pending.addReplies(1);
+      pending.overrideSource(9,{native_turn:'parked-'+invalidate,native_item:'item',text_characters:pendingOptions.liveText.length,preview:pendingOptions.liveText});pending.replyTexts.set('native:9',pendingOptions.liveText);
+      await pending.ui.refresh();const question=player.src;player.ended=true;await player.handlers.ended();pending.clock.fire(1200);
+      await until(()=>pending.audioCalls.length===4&&player.src!==question&&!player.paused);
+      assert.equal(pending.audioCalls[3].source,'native:9','Changed confirmation discards the parked live prefix');
+    }
+    pending.clock.fire(180);pending.clock.fire(450);pending.clock.fire(1200);await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(pending.audioCalls.length,invalidate==='changed'?4:3,'Invalidated parked preparations cannot restart or retry automatically');pending.ui.stop();
+  }
   const interruptionOptions={liveSpeech:true,clock:true,capture:true,immediateHash:true,responseDraft:{provisional:true,native_turn:'interruption-physical',native_item:'interruption-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
   const interruptedLive=boot(false,true,interruptionOptions);interruptedLive.audio();await interruptedLive.ui.refresh();
   interruptedLive.nodes.get('#conversation-voice-replies').handlers.click();await interruptedLive.ui.refresh();
   const interruptedPlayer=interruptedLive.nodes.get('#conversation-audio');await until(()=>interruptedLive.audioCalls.length===1&&!interruptedPlayer.paused);
   interruptionOptions.responseDraft.text='First sentence. Second sentence. Unfinished';await interruptedLive.ui.refresh();
   interruptedLive.capture();interruptedLive.finishCapture();await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(interruptedLive.audioCalls.length,1,'Finishing capture cannot automatically speak the next prefix of the interrupted answer');
+  assert.equal(interruptedLive.audioCalls.length,2,'Capture retains the one already prepared prefix without another synthesis');
   const interruptedText='First sentence. Second sentence. Confirmed tail.';interruptionOptions.liveText=interruptedText;interruptionOptions.responseDraft=null;interruptedLive.addReplies(1);
   interruptedLive.overrideSource(9,{native_turn:'interruption-physical',native_item:'interruption-item',text_characters:interruptedText.length,preview:interruptedText});interruptedLive.replyTexts.set('native:9',interruptedText);
-  await interruptedLive.ui.refresh();assert.equal(interruptedLive.audioCalls.length,1,'Unchanged canonical confirmation does not resume interrupted narration');
+  await interruptedLive.ui.refresh();assert.equal(interruptedLive.audioCalls.length,2,'Unchanged canonical confirmation does not synthesize interrupted narration');
   assert.equal(interruptedPlayer.paused,true);
   await interruptedPlayer.beforeNodes[0].handlers.click();await until(()=>!interruptedPlayer.paused&&!interruptedPlayer.muted);
-  assert.equal(interruptedLive.audioCalls.length,1,'Explicit Play reuses the interrupted media');
-  interruptedPlayer.ended=true;await interruptedPlayer.handlers.ended();interruptedLive.clock.fire(450);
-  await until(()=>interruptedLive.audioCalls.length===2&&!interruptedPlayer.paused);
-  assert.equal(interruptedLive.audioCalls[1].source,'native:9');
-  assert.equal(interruptedLive.audioCalls[1].offset,Number(interruptedLive.audioCalls[0].source.split(':')[4]),'Explicit resume continues the matching canonical tail once');
+  assert.equal(interruptedLive.audioCalls.length,2,'Explicit Play reuses the interrupted media');
+  const interruptedMedia=interruptedPlayer.src;interruptedPlayer.ended=true;await interruptedPlayer.handlers.ended();interruptedLive.clock.fire(180);
+  await until(()=>interruptedPlayer.src!==interruptedMedia&&!interruptedPlayer.paused);
+  assert(interruptedLive.audioCalls[1].source.startsWith('live:'),'Explicit resume consumes the already prepared prefix');
+  interruptedPlayer.ended=true;await interruptedPlayer.handlers.ended();interruptedLive.clock.fire(180);
+  await until(()=>interruptedLive.audioCalls.length===3&&!interruptedPlayer.paused);
+  assert.equal(interruptedLive.audioCalls[2].source,'native:9');
+  assert.equal(interruptedLive.audioCalls[2].offset,Number(interruptedLive.audioCalls[1].source.split(':')[4]),'Explicit resume continues the matching canonical tail once');
 
   interruptedLive.ui.stop();
 
@@ -428,7 +480,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   gapPlayer.ended=true;await gapPlayer.handlers.ended();
   const gapText='First sentence. Second sentence. The confirmed tail.';gapOptions.liveText=gapText;gapOptions.responseDraft=null;gapVoice.addReplies(1);
   gapVoice.overrideSource(9,{native_turn:'gap-physical',native_item:'gap-item',text_characters:gapText.length,preview:gapText});gapVoice.replyTexts.set('native:9',gapText);
-  await gapVoice.ui.refresh();gapVoice.clock.fire(450);await until(()=>gapVoice.audioCalls.length===3&&!gapPlayer.paused);
+  await gapVoice.ui.refresh();gapVoice.clock.fire(180);await until(()=>gapVoice.audioCalls.length===3&&!gapPlayer.paused);
   gapVoice.ui.pause();
   const gapCard=gapVoice.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:9');
   await gapCard.children[3].children[1].handlers.click();
