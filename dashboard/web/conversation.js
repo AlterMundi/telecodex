@@ -617,6 +617,12 @@ window.Conversation = (() => {
       try{await telegramPage(telegramCursor);}catch(e){$("#conversation-telegram-state").textContent="Earlier Telegram inputs unavailable; nothing was resent.";if([401,403].includes(e.status))failed(e);}
       finally{button.disabled=false;}
     });
+    draft.addEventListener("keydown", event => {
+      if(event.key!=="Enter" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey
+        || event.isComposing || event.keyCode===229)return;
+      event.preventDefault();
+      if(!event.repeat && !send.disabled && !readOnly)compose.requestSubmit();
+    });
     compose.addEventListener("submit", async event => {
       event.preventDefault();
       if(microphone?.ownsSend?.())return microphone.submit();
