@@ -924,3 +924,19 @@ A large current turn must not become an empty source merely because it cannot
 fit whole. Source-read failures emit fixed diagnostic categories, without private
 conversation text. `tests/observer_io.py` exercises a long active turn and unchanged
 reinspection without new source work or repeated synthesis.
+
+### Native runtime fragment limits
+
+Native App Server truncates each additional-context value at 1,000 approximate
+tokens (4,000 UTF-8 bytes). Telecodex preserves runtime control in ordered
+`application` fragments of at most 3,000 bytes, with `telecodex.runtime` first
+and zero-padded continuation keys. Concatenating those values restores the exact
+original instructions, including multilingual text. Human originals stay in
+`input`; no runtime policy or retained source summary is recast as human speech.
+An application context index is orientation metadata, not worker authority.
+Observer summaries, goal details and blockers are requested on demand rather
+than permanently attaching every session's contents (tracking #333).
+
+Qualification must inspect actual native/provider receipt: an unbounded synthetic
+peer alone cannot detect native context truncation. Preserve the previous failed
+qualification and use a distinct follow-up for the corrected candidate.

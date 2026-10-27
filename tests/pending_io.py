@@ -16,7 +16,7 @@ class Pending(Goals):
     def finish(self,thread,turn,continuation=False):
         if self.declaration is not None:
             request=next(m for m in reversed(self.rpc) if m.get('method')=='turn/start' and m['params']['threadId']==thread)
-            runtime=request['params']['additionalContext']['telecodex.runtime']['value']
+            runtime=''.join(v['value'] for k,v in sorted(request['params']['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
             filename=re.search(r'explicitly declare it in (.*?)\. This optional regular JSON',runtime).group(1)
             pathlib.Path(filename).write_text(json.dumps(self.declaration));self.declaration=None
         super().finish(thread,turn,continuation)

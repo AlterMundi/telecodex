@@ -129,7 +129,7 @@ topic_id=8
         elif m['method'] == 'turn/start':
             if self.declare_task:
                 self.declare_task = False
-                context = p['additionalContext']['telecodex.runtime']['value']
+                context = ''.join(v['value'] for k,v in sorted(p['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
                 manifest = pathlib.Path(re.search(r'explicitly declare it in (\S+human-requests\.json)', context).group(1))
                 manifest.write_text(json.dumps({'schema': 'telecodex.human-requests/v1', 'requests': [
                     {'id': 'physical-fixture', 'title': 'Physical fixture observation',
@@ -208,7 +208,7 @@ def direct_topics_bypass_router(binary):
         assert j.row('SELECT count(*) FROM interaction_sources') == before
         packet = j.packets['native-topic-8'][-1]
         assert packet['input'][0]['text'] == original
-        runtime = packet['additionalContext']['telecodex.runtime']['value']
+        runtime = ''.join(v['value'] for k,v in sorted(packet['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
         assert 'This routed adapter' not in runtime
         assert 'Your selected local work conversation' not in runtime
         thread = 'native-topic-8'
@@ -253,7 +253,7 @@ def disabled_entry_is_native(binary):
         packet = j.packets[thread][-1]
         assert packet['input'][0]['text'] == text
         assert j.row('SELECT count(*) FROM interaction_sources') == [(0,)]
-        runtime = packet['additionalContext']['telecodex.runtime']['value']
+        runtime = ''.join(v['value'] for k,v in sorted(packet['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
         assert 'integrating conversation' not in runtime
         j.broadcast(thread,'turn/completed',{'turn':{'id':j.runs[thread],'status':'completed'}})
         j.idle()

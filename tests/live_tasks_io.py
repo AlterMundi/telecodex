@@ -78,7 +78,7 @@ def qualify(binary):
         j.admit('Direct work with its own observation.',topic=7)
         j.wait(lambda:len(j.packets['native-topic-7'])>before_direct)
         j.wait(lambda:j.row("SELECT count(*) FROM turns t JOIN sessions s ON s.id=t.session_id WHERE s.thread_id=7 AND t.status='running'")==[(1,)])
-        context=j.packets['native-topic-7'][-1]['additionalContext']['telecodex.runtime']['value']
+        context=''.join(v['value'] for k,v in sorted(j.packets['native-topic-7'][-1]['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
         manifest=Path(re.search(r'explicitly declare it in (\S+human-requests\.json)',context).group(1))
         manifest.write_text(json.dumps({'schema':'telecodex.human-requests/v1','requests':[{'id':'direct-observation','title':'Direct observation','action':'Only this direct topic needs this action.','links':[]}]}))
         j.broadcast('native-topic-7','turn/completed',{'turn':{'id':j.runs['native-topic-7'],'status':'completed'}})

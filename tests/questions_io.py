@@ -376,7 +376,7 @@ import_desktop_history=false
             elif method == 'thread/name/set': send({'id': request_id, 'result': {}})
             elif method == 'turn/start':
                 import re
-                match=re.search(r'explicitly declare it in ([^\s]+human-requests.json)',params.get('additionalContext',{}).get('telecodex.runtime',{}).get('value',''))
+                match=re.search(r'explicitly declare it in ([^\s]+human-requests.json)',''.join(v['value'] for k,v in sorted(params.get('additionalContext',{}).items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.')))
                 assert match,params
                 manifest=pathlib.Path(match[1])
                 assert params['collaborationMode']=={'mode': ('default' if params['input'][0]['text']=='implement after planning' else 'plan'),'settings':{

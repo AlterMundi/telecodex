@@ -156,7 +156,7 @@ def qualify(binary,pack=False):
         # Dormant access may exist locally, but ordinary direct input is unchanged.
         packet=j.packets['native-topic-8'][-1]
         assert not any('Controller access for this execution' in item.get('text','') for item in packet['input'])
-        runtime=packet.get('additionalContext',{}).get('telecodex.runtime',{}).get('value','')
+        runtime=''.join(v['value'] for k,v in sorted(packet.get('additionalContext',{}).items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
         assert 'controller fallback' not in runtime and 'scoped live controller' not in runtime
         j.broadcast('native-topic-8','turn/completed',{'turn':{'id':j.runs['native-topic-8'],'status':'completed'}})
         j.idle()

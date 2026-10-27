@@ -78,7 +78,7 @@ class Foreground(Semantic):
         p=m.get('params',{});ident=m.get('id');method=m.get('method')
         if method=='turn/start' and p['threadId'] not in ('native-topic-7','native-topic-8'):
             self.entry=p['threadId'];self.entry_turn='foreground-'+str(len(self.outputs));self.entry_send=send
-            context=p['additionalContext']['telecodex.runtime']['value']
+            context=''.join(v['value'] for k,v in sorted(p['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
             snapshot=next(json.loads(line) for line in context.splitlines() if line.startswith('{') and '"kind":"foreground_routing_context"' in line)
             assert snapshot['scope']=='initial_turn_input_only' and snapshot['complete']
             assert {(t['selector'],t['label']) for t in snapshot['candidates']}=={('t7','Alpha'),('t8','Beta')}

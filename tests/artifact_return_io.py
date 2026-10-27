@@ -22,7 +22,7 @@ class ArtifactRouting(CanonicalRouting):
     def handle_extra_rpc(self,message,send):
         p=message.get('params',{})
         if self.routing and message.get('method')=='turn/start' and p.get('threadId')=='native-topic-7':
-            context=p['additionalContext']['telecodex.runtime']['value']
+            context=''.join(v['value'] for k,v in sorted(p['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
             out=Path(re.search(r'\n([^\n]+/out)\n',context).group(1))
             self.expected={'alpha.txt':b'Exact native generated requirement17\n',
                 'image.png':base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGQAAAABJRU5ErkJggg==')}

@@ -72,7 +72,7 @@ for line in sys.stdin:
  elif m=='turn/start':
   contract=p['additionalContext']['telecodex.runtime']
   assert contract['kind']=='application'
-  out=pathlib.Path(re.search(r'\\n([^\\n]+/out)\\n',contract['value']).group(1))
+  out=pathlib.Path(re.search(r'\\n([^\\n]+/out)\\n',''.join(v['value'] for k,v in sorted(p['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))).group(1))
   count=len(list(root.glob('completed-*')))+1
   (root/('completed-'+str(count))).touch()
   mode=(root/'mode').read_text()
