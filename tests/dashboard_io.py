@@ -95,7 +95,9 @@ class DashboardHTTP(unittest.TestCase):
         self.assertEqual(self.client.get('/api/interaction/events').status_code,401)
         self.login()
         self.provider.receiver={'db_path':str(Path(self.tmp.name)/'source.db')}
-        async def events(paths):
+        async def events(paths, subscribe=None):
+            self.assertEqual(paths,[Path(self.tmp.name)/'source.db'])
+            self.assertTrue(subscribe is None or callable(subscribe))
             yield True
             yield False
         with patch('dashboard.live.changes',events):
