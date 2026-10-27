@@ -734,7 +734,8 @@ selection added0.86–1.12s. The Send-to-native-request interval includes transc
 commit/orchestration/client startup, not just recognition. Cold committed-ASR
 preparation reported3.14s (2.69s in its helper); warm preparation reported0.38s
 and0.36s (helper0.18s/0.12s). The data identifies these separate waits, but does
-not yet establish which mechanism dominates the warm admission overhead.
+not by itself attribute the warm admission overhead. Retained native stage logs
+below narrow the next investigation.
 
 One verifier initially expected a new durable transcript mirror for every
 capture. Identical source bytes intentionally share one immutable result. Both
@@ -754,3 +755,23 @@ selected-stack latency and full receiving/device acceptance remain unfinished
 under301/303/304. Inspect native admission and output-boundary waits before
 changing a conversational model; a different foreground model still requires
 the human's explicit choice.
+
+
+#### Retained native admission stages
+
+The same isolated listener already logged native preparation stages, so no new
+model request was needed to narrow the admission interval. From `proxy_start`,
+proxy initialization began at162/167/163ms; thread binding began at170/173/167ms
+and completed at831/1554/1805ms. The binding phase therefore took661ms cold and
+1381/1638ms warm. The warm delay is concentrated in the current
+`start_or_resume_thread` path (profile application, native binding request/response
+and verification), rather than solely transcription or proxy initialization.
+The underlying reason within that phase is not established by these logs.
+
+A separate finite read-only check of the single idle qualification thread found
+three new client initializations at99/299/99ms and thread metadata reads at55/38/
+41ms. That supports neither a general slow-client diagnosis nor permission to
+skip native profile/binding verification. It did not exercise resume, alter a
+thread or submit a model input. Inspect the supported loaded-thread/profile
+semantics before attempting to shorten the measured binding path; preserve
+actual selected provider/model/effort, event ownership and current native jobs.
