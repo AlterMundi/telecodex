@@ -118,7 +118,10 @@ def qualify(binary):
         with sqlite3.connect(j.root/'state.sqlite')as db:
             db.execute('UPDATE sessions SET force_fresh_thread=1 WHERE thread_id=7')
         replaced=j.call('route-playback-replaced-worker','playback_context',{'input_ref':worker_input})
-        assert replaced['availability']=='source_not_current' and 'source_part' not in replaced
+        # Binding freshness participates in the canonical revision, so its
+        # exact-revision reader refuses the old selection before returning text.
+        assert replaced['availability']=='source_unconfirmed' and 'source_part' not in replaced, replaced
+        assert replaced['report']==worker_audio
         missing_audio={**playback,'source':'native:9223372036854775807'}
         missing_input,_=b.text('Unrelated new topic with an unavailable audio source.',None,missing_audio)
         j.wait(lambda:b.status(missing_input)['phase']=='accepted')
