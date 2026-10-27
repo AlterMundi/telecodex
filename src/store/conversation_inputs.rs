@@ -69,6 +69,9 @@ pub struct ConversationInput {
     /// Bounded owned question versions present before capture/ASR, not device hints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_versions: Option<std::collections::BTreeMap<String, String>>,
+    /// Client's frozen capture-time restriction; never adds owned questions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_questions: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<ConversationVoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -427,7 +430,7 @@ impl Store {
         reply: Option<ConversationReply>,
     ) -> Result<(ConversationInput, bool)> {
         self.capture_original(
-            human, entry, binding, id, text, None, true, reply, None, None,
+            human, entry, binding, id, text, None, true, reply, None, None, None,
         )
     }
 
@@ -456,6 +459,7 @@ impl Store {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -471,6 +475,7 @@ impl Store {
         reply: Option<ConversationReply>,
         visual: Option<crate::visual::VisualSelection>,
         playback: Option<ConversationPlayback>,
+        capture_questions: Option<std::collections::BTreeMap<String, String>>,
     ) -> Result<(ConversationInput, bool)> {
         voice.validate()?;
         if voice.transcription.is_some() {
@@ -487,6 +492,7 @@ impl Store {
             reply,
             visual,
             playback,
+            capture_questions,
         )
     }
 
@@ -503,7 +509,7 @@ impl Store {
         playback: Option<ConversationPlayback>,
     ) -> Result<(ConversationInput, bool)> {
         self.capture_original(
-            human, entry, binding, id, text, None, true, reply, visual, playback,
+            human, entry, binding, id, text, None, true, reply, visual, playback, None,
         )
     }
 
@@ -520,6 +526,7 @@ impl Store {
         reply: Option<ConversationReply>,
         visual: Option<crate::visual::VisualSelection>,
         playback: Option<ConversationPlayback>,
+        capture_questions: Option<std::collections::BTreeMap<String, String>>,
     ) -> Result<(ConversationInput, bool)> {
         if Uuid::parse_str(id)
             .ok()
@@ -532,6 +539,21 @@ impl Store {
         }
         if let Some(value) = &playback {
             value.validate()?;
+        }
+        if let Some(versions) = &capture_questions {
+            if voice.is_none()
+                || versions.len() > 32
+                || versions.iter().any(|(id, version)| {
+                    id.len() != 32
+                        || version.len() != 64
+                        || !id
+                            .bytes()
+                            .chain(version.bytes())
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+            {
+                bail!("Invalid bounded capture question restriction");
+            }
         }
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
@@ -550,6 +572,7 @@ impl Store {
                 || input.visual != visual
                 || input.reply != reply
                 || input.playback != playback
+                || input.capture_questions != capture_questions
                 || match (&input.voice, &voice) {
                     (None, None) => input.text != text,
                     (Some(a), Some(b)) => a.audio_sha256 != b.audio_sha256 || a.mime != b.mime,
@@ -585,6 +608,13 @@ impl Store {
                 .map(|r| super::conversation_routing::reply_on(&tx, human, entry, r))
                 .transpose()?
         };
+        let mut question_versions =
+            super::conversation_requests::capture_questions_on(&tx, human, entry)?;
+        if let Some(limit) = &capture_questions {
+            // Snapshot current server-owned versions, then only remove entries.
+            // A device hint cannot add another scope or authorize an answer.
+            question_versions.retain(|id, version| limit.get(id) == Some(&*version));
+        }
         let input = ConversationInput {
             id: id.into(),
             human,
@@ -594,9 +624,8 @@ impl Store {
             epoch: super::stopping::admission_epoch_on(&tx, entry)?,
             text: text.into(),
             visual,
-            question_versions: Some(super::conversation_requests::capture_questions_on(
-                &tx, human, entry,
-            )?),
+            question_versions: Some(question_versions),
+            capture_questions,
             voice: voice.clone(),
             reply,
             playback,
@@ -1342,6 +1371,81 @@ mod tests {
         assert!(value.validate().is_err());
     }
 
+    #[test]
+    fn capture_question_limits_are_bounded_immutable_and_cannot_add_scope() {
+        let (_file, store, key, binding) = setup();
+        let id = Uuid::now_v7().to_string();
+        let limit = std::collections::BTreeMap::from([("a".repeat(32), "b".repeat(64))]);
+        let (saved, fresh) = store
+            .conversation_voice_capture_reply(
+                100,
+                key,
+                &binding,
+                &id,
+                clip(),
+                true,
+                None,
+                None,
+                None,
+                Some(limit.clone()),
+            )
+            .unwrap();
+        assert!(fresh);
+        assert!(saved.question_versions.as_ref().unwrap().is_empty());
+        assert_eq!(saved.capture_questions, Some(limit.clone()));
+        assert!(
+            !store
+                .conversation_voice_capture_reply(
+                    100,
+                    key,
+                    &binding,
+                    &id,
+                    clip(),
+                    true,
+                    None,
+                    None,
+                    None,
+                    Some(limit)
+                )
+                .unwrap()
+                .1
+        );
+        assert!(
+            store
+                .conversation_voice_capture_reply(
+                    100,
+                    key,
+                    &binding,
+                    &id,
+                    clip(),
+                    true,
+                    None,
+                    None,
+                    None,
+                    None
+                )
+                .is_err()
+        );
+        let invalid =
+            std::collections::BTreeMap::from([("not-an-owned-id".into(), "b".repeat(64))]);
+        assert!(
+            store
+                .conversation_voice_capture_reply(
+                    100,
+                    key,
+                    &binding,
+                    &Uuid::now_v7().to_string(),
+                    clip(),
+                    true,
+                    None,
+                    None,
+                    None,
+                    Some(invalid)
+                )
+                .is_err()
+        );
+    }
+
     fn clip() -> ConversationVoice {
         ConversationVoice {
             audio_sha256: "a".repeat(64),
@@ -1375,6 +1479,7 @@ mod tests {
                 &id,
                 clip(),
                 true,
+                None,
                 None,
                 None,
                 None,

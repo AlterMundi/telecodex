@@ -47,3 +47,10 @@ the same task ledger and exact current entry/task revision, without completion,
 native approval or work cancellation. Reply feedback remains ordinary conversation
 context; its visible progress is not proof of task completion. Do not import later
 direct tasks or create another task store, responder or arbitrary completion route.
+
+
+Voice capture freezes observed question versions before permission/streaming.
+`capture_questions` is an untrusted narrowing limit, intersected with the native
+owned question snapshot; it cannot add scope or become an answer. Keep it frozen
+through exact-original retry/recovery. Questions first observed later require a
+later original or explicit controls. See docs/interaction-streaming.md.

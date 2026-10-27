@@ -20,7 +20,7 @@ struct Submit {
 
 fn outcome(input: &ConversationInput, fresh: bool) -> Value {
     json!({"schema":"telecodex.conversation-input/v1","id":input.id,"phase":input.phase,
-        "new_input":fresh,"retired":input.retired,"text":input.text,"visual":input.visual,"voice":input.voice,"routing":input.routing,"playback":input.playback,
+        "new_input":fresh,"retired":input.retired,"text":input.text,"visual":input.visual,"voice":input.voice,"routing":input.routing,"playback":input.playback,"capture_questions":input.capture_questions,
         "entry_binding":[input.human,input.entry,input.session,input.native],"native_acceptance":if input.phase=="accepted" {"observed"}else{"unconfirmed"},
         "incorporation":"Not established by input retention or native acceptance"})
 }
@@ -152,7 +152,7 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         }
         let voice = input.voice.context("Original voice capture unavailable")?;
         let payload = json!({"binding":selected.binding,"id":selected.id,
-            "audio_sha256":voice.audio_sha256,"mime":voice.mime,"visual":input.visual,"reply":input.reply,"playback":input.playback});
+            "audio_sha256":voice.audio_sha256,"mime":voice.mime,"visual":input.visual,"reply":input.reply,"playback":input.playback,"capture_questions":input.capture_questions});
         return voice_submit(app, human, cfg.entry(), &payload.to_string(), true).await;
     }
     if let Some(body) = args.strip_prefix("retry ") {
@@ -608,6 +608,8 @@ struct VoiceSubmit {
     reply: Option<crate::store::ConversationReply>,
     #[serde(default)]
     playback: Option<crate::store::ConversationPlayback>,
+    #[serde(default)]
+    capture_questions: Option<std::collections::BTreeMap<String, String>>,
 }
 
 async fn voice_submit(
@@ -692,6 +694,7 @@ async fn voice_submit(
         request.reply,
         request.visual,
         request.playback,
+        request.capture_questions,
     )?;
     if recover {
         (input, fresh) = app.shared.store.conversation_voice_resume(

@@ -6,7 +6,7 @@ function boot(live=false){
  const nodes=new Map(),events={},timers=[],uploads=[],originals=new Map(),received=[],devices=[],activities=[];
  const document={hidden:false,addEventListener(name,fn){events[name]=fn;},querySelector(name){if(!nodes.has(name))nodes.set(name,{hidden:false,disabled:false,textContent:'',handlers:{},setAttribute(k,v){this[k]=v;},addEventListener(n,f){this.handlers[n]=f;}});return nodes.get(name);}};
  let mediaFailure,visual,visualFailure,mediaRequests=0,confirmDiscard=true;const confirmations=[];
- let playback,selection, binding='original-binding',mode,permission,receiptHold,uploadHold,capturePhase='preparing',captureRetired=false,paused=0,unauthorized=0;
+ let captureQuestions,playback,selection, binding='original-binding',mode,permission,receiptHold,uploadHold,capturePhase='preparing',captureRetired=false,paused=0,unauthorized=0;
  class Recorder{
   static isTypeSupported(type){return type==='audio/webm;codecs=opus';}
   constructor(stream){this.stream=stream;this.events={};this.state='inactive';devices.push(this);}
@@ -32,9 +32,9 @@ function boot(live=false){
  const context=vm.createContext({window,document,Blob,Uint8Array,fetch,AbortController,
   setTimeout(fn,ms){const t={fn,ms};timers.push(t);return t;},clearTimeout(t){if(t)t.closed=true;}});
  vm.runInContext(fs.readFileSync('dashboard/web/microphone.js','utf8'),context);
- let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,getPlayback:()=>playback,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
+ let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,getPlayback:()=>playback,getCaptureQuestions:()=>captureQuestions,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
  ui.configure(true,live);
- return {ui,nodes,uploads,originals,received,devices,events,timers,media,activities,playback:value=>{playback=value;},preparation:()=>preparation,
+ return {ui,nodes,uploads,originals,received,devices,events,timers,media,activities,questions:value=>{captureQuestions=value;},playback:value=>{playback=value;},preparation:()=>preparation,
   confirmation:value=>{confirmDiscard=value;},confirmations,
   button:()=>nodes.get('#conversation-talk'),state:()=>nodes.get('#conversation-voice-state').textContent,
   click:()=>nodes.get('#conversation-talk').handlers.click(),cancel:()=>nodes.get('#conversation-voice-discard').handlers.click(),check:()=>nodes.get('#conversation-voice-check').handlers.click(),
@@ -60,6 +60,15 @@ function boot(live=false){
  playCapture.playback(undefined);await playCapture.click();await until(()=>playCapture.received.length===1);
  assert.equal(playCapture.uploads[0].headers['X-Playback-Context'],playCapture.uploads[1].headers['X-Playback-Context'],'An identical recording retry keeps its captured playback metadata');
 
+ const scoped=boot(true),known={['a'.repeat(32)]:'b'.repeat(64)};
+ scoped.questions(known);const scopePermission=scoped.permission(),scopeStarting=scoped.click();
+ known['c'.repeat(32)]='d'.repeat(64);scoped.questions({});scopePermission.resolve(scoped.media());await scopeStarting;
+ scoped.mode('after');scoped.click();await until(()=>scoped.uploads.length===1&&scoped.state().includes('unconfirmed'));
+ assert.deepEqual(JSON.parse(scoped.uploads[0].headers['X-Capture-Questions']),{['a'.repeat(32)]:'b'.repeat(64)},'Question limits are cloned before permission and live ASR');
+ scoped.questions({['c'.repeat(32)]:'d'.repeat(64)});await scoped.click();await until(()=>scoped.received.length===1);
+ assert.equal(scoped.uploads[1].headers['X-Capture-Questions'],scoped.uploads[0].headers['X-Capture-Questions'],'A recording retry cannot acquire later question versions');
+ const none=boot(true);none.questions({});await none.click();none.click();await until(()=>none.received.length===1);
+ assert.equal(none.uploads[0].headers['X-Capture-Questions'],'{}','An empty capture-time question set is an explicit restriction');
  const live=boot(true);await live.click();const preparation=live.preparation();
  assert(preparation.id&&preparation.binding==='original-binding');preparation.onPartial('unfinished words');
  assert.equal(live.state(),'unfinished words');assert.equal(live.uploads.length,0,'Live recognition cannot dispatch the original');

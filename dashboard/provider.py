@@ -613,13 +613,23 @@ class Provider:
         self.input_id(body['instruction'])
         return self.decorate_input(self.presentation('input retry '+json.dumps({**body, 'id':ident})))
 
+    @staticmethod
+    def check_capture_questions(value):
+        import re
+        if value is None:return
+        if (not isinstance(value,dict) or len(value)>32
+                or any(not isinstance(k,str) or not re.fullmatch('[a-f0-9]{32}',k)
+                       or not isinstance(v,str) or not re.fullmatch('[a-f0-9]{64}',v) for k,v in value.items())):
+            raise ValueError('Invalid bounded capture question restriction')
+
     def conversation_voice_submit(self, metadata, data):
         import re
-        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual','playback'}:
+        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual','playback','capture_questions'}:
             raise ValueError('Select one original voice recording')
         self.input_id(metadata['id'])
         self.check_reply(metadata.get('reply'))
         self.check_playback(metadata.get('playback'))
+        self.check_capture_questions(metadata.get('capture_questions'))
         from .visual import check_reference
         check_reference(metadata.get('visual'))
         self.check_visual_original(metadata.get('visual'),metadata['id'])
