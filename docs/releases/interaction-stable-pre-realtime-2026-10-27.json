@@ -1,0 +1,58 @@
+{
+  "schema": "telecodex.interaction-baseline/v1",
+  "tag": "interaction-stable-pre-realtime-2026-10-27",
+  "purpose": "Human-selected functioning receiving state before the next continuous duplex/foreground integration; preserve earlier immutable functional tags.",
+  "captured_at": "2026-10-27T08:41:29.849700+00:00",
+  "components": [
+    {
+      "name": "Telecodex bridge, web app, observer and ASR/TTS helpers",
+      "repository": "https://github.com/AlterMundi/telecodex",
+      "tag": "interaction-stable-pre-realtime-2026-10-27",
+      "source": "174b7de293d0851d57037cca0163e85dbbbe3fb5",
+      "web_scripts_source": "4ad1e6a469ace8920f5aca4ddce5275576c0f5af",
+      "native_build_tag": "interaction-stable-pre-realtime-2026-10-27-native-build",
+      "native_build_source": "1440fa49c93fa59b7209bcb09de37a3842772168",
+      "binary_sha256": "dc048968de90b958dc3d2930b3076608a46d1f47da703fc6946e85b9c8d04aae"
+    },
+    {
+      "name": "Native Codex runtime",
+      "repository": "https://github.com/compaii/codex",
+      "tag": "interaction-stable-pre-realtime-2026-10-27",
+      "source": "c36b482b6c23927131dd493ced55a7c3160702d3",
+      "build_source": "3582931505a2c1a1bf9885c3864eada9bfb037bf",
+      "binary_sha256": "c3244f9e4e536e585b57da3ffcde085df313eb755fee72d93a5c003429c37349"
+    },
+    {
+      "name": "Shared auth and Apps gateway",
+      "repository": "https://github.com/nicoechaniz/daimon-cluster",
+      "tag": "interaction-stable-pre-realtime-2026-10-27",
+      "source": "25aa2c3641203468162ad9b29adb80a3a29cf78c",
+      "composition": {
+        "base": "e1dd324c9e389714a5392d69fde4f97ac0fc37d8",
+        "launcher_css_source": "29c4f16ee0d89f8727b2216af00688ba327dbf6e",
+        "launcher_css_sha256": "8224e98de6e0f9b38e61315b1b1a9aa1bdd1b648a5918c1e9ebf706ca721f495"
+      }
+    }
+  ],
+  "selected_services": {
+    "conversation_model": "gpt-6.1-sol / openai / medium",
+    "tts": "Qwen API / qwen-audio-3.0-tts-plus / longanlufeng",
+    "streaming_asr": "Gemini / gemini-3.5-transcribe-live",
+    "file_asr_fallback": "Groq / whisper-large-v3"
+  },
+  "external_dependencies": "Provider models/accounts, home authority/data and browser capabilities are receiving dependencies, not vendored Git components. Versions/configuration are recorded privately; no secrets or private topology are published. No other-being deployment change is implied.",
+  "qualification": {
+    "human_basis": "Human reported the current app works well and requested this rollback point. This is not new physical acceptance of each later optional timing feature.",
+    "automated": "PR357 dashboard/speech and required Rust checks/build plus compiled HTTP/native context journeys passed; final aggregate40473421537 was still running at capture. Full native354 CI40468343840 successful supplies unchanged compatibility.",
+    "remaining": "Useful-speech latency, early/long response streaming, semantic heard/remaining attention and integrated device acceptance remain unfinished under301."
+  },
+  "rollback": {
+    "software": "Select the tagged Telecodex source or retained verified executable and web/scripts, preserving a decoder for artifact collections, prepared ASR and optional playback word_offset. Restore only intended receiving software/configuration selections through the existing scoped maintenance route.",
+    "data": "Never restore old conversation databases, delivery offsets, goals, identity/grants or uncertain inputs to return software to this point. Current journals and completed effects stay current.",
+    "retention": "Operator retains the exact Telecodex executable and private configuration preimage. Existing immutable Codex package and gateway release remain retained.",
+    "scope": "No global Stop, native model change, account change, provider replay or unrelated service restart is authorized by this tag."
+  },
+  "plan": "https://github.com/AlterMundi/telecodex/issues/301",
+  "milestone": 9,
+  "roadmap": "https://github.com/AlterMundi/telecodex/blob/master/docs/interaction-roadmap.md"
+}
