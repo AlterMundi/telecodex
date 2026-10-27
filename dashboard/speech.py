@@ -42,13 +42,17 @@ def speech_part(source):
     return {**source, 'text':text[:end], 'next_offset':source['offset']+end}
 
 
-def speech_request(source):
+def speech_request(source, language="en-US"):
     text = source['text']
     if source.get('kind') in ('worker_result','worker_progress','matrix_result') and source.get('offset') == 0:
         label = source.get('label')
         if not isinstance(label,str) or not label.strip():
             raise SpeechUnavailable('Selected work source has no audible label')
-        text = label[:198] + '. ' + text
+        label = label.strip().lstrip('#').strip()
+        if not label:
+            raise SpeechUnavailable('Selected work source has no audible label')
+        introduction = 'Novedades desde' if language.split('-')[0] == 'es' else 'Update from'
+        text = introduction + ' ' + label[:198] + '. ' + text
     scope = speech_render.sha(speech_render.canonical([source['entry_binding'],source['id'],source['offset']]))
     return {'scope':scope,'text':text}
 
@@ -77,7 +81,7 @@ class Speech:
         # The caller supplies a controller-certified part, never browser-authored text.
         config_bytes = speech_render.private_bytes(self.binding, 16384)
         route = speech_render.route(self.binding)
-        payload = speech_request(source)
+        payload = speech_request(source, route['language'])
         text = payload['text']
         request = json.dumps(payload).encode()
         command = [sys.executable, str(Path(speech_render.__file__).resolve()), '--binding', str(self.binding)]
@@ -138,7 +142,7 @@ class Speech:
             total = 0; ended = False
             try:
                 async with asyncio.timeout(self.timeout):
-                    child.stdin.write(json.dumps(speech_request(source)).encode());await child.stdin.drain();child.stdin.close()
+                    child.stdin.write(json.dumps(speech_request(source, speech_render.route(self.binding)['language'])).encode());await child.stdin.drain();child.stdin.close()
                     while raw := await child.stdout.readline():
                         total += len(raw)
                         if len(raw)>65536 or total>16*1024*1024 or ended:

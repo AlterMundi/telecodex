@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
-from dashboard.speech import speech_part
+from dashboard.speech import speech_part, speech_request
 from dashboard.app import create_app
 from dashboard.companion import Grants, authority
 from dashboard.provider import Provider, ProviderUnavailable
@@ -166,6 +166,15 @@ class Companion(unittest.TestCase):
             used=len(chosen['text']);self.assertGreater(used,0)
             part={**part,'text':part['text'][used:],'offset':part['offset']+used}
         self.assertEqual(''.join(segments),text)
+
+    def test_worker_voice_introduction_is_natural_and_does_not_change_source(self):
+        source={'entry_binding':'fixture','id':'worker:1','kind':'worker_progress',
+                'label':'#Realtime','offset':0,'text':'**A useful update.**'}
+        original=copy.deepcopy(source)
+        self.assertEqual(speech_request(source,'es-US')['text'],'Novedades desde Realtime. **A useful update.**')
+        self.assertEqual(speech_request(source,'en-US')['text'],'Update from Realtime. **A useful update.**')
+        self.assertEqual(speech_request({**source,'offset':100},'es-US')['text'],source['text'])
+        self.assertEqual(source,original,'Canonical source and offsets remain unchanged')
 
     def test_incremental_audio_is_an_exact_canonical_prefix(self):
         self.config['speech']['incremental_segments']=True

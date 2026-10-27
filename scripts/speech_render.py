@@ -54,7 +54,10 @@ def spoken_markdown(text, language):
                 out.append(visible(token.children))
             elif token.type == 'text':
                 # An ordinary URL/autolink has no useful spoken label.
-                out.append(re.sub(r'https?://[^\s<>]+', link_word, token.content))
+                visible_text = re.sub(r'https?://[^\s<>]+', link_word, token.content)
+                # Topic tags are visual labels, not a spoken number/hash sign.
+                # Preserve issue numbers, C# and literal code token contents.
+                out.append(re.sub(r'(?<!\w)#(?=[^\W\d_])', '', visible_text))
             elif token.type in ('code_inline', 'code_block', 'fence'):
                 out.append(token.content)
             elif token.type in ('softbreak', 'hardbreak', 'hr') or (token.block and token.nesting == -1):
