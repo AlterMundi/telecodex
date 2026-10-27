@@ -18,6 +18,7 @@
     <script src="assets/live-speech.js" defer></script>
     <script src="assets/markdown-it.min.js" defer></script>
     <script src="assets/markdown.js" defer></script>
+    <script src="assets/attention.js" defer></script>
     <script src="assets/conversation.js" defer></script>
     <script src="assets/live.js" defer></script>
     <script src="assets/app.js" defer></script>
@@ -56,13 +57,13 @@
         <p id="conversation-state" role="status" aria-live="polite">Connecting to your conversation…</p></div>
         <div id="conversation-attention">
         <section id="conversation-requests" hidden aria-labelledby="conversation-requests-title">
-          <h2 id="conversation-requests-title">Requests from your sessions</h2>
+          <h2 id="conversation-requests-title">Questions</h2>
           <p id="conversation-request-state" class="note" role="status" aria-live="polite"></p>
           <div id="conversation-request-cards"></div>
           <button id="conversation-requests-more" type="button" hidden>More requests</button>
         </section>
         <section id="conversation-tasks" hidden aria-labelledby="conversation-tasks-title">
-          <h2 id="conversation-tasks-title">For you</h2>
+          <h2 id="conversation-tasks-title">Actions</h2>
           <p id="conversation-task-state" class="note" role="status"></p>
           <div id="conversation-task-cards"></div>
           <button id="conversation-tasks-more" type="button" hidden>More actions</button>

@@ -385,3 +385,33 @@ newline behavior. IME composition, composition keycode229 and modifier shortcuts
 do not submit. Repeated keydown and a disabled Send do not create another input.
 The same submit handler retains draft, attachment, pending voice and uncertain
 delivery behavior; there is no separate keyboard dispatch path.
+
+
+### Pending navigation — human correction, 2026-10-27
+
+Keep two surfaces separate: **For you** contains the integrating conversation's
+canonical questions, durable actions and proposals; the header carousel is for
+pending items from internal owned sessions. For you needs permanent explicit
+access, including an understandable empty state. It must not depend on a card
+happening to be visible during refresh.
+
+The internal-session carousel should show one concise session/item line, rotate
+slowly, support horizontal drag and keyboard navigation, and open the selected
+current action. Pause rotation on hover/focus/drag, hidden state, an open detail
+and reduced motion. Retain a stable list entry. Reuse existing ledgers and native
+responders; reading never approves, completes, cancels or resends anything.
+Direct-topic ingress stays direct. Canonical For you scope must never be labelled
+all sessions: global attention needs its own owner-scoped read/navigation contract.
+
+Local draft branch `fix/interaction-pending-navigation` adds a permanent For you
+header control and readable panel over the same retained card nodes. Existing
+request/conversation state tests pass. A synthetic Chromium component verifies
+open/close, reply-to-composer, preserved draft and explicit empty access. The full
+shipped HTML/JS with synthetic read-only HTTP verifies Escape/draft preservation,
+question/task reply preparation and scrollable dialogs at320/390/1040px. A found
+desktop header overflow was corrected; inspected screenshots and updated metrics
+show contained44px header access and no horizontal overflow. These fixtures send
+no native decisions, models or capture. Global session data/navigation, carousel
+drag/focus, exact reported Review-item diagnosis, final CI and receiving deployment
+remain unfinished.
+Owning task #61; stage4 attention and native repair remain in plan #301/milestone9.

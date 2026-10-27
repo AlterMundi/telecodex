@@ -300,7 +300,7 @@ window.RequestControls = (() => {
       } finally {if (owned === generation) {reading = false; more.disabled = false;}}
     }
     more.addEventListener("click", () => refresh(cursor));
-    return {refresh,reset,captureQuestions:()=>Object.fromEntries([...cards.values()].filter(card=>!card.unavailable).map(card=>card.meta).filter(value=>audioSource(value) && value.binding===getBinding() && /^[a-f0-9]{32}$/.test(value.id) && /^[a-f0-9]{64}$/.test(value.capture_version)).slice(0,32).map(value=>[value.id,value.capture_version])),audioSources:()=>[...cards.values()].filter(c=>!c.unavailable).map(c=>audioSource(c.meta)).filter(Boolean)};
+    return {attentionItems:()=>[...cards.values()].filter(c=>c.meta&&!terminal(c.meta)&&!c.closed).map(c=>({id:`request:${c.id}`,label:c.meta.label,title:c.meta.title,box:c.box,open:()=>readRequest(c,true,true)})),refresh,reset,captureQuestions:()=>Object.fromEntries([...cards.values()].filter(card=>!card.unavailable).map(card=>card.meta).filter(value=>audioSource(value) && value.binding===getBinding() && /^[a-f0-9]{32}$/.test(value.id) && /^[a-f0-9]{64}$/.test(value.capture_version)).slice(0,32).map(value=>[value.id,value.capture_version])),audioSources:()=>[...cards.values()].filter(c=>!c.unavailable).map(c=>audioSource(c.meta)).filter(Boolean)};
   }
   return {mount};
 })();
@@ -382,7 +382,7 @@ window.GoalControls = (() => {
       try{const page=await api(`interaction/goals?before=${cursor}`);if(owned===generation)await observe(page);}
       catch(_){if(owned===generation)message.textContent="Older controls unavailable. Nothing changed; refresh to reconnect.";}
       finally{if(owned===generation){reading=false;more.disabled=false;}}});
-    return {observe,reset};
+    return {observe,reset,attentionItems:()=>[...cards.values()].filter(c=>c.view&&!closed(c.view.phase)).map(c=>({id:`goal:${c.id}`,label:c.view.label,title:status(c.view),box:c.box,open:()=>detail(c,true)}))};
   }
   return {mount};
 })();
@@ -494,7 +494,7 @@ window.HumanTaskControls = (() => {
       }catch(e){if(token===generation){for(const card of cards.values()){card.unavailable=true;controls(card);}section.hidden=false;state.textContent='Human actions unavailable. Refresh to reconnect.';if([401,403].includes(e.status))unauthorized(e);}}
       finally{if(token===generation){reading=false;more.disabled=false;}}
     }
-    more.addEventListener('click',()=>refresh(cursor));return {refresh,reset,observeInput};
+    more.addEventListener('click',()=>refresh(cursor));return {refresh,reset,observeInput,attentionItems:()=>[...cards.values()].filter(c=>c.view&&!terminal(c.view)).map(c=>({id:`task:${c.id}`,label:c.view.label,title:c.view.title,box:c.box,open:()=>detail(c)}))};
   }
   return {mount};
 })();
