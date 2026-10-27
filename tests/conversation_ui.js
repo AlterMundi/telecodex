@@ -273,6 +273,14 @@ function boot(readOnly=false,standalone=false,options={}) {
   automatic.overrideSource(8,{preview:'🙂🙂',text_characters:8,text_sha256:'new-emoji',revision:'emoji-revision'});automatic.replyTexts.set('native:8','🙂🙂abcdef');
   await automatic.ui.refresh();automatic.intersect('native:8');await new Promise(setImmediate);
   assert.equal(automatic.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8').children[2].textContent,'🙂🙂abcdef','truncation uses Unicode code points, not UTF-16 units');
+  const progressText=boot(false,true,{autoText:true});
+  const completeProgress='This update must remain complete on phones as well as TVs. '.repeat(60);
+  progressText.overrideSource(8,{kind:'worker_progress',target:{chat_id:100,thread_id:7},label:'Realtime',preview:completeProgress.slice(0,160),text_characters:completeProgress.length});
+  progressText.replyTexts.set('native:8',completeProgress);
+  await progressText.ui.refresh();progressText.intersect('native:8');await new Promise(setImmediate);
+  const visibleProgress=progressText.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');
+  assert.equal(visibleProgress.children[1].textContent,completeProgress,'visible Update from cards must load full canonical text, without opening the inspector');
+  progressText.ui.stop();
   const scrolledAway=boot(false,true,{autoText:true});const longText='Visible text only. '.repeat(300);
   scrolledAway.overrideSource(8,{preview:'Visible',text_characters:longText.length});scrolledAway.replyTexts.set('native:8',longText);
   await scrolledAway.ui.refresh();const heldText=scrolledAway.holdReplyText('native:8');scrolledAway.intersect('native:8');await heldText.entered;
