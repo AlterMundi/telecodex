@@ -864,6 +864,11 @@ rather than injecting it as new human speech. Native worker progress snapshots
 its web source at first observation. Duplicate native observations retain that
 original scope, and old progress without a recorded web source is not imported.
 
+For an interruption or reference to spoken text, `playback_context` reads only the
+selected original's frozen device report and a bounded exact-revision source
+window on demand. See [interrupted-source inspection](interaction-speech.md#on-demand-interrupted-source-inspection).
+This is advisory evidence, not a hearing receipt or an automatic resume command.
+
 ## Spoken conversation scheduling
 
 Talk enables new spoken replies when synthesis is available. The browser captures

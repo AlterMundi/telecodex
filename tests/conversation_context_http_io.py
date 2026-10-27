@@ -16,7 +16,7 @@ def qualify(binary):
         worker=next(send for thread,send in j.clients.values()if thread=='native-topic-7')
         worker({'id':'canonical-context-question','method':'item/tool/requestUserInput','params':{
             'threadId':'native-topic-7','turnId':j.workers['native-topic-7'],'itemId':'context-question',
-            'isBlocking':True,'questions':[{'id':'scope','header':'Scope','question':'Which exact scope should Alpha use?','options':None}]}})
+            'isBlocking':True,'questions':[{'id':'scope','header':'Scope','question':'Which exact scope should Alpha use? '+('á🌱'*2200),'options':None}]}})
         j.wait(lambda:bool(b.get('/api/interaction/requests')['items']))
         question=b.get('/api/interaction/requests')['items'][0]
         question=b.get('/api/interaction/requests/'+question['id'])
@@ -38,6 +38,20 @@ def qualify(binary):
         assert '[Device-reported playback context]'in str(j.packets[0]) and 'not proof of human hearing' in str(j.packets[0])
         view=j.call('route-read-question-context','question_context',{'input_ref':changed})
         assert view['matches_current']and view['question']['body']==question['body']
+        caps=j.call('route-playback-capabilities','capabilities',{})
+        assert 'playback_context' in caps['operations']
+        audio_view=j.call('route-playback-context','playback_context',{'input_ref':changed})
+        assert audio_view['report']==playback and audio_view['availability']=='current_source'
+        assert audio_view['source_part']['text']==question['body'][:1600]
+        assert audio_view['source_part']['offset']==0 and audio_view['source_part']['next_offset']==1600
+        assert audio_view['source_part']['id']==playback['source']
+        assert audio_view['read_only'] and 'not' in audio_view['interpretation']
+        next_audio_view=j.call('route-playback-next','playback_context',{'input_ref':changed,'offset':1600})
+        assert next_audio_view['source_part']['text']==question['body'][1600:3200]
+        j.call('route-playback-cannot-invent-source','playback_context',{'input_ref':changed,'source':'native:1'},ok=False)
+        j.call('route-playback-invalid-offset','playback_context',{'input_ref':changed,'offset':1000001},ok=False)
+        j.call('route-playback-unknown-original','playback_context',{'input_ref':'f'*32},ok=False)
+        assert b.status(changed)['playback']==playback and not j.native_answers
         j.call('route-context-new-topic','dispatch',{'input_ref':changed,'destinations':[{'selector':'Beta','relation':'new','requests':[]}]})
         j.wait(lambda:j.instructions(8)and j.instructions(8)[0][1]=='accepted')
         j.call('route-no-double-use','answer_question',{'input_ref':changed},ok=False)
@@ -49,6 +63,9 @@ def qualify(binary):
             db.execute("INSERT INTO interaction_creations(id,human_id,entry_chat,entry_topic,input_update,phase,doc,instance_id) SELECT 'synthetic-reserved-creation',100,100,1,?,'prepared','{}',instance_id FROM conversation_inputs WHERE id=?",(reserved,reserved))
         j.call('route-no-answer-after-creation-reservation','answer_question',{'input_ref':reserved},ok=False)
         assert not j.native_answers
+        no_audio=j.call('route-playback-unreported','playback_context',{'input_ref':reserved})
+        assert no_audio['availability']=='not_reported' and no_audio['report'] is None
+        assert 'source_part' not in no_audio
         j.drop_ack=True
         spoken,_=b.voice(context,playback)
         j.wait(lambda:b.status(spoken)['phase']=='steering'and j.late_ack is not None)
@@ -80,6 +97,36 @@ def qualify(binary):
         j.wait(lambda:b.status(missing)['phase']=='accepted')
         j.call('route-missing-context-cannot-answer','answer_question',{'input_ref':missing},ok=False)
         assert len(j.native_answers)==1
+        old_audio=j.call('route-playback-answered','playback_context',{'input_ref':changed})
+        assert old_audio['availability'] in ('source_not_current','source_unconfirmed')
+        assert 'source_part' not in old_audio and old_audio['report']==playback
+        body='Canonical spoken worker result. '+('Español 🌱 mixed English. '*150)
+        j.answer_worker(7,body)
+        def returned_source():
+            return next((item for item in b.get('/api/interaction')['items']
+                         if item.get('kind')=='worker_result' and item.get('preview','').startswith('Canonical spoken worker result.')),None)
+        j.wait(lambda:returned_source() is not None)
+        source=returned_source()
+        worker_audio={**playback,'source':source['id'],'revision':source['revision'],'segment_offset':12}
+        worker_input,_=b.text('Discuss the interrupted worker explanation.',None,worker_audio)
+        j.wait(lambda:b.status(worker_input)['phase']=='accepted')
+        worker_view=j.call('route-playback-worker-source','playback_context',{'input_ref':worker_input})
+        assert worker_view['availability']=='current_source'
+        assert worker_view['source_part']['text']==body[12:1612]
+        assert worker_view['source_part']['offset']==12 and worker_view['source_part']['next_offset']==1612
+        assert worker_view['source_part']['target']['thread_id']==7
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            db.execute('UPDATE sessions SET force_fresh_thread=1 WHERE thread_id=7')
+        replaced=j.call('route-playback-replaced-worker','playback_context',{'input_ref':worker_input})
+        # Binding freshness participates in the canonical revision, so its
+        # exact-revision reader refuses the old selection before returning text.
+        assert replaced['availability']=='source_unconfirmed' and 'source_part' not in replaced, replaced
+        assert replaced['report']==worker_audio
+        missing_audio={**playback,'source':'native:9223372036854775807'}
+        missing_input,_=b.text('Unrelated new topic with an unavailable audio source.',None,missing_audio)
+        j.wait(lambda:b.status(missing_input)['phase']=='accepted')
+        missing_view=j.call('route-playback-missing','playback_context',{'input_ref':missing_input})
+        assert missing_view['availability']=='source_unconfirmed' and 'source_part' not in missing_view
         print('PASS actual HTTP/native/SQLite contextual text and committed voice; context does not answer or select target, semantic new-topic dispatch and exact original answer, changed/stale/missing source, immutable receipt retry, no invented text or double consumption; zero models.')
     finally:
         if b:b.client.close()
