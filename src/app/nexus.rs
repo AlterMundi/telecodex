@@ -538,10 +538,23 @@ async fn poll(app: &App) -> Result<()> {
         .context("Nexus pending response is not a list")?
     {
         let id = id.as_str().context("Nexus request identity missing")?;
-        if app.shared.store.nexus_request(id)?.is_some() {
-            continue;
+        let retained = app.shared.store.nexus_request(id)?;
+        if let Some(old) = retained.as_ref() {
+            if old["phase"] != "undetermined"
+                || old["reason"] != "Dispatch acknowledgement missing; no automatic native replay"
+                || !old["dispatch_id"].is_null()
+                || !old["local_turn"].is_null()
+                || !old["native_turn"].is_null()
+                || !old["_known_unsent_recovery"].is_null()
+            {
+                continue;
+            }
+            let current_epoch = app.shared.store.stop_admission_epoch(target(old)?.key())?;
+            if old["_admission_epoch"].as_str() != Some(current_epoch.as_str()) {
+                continue;
+            }
         }
-        let doc = cfg
+        let mut doc = cfg
             .call(
                 "inspect",
                 &json!({"listener_id":cfg.listener_id,"request_id":id}),
@@ -555,6 +568,7 @@ async fn poll(app: &App) -> Result<()> {
             result => result?,
         }
         let t = target(&doc)?;
+        let admission_epoch = app.shared.store.stop_admission_epoch(t.key())?;
         let session = app
             .shared
             .store
@@ -576,7 +590,18 @@ async fn poll(app: &App) -> Result<()> {
         if session.busy && active.is_none() {
             continue;
         }
-        if !app.shared.store.nexus_receive(id, &doc)? {
+        if admission_epoch != app.shared.store.stop_admission_epoch(t.key())? {
+            continue;
+        }
+        let received = if retained.is_some() {
+            app.shared
+                .store
+                .nexus_recover_undispatched(id, &doc, &admission_epoch)?
+        } else {
+            doc["_admission_epoch"] = json!(admission_epoch);
+            app.shared.store.nexus_receive(id, &doc)?
+        };
+        if !received {
             continue;
         }
         if let Some(active) = active {
