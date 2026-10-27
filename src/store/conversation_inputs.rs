@@ -160,7 +160,7 @@ impl ConversationInput {
         };
         match &self.playback {
             Some(playback) => format!(
-                "[Device-reported playback context]\n{}\nClient-reported media progress at input capture, not proof of human hearing or comprehension. segment_offset is a canonical text segment boundary; position/duration are media milliseconds, not word alignment. This metadata does not select a destination, answer or approval, cancel native work, or instruct resumption. Use scoped conversation/conversation_part to inspect the source if relevant; it may be stale or unrelated.\n\n{}",
+                "[Device-reported playback context]\n{}\nClient-reported media progress at input capture, not proof of human hearing or comprehension. segment_offset is a canonical text segment boundary; position/duration are media milliseconds, not word alignment. This metadata does not select a destination, answer or approval, cancel native work, or instruct resumption. Use playback_context with this input_ref to inspect the frozen report and bounded canonical source text on demand if relevant; it may be stale or unrelated.\n\n{}",
                 serde_json::json!({"input_ref":self.id,"playback":playback}),
                 rendered
             ),

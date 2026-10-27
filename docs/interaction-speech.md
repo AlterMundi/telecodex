@@ -355,6 +355,33 @@ rewriting retained documents. Roll back presentation/feature use while preservin
 that compatible native reader/writer and all original journals.
 
 
+## On-demand interrupted-source inspection
+
+The integrating controller's `playback_context` operation takes one retained
+original's `input_ref` and an optional canonical character `offset`. It reads
+that original's immutable device report, verifies the current entry/native
+ownership, then reuses the exact-revision presentation or native-question reader.
+It returns at most1600 canonical characters and `source_part.next_offset`; follow
+that cursor only when the human's actual message needs the remaining text. No
+source body is attached to every foreground turn, no extra model call is made,
+and no second playback/transcript journal is created.
+
+`availability` distinguishes `not_reported`, `current_source`,
+`source_not_current` and `source_unconfirmed`. A failed lookup is unconfirmed,
+not proof that a source disappeared. Changed, withdrawn, inaccessible or unknown
+sources supply no replacement text. An unrelated new human topic remains valid.
+Native-question offsets address the canonical question body, excluding the
+cosmetic spoken session label. Other unsupported presentation kinds remain
+unconfirmed rather than being resolved through a different audience.
+
+This supplies semantic source material for interruption handling; it does not
+establish a word-aligned heard/unsaid split. The report is a past client claim,
+not current playback or proof that preceding words were heard. Manual seeking,
+incomplete earlier playback and a smaller synthesized chunk are possible. Never
+infer heard text by multiplying characters by the media-time fraction. Reading
+selects no answer, destination, resumption or work cancellation. Full coordinated
+heard/remaining attention and foreground latency qualification remain #304/#303.
+
 ## Markdown presentation and spoken projection
 
 Conversation replies render standard Markdown locally using the vendored MIT
