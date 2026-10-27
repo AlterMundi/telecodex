@@ -116,7 +116,7 @@ window.Conversation = (() => {
       clearFocus();voiceContext=undefined;draft.value=message;draft.focus?.();compose.scrollIntoView?.({block:"nearest"});return true;
     }});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getPlayback:()=>playbackContext(true),getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -437,7 +437,7 @@ window.Conversation = (() => {
           const owned = inputGeneration, observation = ++inputObservation;
           card.retryBusy=true;retry.disabled = true;
           try {
-            const result = recovery ? await api(`interaction/inputs/${card.value.id}/retry`,{binding:card.value.binding,instruction:recovery.instruction}) : await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{})});
+            const result = recovery ? await api(`interaction/inputs/${card.value.id}/retry`,{binding:card.value.binding,instruction:recovery.instruction}) : await api("interaction/inputs", {id:card.value.id,binding:card.value.binding,text:card.value.text,...(card.value.reply?{reply:card.value.reply}:{}),...(card.value.visual?{visual:card.value.visual}:{}),...(card.value.playback?{playback:card.value.playback}:{})});
             if (owned === inputGeneration) inputCard(result, observation);
           } catch(e) {
             if (owned !== inputGeneration) return;
@@ -570,12 +570,12 @@ window.Conversation = (() => {
       catch(e){posting=false;send.disabled=!inputBinding;microphone?.syncControls?.();composerNotice(e.message||"Select your image again.");return;}
       const id = crypto.randomUUID(), owned = inputGeneration, observation = ++inputObservation, focusAtSubmit=focusVersion;
       const context=replyFocus?.reference||voiceContext;
-      const reply=context&&JSON.parse(JSON.stringify(context));
+      const reply=context&&JSON.parse(JSON.stringify(context)),playback=playbackContext();
       posting = true; send.disabled = true; latestComposerId = id;
-      inputCard({id,text,binding,reply,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); if(timeline)timeline.scrollTop=timeline.scrollHeight; $("#conversation-sent").open = true;
+      inputCard({id,text,binding,reply,playback,visual:selectedVisual,focusVersion:focusAtSubmit}, observation); if(timeline)timeline.scrollTop=timeline.scrollHeight; $("#conversation-sent").open = true;
       composerNotice("Sending…",false);
       try {
-        const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{}),...(selectedVisual?{visual:selectedVisual}:{})});
+        const result = await api("interaction/inputs", {binding, id, text,...(reply?{reply}:{}),...(selectedVisual?{visual:selectedVisual}:{}),...(playback?{playback}:{})});
         if (owned !== inputGeneration) return;
         const confirmed = inputCard(result, observation);
         visual?.consumed(selectedVisual);
@@ -695,7 +695,7 @@ window.Conversation = (() => {
         scroll(timeline.scrollTop+point.top-viewport.top-viewport.height*.25);
       selected.followed=true;
     }
-    let enabled = false, ready = false, reading = false, binding, canListen = false, canStreamSpeech = false;
+    let enabled = false, ready = false, reading = false, binding, canListen = false, canStreamSpeech = false, canReportPlayback=false;
     let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
     let initialized = false, active, generation = 0, requestAbort, blobUrl, prefetched;
     const audioState = (text) => { $("#conversation-audio-state").textContent = text; };
@@ -760,6 +760,15 @@ window.Conversation = (() => {
       speechPositions.delete(source.id);speechPositions.set(source.id,{source:source.id,revision:source.revision,offset});
       while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
       savePositions();const card=cards.get(source.id);if(card)positionLabel(card);
+    }
+    function playbackContext(interrupted=false){
+      if(!canReportPlayback || !active || !blobUrl || active.verifying || active.segmentEnded
+        || active.source.current===false || active.source.correction_pending || active.source.native_binding_current===false)return;
+      const millis=value=>Number.isFinite(value) && value>=0 && value<=3600?Math.floor(value*1000):undefined;
+      const position=millis(audio.currentTime),duration=millis(audio.duration);
+      if(position===undefined)return;
+      return {source:active.source.id,revision:active.source.revision,segment_offset:active.offset,
+        position_millis:position,duration_millis:duration>0?duration:null,state:interrupted?'interrupted':audio.paused?'paused':'playing'};
     }
     function beginVoiceCapture() {
       draft.blur?.();enableVoice();voiceBusy=false;cancelSpeechWait();
@@ -989,7 +998,7 @@ window.Conversation = (() => {
       }
       companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
-      binding = value.binding;loadPositions();
+      binding = value.binding;loadPositions();canReportPlayback=value.can_report_playback===true;
       canFiles=!readOnly && value.can_download_files===true;
       if(!canFiles)clearFiles();
       else if(value.artifacts?.state==="unavailable")filesConnected=false;

@@ -604,6 +604,13 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 # Older receivers reject this source form before ASR rather
                 # than silently interpreting context as an explicit answer.
                 metadata['reply'].update(source=reply_source[8:], context_only=True)
+        playback=request.headers.get('x-playback-context')
+        if playback is not None:
+            try:
+                if len(playback.encode())>2048:raise ValueError('Playback context exceeds bound')
+                metadata['playback']=json.loads(playback)
+                Provider.check_playback(metadata['playback'])
+            except (ValueError,TypeError):raise HTTPException(400,'Invalid device playback context') from None
         visual=request.headers.get('x-visual-reference')
         if visual is not None:
             try:metadata['visual']=json.loads(visual)

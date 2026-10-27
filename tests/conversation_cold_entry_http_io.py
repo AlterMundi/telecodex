@@ -66,17 +66,19 @@ class Browser:
         self.headers['authorization']='Bearer '+r.json()['session_token']
         r=self.client.get('/api/interaction/inputs',headers=self.headers);assert r.status_code==200,r.text
         self.binding=r.json()['binding'];self.headers['x-dashboard-csrf']=r.json()['csrf']
-    def text(self,text,reply=None):
+    def text(self,text,reply=None,playback=None):
         body={'id':str(uuid.uuid4()),'binding':self.binding,'text':text}
         if reply:body['reply']=reply
+        if playback:body['playback']=playback
         r=self.client.post('/api/interaction/inputs',json=body,headers=self.headers);assert r.status_code==200,r.text
         return body['id'],r.json()
     def status(self,ident):
         r=self.client.get('/api/interaction/inputs/'+ident,headers=self.headers);assert r.status_code==200,r.text;return r.json()
-    def voice(self,reply=None):
+    def voice(self,reply=None,playback=None):
         clip=audio();ident=str(uuid.uuid4())
         h={**self.headers,'content-type':'audio/wav','x-input-id':ident,'x-input-binding':self.binding,'x-audio-sha256':hashlib.sha256(clip).hexdigest()}
         if reply:h.update({'x-reply-source':('context:' if reply.get('context_only') else '')+reply['source'],'x-reply-revision':reply['revision']})
+        if playback:h['x-playback-context']=json.dumps(playback)
         r=self.client.post('/api/interaction/voice',content=clip,headers=h);assert r.status_code==200,r.text
         return ident,r.json()
     def get(self,path):

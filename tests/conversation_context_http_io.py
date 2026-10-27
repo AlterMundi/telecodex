@@ -21,15 +21,21 @@ def qualify(binary):
         question=b.get('/api/interaction/requests')['items'][0]
         question=b.get('/api/interaction/requests/'+question['id'])
         context={'source':'request:'+question['id'],'revision':question['revision'],'context_only':True}
-        changed,_=b.text('Start a separate task about the garden in Beta.',context)
+        playback={'source':context['source'],'revision':context['revision'],'segment_offset':0,'position_millis':3700,'duration_millis':12000,'state':'interrupted'}
+        assert b.get('/api/interaction')['can_report_playback'] is True
+        changed,_=b.text('Start a separate task about the garden in Beta.',context,playback)
         j.wait(lambda:b.status(changed)['phase']=='accepted')
         assert not j.native_answers,'Context alone consumed a native question'
+        assert b.status(changed)['playback']==playback
+        changed_playback=b.client.post('/api/interaction/inputs',json={'id':changed,'binding':b.binding,'text':'Start a separate task about the garden in Beta.','reply':context,'playback':dict(playback,position_millis=9900)},headers=b.headers)
+        assert changed_playback.status_code==503,'Captured media progress changed under the same original identity'
         changed_mode=b.client.post('/api/interaction/inputs',json={'id':changed,'binding':b.binding,
             'text':'Start a separate task about the garden in Beta.','reply':{k:context[k]for k in ('source','revision')}},headers=b.headers)
         assert changed_mode.status_code==503,'An immutable contextual original became an explicit answer'
         assert len(j.packets)==1
 
         assert '[Device-reported conversational context]'in str(j.packets[0])and changed in str(j.packets[0])
+        assert '[Device-reported playback context]'in str(j.packets[0]) and 'not proof of human hearing' in str(j.packets[0])
         view=j.call('route-read-question-context','question_context',{'input_ref':changed})
         assert view['matches_current']and view['question']['body']==question['body']
         j.call('route-context-new-topic','dispatch',{'input_ref':changed,'destinations':[{'selector':'Beta','relation':'new','requests':[]}]})
@@ -44,15 +50,17 @@ def qualify(binary):
         j.call('route-no-answer-after-creation-reservation','answer_question',{'input_ref':reserved},ok=False)
         assert not j.native_answers
         j.drop_ack=True
-        spoken,_=b.voice(context)
+        spoken,_=b.voice(context,playback)
         j.wait(lambda:b.status(spoken)['phase']=='steering'and j.late_ack is not None)
         assert not j.native_answers,'ASR or playback metadata implicitly answered'
+        assert b.status(spoken)['playback']==playback
         result=j.call('route-classified-original-answer','answer_question',{'input_ref':spoken})
         assert result['recorded']and result['new_decision']
         j.wait(lambda:any(v['id']=='canonical-context-question'for v in j.native_answers))
         answer=next(v for v in j.native_answers if v['id']=='canonical-context-question')['result']['answers']['scope']['answers'][0]
         assert '[Committed voice input]'in answer and 'Continue requirement17'in answer
         assert '[Device-reported conversational context]'not in answer
+        assert '[Device-reported playback context]'not in answer
         assert b.status(spoken)['decision']['source_input']==spoken and b.status(spoken)['phase']=='answered'
         send,rpc,turn=j.late_ack;send({'id':rpc,'result':{'turnId':turn}})
         j.drop_ack=False

@@ -134,7 +134,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", can_listen:true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
+    return {binding:"fixture", csrf:"synthetic", can_listen:true,can_report_playback:options.playback===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
@@ -187,6 +187,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     mediaSession,mediaActions,event(name,value){for(const fn of windowEvents.get(name)||[])fn(value);},
     hide(){document.hidden=true;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
     show(){document.hidden=false;for(const fn of documentEvents.get('visibilitychange')||[])fn();},
+    playbackContext(){return capture.getPlayback();},
     capture(){capture.pauseAudio();capture.onActivity(true);},
     finishCapture(){capture.onActivity(false);},
     capturedInput(value){capture.onInput(value);},
@@ -509,6 +510,19 @@ function boot(readOnly=false,standalone=false,options={}) {
   await listenButton(spokenCard(7)).handlers.click();followSwitch.handlers.change();
   assert.equal(scrolls.length,2,'Turning Voice off also prevents subsequent Follow movement');followed.ui.stop();
 
+  const playbackHint=boot(false,true,{capture:true,playback:true});playbackHint.audio();
+  playbackHint.overrideSource(8,{revision:'a'.repeat(64)});await playbackHint.ui.refresh();
+  const hintedCard=playbackHint.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');
+  await listenButton(hintedCard).handlers.click();const hintedAudio=playbackHint.nodes.get('#conversation-audio');hintedAudio.currentTime=4.567;hintedAudio.duration=100;
+  assert.deepEqual(JSON.parse(JSON.stringify(playbackHint.playbackContext())),{source:'native:8',revision:'a'.repeat(64),segment_offset:0,position_millis:4567,duration_millis:100000,state:'interrupted'});
+  playbackHint.nodes.get('#conversation-message').value='Start a different topic';
+  await playbackHint.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+  const capturedHint=[...playbackHint.originals.values()][0];assert.equal(capturedHint.playback.state,'playing');
+  assert.equal(capturedHint.playback.position_millis,4567);assert.equal(capturedHint.reply,undefined,'Media context cannot choose a reply destination');
+  playbackHint.capture();assert.equal(hintedAudio.paused,true);playbackHint.finishCapture();playbackHint.ui.stop();
+  const oldReceiver=boot(false,true,{capture:true});oldReceiver.audio();await oldReceiver.ui.refresh();
+  const oldCard=oldReceiver.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');await listenButton(oldCard).handlers.click();
+  assert.equal(oldReceiver.playbackContext(),undefined,'Older receivers never get an unsupported metadata field');oldReceiver.ui.stop();
   const updatesFollow=boot(false,true);updatesFollow.audio();
   updatesFollow.overrideSource(8,{kind:'worker_progress',target:{chat_id:100,thread_id:77},label:'Alpha'});
   await updatesFollow.ui.refresh();updatesFollow.nodes.get('#conversation-voice-replies').handlers.click();

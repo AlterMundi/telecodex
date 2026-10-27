@@ -491,10 +491,11 @@ class Provider:
         return value
 
     def conversation_input_submit(self, body):
-        if not isinstance(body, dict) or not {'binding','id','text'} <= set(body) or set(body)-{'binding','id','text','reply','visual'}:
+        if not isinstance(body, dict) or not {'binding','id','text'} <= set(body) or set(body)-{'binding','id','text','reply','visual','playback'}:
             raise ValueError('Select the conversation and provide one original message')
         self.input_id(body['id'])
         self.check_reply(body.get('reply'))
+        self.check_playback(body.get('playback'))
         from .visual import check_reference
         check_reference(body.get('visual'))
         self.check_visual_original(body.get('visual'),body['id'])
@@ -565,6 +566,25 @@ class Provider:
         else:
             cls.input_id(ident)
 
+    @classmethod
+    def check_playback(cls, value):
+        import re
+        if value is None:return
+        if (not isinstance(value,dict)
+                or set(value)!={'source','revision','segment_offset','position_millis','duration_millis','state'}
+                or not isinstance(value['source'],str) or len(value['source'])>256
+                or not isinstance(value['revision'],str) or not re.fullmatch('[a-f0-9]{64}',value['revision'])
+                or type(value['segment_offset']) is not int or not 0<=value['segment_offset']<=1000000
+                or type(value['position_millis']) is not int or not 0<=value['position_millis']<=3600000
+                or value['duration_millis'] is not None and (type(value['duration_millis']) is not int or not 1<=value['duration_millis']<=3600000)
+                or value['state'] not in ('playing','paused','interrupted')):
+            raise ValueError('Invalid bounded device playback context')
+        if value['source'].startswith('native:'):
+            suffix=value['source'][7:]
+            if not re.fullmatch('[1-9][0-9]{0,18}',suffix) or int(suffix)>2**63-1:
+                raise ValueError('Invalid native playback source')
+        else:cls.check_reply({'source':value['source'],'revision':value['revision'],'context_only':True})
+
     def conversation_input_route(self, ident, body):
         import re
         self.input_id(ident)
@@ -585,10 +605,11 @@ class Provider:
 
     def conversation_voice_submit(self, metadata, data):
         import re
-        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual'}:
+        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual','playback'}:
             raise ValueError('Select one original voice recording')
         self.input_id(metadata['id'])
         self.check_reply(metadata.get('reply'))
+        self.check_playback(metadata.get('playback'))
         from .visual import check_reference
         check_reference(metadata.get('visual'))
         self.check_visual_original(metadata.get('visual'),metadata['id'])
