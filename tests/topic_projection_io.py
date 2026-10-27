@@ -127,8 +127,8 @@ def qualify(binary):
         assert len(j.instructions(7)) == 1
 
         # Ordinary direct input uses the same native session, without router wrapping.
-        j.admit('Direct work-topic text.', topic=7)
-        j.wait(lambda: len(j.direct_packets) == 1)
+        direct_update=j.admit('Direct work-topic text.', topic=7)
+        j.wait(lambda: len(j.direct_packets)==1 and j.row('SELECT native_turn FROM native_input_receipts WHERE update_id=?',(direct_update,))==[(j.workers['native-topic-7'],)])
         assert j.direct_packets[0]['input'][0]['text'] == 'Direct work-topic text.'
         j.answer(7, 'Direct answer once.', direct=True, duplicate=True)
         j.wait(lambda: j.sent('Direct answer once.', 7) == 1); j.idle()

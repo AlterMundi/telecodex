@@ -155,7 +155,7 @@ impl Store {
         store.init_observer_freshness()?;
         // A restarted process cannot continue a previous command's activity lease.
         store.conn.lock().expect("store mutex poisoned").execute(
-            "DELETE FROM bot_state WHERE key LIKE 'command_activity:%'",
+            "DELETE FROM bot_state WHERE key LIKE 'command_activity:%' OR key LIKE 'interaction-response-draft:%'",
             [],
         )?;
         // A restart does not authorize replaying a partially dispatched turn.

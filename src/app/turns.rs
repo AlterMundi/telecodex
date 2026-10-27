@@ -884,7 +884,15 @@ pub(super) async fn process_turn(
                                 super::topic_publications::wake(shared.clone(),session_key);
                                 Ok(CodexEventOutcome::None)
                             }
+                            CodexEvent::NativeMessageDraft {thread_id,turn_id:native_turn,item_id,text} => {
+                                if shared.config.interaction.as_ref().is_some_and(|c|c.entry()==session_key && c.human_id==requester_user_id) {
+                                    // Display failure cannot interrupt native work or authorize replay.
+                                    let _=shared.store.interaction_response_draft(requester_user_id,session_key,turn_id,&thread_id,&native_turn,&item_id,&text);
+                                }
+                                Ok(CodexEventOutcome::None)
+                            }
                             CodexEvent::NativeMessageCompleted { thread_id, turn_id: native_turn, item_id, phase, text } => {
+                                let _=shared.store.clear_response_draft(turn_id,&native_turn,Some(&item_id));
                                 let inputs=shared.store.interaction_turn_inputs(turn_id,requester_user_id)?;
                                 let root=result_root.as_deref().or_else(||inputs.iter().find(|i|super::routing::relayed(i)).map(|i|i.id.as_str()));
                                 if phase.as_deref()==Some("final_answer") && let Some(id)=root {
@@ -913,6 +921,10 @@ pub(super) async fn process_turn(
                                 if let Some(native)=attach_native.as_deref() {shared.store.record_collector_attachment(turn_id,session_key,requester_user_id,native,&native_id)?;}
                                 super::routing::native_started(&routing_app,session_key,turn_id,&native_id)?;
                                 shared.store.native_collection_started(turn_id,&native_id)?;
+                                if shared.config.interaction.as_ref().is_some_and(|c|c.entry()==session_key && c.human_id==requester_user_id)
+                                    && let Ok(Some(session))=shared.store.get_session(session_key) && let Some(thread)=session.codex_thread_id {
+                                    let _=shared.store.start_response_draft(requester_user_id,session_key,turn_id,&thread,&native_id);
+                                }
                                 *physical_turn.lock().expect("native correlation mutex poisoned")=Some(native_id.clone());
                                 if !shared.store.nexus_local_requests(turn_id)?.is_empty() { shared.store.nexus_native_started(turn_id,&native_id)?; }
                                 if let Some(id)=admission.as_deref(){shared.store.tribu_native_turn(id,&native_id,None)?;}
@@ -959,6 +971,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnTerminal {id:native_id,status} => {
+                                let _=shared.store.clear_response_draft(turn_id,&native_id,None);
                                 if let Ok(native)=shared.store.controller_native_turn(turn_id,session_key,requester_user_id) {
                                     let _=shared.store.goal_retry_native_terminal(requester_user_id,session_key,&native,&native_id,&status);
                                 }
@@ -1704,6 +1717,7 @@ impl LiveTurnSink {
                 tracing::debug!("codex thread started: {thread_id}");
             }
             CodexEvent::NativeMessageCompleted { .. }
+            | CodexEvent::NativeMessageDraft { .. }
             | CodexEvent::NativeModelConfigured { .. }
             | CodexEvent::UserInputRequest { .. }
             | CodexEvent::DynamicToolRequest { .. }

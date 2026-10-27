@@ -57,6 +57,142 @@ pub(super) fn entry_binding(
 }
 
 impl Store {
+    /// A native lifecycle event owns this ephemeral producer, including later goal turns.
+    pub fn start_response_draft(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        local: i64,
+        thread: &str,
+        physical: &str,
+    ) -> Result<bool> {
+        if [thread, physical]
+            .iter()
+            .any(|v| v.is_empty() || v.len() > 128)
+        {
+            return Ok(false);
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = entry_on(&conn, human, entry)?;
+        if native != thread {
+            return Ok(false);
+        }
+        let valid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM turns t JOIN native_collections n ON n.local_turn=t.id WHERE t.id=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND t.native_thread_id=?4 AND t.status='running' AND t.completed_at IS NULL)",params![local,session,human,thread],|r|r.get(0))?;
+        if !valid {
+            return Ok(false);
+        }
+        let value = json!({"local":local,"thread":thread,"turn":physical,"generation":entry_binding(&conn,human,entry,session)?,"item":null,"text":null});
+        conn.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![format!("interaction-response-draft:{session}"),value.to_string()])?;
+        Ok(true)
+    }
+
+    /// One bounded replaceable display snapshot per conversation, not an answer journal.
+    #[allow(clippy::too_many_arguments)]
+    pub fn interaction_response_draft(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        local: i64,
+        thread: &str,
+        physical: &str,
+        item: &str,
+        text: &str,
+    ) -> Result<bool> {
+        if [thread, physical, item]
+            .iter()
+            .any(|v| v.is_empty() || v.len() > 128)
+            || text.len() > 64 * 1024
+        {
+            return Ok(false);
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = entry_on(&conn, human, entry)?;
+        if native != thread {
+            return Ok(false);
+        }
+        let valid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM turns t WHERE t.id=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND t.native_thread_id=?4 AND t.status='running' AND t.completed_at IS NULL)
+            AND NOT EXISTS(SELECT 1 FROM interaction_native_messages WHERE native_thread=?4 AND native_turn=?5 AND item_id=?6)",params![local,session,human,thread,physical,item],|r|r.get(0))?;
+        if !valid {
+            return Ok(false);
+        }
+        let key = format!("interaction-response-draft:{session}");
+        let previous: Option<String> = conn
+            .query_row("SELECT value FROM bot_state WHERE key=?", [&key], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        let Some(previous) = previous.and_then(|v| serde_json::from_str::<Value>(&v).ok()) else {
+            return Ok(false);
+        };
+        let generation = entry_binding(&conn, human, entry, session)?;
+        if previous["local"] != local
+            || previous["thread"] != thread
+            || previous["turn"] != physical
+            || previous["generation"] != generation
+        {
+            return Ok(false);
+        }
+        if text.trim().is_empty() {
+            if previous["item"] == item {
+                conn.execute(
+                    "UPDATE bot_state SET value=json_set(value,'$.text',NULL) WHERE key=?1",
+                    [&key],
+                )?;
+            }
+            return Ok(false);
+        }
+        let now = Utc::now().timestamp_millis();
+        if previous["item"] == item
+            && previous["at_millis"]
+                .as_i64()
+                .is_some_and(|t| now.saturating_sub(t) < 200)
+        {
+            return Ok(false);
+        }
+        let mut visible = text.split("\n<daimon-").next().unwrap_or("").trim_end();
+        // Withhold an unfinished trailer prefix, without changing the canonical item.
+        if let Some((body, last)) = visible.rsplit_once('\n')
+            && !last.is_empty()
+            && "<daimon-result>".starts_with(last)
+        {
+            visible = body.trim_end();
+        }
+        let observed = if previous["item"] == item {
+            previous["observed_at"].as_str().map(str::to_owned)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+        let value = json!({"local":local,"thread":thread,"turn":physical,"generation":generation,"item":item,"text":visible,"at_millis":now,"observed_at":observed});
+        conn.execute(
+            "UPDATE bot_state SET value=?2 WHERE key=?1",
+            params![key, value.to_string()],
+        )?;
+        Ok(true)
+    }
+
+    pub fn clear_response_draft(
+        &self,
+        local: i64,
+        physical: &str,
+        item: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let key = format!(
+            "interaction-response-draft:{}",
+            conn.query_row("SELECT session_id FROM turns WHERE id=?1", [local], |r| r
+                .get::<_, i64>(
+                0
+            ))?
+        );
+        if let Some(item) = item {
+            conn.execute("UPDATE bot_state SET value=json_set(value,'$.text',NULL) WHERE key=?1 AND json_extract(value,'$.local')=?2 AND json_extract(value,'$.turn')=?3 AND json_extract(value,'$.item')=?4",params![key,local,physical,item])?;
+        } else {
+            conn.execute("DELETE FROM bot_state WHERE key=?1 AND json_extract(value,'$.local')=?2 AND json_extract(value,'$.turn')=?3",params![key,local,physical])?;
+        }
+        Ok(())
+    }
+
     /// Register at most one cosmetic choice for an actual current execution.
     /// A recorded final source cannot acquire a hint later and change revision.
     #[allow(clippy::too_many_arguments)]
@@ -317,6 +453,13 @@ impl Store {
             "newest":{"delivery":deliveries.iter().take(8).map(|r|r.0).max().unwrap_or(0),
                       "native":natives.iter().take(8).copied().max().unwrap_or(0)},
             "more":deliveries.len()>8 || natives.len()>8 || matrices.len()>8,"playback":"not_observed"});
+        let draft:Option<String>=conn.query_row("SELECT b.value FROM bot_state b JOIN turns t ON t.id=json_extract(b.value,'$.local') JOIN native_collections n ON n.local_turn=t.id
+            WHERE b.key=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND t.native_thread_id=?4 AND t.status='running' AND t.completed_at IS NULL
+            AND json_extract(b.value,'$.thread')=?4 AND json_extract(b.value,'$.generation')=?5 AND length(trim(json_extract(b.value,'$.text')))>0
+            AND NOT EXISTS(SELECT 1 FROM interaction_native_messages m WHERE m.native_thread=?4 AND m.native_turn=json_extract(b.value,'$.turn') AND m.item_id=json_extract(b.value,'$.item'))",
+            params![format!("interaction-response-draft:{session}"),session,human,native,result["binding"].as_str()],|r|r.get(0)).optional()?;
+        result["response_draft"]=draft.and_then(|v|serde_json::from_str::<Value>(&v).ok())
+            .map(|v|json!({"text":v["text"],"observed_at":v["observed_at"],"provisional":true,"can_listen":false})).unwrap_or(Value::Null);
         if let Some(cursor) = after_matrix {
             result["cursor"]["matrix"] =
                 json!(matrices.iter().take(8).next_back().map_or(cursor, |r| r.0));
@@ -516,6 +659,193 @@ pub(super) fn source_on(
 mod tests {
     use super::*;
     use crate::interaction::{RequestRelation, ReturnRoute, SourceInput, TransportPhase};
+
+    #[test]
+    fn response_draft_is_provisional_owned_bounded_and_retires_on_completion() {
+        let (_file, store, entry, worker, _, _) = setup();
+        let session = store.get_session(entry).unwrap().unwrap();
+        let local = store
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: entry,
+                    from_user_id: 100,
+                    prompt: "Discuss".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(local, "entry-native")
+            .unwrap();
+        store.native_collection_started(local, "physical").unwrap();
+        store
+            .start_response_draft(100, entry, local, "entry-native", "physical")
+            .unwrap();
+        let write = |human, key, native, physical, item, text| {
+            store.interaction_response_draft(human, key, local, native, physical, item, text)
+        };
+        assert!(!write(100, entry, "worker-native", "physical", "A", "Hidden").unwrap());
+        assert!(!write(100, worker.key, "entry-native", "physical", "A", "Hidden").unwrap());
+        assert!(!write(100, entry, "entry-native", "wrong-turn", "A", "Hidden").unwrap());
+        assert!(write(200, entry, "entry-native", "physical", "A", "Hidden").is_err());
+        assert!(
+            !write(
+                100,
+                entry,
+                "entry-native",
+                "physical",
+                "A",
+                &"x".repeat(65537)
+            )
+            .unwrap()
+        );
+        assert!(
+            write(
+                100,
+                entry,
+                "entry-native",
+                "physical",
+                "A",
+                "Useful early text.\n<daimon-result>partial"
+            )
+            .unwrap()
+        );
+        let page = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap();
+        assert_eq!(page["response_draft"]["text"], "Useful early text.");
+        assert_eq!(page["response_draft"]["provisional"], true);
+        assert_eq!(page["response_draft"]["can_listen"], false);
+        assert!(
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|v| v["preview"] != "Useful early text.")
+        );
+        assert!(!write(100, entry, "entry-native", "physical", "A", "More text").unwrap());
+        store
+            .record_native_message(
+                local,
+                "entry-native",
+                "physical",
+                "A",
+                Some("final_answer"),
+                "Confirmed different text.",
+            )
+            .unwrap();
+        assert!(
+            store
+                .interaction_presentation_list(100, entry, 0, 0)
+                .unwrap()["response_draft"]
+                .is_null()
+        );
+        assert!(!write(100, entry, "entry-native", "physical", "A", "Late replay").unwrap());
+        assert!(write(100, entry, "entry-native", "physical", "B", "Next draft").unwrap());
+        store
+            .clear_response_draft(local, "physical", Some("unrelated-item"))
+            .unwrap();
+        assert!(
+            !store
+                .interaction_presentation_list(100, entry, 0, 0)
+                .unwrap()["response_draft"]
+                .is_null()
+        );
+        store
+            .clear_response_draft(local, "physical", Some("B"))
+            .unwrap();
+        assert!(
+            store
+                .interaction_presentation_list(100, entry, 0, 0)
+                .unwrap()["response_draft"]
+                .is_null()
+        );
+        assert!(
+            write(
+                100,
+                entry,
+                "entry-native",
+                "physical",
+                "C",
+                "Binding scoped"
+            )
+            .unwrap()
+        );
+        store
+            .start_response_draft(100, entry, local, "entry-native", "physical-2")
+            .unwrap();
+        assert!(
+            !write(
+                100,
+                entry,
+                "entry-native",
+                "physical",
+                "late",
+                "Old physical delta"
+            )
+            .unwrap()
+        );
+        assert!(
+            write(
+                100,
+                entry,
+                "entry-native",
+                "physical-2",
+                "D",
+                "Goal continuation draft"
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            store
+                .interaction_presentation_list(100, entry, 0, 0)
+                .unwrap()["response_draft"]["text"],
+            "Goal continuation draft"
+        );
+        assert!(!write(100, entry, "entry-native", "physical-2", "D", "").unwrap());
+        assert!(
+            store
+                .interaction_presentation_list(100, entry, 0, 0)
+                .unwrap()["response_draft"]
+                .is_null()
+        );
+        assert!(
+            write(
+                100,
+                entry,
+                "entry-native",
+                "physical-2",
+                "E",
+                "Producer lease"
+            )
+            .unwrap()
+        );
+        store
+            .set_session_codex_thread(entry, "replacement-native")
+            .unwrap();
+        assert!(
+            store
+                .interaction_presentation_list(100, entry, 0, 0)
+                .unwrap()["response_draft"]
+                .is_null()
+        );
+        drop(store);
+        let reopened = Store::open(_file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let conn = reopened.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM bot_state WHERE key LIKE 'interaction-response-draft:%'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
 
     #[test]
     fn companion_choice_is_bounded_owned_and_immutable_before_final_source() {
