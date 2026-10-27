@@ -797,7 +797,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-compose-status p { display:block; }
 .standalone-conversation #conversation-compose-status:has([data-attention="true"]:not(:empty)) p:not([data-attention="true"]) { display:none; }
 .standalone-conversation #conversation-compose-status p[data-attention="true"]:not(:empty) { display:block; margin:0 0 8px; color:var(--warn); overflow-wrap:anywhere; }
-.standalone-conversation #conversation-compose-status:not(:has([data-attention="true"]:not(:empty))) { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.standalone-conversation #conversation-compose-status:not(:has([data-attention="true"]:not(:empty),[data-live-caption="true"]:not(:empty))) { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 /* Attachment choices open from the paperclip; their sheet does not stretch the dock. */
 .standalone-conversation #conversation-visual[open] { position:static; width:auto; }
 .standalone-conversation #conversation-compose .composer-actions #conversation-visual[open] { grid-column:1; }
@@ -927,3 +927,6 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .markdown-text blockquote { border-left:2px solid var(--line); padding-left:.8em; color:var(--muted); }
 .markdown-text table { display:block; overflow-x:auto; border-collapse:collapse; }
 .markdown-text th,.markdown-text td { padding:.3em .6em; border:1px solid var(--line); }
+
+/* Live captions are useful conversation content, independently of validation errors. */
+.standalone-conversation #conversation-compose-status:has(#conversation-voice-state[data-live-caption="true"]) #conversation-send-state { display:none; }

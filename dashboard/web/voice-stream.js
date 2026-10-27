@@ -65,7 +65,8 @@ window.StreamingVoice=(()=>{
         else if(value.type==='partial'&&typeof value.text==='string')onPartial(value.text);
         else if(value.type==='prepared'){
           if(canonicalRecorder)throw Error('Live captions cannot confirm the original');
-          if(value.id!==id||!ending||!finishSent)throw Error('Unexpected prepared recording');
+          if(value.id!==id||!ending||!finishSent||typeof value.text!=='string')throw Error('Unexpected prepared recording');
+          recorder.preparedText=value.text;
           complete();
         }else if(value.type==='unavailable'){ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}
       }catch{ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}

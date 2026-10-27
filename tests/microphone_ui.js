@@ -42,6 +42,14 @@ function boot(live=false){
  };
 }
 (async()=>{
+ const prepared=boot(true);await prepared.click();prepared.preparation().onPartial('Live caption without a prior error');
+ assert.equal(prepared.nodes.get('#conversation-voice-state')['data-live-caption'],'true');
+ prepared.devices[0].preparedText='Final recognized sentence';const savedHold=prepared.holdUpload();
+ prepared.nodes.get('#conversation-send').handlers.click();await until(()=>prepared.uploads.length===1);
+ assert.equal(prepared.state(),'Final recognized sentence','Keep completed recognition visible during durable saving');
+ savedHold.resolve();await until(()=>prepared.received.length===1);
+ assert.equal(prepared.state(),'Final recognized sentence','Do not replace prepared text with a second-transcription claim');
+ assert.equal(prepared.uploads.length,1);
  const mediaHint={source:'native:7',revision:'a'.repeat(64),segment_offset:240,position_millis:3700,duration_millis:12000,state:'interrupted'};
  const playCapture=boot();playCapture.playback(mediaHint);const heldPlayPermission=playCapture.permission();
  const playingStart=playCapture.click();playCapture.playback({...mediaHint,position_millis:9900});heldPlayPermission.resolve(playCapture.media());await playingStart;
