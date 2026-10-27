@@ -246,15 +246,98 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         let decision: Decision = serde_json::from_str(raw)?;
         return decide_scoped(app, human, entry, decision, None, None, true).await;
     }
+    if let Some(raw) = args.strip_prefix("internal dismiss ") {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Dismissal {
+            binding: String,
+            id: String,
+            revision: String,
+        }
+        let selected: Dismissal = serde_json::from_str(raw)?;
+        return app.shared.store.internal_dismiss_human_task(
+            human,
+            entry,
+            &selected.binding,
+            &selected.id,
+            &selected.revision,
+        );
+    }
     if let Some(args) = args.strip_prefix("internal ") {
         let fields: Vec<_> = args.split_whitespace().collect();
         return match fields.as_slice() {
-            ["list", after] => app
-                .shared
-                .store
-                .internal_pending_page(human, entry, after.parse()?),
-            ["request", id, offset] if id.len() <= 64 => {
-                detail_scoped(app, human, entry, id, offset.parse()?, true).await
+            ["list", after] => {
+                let mut page =
+                    app.shared
+                        .store
+                        .internal_pending_page(human, entry, after.parse()?)?;
+                let binding = page["binding"].clone();
+                let entry_binding = page["entry_binding"].clone();
+                for item in page["items"]
+                    .as_array_mut()
+                    .context("Missing internal items")?
+                {
+                    let id = item["id"]
+                        .as_str()
+                        .context("Missing internal identity")?
+                        .to_owned();
+                    item["binding"] = binding.clone();
+                    item["entry_binding"] = entry_binding.clone();
+                    if item["kind"] == "native" {
+                        let detail = detail_scoped(app, human, entry, &id, 0, true).await?;
+                        for key in [
+                            "kind",
+                            "revision",
+                            "state",
+                            "actionable",
+                            "question_index",
+                            "question_total",
+                            "capture_version",
+                        ] {
+                            item[key] = detail[key].clone();
+                        }
+                    } else if item["kind"] == "task" {
+                        let task = app.shared.store.internal_human_task(human, entry, &id)?;
+                        for key in ["revision", "state", "can_dismiss"] {
+                            item[key] = task[key].clone();
+                        }
+                    }
+                }
+                Ok(page)
+            }
+            ["request", id, offset] | ["request", id, offset, _] if id.len() <= 64 => {
+                let value = detail_scoped(app, human, entry, id, offset.parse()?, true).await?;
+                if fields.len() == 4 && value["revision"] != fields[3] {
+                    bail!("Internal request changed; read its current proposal");
+                }
+                Ok(value)
+            }
+            ["task", id, offset] | ["task", id, offset, _] if id.len() <= 64 => {
+                let mut value = app.shared.store.internal_human_task(human, entry, id)?;
+                if fields.len() == 4 && value["revision"] != fields[3] {
+                    bail!("Internal action changed; read its current text");
+                }
+                let offset: usize = offset.parse()?;
+                let body = value["body"].as_str().context("Missing task text")?;
+                let length = body.chars().count();
+                if offset > length {
+                    bail!("Invalid task offset");
+                }
+                let part: String = body.chars().skip(offset).take(4000).collect();
+                let end = offset + part.chars().count();
+                value["body"] = json!(part);
+                value["offset"] = json!(offset);
+                value["next_offset"] = if end < length {
+                    json!(end)
+                } else {
+                    Value::Null
+                };
+                let target: SessionKey = serde_json::from_value(value["target"].clone())?;
+                value["label"] = json!(super::routing::label(&app.shared, target));
+                Ok(value)
+            }
+            ["receipt", id, rev] if id.len() <= 64 && rev.len() == 64 => {
+                retained_receipt(app, human, entry, id, rev, false)
             }
             _ => bail!("Expected internal list CURSOR, request ID OFFSET or decide JSON"),
         };

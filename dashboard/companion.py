@@ -24,6 +24,10 @@ def permitted(method, path, scope='interaction_only', artifact_access=False, ale
         return scope == 'interaction_only' and alerts_access is True and method == 'GET'
     if path == '/api/interaction/artifacts' or path.startswith('/api/interaction/artifacts/'):
         return scope == 'interaction_only' and artifact_access is True and method == 'GET' and re.fullmatch(r'/api/interaction/artifacts(?:/[a-f0-9-]{36})?', path) is not None
+    if path == '/api/interaction/internal' or path.startswith('/api/interaction/internal/'):
+        return scope=='interaction_only' and (
+            method=='GET' and re.fullmatch(r'/api/interaction/internal(?:/(?:requests|tasks)/[a-f0-9]{32}(?:/receipt)?)?',path) is not None
+            or method=='POST' and re.fullmatch(r'/api/interaction/internal/(?:requests|tasks)/[a-f0-9]{32}',path) is not None)
     if scope == 'monitor_readonly':
         return method == 'GET' and re.fullmatch(r'/api/interaction(?:/(?:part|sonic|events|goals(?:/[a-f0-9-]{36})?|telegram-inputs|inputs(?:/(?:[a-f0-9-]{36}|telegram:[0-9]+)(?:/trace(?:/(?:original|[a-f0-9-]{36}))?|/image)?)?))?', path) is not None
     if scope != 'interaction_only':

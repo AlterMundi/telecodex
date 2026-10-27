@@ -15,7 +15,7 @@ window.AttentionCarousel = (() => {
       strip.append(all);
     }else strip.append(previous,current,next,all);
     line.append(strip);
-    const dialog=el("dialog"),heading=el("h2",localOnly?"For you":"Pending requests"),closeButton=el("button","Close"),scope=el("p","From this conversation and its routed sessions.");
+    const dialog=el("dialog"),heading=el("h2",localOnly?"For you":"Pending requests"),closeButton=el("button","Close"),scope=el("p",localOnly?"From this conversation and its routed sessions.":"From your internal work sessions.");
     dialog.className="pending-panel";dialog.setAttribute("aria-label",localOnly?"For you":"Pending requests");
     closeButton.type="button";scope.className="note";
     dialog.append(heading,closeButton,scope,panel);document.body.append(dialog);
@@ -29,7 +29,7 @@ window.AttentionCarousel = (() => {
     function render(){
       strip.hidden=!localOnly&&!items.length;
       if(!localOnly)line.dataset.pending=String(!!items.length);
-      scope.textContent=items.length?"From this conversation and its routed sessions.":"Nothing pending for you in this conversation.";
+      scope.textContent=items.length?(localOnly?"From this conversation and its routed sessions.":"From your internal work sessions."):(localOnly?"Nothing pending for you in this conversation.":"Nothing pending in your work sessions.");
       previous.disabled=next.disabled=items.length<2;
       const item=items[position];selected=item?.id;
       current.textContent=item?`${item.label||"Conversation"} · ${item.title||"Your response is needed"}`:"";

@@ -177,7 +177,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                     return JSONResponse({'detail':exc.detail}, status_code=exc.status_code)
                 bound = 2*1024*1024 if request.url.path.endswith('/visual') else 20*1024*1024
             else:
-                bound = 262144 if (request.url.path == '/api/interaction/inputs' or re.fullmatch(r'/api/interaction/requests/[a-f0-9]{32}',request.url.path)) else 16384
+                bound = 262144 if (request.url.path == '/api/interaction/inputs' or re.fullmatch(r'/api/interaction/(?:internal/)?requests/[a-f0-9]{32}',request.url.path)) else 16384
             data = bytearray()
             async for chunk in request.stream():
                 data.extend(chunk)
@@ -761,6 +761,70 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(400,'Select one current action to dismiss') from None
         except (ProviderUnavailable,OSError):
             raise HTTPException(409,'Dismissal unconfirmed or action changed; check its current state') from None
+        await authorize_async(request)
+        return result
+
+    @app.get('/api/interaction/internal')
+    async def internal_pending(request: Request, after: int = 0):
+        session=await authorize_async(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.internal_pending,after)
+        except ValueError:
+            raise HTTPException(400,'Invalid internal pending cursor') from None
+        except (ProviderUnavailable,OSError):
+            raise HTTPException(503,'Session pending requests unavailable') from None
+        await authorize_async(request)
+        return {**result,'csrf':session['csrf']}
+
+    @app.get('/api/interaction/internal/{kind}/{ident}')
+    async def internal_pending_detail(request: Request, kind: str, ident: str, offset: int = 0, revision: str | None = None):
+        await authorize_async(request)
+        if kind not in ('requests','tasks'):raise HTTPException(404,'Unknown pending kind')
+        try:
+            from starlette.concurrency import run_in_threadpool
+            method=provider.conversation_request_detail if kind=='requests' else provider.conversation_task_detail
+            result=await run_in_threadpool(method,ident,offset,revision,True)
+        except ValueError:
+            raise HTTPException(400,'Invalid session pending selection') from None
+        except (ProviderUnavailable,OSError):
+            raise HTTPException(409,'Pending item changed; read its current state') from None
+        await authorize_async(request)
+        return result
+
+    @app.get('/api/interaction/internal/requests/{ident}/receipt')
+    async def internal_pending_receipt(request: Request, ident: str, revision: str):
+        await authorize_async(request)
+        try:
+            from starlette.concurrency import run_in_threadpool
+            result=await run_in_threadpool(provider.conversation_decision_receipt,ident,revision,True)
+        except ValueError:
+            raise HTTPException(400,'Invalid session pending receipt') from None
+        except (ProviderUnavailable,OSError):
+            raise HTTPException(409,'Decision receipt unavailable; nothing was repeated') from None
+        await authorize_async(request)
+        return result
+
+    @app.post('/api/interaction/internal/{kind}/{ident}')
+    async def internal_pending_decide(request: Request, kind: str, ident: str):
+        session=await authorize_async(request)
+        if kind not in ('requests','tasks'):raise HTTPException(404,'Unknown pending kind')
+        if not secrets.compare_digest(request.headers.get('x-dashboard-csrf',''),session['csrf']):
+            raise HTTPException(403,'Action token missing')
+        try:
+            body=await request.json()
+            # Conversation-only devices keep their existing approval/cancellation restriction.
+            if kind=='requests' and dict(session).get('scope')=='interaction_only' and (
+                    not isinstance(body,dict) or not isinstance(body.get('action'),dict)
+                    or body['action'].get('kind') not in ('answer','option')):
+                raise HTTPException(403,'Use Sessions to review this approval or cancellation')
+            from starlette.concurrency import run_in_threadpool
+            method=provider.conversation_request_decide if kind=='requests' else provider.conversation_task_dismiss
+            result=await run_in_threadpool(method,ident,body,True)
+        except ValueError:
+            raise HTTPException(400,'Select one exact session pending action') from None
+        except (ProviderUnavailable,OSError):
+            raise HTTPException(409,'Action unconfirmed or changed; inspect its current state before retrying') from None
         await authorize_async(request)
         return result
 
