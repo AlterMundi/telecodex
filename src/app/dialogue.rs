@@ -154,6 +154,12 @@ async fn playback_context(
             &format!("part {} {} {offset}", report.source, report.revision),
         )
     };
+    // Native question inspection may wait for its live responder lock. An old
+    // execution must not finish a read after the entry has changed owner.
+    super::observer::tool_owner(&app.shared, key, human, native)?;
+    if closed.is_cancelled() {
+        bail!("Playback inspection closed before its source was read");
+    }
     match selected {
         Ok(view)
             if view["revision"] == report.revision

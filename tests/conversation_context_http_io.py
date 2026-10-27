@@ -100,6 +100,25 @@ def qualify(binary):
         old_audio=j.call('route-playback-answered','playback_context',{'input_ref':changed})
         assert old_audio['availability'] in ('source_not_current','source_unconfirmed')
         assert 'source_part' not in old_audio and old_audio['report']==playback
+        body='Canonical spoken worker result. '+('Español 🌱 mixed English. '*150)
+        j.answer_worker(7,body)
+        def returned_source():
+            return next((item for item in b.get('/api/interaction')['items']
+                         if item.get('kind')=='worker_result' and item.get('preview','').startswith('Canonical spoken worker result.')),None)
+        j.wait(lambda:returned_source() is not None)
+        source=returned_source()
+        worker_audio={**playback,'source':source['id'],'revision':source['revision'],'segment_offset':12}
+        worker_input,_=b.text('Discuss the interrupted worker explanation.',None,worker_audio)
+        j.wait(lambda:b.status(worker_input)['phase']=='accepted')
+        worker_view=j.call('route-playback-worker-source','playback_context',{'input_ref':worker_input})
+        assert worker_view['availability']=='current_source'
+        assert worker_view['source_part']['text']==body[12:1612]
+        assert worker_view['source_part']['offset']==12 and worker_view['source_part']['next_offset']==1612
+        assert worker_view['source_part']['target']['thread_id']==7
+        with sqlite3.connect(j.root/'state.sqlite')as db:
+            db.execute('UPDATE sessions SET force_fresh_thread=1 WHERE thread_id=7')
+        replaced=j.call('route-playback-replaced-worker','playback_context',{'input_ref':worker_input})
+        assert replaced['availability']=='source_not_current' and 'source_part' not in replaced
         missing_audio={**playback,'source':'native:9223372036854775807'}
         missing_input,_=b.text('Unrelated new topic with an unavailable audio source.',None,missing_audio)
         j.wait(lambda:b.status(missing_input)['phase']=='accepted')
