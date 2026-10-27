@@ -684,7 +684,7 @@ keeping its high-water mark.
 
 The live scheduler retains one partial media range separately from completed
 ranges. It cannot advance over an earlier unsaid gap. Completion of the matching
-prefix or an explicitly resumed canonical remainder joins those ranges. The canonical mapping stays unpublished while prefix validation is pending or
+prefix or an explicitly resumed canonical remainder joins those ranges. A new canonical mapping stays unpublished while prefix validation is pending or
 offline. Changed confirmation retires the partial cursor; entry replacement and
 superseded validations cannot publish it later. Completed media retains the full
 segment boundary even if word alignment ends before trailing punctuation. No new

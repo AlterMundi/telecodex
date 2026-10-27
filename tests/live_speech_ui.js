@@ -60,7 +60,12 @@ const deadline=setTimeout(()=>{throw Error("Live speech test did not settle");},
  partialGap.observe({...key,text:'First sentence. Second useful sentence. Unfinished'},'binding');
  const ahead=await partialGap.next();assert(partialGap.admit(ahead));partialGap.checkpoint(ahead,ahead.speech_start,ahead.speech_start+5);
  assert.equal((await partialGap.reconcile(canonical,async()=>{})).resume,0,'A later aligned prefix cannot hide the earlier unplayed range');
- assert.equal(partialGap.ended(missing).resume,ahead.speech_start+5,'An earlier completed gap joins the later partial cursor');
+ let validateAgain;const rechecking=partialGap.reconcile(canonical,()=>new Promise(resolve=>{validateAgain=resolve;}));
+ assert.equal(partialGap.resume(canonical),0,'Revalidating the same source cannot remove its known earlier-gap fence');
+ assert.equal(partialGap.resume({...canonical,revision:'unverified-new-revision'}),undefined,'The previous gap fence is scoped to its validated revision');
+ assert.equal(partialGap.checkpoint(ahead,ahead.speech_start,ahead.speech_start+6),undefined);
+ validateAgain();assert.equal((await rechecking).resume,0);
+ assert.equal(partialGap.ended(missing).resume,ahead.speech_start+6,'An earlier completed gap joins the later partial cursor');
  partialGap.reset();assert.equal(partialGap.checkpoint(ahead,ahead.speech_start,ahead.speech_start+10),undefined,'Entry reset retires timing state');
  for(const outcome of ['match','changed','offline','reset']){
    const pendingState=context.window.LiveSpeech.mount();pendingState.observe({...key,text:'A useful spoken sentence. Unfinished'},'binding');

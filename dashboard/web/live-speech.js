@@ -67,7 +67,7 @@ window.LiveSpeech=(()=>{
     }
     function resume(source){
       const record=records.get(identity(source));
-      if(record?.canonicalSource?.id!==source.id || record.canonicalSource.revision!==source.revision)return;
+      if(record?.validatedSource?.id!==source.id || record.validatedSource.revision!==source.revision)return;
       return resumeOffset(record);
     }
     function resumeOffset(record){
@@ -107,14 +107,14 @@ window.LiveSpeech=(()=>{
       if(!record || !["integrator_answer","integrator_progress"].includes(source.kind))return {source};
       const mapping={source};record.mapping=mapping;
       record.canonical=source.id;record.canonicalSource=undefined;record.pending=undefined;
-      if(!record.last){record.canonicalSource=source;return {source};}
+      if(!record.last){record.canonicalSource=source;record.validatedSource=source;return {source};}
       // Validate the full frozen prefix against the canonical item, not a preview.
       let changed=false;
       try{await validate(record.last,record.last.speech_start);}catch(error){
         if(error.status!==409)throw error;changed=true;
       }
       if(records.get(record.key)!==record || record.mapping!==mapping)return {source,skip:true};
-      record.canonicalSource=source;
+      record.canonicalSource=source;record.validatedSource=source;
       if(changed){record.changed=true;record.completed=0;record.partial=undefined;record.finished.clear();}
       return {source:{...source,speech_start:changed?0:record.attempted},changed,
         resume:changed?0:resumeOffset(record),skip:!changed && (record.interrupted || record.attempted>=source.text_characters)};
