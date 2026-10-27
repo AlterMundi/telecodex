@@ -437,6 +437,38 @@ source workers or authorize another query.
 
 ## Semantic destination selection through the integrating dialogue
 
+### Foreground routing context
+
+The ordinary integrating native turn receives a compact metadata snapshot from
+its existing receiving registry, plus the reference to the original that started
+that turn. This removes capabilities/inputs/inventory round trips solely to
+recover an already known original and clearly named destination. It introduces
+no extra model, native thread, registry, dispatcher or persistent writer.
+
+The snapshot is bounded to8192 JSON bytes of candidates. `complete` and `total`
+distinguish truncation or unavailable metadata from an empty registry. Stable
+topic selectors remain separate from untrusted display labels; neither labels
+nor eligibility prove relevance, readiness or completion. Contextual/ambiguous
+requests still need observer evidence or human clarification. A source reference
+is scoped to the **initial** turn input: later steered messages retain their own
+references and must never inherit that earlier message's routing decision.
+
+The foreground role keeps ordinary dialogue local and routes authorized long
+work to its owning session without waiting/polling for completion. It does not
+create a duplicate session because one is busy, rewrite human text, change the
+selected model, cancel a job or mutate a goal. All dispatches still use the
+existing exact-original controller with current owner/binding/generation checks.
+A stale snapshot cannot bypass those checks. Unknown controller operations still
+require capability discovery; this is an input hint, not a capability grant.
+
+`tests/semantic_routing_io.py` exercises the first provider-facing turn context,
+stable named dispatch without discovery calls, a fresh subsequent input while
+two workers remain active and their independent attributed returns. Synthetic
+native/model peers prove wiring and lifecycle, not actual model obedience or a
+latency improvement. Those require the v0.3 integrated selected-model journey in
+[#303](https://github.com/AlterMundi/telecodex/issues/303).
+
+
 New native integrating entries also declare the stable `interaction_controller`
 tool. Its `capabilities` operation returns the supported operations and schemas,
 so later controller features can evolve without replacing a native conversation's
