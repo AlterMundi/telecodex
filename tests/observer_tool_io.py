@@ -71,6 +71,14 @@ class Portfolio(Dialogue):
         self.goal_state='blocked';self.portfolio_reads=[];self.rebind_on_goal=False
         super().__init__(binary)
 
+    def tool_request(self,send,ident,mode,selectors,*,namespace=None):
+        thread,turn=self.tool_context
+        params={'threadId':thread,'turnId':turn,'callId':ident,'tool':'interaction_controller',
+                'namespace':namespace,'arguments':{'operation':'candidates','arguments':{'mode':mode,'selectors':selectors}}}
+        send({'id':'foreign-'+ident,'method':'item/tool/call','params':{**params,'threadId':'foreign'}})
+        send({'id':ident,'method':'item/tool/call','params':params})
+        send({'id':ident,'method':'item/tool/call','params':params})
+
     def handle_extra_rpc(self,request,send):
         method=request.get('method');p=request.get('params',{});ident=request.get('id')
         if method in ('thread/goal/get','thread/goal/snapshot') and p.get('threadId')=='native-topic-7':
