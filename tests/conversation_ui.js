@@ -450,10 +450,28 @@ function boot(readOnly=false,standalone=false,options={}) {
   background.failPage('AbortError');await background.ui.refresh();
   assert.equal(background.nodes.get('#conversation-voice-replies').dataset.voiceState,'on','The API request deadline cannot become a human pause');
   background.mediaActions.get('pause')();assert.equal(bgPlayer.paused,true);assert.equal(background.mediaSession.playbackState,'paused');
+  assert.equal(background.nodes.get('#conversation-voice-replies').dataset.lastPauseReason,'media-session','Retain the actual pause entry point locally for device diagnosis');
   background.show();assert.equal(bgPlayer.paused,true,'OS Pause is explicit human intent');
   background.mediaActions.get('play')();await until(()=>!bgPlayer.paused);
   background.ui.pause();background.hide();background.show();
   assert.equal(bgPlayer.paused,true,'Returning never overrides an explicit human pause');background.ui.stop();
+
+  const speakerResume=boot(false,true,{clock:true});speakerResume.audio();await speakerResume.ui.refresh();
+  speakerResume.nodes.get('#conversation-voice-replies').handlers.click();speakerResume.addReplies(1);await speakerResume.ui.refresh();
+  const srPlayer=speakerResume.nodes.get('#conversation-audio');await until(()=>speakerResume.audioCalls.length===1&&!srPlayer.paused);
+  speakerResume.mediaActions.get('pause')();assert.equal(srPlayer.paused,true);
+  speakerResume.nodes.get('#conversation-voice-replies').handlers.click();
+  await until(()=>!srPlayer.paused);
+  assert.equal(speakerResume.audioCalls.length,1,'Speaker resume reuses the loaded reply, without another synthesis');
+  speakerResume.addReplies(1);await speakerResume.ui.refresh();srPlayer.ended=true;await srPlayer.handlers.ended();speakerResume.clock.fire(450);
+  await until(()=>speakerResume.audioCalls.length===2&&!srPlayer.paused);
+  assert.equal(speakerResume.audioCalls[1].source,'native:10','New replies remain audible after speaker resume, without a Stop cycle');speakerResume.ui.stop();
+  const emptyResume=boot(false,true,{clock:true});await emptyResume.ui.refresh();emptyResume.nodes.get('#conversation-voice-replies').handlers.click();emptyResume.addReplies(1);await emptyResume.ui.refresh();
+  await until(()=>emptyResume.audioCalls.length===1);emptyResume.ui.pause();
+  emptyResume.nodes.get('#conversation-voice-replies').handlers.click();emptyResume.audio();emptyResume.addReplies(1);await emptyResume.ui.refresh();
+  await until(()=>emptyResume.audioCalls.length===2&&!emptyResume.nodes.get('#conversation-audio').paused);
+  assert.equal(emptyResume.audioCalls[1].source,'native:10','An aborted preparation cannot hold the resumed voice queue');
+  assert.equal(emptyResume.audioCalls.filter(call=>call.source==='native:9').length,1,'Resuming never automatically retries the cancelled/uncertain synthesis');emptyResume.ui.stop();
 
   for(const action of ['pause','stop','hide','disable','capture','offline','pagehide']){
     const gap=boot(false,false,{clock:true,capture:true});gap.audio(true);await gap.ui.refresh();

@@ -353,6 +353,16 @@ pause. Explicit player/OS Pause, Stop, access revocation and leaving the ordinar
 non-standalone view retain their existing behavior. This fixes a reproduced
 timeout path; it does not identify the cause of every reported device pause.
 
+Resuming the speaker toggle also resumes an already-loaded paused reply through
+the ordinary canonical-source validation, without synthesizing it again. An
+ended segment or cancelled preparation releases its queue ownership, allowing
+new replies to play without a Stop/off/on cycle. Cancelled or uncertain speech
+preparation is never retried automatically. Recording still takes precedence.
+The speaker element retains only its last on-to-paused reason and client time
+in `data-last-pause-reason`/`data-last-pause-at`, for distinguishing player/OS,
+access, capability and observation transitions during device diagnosis. This
+view-local diagnostic contains no transcript and creates no history collector.
+
 ## Prepared completion receiving evidence
 
 PR348 source637836cdb08f5f18ec3e64e77073d994bba6e56c is receiving-selected

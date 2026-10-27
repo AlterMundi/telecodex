@@ -912,7 +912,18 @@ window.Conversation = (() => {
       voiceEnabled=false;voiceBusy=false;voiceQueue.length=0;voiceFinalTimes.clear();voiceContext=undefined;voiceStatus();stop();
     }
     $("#conversation-voice-replies").addEventListener("click",()=>{
-      if(voiceEnabled && !voiceSuspended)disableVoice();else {enableVoice();drainVoice();}
+      if(voiceEnabled && !voiceSuspended)disableVoice();else {
+        enableVoice();
+        if(captureBusy)return;
+        if(active && blobUrl && !audio.ended){
+          voiceBusy=true;void startPlayback();
+        }else{
+          // A cancelled preparation or ended segment cannot own the queue
+          // forever. Release it without retrying its synthesis automatically.
+          if(active)stop();
+          voiceBusy=false;drainVoice();
+        }
+      }
     });
     function stop(text = "Audio stopped.") {
       rememberPosition();
@@ -931,7 +942,11 @@ window.Conversation = (() => {
       audioState(text);
       $("#conversation-player").hidden = true;
     }
-    function pause() {
+    function pause(reason="manual") {
+      if(voiceEnabled && !voiceSuspended){
+        const button=$("#conversation-voice-replies");
+        button.dataset.lastPauseReason=reason;button.dataset.lastPauseAt=new Date().toISOString();
+      }
       rememberPosition();
       presentState({playback:undefined});
       cancelSpeechWait();voiceBusy=false;voiceQueue.length=0;
@@ -962,7 +977,7 @@ window.Conversation = (() => {
         history.replaceState(null, "", url);
       }
       try { telegram?.BackButton?.[enabled ? "show" : "hide"]?.(); } catch (_) {}
-      if (!enabled) {pause(); sound?.reset(); microphone?.deactivate();}
+      if (!enabled) {pause("view"); sound?.reset(); microphone?.deactivate();}
       modeChanged(enabled, initial);
     }
     // api() aborts a request at its deadline. That is a connection interruption,
@@ -973,10 +988,10 @@ window.Conversation = (() => {
       if (error.status === 401 || error.status === 403) {
         onUnauthorized?.(error);
         clearFiles();
-        pause();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
+        pause("access");stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
-      } else if(!(standalone && voiceEnabled && !voiceSuspended && transientConnectionError(error)))pause();
+      } else if(!(standalone && voiceEnabled && !voiceSuspended && transientConnectionError(error)))pause("observation");
       $("#conversation-state").textContent = error.name === "TypeError" ? "Connection unavailable. Refresh to reconnect."
         : error.message || "Replies are unavailable. Refresh to continue.";
     }
@@ -1080,7 +1095,7 @@ window.Conversation = (() => {
       microphone?.configure(value.can_speak,value.can_stream_transcribe,value.streaming_transcription_mode);
       setCsrf(value.csrf);
       canListen = !readOnly && value.can_listen;canStreamSpeech=canListen && !!value.can_stream_speech;
-      if(!canListen && (voiceEnabled || active || speechWait))pause();
+      if(!canListen && (voiceEnabled || active || speechWait))pause("capability");
       $("#conversation-voice-replies").disabled=!canListen;
       for (const source of value.items)upsert(source);
       if(direction==="after")for(const source of value.items)companion?.reply(source);
@@ -1343,7 +1358,7 @@ window.Conversation = (() => {
     toggle.addEventListener("click", () => {
       if(captureBusy)return;
       if (audio.paused) { cancelSpeechWait();voiceSuspended=false;voiceStatus();if (audio.ended) audio.currentTime = 0; startPlayback(); }
-      else pause();
+      else pause("player");
     });
     $("#conversation-stop").addEventListener("click",()=>{sound?.disable();disableVoice();});
     $("#conversation-open").addEventListener("click", () => setMode(true));
@@ -1358,7 +1373,7 @@ window.Conversation = (() => {
       finally { reading = false; $("#conversation-older").disabled = false; }
     });
     document.addEventListener("visibilitychange", () => {
-      if(document.hidden){if(!playbackAllowed())pause();return;}
+      if(document.hidden){if(!playbackAllowed())pause("hidden");return;}
       if(standalone && voiceEnabled && !voiceSuspended && enabled && ready){
         // A browser suspension preserves intent; a human pause clears active.auto.
         if(active?.auto && audio.ended && !active.segmentEnded)audio.dispatchEvent?.(new Event("ended"));
@@ -1369,7 +1384,7 @@ window.Conversation = (() => {
     });
     window.addEventListener("pagehide", event => {
       if(event?.persisted && standalone && voiceEnabled && !voiceSuspended)return;
-      pause();stop();clearFiles();
+      pause("pagehide");stop();clearFiles();
     });
     window.addEventListener("pageshow", event => {
       if(event?.persisted && enabled && ready){
@@ -1379,7 +1394,7 @@ window.Conversation = (() => {
     });
     window.addEventListener("offline", () => {
       presentState({connected:false});
-      if(!standalone || !voiceEnabled || voiceSuspended)pause();
+      if(!standalone || !voiceEnabled || voiceSuspended)pause("offline");
       $("#conversation-state").textContent = "Offline. Replies already loaded remain readable.";
     });
     window.addEventListener("online", () => {
@@ -1393,7 +1408,7 @@ window.Conversation = (() => {
     if(mediaSession){
       for(const [action,handler] of Object.entries({
         play:()=>{voiceSuspended=false;voiceStatus();if(active && blobUrl)startPlayback();else {enableVoice();drainVoice();}},
-        pause:()=>pause(),stop:()=>disableVoice()
+        pause:()=>pause("media-session"),stop:()=>disableVoice()
       }))try{mediaSession.setActionHandler(action,handler);}catch{}
     }
     telegram?.onEvent?.("deactivated", pause);
