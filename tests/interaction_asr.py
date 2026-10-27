@@ -82,6 +82,60 @@ class Retention(unittest.TestCase):
         record.unlink()
         self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Live final words')
         self.assertEqual(self.calls(),0)
+    def identity_job(self):
+        identity={'schema':'telecodex.interaction-asr-result/v1',
+            'source_sha256':asr.digest(self.source.read_bytes()),
+            'route_sha256':asr.digest(self.route.read_bytes()),'helper_sha256':asr.digest(self.helper.read_bytes())}
+        return self.root/'cache'/asr.digest(asr.canonical(identity))
+    def full_prepared_cache(self):
+        root=self.root/'streamed';root.mkdir(mode=0o700,exist_ok=True)
+        with (root/'retained.json').open('wb') as stream:stream.truncate(asr.PREPARED_BUDGET)
+        self.cfg['streaming_cache_root']=str(root);self.write_config();return root
+    def test_prepared_commit_does_not_rescan_or_sync_file_asr_history(self):
+        record,_=self.streaming_fixture();(self.root/'cache').mkdir(mode=0o700)
+        directory=asr.directory
+        def checked(path):
+            self.assertFalse(Path(path).is_relative_to(self.root/'cache'),'Prepared text must not establish another file-ASR outcome')
+            return directory(path)
+        with patch.object(asr,'directory',side_effect=checked),patch.object(asr,'reserve',side_effect=AssertionError('Historical file-ASR scan')):
+            self.assertEqual(self.run_asr()['text'],'Live final words')
+        self.assertEqual(len(list((self.root/'streamed').glob('asr-*.json'))),1)
+        self.assertFalse(list((self.root/'cache').glob('*/state.json')))
+        record.unlink();self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Live final words')
+        self.assertEqual(self.calls(),0)
+    def test_full_prepared_cache_preserves_legacy_completion_and_uncertainty(self):
+        self.run_asr();self.full_prepared_cache()
+        self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Final words')
+        self.assertEqual(self.calls(),1)
+        state=self.identity_job()/'state.json';value=json.loads(state.read_text());value['phase']='unconfirmed';state.write_text(json.dumps(value))
+        with self.assertRaisesRegex(asr.RenderError,'retained-asr-outcome-no-automatic-retry'):
+            self.run_asr()
+        self.assertEqual(self.calls(),1)
+    def test_full_prepared_cache_does_not_disable_ordinary_file_fallback(self):
+        root=self.full_prepared_cache();self.assertEqual(self.run_asr()['text'],'Final words')
+        self.assertEqual(self.calls(),1);self.assertFalse(list(root.glob('asr-*.json')))
+    def test_new_stream_completion_obeys_shared_prepared_quota(self):
+        self.streaming_fixture();self.full_prepared_cache()
+        with self.assertRaisesRegex(asr.RenderError,'prepared-transcription-storage-full'):
+            self.run_asr()
+        self.assertEqual(self.calls(),0);self.assertFalse(list((self.root/'streamed').glob('asr-*.json')))
+    def test_late_old_helper_cannot_admit_file_asr_during_prepared_commit(self):
+        self.streaming_fixture();original=asr.streaming_result;attempts=[]
+        def late_writer(*args):
+            job=self.identity_job()
+            with self.assertRaisesRegex(asr.RenderError,'render-in-progress'):
+                with asr.lock(job/'.lock'):attempts.append('old helper admitted')
+            return original(*args)
+        with patch.object(asr,'streaming_result',side_effect=late_writer):
+            self.assertEqual(self.run_asr()['text'],'Live final words')
+        self.assertEqual(attempts,[]);self.assertEqual(self.calls(),0)
+        self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Live final words')
+    def test_changed_flat_completion_is_refused_without_file_asr(self):
+        self.streaming_fixture();self.run_asr()
+        record=next((self.root/'streamed').glob('asr-*.json'));value=json.loads(record.read_text());value['result']['text']='Changed';record.write_text(json.dumps(value))
+        with self.assertRaisesRegex(asr.RenderError,'retained-asr-outcome-no-automatic-retry'):
+            self.run_asr()
+        self.assertEqual(self.calls(),0)
     def test_stream_receipt_cannot_substitute_another_original(self):
         record,value=self.streaming_fixture();value['source_sha256']='a'*64;record.write_text(json.dumps(value))
         with self.assertRaisesRegex(asr.RenderError,'invalid-completed-streaming-transcript'):

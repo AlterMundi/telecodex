@@ -221,8 +221,8 @@ allows the next segment to prepare during playback. It is not token-level native
 LLM output streaming, a measured latency result, or completion of foreground
 separation/barge-in. The option is receiving-enabled in CompAII’s selected app after actual-provider
 and Chromium qualification (PR316). This does not change its conversational model.
-Streaming input captions are now receiving-enabled; canonical recognition still
-uses the existing final-file transcriber. The earlier deployment record below
+Streaming input captions are now receiving-enabled; current prepared recognition
+uses Gemini with exact-original reuse and final-file fallback (PR341). The earlier deployment record below
 describes PR316 at its adoption time, rather than the current software selection.
 
 
@@ -299,7 +299,7 @@ and streaming input quality remain unfinished under milestone9.
 
 ## Gemini receiving rollback
 
-The selected immutable release contains dashboard and scripts from PR341. Its
+The selected receiving releases include PR341's dashboard/provider contract. The
 prepared-transcript cache is shared with the existing native ASR adapter binding.
 For UI/provider rollback, select the retained previous dashboard with PR341's
 compatible scripts reader, restore the previous dashboard configuration and keep
@@ -311,6 +311,25 @@ transcript provenance retains it separately as optional `actual_transcriber`.
 Older receipts without that field remain readable; never infer actual provider
 from the static configured label or rewrite history. Receiving adoption of this
 additive provenance follow-up is recorded separately from PR341 input delivery.
+
+Prepared completion recovery can retain a flat `asr-<identity>.json` in the same
+private prepared-text store, rather than copying text into the file-ASR media
+cache. The identity still covers original bytes, configured route and helper;
+the existing file-ASR identity lock serializes both paths. Existing completed or
+uncertain legacy jobs take precedence. File-ASR still durably establishes its
+job namespace and intent before contacting a provider.
+
+Flat recovery records share the web writer's64MiB/32768-file bound and quota
+lock. They contain text/provenance only; no raw media. Full prepared storage
+refuses a new flat completion, without evicting any outcome or disabling existing
+legacy completion reads or ordinary file-ASR fallback. No automatic cleanup of
+these records is installed. Retain this compatible completion reader during
+rollback, even if streaming input is turned off; do not replace it with an older
+helper that cannot read flat outcomes. Adopt after existing helper processes
+have exited, without terminating or replaying them. Native journals and legacy
+cache contents remain unchanged. This removes a historical-cache scan and data-
+volume durability barriers from the prepared completion path; it does not claim
+an end-to-end latency target or explain every reported wait.
 
 ## Per-session automatic audio attention
 
