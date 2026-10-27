@@ -4,6 +4,48 @@ use super::*;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
+/// Untrusted client media progress attached to one original, never hearing proof.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationPlayback {
+    pub source: String,
+    pub revision: String,
+    pub segment_offset: usize,
+    pub position_millis: u64,
+    pub duration_millis: Option<u64>,
+    pub state: String,
+}
+impl ConversationPlayback {
+    pub fn validate(&self) -> Result<()> {
+        let source = ConversationReply {
+            source: self.source.clone(),
+            revision: self.revision.clone(),
+            context_only: true,
+        };
+        let native = self
+            .source
+            .strip_prefix("native:")
+            .and_then(|v| v.parse::<i64>().ok())
+            .is_some_and(|id| id > 0 && self.source == format!("native:{id}"));
+        if ((!native && source.validate_context().is_err())
+            || self.revision.len() != 64
+            || !self
+                .revision
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+            || self.segment_offset > 1_000_000
+            || self.position_millis > 3_600_000
+            || self
+                .duration_millis
+                .is_some_and(|v| v == 0 || v > 3_600_000)
+            || !matches!(self.state.as_str(), "playing" | "paused" | "interrupted")
+        {
+            bail!("Invalid bounded device playback context");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationInput {
     pub id: String,
@@ -22,6 +64,8 @@ pub struct ConversationInput {
     pub voice: Option<ConversationVoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply: Option<ConversationReply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback: Option<ConversationPlayback>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<ConversationFocus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -73,7 +117,7 @@ impl ConversationInput {
             self.answer_text()
         );
         let questions = self.question_versions.as_ref().map(|v| v.len());
-        if self.reply.as_ref().is_some_and(|r| r.context_only) {
+        let rendered = if self.reply.as_ref().is_some_and(|r| r.context_only) {
             let guidance = if self
                 .reply
                 .as_ref()
@@ -113,6 +157,14 @@ impl ConversationInput {
                 guidance,
                 text
             )
+        };
+        match &self.playback {
+            Some(playback) => format!(
+                "[Device-reported playback context]\n{}\nClient-reported media progress at input capture, not proof of human hearing or comprehension. segment_offset is a canonical text segment boundary; position/duration are media milliseconds, not word alignment. This metadata does not select a destination, answer or approval, cancel native work, or instruct resumption. Use scoped conversation/conversation_part to inspect the source if relevant; it may be stale or unrelated.\n\n{}",
+                serde_json::json!({"input_ref":self.id,"playback":playback}),
+                rendered
+            ),
+            None => rendered,
         }
     }
     pub fn question_answer_text(&self, db: &std::path::Path) -> String {
@@ -365,7 +417,9 @@ impl Store {
         text: &str,
         reply: Option<ConversationReply>,
     ) -> Result<(ConversationInput, bool)> {
-        self.capture_original(human, entry, binding, id, text, None, true, reply, None)
+        self.capture_original(
+            human, entry, binding, id, text, None, true, reply, None, None,
+        )
     }
 
     #[cfg(test)]
@@ -392,6 +446,7 @@ impl Store {
             can_prepare,
             None,
             None,
+            None,
         )
     }
 
@@ -406,6 +461,7 @@ impl Store {
         can_prepare: bool,
         reply: Option<ConversationReply>,
         visual: Option<crate::visual::VisualSelection>,
+        playback: Option<ConversationPlayback>,
     ) -> Result<(ConversationInput, bool)> {
         voice.validate()?;
         if voice.transcription.is_some() {
@@ -421,6 +477,7 @@ impl Store {
             can_prepare,
             reply,
             visual,
+            playback,
         )
     }
 
@@ -434,8 +491,11 @@ impl Store {
         text: &str,
         reply: Option<ConversationReply>,
         visual: Option<crate::visual::VisualSelection>,
+        playback: Option<ConversationPlayback>,
     ) -> Result<(ConversationInput, bool)> {
-        self.capture_original(human, entry, binding, id, text, None, true, reply, visual)
+        self.capture_original(
+            human, entry, binding, id, text, None, true, reply, visual, playback,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -450,6 +510,7 @@ impl Store {
         can_prepare: bool,
         reply: Option<ConversationReply>,
         visual: Option<crate::visual::VisualSelection>,
+        playback: Option<ConversationPlayback>,
     ) -> Result<(ConversationInput, bool)> {
         if Uuid::parse_str(id)
             .ok()
@@ -459,6 +520,9 @@ impl Store {
             || text.contains('\0')
         {
             bail!("Invalid bounded conversation input");
+        }
+        if let Some(value) = &playback {
+            value.validate()?;
         }
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
@@ -476,6 +540,7 @@ impl Store {
             if input.entry != entry
                 || input.visual != visual
                 || input.reply != reply
+                || input.playback != playback
                 || match (&input.voice, &voice) {
                     (None, None) => input.text != text,
                     (Some(a), Some(b)) => a.audio_sha256 != b.audio_sha256 || a.mime != b.mime,
@@ -525,6 +590,7 @@ impl Store {
             )?),
             voice: voice.clone(),
             reply,
+            playback,
             focus,
             routing: None,
             phase: if !can_prepare
@@ -880,7 +946,7 @@ impl Store {
             )?;
             items.push(serde_json::json!({
                 "received_at":received_at,"id":id,"sequence":sequence,"capture_order":capture,"ordering_unknown":capture.is_none(),"preview":input.text.chars().take(1000).collect::<String>(),
-                "phase":input.phase,"retired":input.retired,"visual":input.visual,"voice":input.voice,"routing":input.routing,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
+                "phase":input.phase,"retired":input.retired,"visual":input.visual,"voice":input.voice,"routing":input.routing,"playback":input.playback,"continuation":super::conversation_routing::continuation_on(&conn,human,entry,&input)?,
                 "clarifiable":input.phase=="awaiting_target" && eligible_on(&conn,&input).is_ok(),
                 "native_binding_current":input.native==native,
             }));
@@ -1119,6 +1185,127 @@ mod tests {
         (file, store, key, binding)
     }
 
+    #[test]
+    fn playback_context_is_immutable_advisory_and_survives_restart() {
+        let (file, store, key, binding) = setup();
+        let id = Uuid::new_v4().to_string();
+        let playback = ConversationPlayback {
+            source: "native:77".into(),
+            revision: "b".repeat(64),
+            segment_offset: 240,
+            position_millis: 3700,
+            duration_millis: Some(12000),
+            state: "interrupted".into(),
+        };
+        let (input, fresh) = store
+            .conversation_input_capture_visual(
+                100,
+                key,
+                &binding,
+                &id,
+                "A different topic",
+                None,
+                None,
+                Some(playback.clone()),
+            )
+            .unwrap();
+        assert!(fresh);
+        assert_eq!(input.text, "A different topic");
+        assert!(input.focus.is_none());
+        assert!(input.reply.is_none());
+        assert!(input.rendered().contains("not proof of human hearing"));
+        assert!(!input.question_answer_text(file.path()).contains("playback"));
+        assert_eq!(input.answer_text(), "A different topic");
+        let (_, fresh) = store
+            .conversation_input_capture_visual(
+                100,
+                key,
+                &binding,
+                &id,
+                "A different topic",
+                None,
+                None,
+                Some(playback.clone()),
+            )
+            .unwrap();
+        assert!(!fresh);
+        let mut changed = playback.clone();
+        changed.position_millis += 1;
+        assert!(
+            store
+                .conversation_input_capture_visual(
+                    100,
+                    key,
+                    &binding,
+                    &id,
+                    "A different topic",
+                    None,
+                    None,
+                    Some(changed)
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .conversation_input_capture_visual(
+                    200,
+                    key,
+                    &binding,
+                    &Uuid::new_v4().to_string(),
+                    "Other owner",
+                    None,
+                    None,
+                    Some(playback.clone())
+                )
+                .is_err()
+        );
+        drop(store);
+        let reopened = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let input = reopened.conversation_input_read(100, key, &id).unwrap();
+        assert_eq!(input.playback, Some(playback));
+        assert_eq!(input.text, "A different topic");
+        assert!(input.focus.is_none());
+    }
+
+    #[test]
+    fn playback_context_rejects_unbounded_or_malformed_device_data() {
+        let base = ConversationPlayback {
+            source: "native:7".into(),
+            revision: "c".repeat(64),
+            segment_offset: 0,
+            position_millis: 1,
+            duration_millis: None,
+            state: "playing".into(),
+        };
+        assert!(base.validate().is_ok());
+        for source in [
+            "native:-1",
+            "native:01",
+            "native:0",
+            "native:9223372036854775808",
+            "unscoped:1",
+        ] {
+            let mut value = base.clone();
+            value.source = source.into();
+            assert!(value.validate().is_err());
+        }
+        let mut value = base.clone();
+        value.segment_offset = 1_000_001;
+        assert!(value.validate().is_err());
+        let mut value = base.clone();
+        value.position_millis = 3_600_001;
+        assert!(value.validate().is_err());
+        let mut value = base.clone();
+        value.duration_millis = Some(0);
+        assert!(value.validate().is_err());
+        let mut value = base.clone();
+        value.state = "heard".into();
+        assert!(value.validate().is_err());
+        let mut value = base;
+        value.revision = "not a revision".into();
+        assert!(value.validate().is_err());
+    }
+
     fn clip() -> ConversationVoice {
         ConversationVoice {
             audio_sha256: "a".repeat(64),
@@ -1144,7 +1331,17 @@ mod tests {
         let (_file, store, key, binding) = setup();
         let id = Uuid::now_v7().to_string();
         store
-            .conversation_voice_capture_reply(100, key, &binding, &id, clip(), true, None, None)
+            .conversation_voice_capture_reply(
+                100,
+                key,
+                &binding,
+                &id,
+                clip(),
+                true,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         assert!(
             !store

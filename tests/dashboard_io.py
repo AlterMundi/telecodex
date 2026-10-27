@@ -65,6 +65,20 @@ class DashboardHTTP(unittest.TestCase):
         return self.client.get('/api/state').json()['csrf']
     def stop(self,nonce,csrf):
         return self.client.post('/api/stop',json={'nonce':nonce},headers={**self.headers,'x-dashboard-csrf':csrf})
+    def test_voice_playback_context_is_bounded_advisory_metadata(self):
+        csrf=self.login();retained=[]
+        self.provider.conversation_voice_submit=lambda metadata,data: retained.append((metadata,data)) or {'id':metadata['id'],'phase':'preparing'}
+        hint={'source':'native:7','revision':'a'*64,'segment_offset':240,'position_millis':3700,'duration_millis':12000,'state':'interrupted'}
+        headers={**self.headers,'x-dashboard-csrf':csrf,'content-type':'audio/webm','x-input-binding':'a'*64,'x-input-id':'10000000-0000-4000-8000-000000000001','x-audio-sha256':'b'*64,'x-playback-context':json.dumps(hint)}
+        response=self.client.post('/api/interaction/voice',content=b'synthetic',headers=headers)
+        self.assertEqual(response.status_code,200);self.assertEqual(retained[0][0]['playback'],hint);self.assertEqual(retained[0][1],b'synthetic')
+        for invalid in (dict(hint,position_millis=True),dict(hint,state='heard'),dict(hint,segment_offset=-1),dict(hint,source='native:0'),dict(hint,source='native:01'),dict(hint,source='native:9223372036854775808'),dict(hint,other='not supported')):
+            self.assertEqual(self.client.post('/api/interaction/voice',content=b'synthetic',headers={**headers,'x-playback-context':json.dumps(invalid)}).status_code,400)
+        self.assertEqual(len(retained),1,'Malformed metadata must fail before retaining or dispatching any audio')
+        self.assertEqual(self.client.post('/api/interaction/voice',content=b'synthetic',headers={**headers,'x-playback-context':' '*2049}).status_code,400)
+        with self.assertRaises(ValueError):Provider.check_playback(dict(hint,duration_millis=0))
+        Provider.check_playback(dict(hint,duration_millis=None))
+
     def test_installable_manifest_and_authenticated_event_stream(self):
         manifest=self.client.get('/manifest.webmanifest')
         self.assertEqual(manifest.status_code,200)

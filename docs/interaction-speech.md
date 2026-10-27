@@ -312,8 +312,9 @@ Explicit Resume reuses the existing canonical source validation and synthesis
 identity. Changed/retired/correction-pending sources retire their cursor. No
 browser cursor approves a native question, selects a work destination or triggers
 automatic replay. Uncertain synthesis retains its existing non-retry behavior.
-The integrating model does not yet receive these media cursors; durable semantic
-heard/remaining coordination remains #304.
+The optional original-scoped playback report below can provide the integrating
+model with a frozen media position. Full semantic heard/remaining coordination
+and continuous foreground dialogue remain #304/#303.
 
 A failed TTS preparation can advance to the next independent queued reply after
 a gap, without repeating the failed source; authorization failure suspends
@@ -325,3 +326,30 @@ timers and synthetic media/network: chunk/reply/question spacing, priority,
 interruption during silence (including no active audio), stale source, TTS
 failure/next reply and offline/reconnect behavior. Real browser playback and
 subjective hearing remain distinct evidence classes in the v0.2 campaign.
+
+
+## Original-scoped device playback reports
+
+A native receiver advertising `can_report_playback` accepts optional `playback`
+metadata on text/voice originals. The browser snapshots it before microphone
+permission/capture or when submitting text: current source/revision, canonical
+`segment_offset`, media `position_millis`, optional `duration_millis` and
+`state` (`playing`, `paused`, `interrupted`). The same UUID retry and voice
+transcript recovery retain these exact values. Source IDs/revisions, offsets,
+times and states are bounded and validated before original retention; voice
+headers have an additional2KiB bound. Older receivers do not receive the field.
+
+This report is independent of explicit reply/question focus and visual context.
+It cannot select a work destination, answer or approve a native question,
+change hearing status, resume speech or cancel a job. A well-formed stale report
+does not block a new human topic. Native input rendering and routed provenance
+label it as untrusted device data, not human speech or proof of hearing. Only
+scoped conversation readers can retrieve actual source text; the report grants
+no additional access. Direct native question answers exclude this metadata.
+
+The existing original JSON journal retains the report without a separate writer
+or playback database. A changed report under an existing UUID is rejected rather
+than replaying work. Keep a compatible native writer after new originals exist:
+an older writer can ignore unknown optional JSON fields and lose them when
+rewriting retained documents. Roll back presentation/feature use while preserving
+that compatible native reader/writer and all original journals.
