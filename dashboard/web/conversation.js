@@ -169,11 +169,15 @@ window.Conversation = (() => {
         inspect.type="button";box.append(title,body,inspect,time);card={box,title,body,inspect,time};progressCards.set(key,card);
         inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
       }
+      const changed=card.source!==source.id || card.revision!==source.revision;
       card.source=source.id;card.revision=source.revision;card.stamp=stamp;card.title.textContent=`Update from ${source.label}`;
+      card.box.dataset.sourceId=source.id;
       const original=cards.get(source.id);
       setReplyText(card.body,original?.expanded && original.source.revision===source.revision?replyText(original.body):source.preview);
       messageTime(card.time,source.observed_at);
       placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
+      if(changed)textObserver?.unobserve(card.box);
+      textObserver?.observe(card.box);
     }
 
     // Read visible answers through the existing immutable source endpoint. Two
@@ -183,7 +187,7 @@ window.Conversation = (() => {
       for(const entry of entries){const card=cards.get(entry.target.dataset.sourceId);if(card){card.textVisible=entry.isIntersecting;if(card.textVisible)queueText(card);}}
     },{root:timeline,rootMargin:"200px"}):undefined;
     function autoTextEligible(card){return card && card.textVisible && cards.get(card.source.id)===card
-      && ["integrator_answer","worker_result","matrix_result"].includes(card.source.kind)
+      && ["integrator_answer","worker_progress","worker_result","matrix_result"].includes(card.source.kind)
       && card.source.native_binding_current!==false && !card.source.correction_pending
       && Number.isSafeInteger(card.source.text_characters) && card.source.text_characters>Array.from(card.source.preview).length
       && !(card.expanded && card.offset===null) && card.autoRevision!==card.source.revision;}
