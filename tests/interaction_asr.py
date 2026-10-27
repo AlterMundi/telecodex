@@ -87,6 +87,19 @@ class Retention(unittest.TestCase):
         with self.assertRaisesRegex(asr.RenderError,'invalid-completed-streaming-transcript'):
             self.run_asr()
         self.assertEqual(self.calls(),0)
+    def test_gemini_manual_final_reuses_completed_text_without_file_asr(self):
+        record,value=self.streaming_fixture()
+        value['model']='gemini-3.5-transcribe-live';record.write_text(json.dumps(value))
+        self.assertEqual(self.run_asr(),{'text':'Live final words','final':True})
+        record.unlink()
+        self.assertEqual(asr.process(self.source,self.binding,completed_only=True)['text'],'Live final words')
+        self.assertEqual(self.calls(),0)
+    def test_unselected_stream_model_is_not_a_trusted_transcript(self):
+        record,value=self.streaming_fixture()
+        value['model']='gemini-conversational-agent';record.write_text(json.dumps(value))
+        with self.assertRaisesRegex(asr.RenderError,'invalid-completed-streaming-transcript'):
+            self.run_asr()
+        self.assertEqual(self.calls(),0)
     def test_stream_receipt_pcm_integrity_and_identity(self):
         record,value=self.streaming_fixture();value['pcm_sha256']='a'*64;record.write_text(json.dumps(value))
         with self.assertRaisesRegex(asr.RenderError,'streaming-audio-original-changed'):

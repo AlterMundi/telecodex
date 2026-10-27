@@ -92,7 +92,7 @@ def streaming_result(cfg, source, source_hash):
     if (not isinstance(record,dict) or record.get('schema') != 'telecodex.streaming-transcript/v1'
             or record.get('capture_id') != ident or record.get('source_sha256') != source_hash
             or record.get('final') is not True
-            or record.get('model') != 'qwen-audio-3.0-realtime-plus'
+            or record.get('model') not in ('qwen-audio-3.0-realtime-plus', 'gemini-3.5-transcribe-live')
             or not re.fullmatch('[a-f0-9]{64}',str(record.get('binding','')))
             or not isinstance(record.get('text'),str) or not record['text'].strip()
             or len(record['text'].encode()) > 16000):

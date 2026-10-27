@@ -123,4 +123,96 @@ class StreamingTranscription(unittest.TestCase):
         with self.assertRaises(ValueError):self.stream.result()
 
 
+class GeminiStreamingTranscription(unittest.TestCase):
+    # Reuse fixture ownership only; Qwen-specific wire assertions remain above.
+    def setUp(self):
+        StreamingTranscription.setUp(self)
+        self.stream.close()
+        self.socket = Socket()
+        self.connections = []
+        def connect(*args, **kwargs):
+            self.connections.append((args, kwargs))
+            return self.socket
+        self.endpoint = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
+        self.stream = TranscriptionStream(self.endpoint, self.key, connect, provider='gemini')
+
+    tearDown = StreamingTranscription.tearDown
+
+    def ready(self):
+        self.socket.events.append({'setupComplete': {}})
+        self.assertEqual(self.stream.receive(), {'type': 'ready'})
+
+    def event(self, value):
+        self.socket.events.append(value)
+        return self.stream.receive()
+
+    def test_manual_transcription_replaces_interim_and_commits_once(self):
+        setup = self.socket.sent[0]['setup']
+        self.assertEqual(setup['model'], 'models/gemini-3.5-transcribe-live')
+        self.assertEqual(setup['inputAudioTranscription']['mode'], 'VERBATIM')
+        self.assertTrue(setup['realtimeInputConfig']['automaticActivityDetection']['disabled'])
+        self.assertNotIn('?', self.connections[0][0][0])
+        self.assertEqual(self.connections[0][1]['header'], ['x-goog-api-key: synthetic-test-token'])
+        self.ready(); self.stream.append(b'\0\0' * 1600)
+        first = self.event({'serverContent': {'interimInputTranscription': {'text': 'Diecisiete'}}})
+        second = self.event({'serverContent': {'interimInputTranscription': {'text': 'Diecinueve'}}})
+        self.assertEqual(second['text'], 'Diecinueve')
+        self.assertGreater(second['revision'], first['revision'])
+        self.stream.finish()
+        final = self.event({'serverContent': {'inputTranscription': {'text': 'Diecinueve. The command is git status.'}}})
+        self.assertEqual(final['type'], 'final')
+        self.assertEqual(self.stream.result()['model'], 'gemini-3.5-transcribe-live')
+        self.assertEqual(self.stream.result()['audio_millis'], 100)
+        self.assertEqual(self.socket.sent[1], {'realtimeInput': {'activityStart': {}}})
+        self.assertEqual(self.socket.sent[-1], {'realtimeInput': {'activityEnd': {}}})
+        self.assertEqual(len(self.socket.sent), 4)
+        with self.assertRaises(ValueError): self.stream.finish()
+
+    def test_bounded_binary_json_and_invalid_utf8(self):
+        self.socket.recv = lambda: b'{"setupComplete":{}}'
+        self.assertEqual(self.stream.receive(), {'type': 'ready'})
+        for raw in (b'\xff', b'x' * 65537):
+            self.stream.phase = 'ready'
+            self.socket.recv = lambda: raw
+            with self.assertRaises(TranscriptionUnavailable): self.stream.receive()
+            self.assertTrue(self.socket.closed)
+        self.assertEqual(len(self.connections), 1)
+
+    def test_final_is_never_accepted_before_send(self):
+        self.ready(); self.stream.append(b'\0\0')
+        with self.assertRaises(TranscriptionUnavailable):
+            self.event({'serverContent': {'inputTranscription': {'text': 'Premature'}}})
+        with self.assertRaises(ValueError): self.stream.result()
+        self.assertTrue(self.socket.closed)
+
+    def test_generated_content_tools_and_error_fail_without_reconnect(self):
+        for value in ({'toolCall': {}}, {'error': {'code': 429}},
+                      {'serverContent': {'modelTurn': {}, 'interimInputTranscription': {'text': 'Unsafe'}}},
+                      {'serverContent': {'outputTranscription': {'text': 'Generated'}}},
+                      {'setupComplete': {}, 'serverContent': {'modelTurn': {}}}):
+            with self.subTest(event=value):
+                self.stream.phase = 'opening'; self.socket.closed = False
+                with self.assertRaises(TranscriptionUnavailable): self.event(value)
+                self.assertEqual(self.stream.phase, 'failed')
+                self.assertTrue(self.socket.closed)
+        self.assertEqual(len(self.connections), 1)
+
+    def test_exact_endpoint_and_provider_do_not_send_key_to_other_hosts(self):
+        for endpoint, provider in ((self.endpoint + '?key=untrusted', 'gemini'),
+                                   (self.endpoint.replace('googleapis.com', 'example.test'), 'gemini'),
+                                   (self.endpoint, 'unknown')):
+            with self.assertRaises(ValueError):
+                TranscriptionStream(endpoint, self.key, lambda *_a, **_k: self.fail('Unexpected dial'), provider=provider)
+
+    def test_disconnect_discard_and_malformed_final_preserve_no_result(self):
+        self.ready(); self.stream.append(b'\0\0'); self.stream.finish()
+        with self.assertRaises(TranscriptionUnavailable): self.stream.receive()
+        self.assertEqual(len(self.connections), 1)
+        with self.assertRaises(ValueError): self.stream.result()
+        for text in ('', None, 'x' * 16001):
+            self.stream.phase = 'finalizing'
+            with self.assertRaises(TranscriptionUnavailable):
+                self.event({'serverContent': {'inputTranscription': {'text': text}}})
+
+
 if __name__=='__main__':unittest.main()

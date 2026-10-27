@@ -51,6 +51,32 @@ response. This is evidence for the tested account/route, not global model access
 or a provider-quality ranking. Mixed-language command recognition remains imperfect;
 do not silently replace the accepted final transcriber on this evidence alone.
 
+## Gemini transcription option (not yet deployed)
+
+The adapter also accepts `provider = "gemini"` with the exact endpoint shown in
+`dashboard/config.example.toml`. It uses the dedicated
+`gemini-3.5-transcribe-live` model, a private server-side `x-goog-api-key` header,
+`VERBATIM` transcription and disabled automatic activity detection. After setup,
+one manual activity starts; explicit Send ends it. Interim hypotheses replace
+previous text; only a final input transcript after Send can prepare trusted text.
+Generated answers, tools and output audio are rejected. Text and binary UTF-8 JSON
+frames share the same event-size bound. Original audio binding, authentication,
+receipt persistence and file-ASR fallback are the existing shared path.
+
+A single 5.76-second synthetic Spanish/English trial on 27 October 2026 succeeded
+after the human funded the selected project. The final preserved `git status`
+and arrived approximately 330 ms after the last audio chunk. An earlier attempt
+was explicitly refused before setup or audio because prepayment was depleted.
+This confirms access and one sample, not longer-utterance quality, a latency
+distribution, receiving deployment or device acceptance. A separate 15.52-second synthetic journey through the authenticated application
+WebSocket and production adapter preserved a two-second pause, routing negation,
+spoken self-correction and `git status` / `git diff`. Final preparation arrived
+425 ms after Send; the exact original WAV reused its durable transcript without
+file-ASR or native dispatch. These two journeys qualify this input slice only;
+receiving deployment and human-device acceptance remain separate.
+See Google's [transcription guide](https://ai.google.dev/gemini-api/docs/live-api/live-transcribe)
+and [Live API contract](https://ai.google.dev/api/live).
+
 ## Transport contract
 
 - The operator supplies an exact `wss` endpoint and a private credential-file
@@ -109,7 +135,8 @@ visibly. Browser-supplied caption text is never trusted for admission.
 
 Use the existing optional `[streaming_transcription]` configuration documented in
 `dashboard/config.example.toml`: `enabled`, exact `endpoint`, private
-`credential_file`, `cache_root` and optional `mode` (`prepared` by default).
+`credential_file`, `cache_root`, optional `provider` (`qwen` by default) and
+optional `mode` (`prepared` by default).
 For `mode = "captions"`, leave native ASR configuration unchanged: no
 `streaming_cache_root`, no trusted preview receipts and no canonical PCM copy.
 The browser retains its normal compressed MediaRecorder original. For prepared

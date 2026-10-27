@@ -76,7 +76,10 @@ Development = "/your-development-mount"
 # [streaming_transcription]
 # enabled = true
 # mode = "captions" # or "prepared" (legacy default)
+# provider = "qwen" # or "gemini" for the dedicated Gemini transcription model
 # endpoint = "wss://your-workspace.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus"
+# Gemini endpoint (credential is sent privately in a header, never in this URL):
+# endpoint = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 # credential_file = "/private/existing-provider-key"
 # cache_root = "/private/receiving/streaming-transcripts"
 

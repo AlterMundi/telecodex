@@ -65,7 +65,8 @@ def install(app, config, provider, authorize, origins):
         return False
     mode=selected.get('mode','prepared')
     if (mode not in ('prepared','captions')
-            or set(selected)-{'enabled','endpoint','credential_file','cache_root','mode'}
+            or selected.get('provider','qwen') not in ('qwen','gemini')
+            or set(selected)-{'enabled','endpoint','credential_file','cache_root','mode','provider'}
             or not {'enabled','endpoint','credential_file','cache_root'}<=set(selected)
             or any(not isinstance(selected[k], str) for k in ('endpoint','credential_file','cache_root'))
             or not all(Path(selected[k]).is_absolute() for k in ('credential_file','cache_root'))):
@@ -124,7 +125,8 @@ def install(app, config, provider, authorize, origins):
                     raise ValueError('Voice preparation capacity occupied')
                 active.add(owner)
                 def open_provider():
-                    value = TranscriptionStream(selected['endpoint'],Path(selected['credential_file']))
+                    value = TranscriptionStream(selected['endpoint'],Path(selected['credential_file']),
+                                                provider=selected.get('provider','qwen'))
                     with opening_lock:
                         if not abandoned.is_set():
                             opened.append(value)

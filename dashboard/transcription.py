@@ -1,6 +1,6 @@
 """Bounded, transcription-only audio preparation; never conversation admission.
 
-Qwen's manual audio session emits input transcripts without response.create.
+Qwen and Gemini use manual audio activities to emit input transcripts only.
 This adapter deliberately has no dialogue, tool, native-input or retry API.
 Its partials remain revisable preparation until an owning ingress commits them.
 """
@@ -24,13 +24,19 @@ class TranscriptionStream:
     max_event_bytes = 65536
     max_text_bytes = 16000
 
-    def __init__(self, endpoint, credential_file, connect=None):
+    def __init__(self, endpoint, credential_file, connect=None, provider='qwen'):
         url = urlsplit(endpoint)
-        model = dict(parse_qsl(url.query, strict_parsing=True)).get('model')
-        if (url.scheme != 'wss' or not url.hostname or url.username or url.password
+        if provider not in ('qwen', 'gemini'):
+            raise ValueError('Select a supported transcription provider')
+        model = 'gemini-3.5-transcribe-live' if provider == 'gemini' else dict(parse_qsl(url.query, strict_parsing=True)).get('model')
+        if provider == 'gemini':
+            valid = (endpoint == 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent')
+        else:
+            valid = not (url.scheme != 'wss' or not url.hostname or url.username or url.password
                 or url.fragment or url.port not in (None, 443)
                 or url.path != '/api-ws/v1/realtime'
-                or list(parse_qsl(url.query)) != [('model', 'qwen-audio-3.0-realtime-plus')]):
+                or list(parse_qsl(url.query)) != [('model', 'qwen-audio-3.0-realtime-plus')])
+        if not valid:
             raise ValueError('Select an exact supported transcription endpoint')
         token = private_bytes(credential_file, 16384).decode().strip()
         if not token or any(c.isspace() for c in token):
@@ -41,6 +47,7 @@ class TranscriptionStream:
             connect = websocket.create_connection
             self._timeout_errors += (websocket.WebSocketTimeoutException,)
         self.model = model
+        self.provider = provider
         self.phase = 'opening'
         self.audio_bytes = 0
         self.audio_sha256 = hashlib.sha256()
@@ -55,13 +62,20 @@ class TranscriptionStream:
         self._socket = None
         try:
             # No redirects, auto-reconnect, provider trace or secret in arguments.
-            self._socket = connect(endpoint, header=['Authorization: Bearer ' + token],
+            credential = 'x-goog-api-key: ' if provider == 'gemini' else 'Authorization: Bearer '
+            self._socket = connect(endpoint, header=[credential + token],
                                    timeout=10, redirect_limit=0, enable_multithread=True)
             if hasattr(self._socket,'settimeout'):
                 self._socket.settimeout(1)
-            self._send({'type': 'session.update', 'session': {
-                'modalities': ['text'], 'input_audio_format': 'pcm',
-                'turn_detection': None}})
+            if provider == 'gemini':
+                self._send({'setup': {'model': 'models/' + model,
+                    'generationConfig': {'responseModalities': ['TEXT']},
+                    'inputAudioTranscription': {'mode': 'VERBATIM', 'languageCodes': []},
+                    'realtimeInputConfig': {'automaticActivityDetection': {'disabled': True}}}})
+            else:
+                self._send({'type': 'session.update', 'session': {
+                    'modalities': ['text'], 'input_audio_format': 'pcm',
+                    'turn_detection': None}})
         except Exception:
             self._fail('transcription-open-unconfirmed')
 
@@ -84,8 +98,9 @@ class TranscriptionStream:
                     or len(pcm) % 2 or len(pcm) > 32000
                     or self.audio_bytes + len(pcm) > self.max_audio_bytes):
                 raise ValueError('Provide bounded PCM only after stream readiness')
-            self._send({'type': 'input_audio_buffer.append',
-                        'audio': base64.b64encode(pcm).decode('ascii')})
+            encoded = base64.b64encode(pcm).decode('ascii')
+            self._send({'realtimeInput': {'audio': {'data': encoded, 'mimeType': 'audio/pcm;rate=16000'}}}
+                       if self.provider == 'gemini' else {'type': 'input_audio_buffer.append', 'audio': encoded})
             self.audio_sha256.update(pcm)
             self.audio_bytes += len(pcm)
 
@@ -95,7 +110,8 @@ class TranscriptionStream:
             if self.phase != 'ready' or not self.audio_bytes:
                 raise ValueError('Finish one nonempty ready stream')
             self.phase = 'finalizing'
-            self._send({'type': 'input_audio_buffer.commit'})
+            self._send({'realtimeInput': {'activityEnd': {}}} if self.provider == 'gemini'
+                       else {'type': 'input_audio_buffer.commit'})
 
     def receive(self):
         """Read one provider event; partial text replaces the previous revision."""
@@ -109,6 +125,10 @@ class TranscriptionStream:
             raise ValueError('Transcription stream is terminal')
         try:
             raw = self._socket.recv()
+            if self.provider == 'gemini' and isinstance(raw, bytes):
+                if len(raw) > self.max_event_bytes:
+                    self._fail('invalid-transcription-event')
+                raw = raw.decode('utf-8')
             if not isinstance(raw, str) or len(raw.encode()) > self.max_event_bytes:
                 self._fail('invalid-transcription-event')
             event = json.loads(raw)
@@ -123,6 +143,8 @@ class TranscriptionStream:
         except Exception:
             self._fail('transcription-receive-unconfirmed')
         with self._lock:
+            if self.provider == 'gemini':
+                return self._gemini_event(event)
             kind = event.get('type')
             if not isinstance(kind, str) or kind == 'error' or kind.startswith('response.'):
                 # No unexpected generated answer is allowed onto the voice path.
@@ -176,6 +198,43 @@ class TranscriptionStream:
                 return {'type': 'final' if final else 'partial', 'text': text,
                         'revision': self.revision}
             return {'type': 'status'}
+
+    def _gemini_event(self, event):
+        # This is the dedicated transcription model, never a live agent. Keep
+        # one manual activity per capture; generated text/audio/tools are errors.
+        if (not event or set(event) - {'setupComplete', 'serverContent', 'usageMetadata', 'voiceActivity'}
+                or len(set(event) - {'usageMetadata', 'voiceActivity'}) > 1):
+            self._fail('unexpected-transcription-provider-event')
+        if 'setupComplete' in event:
+            if self.phase != 'opening' or not isinstance(event['setupComplete'], dict):
+                self._fail('transcription-manual-mode-unconfirmed')
+            self._send({'realtimeInput': {'activityStart': {}}})
+            self.phase = 'ready'
+            return {'type': 'ready'}
+        content = event.get('serverContent', {})
+        if (not isinstance(content, dict) or any(k in content for k in ('modelTurn', 'outputTranscription'))
+                or content.get('interrupted')):
+            self._fail('unexpected-transcription-provider-event')
+        final = 'inputTranscription' in content
+        if not final and 'interimInputTranscription' not in content:
+            return {'type': 'status'}
+        if (self.phase not in ('ready', 'finalizing') or not self.audio_bytes
+                or final and self.phase != 'finalizing'):
+            self._fail('transcription-final-before-finish' if final else 'transcription-result-before-audio')
+        value = content['inputTranscription' if final else 'interimInputTranscription']
+        text = value.get('text') if isinstance(value, dict) else None
+        if (not isinstance(text, str) or len(text.encode()) > self.max_text_bytes
+                or final and not text.strip()):
+            self._fail('invalid-transcription-text')
+        self.text = text
+        self.revision += 1
+        now = time.monotonic()
+        if self.first_partial_at is None and text:
+            self.first_partial_at = now
+        if final:
+            self.phase = 'completed'
+            self.finalized_at = now
+        return {'type': 'final' if final else 'partial', 'text': text, 'revision': self.revision}
 
     def result(self):
         if self.phase != 'completed':

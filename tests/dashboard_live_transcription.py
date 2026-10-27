@@ -29,7 +29,8 @@ from dashboard_io import Receiver
 
 class Stream:
     opened = []
-    def __init__(self,*args):
+    def __init__(self,*args,**kwargs):
+        self.selected_provider=kwargs.get('provider','qwen')
         self.events=queue.Queue();self.events.put({'type':'ready'})
         self.pcm=b'';self.finished=False;self.closed=False;self.closed_event=threading.Event()
         self.opened.append(self)
@@ -43,7 +44,7 @@ class Stream:
         if value is None:raise TranscriptionUnavailable('closed')
         return value
     def result(self):
-        return {'text':'Final words','final':True,'model':'qwen-audio-3.0-realtime-plus',
+        return {'text':'Final words','final':True,'model':'gemini-3.5-transcribe-live' if self.selected_provider=='gemini' else 'qwen-audio-3.0-realtime-plus',
                 'pcm_sha256':hashlib.sha256(self.pcm).hexdigest(),
                 'audio_millis':len(self.pcm)*1000//32000}
     def close(self):self.closed=True;self.events.put(None);self.closed_event.set()
@@ -95,6 +96,25 @@ class LiveTranscription(unittest.TestCase):
         trusted=streaming_result({'streaming_cache_root':str(self.root/'prepared')},original,
                                  hashlib.sha256(original.read_bytes()).hexdigest())
         self.assertEqual(trusted,{'text':'Final words','streaming_model':'qwen-audio-3.0-realtime-plus'})
+    def test_selected_gemini_prepares_exact_original_with_no_dispatch(self):
+        self.client.__exit__(None,None,None)
+        self.config['streaming_transcription']['provider']='gemini'
+        self.client=TestClient(create_app(self.config,self.provider,lambda raw,bot:int(raw)),base_url='https://example.test');self.client.__enter__()
+        self.client.post('/api/session',json={'init_data':'100'},headers={'origin':'https://example.test'})
+        self.client.cookies.set('telecodex_dashboard',self.client.cookies.get('telecodex_dashboard'),path='/')
+        self.csrf=self.client.get('/api/state').json()['csrf']
+        pcm=b'\0\0'*1600
+        with self.open() as ws:
+            ws.send_json(self.meta());self.assertEqual(ws.receive_json()['type'],'ready')
+            ws.send_bytes(pcm);self.assertEqual(ws.receive_json()['type'],'partial')
+            ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'prepared')
+        original=self.root/self.ident;original.write_bytes(wav_bytes(pcm));original.chmod(0o600)
+        value=streaming_result({'streaming_cache_root':str(self.root/'prepared')},original,
+                               hashlib.sha256(original.read_bytes()).hexdigest())
+        self.assertEqual(value,{'text':'Final words','streaming_model':'gemini-3.5-transcribe-live'})
+        self.assertEqual(Stream.opened[0].selected_provider,'gemini')
+        self.assertEqual(self.provider.calls,[])
+
     def test_caption_mode_never_prepares_canonical_text(self):
         self.client.__exit__(None,None,None)
         self.config['streaming_transcription']['mode']='captions'
@@ -181,12 +201,12 @@ class LiveTranscription(unittest.TestCase):
         entered,release,closed=threading.Event(),threading.Event(),threading.Event()
         class Delayed(Stream):
             count=0
-            def __init__(self,*args):
+            def __init__(self,*args,**kwargs):
                 Delayed.count+=1;self.delayed=Delayed.count==1
                 if self.delayed:
                     entered.set()
                     if not release.wait(3):raise TimeoutError('Synthetic dial gate')
-                super().__init__(*args)
+                super().__init__(*args,**kwargs)
             def close(self):
                 super().close()
                 if self.delayed:closed.set()
@@ -204,8 +224,8 @@ class LiveTranscription(unittest.TestCase):
         entered,release=threading.Event(),threading.Event()
         class SlowClose(Stream):
             count=0
-            def __init__(self,*args):
-                SlowClose.count+=1;self.slow=SlowClose.count==1;super().__init__(*args)
+            def __init__(self,*args,**kwargs):
+                SlowClose.count+=1;self.slow=SlowClose.count==1;super().__init__(*args,**kwargs)
             def close(self):
                 if self.slow:
                     entered.set();release.wait(3)
