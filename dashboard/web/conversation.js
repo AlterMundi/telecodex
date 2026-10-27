@@ -757,7 +757,9 @@ window.Conversation = (() => {
       if(!timed && selected.followed && !force)return;
       const fraction=timed?Math.max(0,Math.min(1,audio.currentTime/audio.duration)):0;
       const characters=Array.from(replyText(card.body));
-      const position=Math.min(characters.length-1,selected.offset+Math.floor(Math.max(0,selected.textEnd-selected.offset-1)*fraction));
+      const wordOffset=selected.streaming?.position?.(audio.currentTime);
+      const aligned=Number.isSafeInteger(wordOffset) && wordOffset>=selected.offset && wordOffset<=selected.textEnd;
+      const position=Math.min(characters.length-1,aligned?wordOffset:selected.offset+Math.floor(Math.max(0,selected.textEnd-selected.offset-1)*fraction));
       if(position<0)return;
       const start=characters.slice(0,position).join("").length;
       const range=window.ConversationMarkdown?window.ConversationMarkdown.range(card.body,position):(()=>{
@@ -771,7 +773,7 @@ window.Conversation = (() => {
         scroll(timeline.scrollTop+point.top-viewport.top-viewport.height*.25);
       selected.followed=true;
     }
-    let enabled = false, ready = false, reading = false, binding, canListen = false, canStreamSpeech = false, canReportPlayback=false;
+    let enabled = false, ready = false, reading = false, binding, canListen = false, canStreamSpeech = false, canReportPlayback=false,canReportWordPosition=false;
     let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
     let initialized = false, active, generation = 0, requestAbort, blobUrl, prefetched;
     const audioState = (text) => { $("#conversation-audio-state").textContent = text; };
@@ -843,7 +845,10 @@ window.Conversation = (() => {
       const millis=value=>Number.isFinite(value) && value>=0 && value<=3600?Math.floor(value*1000):undefined;
       const position=millis(audio.currentTime),duration=millis(audio.duration);
       if(position===undefined)return;
-      return {source:active.source.id,revision:active.source.revision,segment_offset:active.offset,
+      const wordOffset=active.streaming?.position?.(audio.currentTime);
+      const word=canReportWordPosition && Number.isSafeInteger(wordOffset) && wordOffset>=active.offset && wordOffset<=active.textEnd && wordOffset<=1000000
+        ?{word_offset:wordOffset}:{};
+      return {source:active.source.id,revision:active.source.revision,segment_offset:active.offset,...word,
         position_millis:position,duration_millis:duration>0?duration:null,state:interrupted?'interrupted':audio.paused?'paused':'playing'};
     }
     function beginVoiceCapture() {
@@ -1093,7 +1098,7 @@ window.Conversation = (() => {
       }
       companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
-      binding = value.binding;loadPositions();loadSessionMutes();canReportPlayback=value.can_report_playback===true;
+      binding = value.binding;loadPositions();loadSessionMutes();canReportPlayback=value.can_report_playback===true;canReportWordPosition=value.can_report_word_position===true;
       canFiles=!readOnly && value.can_download_files===true;
       if(!canFiles)clearFiles();
       else if(value.artifacts?.state==="unavailable")filesConnected=false;

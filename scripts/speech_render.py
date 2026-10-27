@@ -462,7 +462,46 @@ def render(binding, request):
 
 
 
-def sse_audio(response):
+def word_alignment(spoken, sentences):
+    """Reconcile provider words to spoken Unicode text; never trust word indices.
+
+    Missing/inconsistent timing is optional metadata, not a synthesis failure.
+    All times must share one monotonic audio clock. Sentence-local clocks, changed
+    text, oversized arrays or incomplete coverage leave alignment unavailable.
+    """
+    punctuation = '.'
+    def separator(n, char):
+        # Provider words can add sentence punctuation at token boundaries. Keep
+        # internal punctuation (3.0, foo.bar), dot-sourcing and command operators exact.
+        # Other ambiguous punctuation keeps timing unavailable rather than guessing.
+        return char.isspace() or char == '.' and n > 0 and spoken[n-1].isalpha() and (n+1 == len(spoken) or spoken[n+1].isspace())
+    origin = [n for n, char in enumerate(spoken) if not separator(n, char)]
+    normalized = ''.join(spoken[n] for n in origin)
+    cursor = 0; last_time = 0; words = []
+    if not sentences or len(sentences) > 512:
+        return None
+    for index, sentence in enumerate(sentences):
+        if (not isinstance(sentence, dict) or type(sentence.get('index')) is not int or sentence.get('index') != index
+                or not isinstance(sentence.get('words'), list)):
+            return None
+        for word in sentence['words']:
+            if not isinstance(word, dict) or not isinstance(word.get('text'), str):
+                return None
+            token = ''.join(char for char in word['text'] if not char.isspace()).strip(punctuation)
+            begin, end = word.get('begin_time'), word.get('end_time')
+            if (not token or len(words) >= 512 or type(begin) is not int or type(end) is not int
+                    or not last_time <= begin < end <= 3600000
+                    or not normalized.startswith(token, cursor)):
+                return None
+            stop = cursor + len(token)
+            words.append([origin[cursor], origin[stop-1]+1, begin, end])
+            cursor = stop; last_time = end
+    if cursor != len(normalized) or not words:
+        return None
+    return {'text_sha256': sha(spoken.encode()), 'words': words}
+
+
+def sse_audio(response, sentence_end=None):
     """Bounded ordered provider SSE; URL fields and provider errors never escape."""
     event = []; event_size = total = audio_size = 0; finished = False
     for raw in iter(lambda: response.readline(1024 * 1024 + 1), b''):
@@ -477,6 +516,8 @@ def sse_audio(response):
         elif not line and event:
             value = json.loads('\n'.join(event)); event = []; event_size = 0
             output = value.get('output', {})
+            if sentence_end is not None and output.get('type') == 'sentence-end':
+                sentence_end(output.get('sentence'))
             encoded = output.get('audio', {}).get('data')
             if encoded:
                 data = base64.b64decode(encoded, validate=True); audio_size += len(data)
@@ -493,9 +534,10 @@ def sse_audio(response):
 
 def stream_render(binding, request, emit):
     """One durable SSE attempt, cache reuse and bounded encoded output; no playback."""
-    if (not isinstance(request, dict) or set(request) != {'scope', 'text'}
+    if (not isinstance(request, dict) or set(request) not in ({'scope','text'}, {'scope','text','timing'})
             or not isinstance(request['scope'], str) or not 1 <= len(request['scope']) <= 128
             or not isinstance(request['text'], str) or not request['text'].strip()
+            or type(request.get('timing',False)) is not bool
             or len(request['text']) > 1800 or '\0' in request['text']):
         raise RenderError('invalid-speech-request')
     config = route(binding)
@@ -506,15 +548,23 @@ def stream_render(binding, request, emit):
         'text': spoken, 'voice': config['voice'], 'format': 'mp3', 'sample_rate': 24000,
         'language_hints': [config['language'].split('-')[0]], 'rate': config.get('rate', 1.0),
         'pitch': config.get('pitch', 1.0), 'instruction': config.get('instruction', '')}}
+    if request.get('timing'):
+        fields['input']['word_timestamp_enabled'] = True
+    # Timing is optional metadata for the same audio request, never a reason to
+    # repeat an existing/uncertain preparation. Keep the legacy identity and lock.
+    identity_fields = {**fields, 'input': {k:v for k,v in fields['input'].items() if k != 'word_timestamp_enabled'}}
     identity = {'mode':'sse-mp3-v1', 'scope':request['scope'],
-        'endpoint':config['endpoint'], 'fields':fields}
+        'endpoint':config['endpoint'], 'fields':identity_fields}
     if spoken != request['text']:
         identity['source_text_sha256'] = sha(request['text'].encode())
         identity['text_projection'] = 'markdown-v1'
     ident = sha(canonical(identity))
     job = directory(directory(config['cache_root']) / ident)
     state_file = job / 'state.json'; audio_file = job / 'audio.mp3'
-    sequence = 0; accumulated = bytearray()
+    sequence = 0; accumulated = bytearray(); sentences = []; alignment = None
+    def sentence_end(value):
+        if len(sentences) < 513:
+            sentences.append(value)
     def send(data):
         nonlocal sequence
         accumulated.extend(data)
@@ -537,6 +587,7 @@ def stream_render(binding, request, emit):
             data = private_bytes(audio_file, MAX_AUDIO)
             if not data or sha(data) != state.get('audio_sha256'):
                 raise RenderError('retained-stream-integrity-failed')
+            alignment = state.get('alignment')
             state['last_used_at'] = time.time(); atomic(state_file, canonical(state))
             for offset in range(0,len(data),32768):send(data[offset:offset+32768])
         else:
@@ -559,15 +610,21 @@ def stream_render(binding, request, emit):
                 with build_opener(NoRedirect).open(http,timeout=config['timeout_seconds']) as response:
                     if response.headers.get_content_type() != 'text/event-stream':
                         raise RenderError('unexpected-stream-content-type')
-                    for data in sse_audio(response):send(data)
+                    for data in sse_audio(response, sentence_end if request.get('timing') else None):send(data)
+                alignment = word_alignment(spoken, sentences) if request.get('timing') else None
                 atomic(audio_file, bytes(accumulated))
                 state.update(phase='rendered',audio_bytes=len(accumulated),audio_sha256=sha(accumulated),
                              format={'encoding':'mp3','sample_rate_hz':24000,'channels':1})
+                if alignment is not None:
+                    state['alignment'] = alignment
                 atomic(state_file,canonical(state))
             except Exception:
                 state['phase']='unconfirmed';atomic(state_file,canonical(state))
                 raise RenderError('streamed-speech-unconfirmed-no-automatic-retry') from None
-        emit({'type':'end', 'audio_bytes':len(accumulated), 'audio_sha256':sha(accumulated)})
+        terminal = {'type':'end', 'audio_bytes':len(accumulated), 'audio_sha256':sha(accumulated)}
+        if request.get('timing') and alignment is not None:
+            terminal['alignment'] = alignment
+        emit(terminal)
 
 
 def fetch(request, timeout, *, json_response=False):

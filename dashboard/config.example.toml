@@ -92,3 +92,7 @@ Development = "/your-development-mount"
 # Optional Qwen SSE/MP3 output through the existing media element; default off.
 # Unsupported MediaSource clients and native questions retain the WAV reader.
 # streaming_output = false
+
+# Optional Qwen word-end positions for exact plain-text projections; default off.
+# Existing rendered or uncertain audio is reused/refused, never regenerated for timing.
+# word_timestamps = false

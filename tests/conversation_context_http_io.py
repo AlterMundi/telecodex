@@ -21,7 +21,7 @@ def qualify(binary):
         question=b.get('/api/interaction/requests')['items'][0]
         question=b.get('/api/interaction/requests/'+question['id'])
         context={'source':'request:'+question['id'],'revision':question['revision'],'context_only':True}
-        playback={'source':context['source'],'revision':context['revision'],'segment_offset':0,'position_millis':3700,'duration_millis':12000,'state':'interrupted'}
+        playback={'source':context['source'],'revision':context['revision'],'segment_offset':0,'word_offset':20,'position_millis':3700,'duration_millis':12000,'state':'interrupted'}
         assert b.get('/api/interaction')['can_report_playback'] is True
         changed,_=b.text('Start a separate task about the garden in Beta.',context,playback)
         j.wait(lambda:b.status(changed)['phase']=='accepted')
@@ -42,6 +42,7 @@ def qualify(binary):
         assert 'playback_context' in caps['operations']
         audio_view=j.call('route-playback-context','playback_context',{'input_ref':changed})
         assert audio_view['report']==playback and audio_view['availability']=='current_source'
+        assert audio_view['source_position']['offset']==20 and audio_view['source_position']['prefix_heard']is False
         assert audio_view['source_part']['text']==question['body'][:1600]
         assert audio_view['source_part']['offset']==0 and audio_view['source_part']['next_offset']==1600
         assert audio_view['source_part']['id']==playback['source']

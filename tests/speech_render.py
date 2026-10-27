@@ -443,6 +443,79 @@ class Render(unittest.TestCase):
             speech.stream_render(self.binding,self.request,lambda frame:None)
         self.assertEqual(len(self.calls),2)
 
+    def test_timed_stream_cache_and_cumulative_snapshots(self):
+        self.qwen_route();self.content_type='text/event-stream'
+        request={**self.request,'text':'Hola. Mundo 🌱','timing':True}
+        sentence={'index':0,'words':[
+            {'text':'Hola','begin_index':0,'end_index':1,'begin_time':0,'end_time':200},
+            {'text':'.Mundo','begin_index':1,'end_index':2,'begin_time':200,'end_time':600},
+            {'text':' 🌱','begin_index':2,'end_index':3,'begin_time':700,'end_time':900}]}
+        snapshots=[{'output':{'type':'sentence-synthesis','sentence':sentence}},
+                   {'output':{'type':'sentence-end','sentence':sentence}}]
+        data=self.stream_data()
+        self.data=data.replace(b'data: {"output": {"finish_reason": "stop"}}',
+            b''.join(b'data: '+json.dumps(v).encode()+b'\n\n' for v in snapshots)+b'data: {"output": {"finish_reason": "stop"}}')
+        frames=[];speech.stream_render(self.binding,request,frames.append)
+        self.assertEqual(json.loads(self.calls[0][2])['input']['word_timestamp_enabled'],True)
+        self.assertEqual(frames[-1]['alignment']['words'],[[0,4,0,200],[6,11,200,600],[12,13,700,900]])
+        again=[];speech.stream_render(self.binding,request,again.append)
+        self.assertEqual(frames,again);self.assertEqual(len(self.calls),1)
+        self.assertLess(len(next((self.root/'cache').glob('*/state.json')).read_bytes()),32768)
+        # Timing failure is metadata unavailability, not permission to synthesize again.
+        self.data=self.stream_data(terminal=False)
+        other={**request,'scope':'timed-uncertain'}
+        with self.assertRaisesRegex(speech.RenderError,'unconfirmed'):
+            speech.stream_render(self.binding,other,lambda frame:None)
+        with self.assertRaisesRegex(speech.RenderError,'no-automatic-retry'):
+            speech.stream_render(self.binding,other,lambda frame:None)
+        self.assertEqual(len(self.calls),2)
+
+    def test_timing_cannot_repeat_existing_untimed_outcome(self):
+        self.qwen_route();self.content_type='text/event-stream';self.data=self.stream_data()
+        speech.stream_render(self.binding,self.request,lambda frame:None)
+        frames=[];speech.stream_render(self.binding,{**self.request,'timing':True},frames.append)
+        self.assertEqual(len(self.calls),1);self.assertNotIn('alignment',frames[-1])
+        self.data=self.stream_data(terminal=False);other={**self.request,'scope':'untimed-uncertain'}
+        with self.assertRaises(speech.RenderError):speech.stream_render(self.binding,other,lambda frame:None)
+        with self.assertRaisesRegex(speech.RenderError,'no-automatic-retry'):
+            speech.stream_render(self.binding,{**other,'timing':True},lambda frame:None)
+        self.assertEqual(len(self.calls),2)
+
+    def test_word_alignment_refuses_unknown_text_or_clocks(self):
+        word={'text':'Hola','begin_time':0,'end_time':200}
+        self.assertIsNotNone(speech.word_alignment('Hola',[{'index':0,'words':[word]}]))
+        for sentences in ([],[None],[{'index':1,'words':[word]}],
+                [{'index':0,'words':[dict(word,text='Otro')]}],
+                [{'index':0,'words':[dict(word,end_time=0)]}],
+                [{'index':0,'words':[dict(word,begin_time=True)]}],
+                [{'index':0,'words':[word,dict(word,begin_time=0)]}],
+                [{'index':0,'words':[word]*513}]):
+            self.assertIsNone(speech.word_alignment('Hola',sentences))
+        self.assertIsNone(speech.word_alignment('Hola mundo',[{'index':0,'words':[word]}]))
+
+    def test_word_alignment_does_not_drop_command_operators(self):
+        for text, tokens in [('x != y',['x','=','y']),('!foo',['foo']),('x ?: y',['x','y']),('. foo',['foo'])]:
+            words=[{'text':v,'begin_time':n*200,'end_time':(n+1)*200}for n,v in enumerate(tokens)]
+            self.assertIsNone(speech.word_alignment(text,[{'index':0,'words':words}]),text)
+        for text in ['3.0','foo.bar','x!=y','!foo']:
+            words=[{'text':text,'begin_time':0,'end_time':200}]
+            self.assertIsNotNone(speech.word_alignment(text,[{'index':0,'words':words}]),text)
+
+    def test_canonical_word_mapping_preserves_prefix_and_unicode(self):
+        sys.path.insert(0,str(SCRIPT.parents[1]))
+        from dashboard.speech import canonical_word_alignment
+        source={'text':'Hola 🌱','offset':240}
+        payload={'text':'Novedades desde Alfa. Hola 🌱'}
+        alignment=speech.word_alignment(payload['text'],[{'index':0,'words':[
+            {'text':'Novedades desde Alfa.','begin_time':0,'end_time':200},
+            {'text':'Hola','begin_time':200,'end_time':400},
+            {'text':'🌱','begin_time':400,'end_time':600}]}])
+        self.assertEqual(canonical_word_alignment(source,payload,'es-US',alignment),
+            {'offset':240,'words':[[240,244,200,400],[245,246,400,600]]})
+        for text in ('**Hola** 🌱','[Hola](https://example.test) 🌱','#Alfa Hola 🌱'):
+            self.assertIsNone(canonical_word_alignment({'text':text,'offset':0},{'text':text},'es-US',alignment))
+        self.assertIsNone(canonical_word_alignment(source,payload,'es-US',{'text_sha256':'0'*64,'words':[]}))
+
     def test_stream_uncertainty_and_disconnected_reader_never_retry(self):
         self.qwen_route();self.content_type='text/event-stream';self.data=self.stream_data(terminal=False)
         with self.assertRaisesRegex(speech.RenderError,'unconfirmed'):

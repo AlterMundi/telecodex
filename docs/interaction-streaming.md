@@ -458,3 +458,45 @@ replicas or hearing acceptance. An alternative `qwen-audio-3.1-tts-plus` /
 `xunanchuan_v3.1` trial was explicitly rejected on this account/route; no automatic
 retry or fallback request was made. Documentation of a voice is not proof of
 receiving account access. The functional Qwen voice remains selected.
+
+## Optional provider-aligned playback positions
+
+`speech.word_timestamps` (defaultfalse) requests Qwen word timing through the
+existing SSE preparation. It adds no second synthesis: timed and untimed readers
+share the same audio identity, lock, completed cache and uncertain outcome. Existing
+completed audio without timing remains playable without regeneration. Invalid,
+partial, reordered or mismatched timing leaves ordinary audio and approximate
+Follow available; it does not authorize another provider request.
+
+Only final sentence snapshots are reconciled. Alphabetic sentence-ending periods
+may differ, while internal punctuation such as3.0 or foo.bar and
+command operators remain exact. Provider indices are never canonical positions.
+A bounded compact timing map is stored with the existing successful audio state,
+without retaining another text/audio journal. Timing is delivered in the terminal
+frame after renderer success and audio integrity; during ongoing generation the
+player still has only segment position. Exact plaintext suffix matching separates
+a spoken session introduction from the canonical body. Transformed Markdown and
+other uncertain projections keep approximate Follow rather than fabricated offsets.
+
+The existing media player's current time chooses the last completed word. Seeking
+backward moves that cursor backward. A newer native presentation advertises
+`can_report_word_position`; only then may a new original freeze optional
+`playback.word_offset`. Old receivers receive the legacy report. The field is a
+bounded device media cursor, never proof of hearing, a consumed prefix, an answer,
+work cancellation or a resumption instruction. On-demand `playback_context` resolves
+the exact current canonical revision and exposes that position within its bounded
+source window. Preserve a reader supporting the optional field once originals
+contain it; rollback must retain live journals and uncertainty.
+
+Worker introductions now separate the session name from the body with a paragraph
+break, removing the inserted dot reported in #356. Canonical text and body offsets
+remain unchanged. The separate human report of punctuation spoken within paragraphs
+is not attributed solely to that prefix; a retained calm-voice sample's ASR draft
+did not reproduce “dot”/“punto”, which does not invalidate the intermittent report.
+The exact reported app text contains ordinary sentence punctuation, not those words.
+
+The selected Qwen style instruction now explicitly treats ordinary sentence
+punctuation as silent pauses, preserves literal commands and version numbers, and
+never asks for punctuation names. This is a provider-guidance mitigation, not a
+verified cure for the intermittent paragraph report. No blanket punctuation
+stripping, old-audio regeneration or native conversation change is applied.
