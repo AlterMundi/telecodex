@@ -97,6 +97,8 @@ name = "Research"
 topic_id = 8
 ```
 
+At startup, an explicit integrating entry creates only its missing local session metadata for an already allowed owner. It performs no native/model request and preserves existing bindings and settings. An unallowed owner or another owner's existing entry is refused. No priming human message, model turn or manual database seed is required.
+
 Use actual existing owned bindings. The entry and targets cannot overlap the
 bounded I/O profile. One selected shared native App Server remains the owner.
 Names are human selectors; `#t7` selects the stable configured topic directly.
