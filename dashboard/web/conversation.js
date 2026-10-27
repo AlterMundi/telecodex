@@ -965,7 +965,9 @@ window.Conversation = (() => {
       if (!enabled) {pause(); sound?.reset(); microphone?.deactivate();}
       modeChanged(enabled, initial);
     }
-    const transientConnectionError=error=>error.name==="TypeError" || error.status>=500;
+    // api() aborts a request at its deadline. That is a connection interruption,
+    // not an explicit decision to pause spoken replies.
+    const transientConnectionError=error=>["TypeError","AbortError"].includes(error.name) || error.status>=500;
     function failed(error) {
       presentState({connected:false});
       if (error.status === 401 || error.status === 403) {
