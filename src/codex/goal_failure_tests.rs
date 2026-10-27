@@ -29,6 +29,7 @@ async fn terminal_error_preserves_native_identity_and_structured_cause() {
         codex_thread_id: Some("native".into()),
         assistant_text: String::new(),
         stderr_text: String::new(),
+        draft_item: None,
     };
     let mut active = Some("failed-turn".into());
     let mut failure = None;
@@ -72,6 +73,7 @@ async fn completion_with_error_shaped_data_is_not_a_terminal_failure() {
         codex_thread_id: Some("native".into()),
         assistant_text: String::new(),
         stderr_text: String::new(),
+        draft_item: None,
     };
     let mut active = Some("done".into());
     let mut failure = None;

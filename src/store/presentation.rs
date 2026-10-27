@@ -98,6 +98,7 @@ impl Store {
         item: &str,
         text: &str,
         started: bool,
+        completed: bool,
     ) -> Result<bool> {
         if [thread, physical, item]
             .iter()
@@ -147,13 +148,16 @@ impl Store {
         if previous["item"] != item || previous["closed"] == true {
             return Ok(false);
         }
-        if text.trim().is_empty() {
+        if completed {
             if previous["item"] == item {
                 conn.execute(
                     "UPDATE bot_state SET value=json_set(value,'$.text',NULL,'$.closed',json('true')) WHERE key=?1",
                     [&key],
                 )?;
             }
+            return Ok(false);
+        }
+        if text.trim().is_empty() {
             return Ok(false);
         }
         let now = Utc::now().timestamp_millis();
@@ -711,6 +715,7 @@ mod tests {
                     item,
                     "",
                     true,
+                    false,
                 )
                 .unwrap()
         };
@@ -718,13 +723,14 @@ mod tests {
         let write =
             |human: i64, key: SessionKey, native: &str, physical: &str, item: &str, text: &str| {
                 store.interaction_response_draft(
-                    human, key, local, native, physical, item, text, false,
+                    human, key, local, native, physical, item, text, false, false,
                 )
             };
         assert!(!write(100, entry, "worker-native", "physical", "A", "Hidden").unwrap());
         assert!(!write(100, worker.key, "entry-native", "physical", "A", "Hidden").unwrap());
         assert!(!write(100, entry, "entry-native", "wrong-turn", "A", "Hidden").unwrap());
         assert!(write(200, entry, "entry-native", "physical", "A", "Hidden").is_err());
+        assert!(!write(100, entry, "entry-native", "physical", "A", "   ").unwrap());
         let oversized = "x".repeat(65537);
         assert!(!write(100, entry, "entry-native", "physical", "A", &oversized).unwrap());
         assert!(
@@ -833,7 +839,21 @@ mod tests {
                 .unwrap()["response_draft"]["text"],
             "Goal continuation draft"
         );
-        assert!(!write(100, entry, "entry-native", "physical-2", "D", "").unwrap());
+        assert!(
+            !store
+                .interaction_response_draft(
+                    100,
+                    entry,
+                    local,
+                    "entry-native",
+                    "physical-2",
+                    "D",
+                    "",
+                    false,
+                    true
+                )
+                .unwrap()
+        );
         assert!(
             store
                 .interaction_presentation_list(100, entry, 0, 0)

@@ -2213,6 +2213,7 @@ async fn upload_failure_marks_turn_failed_and_retains_output_for_explicit_recove
         codex_thread_id: Some("thread-123".to_string()),
         assistant_text: "answer".to_string(),
         stderr_text: String::new(),
+        draft_item: None,
     };
     let failure_messages = Arc::new(StdMutex::new(Vec::<String>::new()));
     let failure_messages_sink = failure_messages.clone();

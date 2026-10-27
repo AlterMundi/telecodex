@@ -16,9 +16,10 @@ def qualify(binary):
             send({'method':method,'params':{'threadId':j.web_thread,'turnId':j.web_turn,**extra}})
         def draft():return b.get('/api/interaction').get('response_draft')
         emit('item/started',item={'id':'blank-completion','type':'agentMessage','phase':'final_answer'})
+        emit('item/agentMessage/delta',itemId='blank-completion',delta=' \n')
         emit('item/agentMessage/delta',itemId='blank-completion',delta='Useful early answer. ')
         j.wait(lambda:bool(draft()))
-        observed=draft();assert observed['text']=='Useful early answer.'
+        observed=draft();assert observed['text'].strip()=='Useful early answer.'
         assert observed['provisional']is True and observed['can_listen']is False
         assert not any(v['preview']=='Useful early answer.'for v in b.get('/api/interaction')['items'])
         assert j.row("SELECT count(*) FROM interaction_native_messages WHERE item_id='blank-completion'")==[(0,)]
