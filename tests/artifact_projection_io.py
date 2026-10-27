@@ -21,7 +21,7 @@ class ProjectedFiles(ArtifactRouting,Projected):
         handled=super().handle_extra_rpc(message,send)
         p=message.get('params',{})
         if self.routing and message.get('method')=='turn/start' and p.get('threadId')=='native-topic-7':
-            out=Path(re.search(r'\n([^\n]+/out)\n',p['additionalContext']['telecodex.runtime']['value']).group(1))
+            out=Path(re.search(r'\n([^\n]+/out)\n',''.join(v['value'] for k,v in sorted(p['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))).group(1))
             self.expected['alpha.txt']=f'Immutable file version {len(self.versions)+1}\n'.encode()
             (out/'alpha.txt').write_bytes(self.expected['alpha.txt'])
             self.versions.append(self.expected['alpha.txt'])
@@ -102,7 +102,7 @@ def unenrolled_direct_files(binary):
         def handle_extra_rpc(self,message,send):
             p=message.get('params',{})
             if message.get('method')=='turn/start' and p['input'][0].get('text')=='Unenrolled direct file request.':
-                out=Path(re.search(r'\n([^\n]+/out)\n',p['additionalContext']['telecodex.runtime']['value']).group(1))
+                out=Path(re.search(r'\n([^\n]+/out)\n',''.join(v['value'] for k,v in sorted(p['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))).group(1))
                 (out/'direct.txt').write_bytes(b'Exact unenrolled direct bytes.\n')
                 native=p['threadId'];turn='unenrolled-direct'
                 self.native_turns+=1

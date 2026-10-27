@@ -166,7 +166,7 @@ def mixed_origin_returns(binary):
         send({'id':'canonical-approval','method':'item/commandExecution/requestApproval','params':{'threadId':thread,'turnId':turn,'itemId':'canonical-command','command':'synthetic command requiring an explicit human choice','reason':'Do not grant this automatically'}})
         journey.wait(lambda:journey.row("SELECT count(*) FROM human_interactions WHERE state='pending' AND json_extract(payload_json,'$.source.kind') IN ('question','approval')")==[(2,)])
         assert not journey.native_answers,'A native request was answered without human selection'
-        runtime=journey.packets[0][1]['additionalContext']['telecodex.runtime']['value']
+        runtime=''.join(v['value'] for k,v in sorted(journey.packets[0][1]['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
         output=Path(re.search(r'\n([^\n]+/out)\n',runtime).group(1))
         artifact=output/'canonical-deliverable.txt';artifact.write_text('Canonical-only generated artifact')
         journey.broadcast(thread,'item/completed',{'turnId':turn,'item':{'type':'agentMessage','id':'canonical-final','phase':'final_answer','text':'The canonical result and its artifact remain retained.'}})
@@ -198,7 +198,7 @@ def late_artifact_return(binary):
         journey.hold_telegram=True
         journey.admit('Produce an artifact on the original return surface.',topic=1)
         journey.wait(lambda:len(journey.packets)==1)
-        runtime=journey.packets[0][1]['additionalContext']['telecodex.runtime']['value']
+        runtime=''.join(v['value'] for k,v in sorted(journey.packets[0][1]['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
         output=Path(re.search(r'\n([^\n]+/out)\n',runtime).group(1))
         artifact=output/'late-deliverable.txt';artifact.write_text('Retained across return-selection race')
         journey.finish(journey.web_thread,journey.web_turn)

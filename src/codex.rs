@@ -8,6 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     fs,
@@ -2519,12 +2520,47 @@ fn build_turn_start_params(
     let collaboration = session.collaboration_mode.map(|mode| json!({
         "mode":mode.as_str(), "settings":{"model":session.model,"reasoning_effort":session.reasoning_effort,"developer_instructions":Value::Null}
     }));
-    let additional_context = request.runtime_instructions.as_deref().map(|instructions| {
-        json!({
-            "telecodex.runtime": {"kind":"application", "value":instructions}
-        })
-    });
+    let additional_context = request.runtime_instructions.as_deref().map(runtime_context);
     json!({"threadId":thread_id,"input":input,"additionalContext":additional_context,"cwd":sanitize_arg_path(&session.cwd),"approvalPolicy":session.approval_policy,"sandboxPolicy":build_sandbox_policy(session),"model":session.model,"effort":session.reasoning_effort,"summary":Value::Null,"serviceTier":service_tier,"outputSchema":Value::Null,"personality":Value::Null,"collaborationMode":collaboration,"config":build_config_overrides(effective_search_mode)})
+}
+
+/// Native additional-context values are middle-truncated at 1,000 approximate
+/// tokens (4,000 UTF-8 bytes). Keep ordered application fragments below that
+/// limit; never move runtime control into the human's original input.
+fn runtime_context(instructions: &str) -> Value {
+    const MAX_FRAGMENT_BYTES: usize = 3_000;
+    let mut context = serde_json::Map::new();
+    let mut remaining = instructions;
+    let mut index = 0;
+    loop {
+        let mut end = remaining.len().min(MAX_FRAGMENT_BYTES);
+        while !remaining.is_char_boundary(end) {
+            end -= 1;
+        }
+        let key = if index == 0 {
+            "telecodex.runtime".to_owned()
+        } else {
+            format!("telecodex.runtime.{index:08}")
+        };
+        context.insert(key, json!({"kind":"application","value":&remaining[..end]}));
+        remaining = &remaining[end..];
+        if remaining.is_empty() {
+            break;
+        }
+        index += 1;
+    }
+    // The native store emits only changed values on subsequent turns. Identify
+    // the current set explicitly, including when a shorter context retires old
+    // continuation keys that still exist in conversation history.
+    let revision = format!("{:x}", Sha256::digest(instructions.as_bytes()));
+    context.insert(
+        "telecodex.context".into(),
+        json!({"kind":"application","value":format!(
+            "Current Telecodex runtime context revision {revision}: {} ordered fragments, starting at telecodex.runtime then telecodex.runtime.00000001 and subsequent zero-padded indices. Read their values as one continuous instruction in key order, even across wrapper boundaries. Unchanged fragments retain their latest value. This set supersedes previous runtime revisions; higher continuation indices from older revisions are no longer current.",
+            context.len()
+        )}),
+    );
+    Value::Object(context)
 }
 
 fn build_sandbox_policy(session: &SessionRecord) -> Value {
@@ -4263,6 +4299,53 @@ model = "ignored-tui-field"
             params.get("serviceTier").and_then(Value::as_str),
             Some("fast")
         );
+    }
+
+    #[test]
+    fn runtime_context_preserves_long_multilingual_control_without_native_truncation() {
+        for original in [
+            String::new(),
+            "short policy".to_owned(),
+            "Nicolás 🎸 日本語\n".repeat(1200),
+        ] {
+            let context = runtime_context(&original);
+            let mut restored = String::new();
+            assert_eq!(context["telecodex.context"]["kind"], "application");
+            for (_, fragment) in context
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(key, _)| key.starts_with("telecodex.runtime"))
+            {
+                assert_eq!(fragment["kind"], "application");
+                let value = fragment["value"].as_str().unwrap();
+                assert!(value.len() <= 3000);
+                restored.push_str(value);
+            }
+            assert_eq!(restored, original);
+        }
+    }
+
+    #[test]
+    fn runtime_context_manifest_changes_when_continuations_are_replaced_or_retired() {
+        let long = "a".repeat(9000);
+        let original = runtime_context(&long);
+        let changed = runtime_context(&format!("{}changed{}", &long[..4000], &long[4007..]));
+        assert_ne!(original["telecodex.context"], changed["telecodex.context"]);
+        assert_eq!(original["telecodex.runtime"], changed["telecodex.runtime"]);
+        assert_ne!(
+            original["telecodex.runtime.00000001"],
+            changed["telecodex.runtime.00000001"]
+        );
+        let shorter = runtime_context("new short context");
+        assert!(shorter.get("telecodex.runtime.00000001").is_none());
+        assert!(
+            shorter["telecodex.context"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("1 ordered fragments")
+        );
+        assert_ne!(original["telecodex.context"], shorter["telecodex.context"]);
     }
 
     #[test]

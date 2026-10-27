@@ -159,7 +159,9 @@ def one_slot_deferred_return(binary):
         j.wait(lambda:len(j.instructions(7))==3 and j.instructions(7)[2][1]=='accepted')
         j.internal_delivery('Original logical task resumed using returned evidence.')
         j.answer(7,'Corrected original task completed using internal evidence.',item='corrected-final')
-        j.wait(lambda:j.row("SELECT count(*) FROM interaction_public_deliveries WHERE phase!='delivered'")==[(0,)] and j.has('Corrected original task completed using internal evidence.',1),seconds=25)
+        # A prior result can be terminally withheld when this correction wins
+        # the presentation race. Do not require it to be delivered again.
+        j.wait(lambda:j.row("SELECT count(*) FROM interaction_public_deliveries WHERE phase NOT IN ('delivered','withheld')")==[(0,)] and j.has('Corrected original task completed using internal evidence.',1),seconds=25)
         j.idle()
         assert j.row('SELECT phase FROM interaction_session_requests WHERE id=?',(admitted['request']['id'],))==[('returned',)]
         assert sum('Corrected original task completed using internal evidence.' in m['text'] for m,_ in j.messages)==1

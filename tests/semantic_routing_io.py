@@ -72,6 +72,88 @@ class Semantic(Routing):
         return super().handle_extra_rpc(m,send)
 
 
+class Foreground(Semantic):
+    """Use received metadata, not extra discovery round trips; no model calls."""
+    def handle_extra_rpc(self,m,send):
+        p=m.get('params',{});ident=m.get('id');method=m.get('method')
+        if method=='turn/start' and p['threadId'] not in ('native-topic-7','native-topic-8'):
+            self.entry=p['threadId'];self.entry_turn='foreground-'+str(len(self.outputs));self.entry_send=send
+            context=''.join(v['value'] for k,v in sorted(p['additionalContext'].items()) if k=='telecodex.runtime' or k.startswith('telecodex.runtime.'))
+            snapshot=next(json.loads(line) for line in context.splitlines() if line.startswith('{') and '"kind":"foreground_routing_context"' in line)
+            assert snapshot['scope']=='initial_turn_input_only' and snapshot['complete']
+            assert {(t['selector'],t['label']) for t in snapshot['candidates']}=={('t7','Alpha'),('t8','Beta')}
+            self.input_ref=snapshot['input_ref']
+            send({'id':ident,'result':{'turn':{'id':self.entry_turn}}})
+            send({'method':'turn/started','params':{'threadId':self.entry,'turn':{'id':self.entry_turn,'status':'inProgress'}}})
+            if any('FOREGROUND-CHECK' in part.get('text','') for part in p['input']):
+                self.finish_front('Foreground reply while both jobs remain active.')
+            else:
+                self.call('fast-dispatch','dispatch',{'input_ref':self.input_ref,'destinations':[{'selector':t['selector'],'relation':'new','requests':[]} for t in snapshot['candidates']]})
+            return True
+        if method=='turn/steer' and p['threadId']==self.entry:
+            self.steered=p
+            assert not p.get('additionalContext'), 'Initial-input context was copied onto later steering'
+            send({'id':ident,'result':{'turnId':self.entry_turn}})
+            self.finish_front('Foreground incorporated later steering without a new dispatch.')
+            return True
+        if method is None and ident=='fast-dispatch':
+            assert m['result']['success'],m
+            self.outputs.append(m)
+            result=json.loads(m['result']['contentItems'][0]['text'])
+            assert len(result['results'])==2 and all(row['new_admission'] for row in result['results'])
+            if not getattr(self,'hold_front',False):self.finish_front('Foreground dispatched; work continues independently.')
+            return True
+        return super().handle_extra_rpc(m,send)
+
+    def finish_front(self,text):
+        self.entry_send({'method':'item/completed','params':{'threadId':self.entry,'turnId':self.entry_turn,'item':{'id':'front-'+str(self.input_ref),'type':'agentMessage','phase':'final_answer','text':text}}})
+        self.entry_send({'method':'turn/completed','params':{'threadId':self.entry,'turn':{'id':self.entry_turn,'status':'completed'}}})
+
+
+def foreground_named_dispatch(binary):
+    j=Foreground(binary)
+    try:
+        j.prepare()
+        original=j.admit('Please ask Alpha and Beta to work on their existing tasks.',topic=1)
+        j.wait(lambda:j.has('Foreground dispatched; work continues independently.',1))
+        j.wait(lambda:all(j.instructions(t)and j.instructions(t)[0][1]=='accepted' for t in(7,8)))
+        assert j.input_ref==original and len(j.outputs)==1
+        assert all(len(j.packets['native-topic-'+str(t)])==1 for t in(7,8))
+        j.wait(lambda:j.row('SELECT busy FROM sessions WHERE thread_id=1')==[(0,)])
+        follow=j.admit('FOREGROUND-CHECK Continue our conversation while those jobs run.',topic=1)
+        j.wait(lambda:j.has('Foreground reply while both jobs remain active.',1))
+        assert j.input_ref==follow and follow!=original
+        assert j.row('SELECT thread_id,busy FROM sessions WHERE thread_id IN(7,8) ORDER BY thread_id')==[(7,1),(8,1)]
+        assert len(j.outputs)==1,'Foreground repeated destination discovery or dispatch'
+        j.answer(8,'Beta retained its own execution.')
+        j.answer(7,'Alpha retained its own execution.')
+        j.wait(lambda:j.has('Beta retained its own execution.',1)and j.has('Alpha retained its own execution.',1))
+        j.idle()
+        print('PASS initial foreground metadata reaches native turn/start; exact-reference stable named dispatch without capabilities/inputs/inventory round trips, fresh next-turn reference, useful independent front reply while two workers remain active and attributed returns; synthetic native/model peers.')
+    finally:j.close()
+
+
+def foreground_steered_reference(binary):
+    j=Foreground(binary);j.hold_front=True
+    try:
+        j.prepare()
+        original=j.admit('Please ask Alpha and Beta to continue their existing tasks.',topic=1)
+        j.wait(lambda:len(j.outputs)==1 and all(j.instructions(t)and j.instructions(t)[0][1]=='accepted' for t in(7,8)))
+        assert j.input_ref==original
+        follow=j.admit('Discuss a separate point here; do not route this later message.',topic=1)
+        j.wait(lambda:j.has('Foreground incorporated later steering without a new dispatch.',1))
+        assert j.steered['clientUserMessageId']=='telegram:100:100:'+str(follow),j.steered
+        assert follow!=original and j.input_ref==original
+        assert 'Discuss a separate point here' in j.steered['input'][0]['text']
+        assert all(len(j.instructions(t))==1 for t in(7,8))
+        j.answer(7,'Alpha stayed on its initial original.')
+        j.answer(8,'Beta stayed on its initial original.')
+        j.wait(lambda:j.has('Alpha stayed on its initial original.',1)and j.has('Beta stayed on its initial original.',1))
+        j.idle()
+        print('PASS later same-turn steering preserves its own correlation and human text, does not replace/reuse initial metadata or redispatch persistent jobs; synthetic native/model peers.')
+    finally:j.close()
+
+
 def semantic_originals(binary):
     j=Semantic(binary)
     try:
@@ -149,5 +231,7 @@ def delayed_original(binary):
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
+    foreground_named_dispatch(binary)
+    foreground_steered_reference(binary)
     semantic_originals(binary)
     delayed_original(binary)
