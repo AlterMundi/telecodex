@@ -1,16 +1,18 @@
 """Early native text stays provisional through actual HTTP/SQLite; zero models."""
 import json
 import hashlib
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse, parse_qs
 import sys
 from pathlib import Path
 from conversation_cold_entry_http_io import ColdEntry, Browser
+import speech_render as speech_fixture
 
 
 def qualify(binary):
-    j=ColdEntry(str(Path(binary).resolve()));b=None
+    j=ColdEntry(str(Path(binary).resolve()));b=None;voice=speech_fixture.Render();voice.setUp()
     try:
-        j.prepare();b=Browser(j)
+        voice.qwen_route();voice.content_type='text/event-stream';voice.data=voice.stream_data()
+        j.prepare();b=Browser(j,speech={'binding':str(voice.binding),'timeout_seconds':10,'streaming_output':True,'live_response':True})
         original,_=b.text('Discuss the plan while work continues.')
         j.wait(lambda:b.status(original)['phase']=='accepted' and bool(j.packets))
         send=next(send for thread,send in j.clients.values()if thread==j.web_thread)
@@ -29,6 +31,17 @@ def qualify(binary):
             return '/api/interaction/part?'+urlencode({'source':ident,'revision':revision,'offset':0})
         frozen_first=frozen(observed)
         assert b.get(frozen_first)['text']==observed['text']
+        speech_selection={k:v[0] for k,v in parse_qs(urlparse(frozen_first).query).items()};speech_selection['offset']=int(speech_selection['offset'])
+        response=b.client.post('/api/interaction/audio',json={**speech_selection,'stream':True},headers=b.headers)
+        assert response.status_code==200,response.text
+        assert [json.loads(line)['type'] for line in response.text.splitlines()]==['audio','end']
+        assert len(voice.calls)==1,'One prefix owns one actual loopback renderer attempt'
+        correction,_=b.text('Continue with this correction.',playback={
+            'source':speech_selection['source'],'revision':speech_selection['revision'],'segment_offset':0,'position_millis':5,'duration_millis':None,'state':'interrupted'})
+        j.wait(lambda:b.status(correction)['phase']=='accepted')
+        report=j.call('route-live-playback-context','playback_context',{'input_ref':correction})
+        assert report['availability']=='current_source' and report['source_part']['text']==observed['text'],report
+
 
         assert not any(v['preview']=='Useful early answer.'for v in b.get('/api/interaction')['items'])
         assert j.row("SELECT count(*) FROM interaction_native_messages WHERE item_id='blank-completion'")==[(0,)]
@@ -36,6 +49,7 @@ def qualify(binary):
         # An empty completion retires the exact draft while native work continues.
         emit('item/completed',item={'id':'blank-completion','type':'agentMessage','phase':'final_answer','text':''})
         j.wait(lambda:draft()is None)
+        assert b.client.get(frozen_first,headers=b.headers).status_code==409
         assert j.row("SELECT count(*) FROM interaction_native_messages WHERE item_id='blank-completion'")==[(0,)]
         emit('item/started',item={'id':'early','type':'agentMessage','phase':'final_answer'})
         emit('item/agentMessage/delta',itemId='early',delta='Revisable early answer.')
@@ -67,9 +81,9 @@ def qualify(binary):
         emit('turn/completed',turn={'id':j.web_turn,'status':'interrupted'})
         j.wait(lambda:draft()is None)
         assert not j.native_answers
-        print('PASS early native text visible before item completion, no canonical/audio/action authority; final replacement once, worker partial excluded, continued ingress and terminal retirement; actual HTTP/native/SQLite, zero models.')
+        print('PASS source-bound speech before native completion, exact playback context and confirmation handover; no answer/action authority, worker partial excluded, original ingress and terminal retirement; actual HTTP/native/SQLite/loopback renderer, zero models.')
     finally:
         if b:b.client.close()
-        j.close()
+        j.close();voice.tearDown()
 
 if __name__=='__main__':qualify(sys.argv[1])

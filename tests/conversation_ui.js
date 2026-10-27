@@ -146,7 +146,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   };
   const context = vm.createContext({window:{navigator:{mediaSession},localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
-    URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:require("node:crypto"),
+    URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:options.hashHold?{...require("node:crypto"),subtle:{digest:(algorithm,bytes)=>options.hashHold.active?new Promise(resolve=>options.hashHold.releases.push(()=>resolve(require("node:crypto").createHash('sha256').update(bytes).digest()))):require("node:crypto").subtle.digest(algorithm,bytes)}}:require("node:crypto"),
     fetch:(_route, options) => {
       if(_route.startsWith('api/interaction/artifacts/'))return Promise.resolve(new Response('Actual fixture file',{headers:{'X-Artifact-Sha256':require('node:crypto').createHash('sha256').update('Actual fixture file').digest('hex')}}));
       audioCalls.push(JSON.parse(options.body));
@@ -392,6 +392,15 @@ function boot(readOnly=false,standalone=false,options={}) {
   await until(()=>liveVoice.audioCalls.length===2&&!livePlayer.paused);
   assert.equal(liveVoice.audioCalls[1].source,'native:9');assert.equal(liveVoice.audioCalls[1].offset,liveEnd,'Canonical speech starts after the reserved prefix');
   liveVoice.ui.stop();
+  const hashHold={active:true,releases:[]},selectionOptions={liveSpeech:true,capture:true,hashHold,responseDraft:{provisional:true,native_turn:'held-physical',native_item:'held-item',text:'Useful interrupted sentence. More',observed_at:'2100-01-01T00:00:00Z'}};
+  const selectionRace=boot(false,true,selectionOptions);selectionRace.audio();await selectionRace.ui.refresh();
+  selectionRace.nodes.get('#conversation-voice-replies').handlers.click();await selectionRace.ui.refresh();await until(()=>hashHold.releases.length===1);
+  selectionRace.capture();selectionRace.finishCapture();
+  hashHold.releases.shift()();await until(()=>hashHold.releases.length===1);hashHold.releases.shift()();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(selectionRace.audioCalls.length,0,'Capture invalidates an awaited prefix even after recording finishes');
+  hashHold.active=false;await selectionRace.ui.refresh();await until(()=>selectionRace.audioCalls.length===1);
+  selectionRace.ui.stop();
+
 
   let voiceSubmissions=0;
   const ownedVoice=boot(false,false,{capture:true,ownsVoice:true,voiceSubmit:()=>{voiceSubmissions++;}});await ownedVoice.ui.refresh();
