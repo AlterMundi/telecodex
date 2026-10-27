@@ -35,6 +35,7 @@ function boot(readOnly=false,standalone=false,options={}) {
         const at = this.children.indexOf(before);
         this.children.splice(at < 0 ? this.children.length : at, 0, child);
       },
+      requestSubmit() {return this.handlers.submit?.({preventDefault(){}});},
       click() {this.clicked=true;},remove() {this.removed=true;},
       before(...nodes) {this.beforeNodes=nodes;}, pause() { this.paused = true; }, play() {this.paused=false;this.ended=false;return Promise.resolve();}, load() {},
     };
@@ -805,10 +806,14 @@ function boot(readOnly=false,standalone=false,options={}) {
   const sending = boot(); await sending.ui.refresh();
   const draft=sending.nodes.get("#conversation-message"), form=sending.nodes.get("#conversation-compose");
   draft.value="  Original message.  ";
-  sending.lose(); await form.handlers.submit({preventDefault(){}});
+  for(const guard of [{shiftKey:true},{isComposing:true},{keyCode:229},{ctrlKey:true},{altKey:true},{metaKey:true}]){
+    let prevented=false;await draft.handlers.keydown({key:"Enter",...guard,preventDefault(){prevented=true;}});
+    assert.equal(sending.originals.size,0,"Newlines and composition must not submit an original");assert.equal(prevented,false);
+  }
+  sending.lose(); await draft.handlers.keydown({key:"Enter",preventDefault(){}});
   assert.equal(draft.value,"  Original message.  ","Lost acknowledgment must preserve the draft");
   assert.equal(sending.originals.size,1);
-  await form.handlers.submit({preventDefault(){}});
+  await draft.handlers.keydown({key:"Enter",preventDefault(){}});
   assert.equal(sending.originals.size,1,"Unknown POST must not be automatically duplicated");
   const retained=sending.nodes.get("#conversation-inputs").children[0];
   await retained.children[2].children[0].handlers.click();

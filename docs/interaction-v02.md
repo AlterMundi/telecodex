@@ -377,3 +377,11 @@ internationalization is tracked separately in #295; this slice introduces no
 language selector or partial translated UI.
 
 Human correction (2026-10-26): Follow remains enabled during manual scrolling. A held pointer/touch owns the reading viewport; release resumes the spoken position. Wheel and keyboard scrolling have a short settle interval. Only the explicit Follow checkbox changes its preference. Background Voice must preserve opted-in intent across transient network errors, with OS media controls where supported; phone screen-lock playback remains a separate actual-device acceptance item.
+
+### Keyboard message entry
+
+Enter submits the existing composer form; Shift+Enter keeps the textarea's normal
+newline behavior. IME composition, composition keycode229 and modifier shortcuts
+do not submit. Repeated keydown and a disabled Send do not create another input.
+The same submit handler retains draft, attachment, pending voice and uncertain
+delivery behavior; there is no separate keyboard dispatch path.
