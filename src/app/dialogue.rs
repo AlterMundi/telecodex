@@ -151,7 +151,16 @@ async fn playback_context(
         super::presentation::owner_read(
             app,
             human,
-            &format!("part {} {} {offset}", report.source, report.revision),
+            &format!(
+                "{} {} {} {offset}",
+                if report.source.starts_with("live:") {
+                    "speech"
+                } else {
+                    "part"
+                },
+                report.source,
+                report.revision
+            ),
         )
     };
     // Native question inspection may wait for its live responder lock. An old

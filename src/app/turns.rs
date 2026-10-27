@@ -892,7 +892,6 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeMessageCompleted { thread_id, turn_id: native_turn, item_id, phase, text } => {
-                                let _=shared.store.clear_response_draft(turn_id,&native_turn,Some(&item_id));
                                 let inputs=shared.store.interaction_turn_inputs(turn_id,requester_user_id)?;
                                 let root=result_root.as_deref().or_else(||inputs.iter().find(|i|super::routing::relayed(i)).map(|i|i.id.as_str()));
                                 if phase.as_deref()==Some("final_answer") && let Some(id)=root {
@@ -900,6 +899,7 @@ pub(super) async fn process_turn(
                                 } else {
                                     shared.store.record_native_message(turn_id, &thread_id, &native_turn, &item_id, phase.as_deref(), &text)?;
                                 }
+                                let _=shared.store.clear_response_draft(turn_id,&native_turn,Some(&item_id));
                                 if phase.as_deref().is_none_or(|p|p=="final_answer") && super::artifact_outputs::retain(shared.clone(),turn_id,requester_user_id,&artifact_workspace,Some(serde_json::json!({"native":thread_id,"turn":native_turn,"item":item_id}))).is_err() {
                                     tracing::warn!("Response files remain unavailable; output is preserved");
                                 }

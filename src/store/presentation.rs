@@ -56,6 +56,34 @@ pub(super) fn entry_binding(
     Ok(digest(&json!([human, entry, session, generation])))
 }
 
+pub(super) fn live_speech_bounds(id: &str) -> Option<(usize, usize)> {
+    let fields: Vec<_> = id.split(':').collect();
+    if fields.len() != 6
+        || fields[0] != "live"
+        || fields[1..3].iter().any(|v| {
+            v.is_empty()
+                || v.len() > 128
+                || !v
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+        })
+        || fields[5].len() != 64
+        || !fields[5]
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        return None;
+    }
+    let start = fields[3].parse::<usize>().ok()?;
+    let end = fields[4].parse::<usize>().ok()?;
+    (fields[3] == start.to_string()
+        && fields[4] == end.to_string()
+        && end > start
+        && end - start <= 640
+        && end <= 65536)
+        .then_some((start, end))
+}
+
 impl Store {
     /// A native lifecycle event owns this ephemeral producer, including later goal turns.
     pub fn start_response_draft(
@@ -478,7 +506,7 @@ impl Store {
             AND NOT EXISTS(SELECT 1 FROM interaction_native_messages m WHERE m.native_thread=?4 AND m.native_turn=json_extract(b.value,'$.turn') AND m.item_id=json_extract(b.value,'$.item'))",
             params![format!("interaction-response-draft:{session}"),session,human,native,result["binding"].as_str()],|r|r.get(0)).optional()?;
         result["response_draft"]=draft.and_then(|v|serde_json::from_str::<Value>(&v).ok())
-            .map(|v|json!({"text":v["text"],"observed_at":v["observed_at"],"provisional":true,"can_listen":false})).unwrap_or(Value::Null);
+            .map(|v|json!({"text":v["text"],"native_turn":v["turn"],"native_item":v["item"],"observed_at":v["observed_at"],"provisional":true,"can_listen":false})).unwrap_or(Value::Null);
         if let Some(cursor) = after_matrix {
             result["cursor"]["matrix"] =
                 json!(matrices.iter().take(8).next_back().map_or(cursor, |r| r.0));
@@ -486,6 +514,73 @@ impl Store {
                 json!(matrices.iter().take(8).map(|r| r.0).max().unwrap_or(0));
         }
         Ok(result)
+    }
+
+    /// Read a frozen spoken prefix, never an answer/action/artifact source.
+    /// The selector carries actual native identity, Unicode bounds and prefix hash.
+    /// It survives confirmation only when that exact canonical prefix agrees.
+    pub fn interaction_live_speech_part(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        revision: &str,
+        offset: usize,
+    ) -> Result<Value> {
+        let fields: Vec<_> = id.split(':').collect();
+        let (start, end) = live_speech_bounds(id).context("Invalid live speech selection")?;
+        if offset < start || offset >= end {
+            bail!("Invalid live speech offset");
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let (session, native) = entry_on(&conn, human, entry)?;
+        let generation = entry_binding(&conn, human, entry, session)?;
+        if revision
+            != format!(
+                "{:x}",
+                Sha256::digest(format!("{generation}:{id}").as_bytes())
+            )
+        {
+            bail!("Live speech binding changed");
+        }
+        // Confirmation wins over a residual snapshot. An earlier item can remain
+        // audible during later work only through its ordinary canonical record.
+        let canonical: Option<String> = conn.query_row(
+            &format!("SELECT m.text FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn JOIN sessions s ON s.id=t.session_id
+                WHERE m.native_thread=?4 AND m.native_turn=?5 AND m.item_id=?6 AND t.session_id=?2 AND {NATIVE_VISIBILITY}"),
+            params![0,session,human,native,fields[1],fields[2]],|r|r.get(0)).optional()?;
+        let text = if let Some(text) = canonical {
+            crate::interaction::visible_answer(&text).to_owned()
+        } else {
+            let snapshot: Option<String> = conn.query_row(
+                "SELECT b.value FROM bot_state b JOIN turns t ON t.id=json_extract(b.value,'$.local') JOIN native_collections n ON n.local_turn=t.id
+                WHERE b.key=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND t.native_thread_id=?4 AND t.status='running' AND t.completed_at IS NULL
+                AND json_extract(b.value,'$.thread')=?4 AND json_extract(b.value,'$.generation')=?5
+                AND json_extract(b.value,'$.turn')=?6 AND json_extract(b.value,'$.item')=?7 AND COALESCE(json_extract(b.value,'$.closed'),0)=0",
+                params![format!("interaction-response-draft:{session}"),session,human,native,generation,fields[1],fields[2]],|r|r.get(0)).optional()?;
+            let snapshot: Value =
+                serde_json::from_str(&snapshot.context("Live speech source retired")?)?;
+            snapshot["text"]
+                .as_str()
+                .context("Live speech text unavailable")?
+                .to_owned()
+        };
+        let prefix: String = text.chars().take(end).collect();
+        if prefix.chars().count() != end
+            || format!("{:x}", Sha256::digest(prefix.as_bytes())) != fields[5]
+        {
+            bail!("Live speech prefix changed");
+        }
+        let text: String = prefix.chars().skip(offset).collect();
+        if text.trim().is_empty() {
+            bail!("Empty live speech segment");
+        }
+        Ok(
+            json!({"schema":"telecodex.presentation-part/v1","id":id,"revision":revision,
+            "kind":"integrator_live","text":text,"offset":offset,"next_offset":null,
+            "native_turn":fields[1],"native_item":fields[2],"provisional":true,
+            "entry_binding":[human,entry,session,generation],"playback":"not_observed"}),
+        )
     }
 
     /// The revision fences source content, owner/native bindings and relevance.
@@ -678,6 +773,139 @@ pub(super) fn source_on(
 mod tests {
     use super::*;
     use crate::interaction::{RequestRelation, ReturnRoute, SourceInput, TransportPhase};
+
+    #[test]
+    fn live_speech_prefix_is_exact_scoped_and_survives_only_matching_confirmation() {
+        let (file, store, entry, worker, _, _) = setup();
+        let session = store.get_session(entry).unwrap().unwrap();
+        let local = store
+            .record_turn_started(
+                session.id,
+                &TurnRequest {
+                    session_key: entry,
+                    from_user_id: 100,
+                    prompt: "Discuss".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(local, "entry-native")
+            .unwrap();
+        store.native_collection_started(local, "physical").unwrap();
+        store
+            .start_response_draft(100, entry, local, "entry-native", "physical")
+            .unwrap();
+        store
+            .interaction_response_draft(
+                100,
+                entry,
+                local,
+                "entry-native",
+                "physical",
+                "early",
+                "",
+                true,
+                false,
+            )
+            .unwrap();
+        let text = "Hola Nicolás. Mixed English follows. More text";
+        store
+            .interaction_response_draft(
+                100,
+                entry,
+                local,
+                "entry-native",
+                "physical",
+                "early",
+                text,
+                false,
+                false,
+            )
+            .unwrap();
+        let prefix = "Hola Nicolás. ";
+        let end = prefix.chars().count();
+        let id = format!(
+            "live:physical:early:0:{end}:{:x}",
+            Sha256::digest(prefix.as_bytes())
+        );
+        let binding = store
+            .interaction_presentation_list(100, entry, 0, 0)
+            .unwrap()["binding"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let revision = format!("{:x}", Sha256::digest(format!("{binding}:{id}").as_bytes()));
+        let read = || store.interaction_live_speech_part(100, entry, &id, &revision, 0);
+        let selected = read().unwrap();
+        assert_eq!(selected["text"], prefix);
+        assert_eq!(selected["next_offset"], Value::Null);
+        assert_eq!(selected["kind"], "integrator_live");
+        assert!(
+            store
+                .interaction_presentation_part(100, entry, &id, &revision, 0)
+                .is_err(),
+            "Speech selector cannot become answer/action context"
+        );
+        assert!(
+            store
+                .interaction_live_speech_part(200, entry, &id, &revision, 0)
+                .is_err()
+        );
+        assert!(
+            store
+                .interaction_live_speech_part(100, worker.key, &id, &revision, 0)
+                .is_err()
+        );
+        assert!(
+            store
+                .interaction_live_speech_part(100, entry, &id, &"0".repeat(64), 0)
+                .is_err()
+        );
+        assert!(
+            store
+                .interaction_live_speech_part(100, entry, &id, &revision, end)
+                .is_err()
+        );
+        store
+            .record_native_message(
+                local,
+                "entry-native",
+                "physical",
+                "early",
+                Some("final_answer"),
+                &format!("{text} in the canonical completion."),
+            )
+            .unwrap();
+        store
+            .clear_response_draft(local, "physical", Some("early"))
+            .unwrap();
+        assert_eq!(
+            read().unwrap(),
+            selected,
+            "Append-only confirmation must not interrupt an audible prefix"
+        );
+        drop(store);
+        let store = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        assert_eq!(
+            store
+                .interaction_live_speech_part(100, entry, &id, &revision, 0)
+                .unwrap(),
+            selected,
+            "Canonical receipt supports an already prepared prefix after restart"
+        );
+        store
+            .set_session_codex_thread(entry, "replacement-native")
+            .unwrap();
+        assert!(
+            store
+                .interaction_live_speech_part(100, entry, &id, &revision, 0)
+                .is_err()
+        );
+    }
 
     #[test]
     fn response_draft_is_provisional_owned_bounded_and_retires_on_completion() {

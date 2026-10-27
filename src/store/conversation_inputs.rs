@@ -29,7 +29,11 @@ impl ConversationPlayback {
             .strip_prefix("native:")
             .and_then(|v| v.parse::<i64>().ok())
             .is_some_and(|id| id > 0 && self.source == format!("native:{id}"));
-        if ((!native && source.validate_context().is_err())
+        let live =
+            super::presentation::live_speech_bounds(&self.source).is_some_and(|(start, end)| {
+                self.segment_offset == start && self.word_offset.is_none_or(|p| p <= end)
+            });
+        if ((!native && !live && source.validate_context().is_err())
             || self.revision.len() != 64
             || !self
                 .revision
@@ -165,7 +169,7 @@ impl ConversationInput {
         };
         match &self.playback {
             Some(playback) => format!(
-                "[Device-reported playback context]\n{}\nClient-reported media progress at input capture, not proof of human hearing or comprehension. segment_offset is a canonical text segment boundary; position/duration are media milliseconds. Optional word_offset is a device-reported canonical boundary derived from provider word-end timestamps for an exactly matched speech projection; seeking or partial playback can occur, so it is not proof that the preceding text was heard. This metadata does not select a destination, answer or approval, cancel native work, or instruct resumption. Use playback_context with this input_ref to inspect the frozen report and bounded canonical source text on demand if relevant; it may be stale or unrelated.\n\n{}",
+                "[Device-reported playback context]\n{}\nClient-reported media progress at input capture, not proof of human hearing or comprehension. segment_offset is a selected source text segment boundary (live prefixes may be provisional); position/duration are media milliseconds. Optional word_offset is a device-reported canonical boundary derived from provider word-end timestamps for an exactly matched speech projection; seeking or partial playback can occur, so it is not proof that the preceding text was heard. This metadata does not select a destination, answer or approval, cancel native work, or instruct resumption. Use playback_context with this input_ref to inspect the frozen report and bounded canonical source text on demand if relevant; it may be stale or unrelated.\n\n{}",
                 serde_json::json!({"input_ref":self.id,"playback":playback}),
                 rendered
             ),
@@ -1296,6 +1300,14 @@ mod tests {
             value.source = source.into();
             assert!(value.validate().is_err());
         }
+        let mut live = base.clone();
+        live.source = format!("live:physical:item:0:20:{}", "a".repeat(64));
+        assert!(live.validate().is_ok());
+        live.word_offset = Some(21);
+        assert!(live.validate().is_err());
+        live.word_offset = None;
+        live.segment_offset = 1;
+        assert!(live.validate().is_err());
         let legacy = serde_json::to_value(&base).unwrap();
         assert!(legacy.get("word_offset").is_none());
         assert!(

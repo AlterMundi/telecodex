@@ -1,5 +1,7 @@
 """Early native text stays provisional through actual HTTP/SQLite; zero models."""
 import json
+import hashlib
+from urllib.parse import urlencode
 import sys
 from pathlib import Path
 from conversation_cold_entry_http_io import ColdEntry, Browser
@@ -21,6 +23,13 @@ def qualify(binary):
         j.wait(lambda:bool(draft()))
         observed=draft();assert observed['text'].strip()=='Useful early answer.'
         assert observed['provisional']is True and observed['can_listen']is False
+        def frozen(value):
+            text=value['text'];ident=f"live:{value['native_turn']}:{value['native_item']}:0:{len(text)}:{hashlib.sha256(text.encode()).hexdigest()}"
+            binding=b.get('/api/interaction')['binding'];revision=hashlib.sha256((binding+':'+ident).encode()).hexdigest()
+            return '/api/interaction/part?'+urlencode({'source':ident,'revision':revision,'offset':0})
+        frozen_first=frozen(observed)
+        assert b.get(frozen_first)['text']==observed['text']
+
         assert not any(v['preview']=='Useful early answer.'for v in b.get('/api/interaction')['items'])
         assert j.row("SELECT count(*) FROM interaction_native_messages WHERE item_id='blank-completion'")==[(0,)]
         assert j.row('SELECT count(*) FROM interaction_deliveries')==[(0,)]
@@ -35,6 +44,13 @@ def qualify(binary):
         emit('item/completed',item={'id':'early','type':'agentMessage','phase':'final_answer','text':'Confirmed answer differs from the draft.'})
         j.wait(lambda:draft()is None and any(v['preview']=='Confirmed answer differs from the draft.'for v in b.get('/api/interaction')['items']))
         assert j.row("SELECT count(*) FROM interaction_native_messages WHERE item_id='early'")==[(1,)]
+        emit('item/started',item={'id':'matching','type':'agentMessage','phase':'final_answer'})
+        emit('item/agentMessage/delta',itemId='matching',delta='Exactly the spoken prefix. Still writing')
+        j.wait(lambda:bool(draft()))
+        frozen_match=frozen(draft());selected=b.get(frozen_match)
+        emit('item/completed',item={'id':'matching','type':'agentMessage','phase':'final_answer','text':'Exactly the spoken prefix. Still writing a confirmed continuation.'})
+        j.wait(lambda:draft()is None)
+        assert b.get(frozen_match)==selected,'Confirmation retains the exact frozen speech source'
         # Partial worker output has no entry audience and cannot replace this draft.
         worker_original,_=b.text('#Alpha Work independently.')
         j.wait(lambda:j.instructions(7)and j.instructions(7)[0][1]=='accepted')

@@ -543,3 +543,28 @@ now waits for the actual matching native-input receipt before publishing its
 synthetic completion; the complete projection journey passes against the existing
 receiving357 executable. This is verifier evidence, not a claimed production
 routing repair or a reason to replay an original. Other final357 checks passed.
+
+
+## Live native speech prefixes (opt-in)
+
+`speech.live_response` defaults to false. A compatible browser can select complete
+sentence/paragraph prefixes from the actual integrating response while it is being
+written. The dedicated `presentation speech` reader verifies the owned current
+native identity, entry generation, Unicode range and exact prefix hash. These
+selectors are not canonical answer, reply, question or artifact sources. They
+use the existing source-linked renderer, progressive player, explicit Voice
+controls and provider-attempt journal. No new prompt, model or result journal.
+
+Appending native text does not invalidate frozen audio. Confirmation preserves
+a prefix only when the exact canonical item agrees; changed/empty/inaccessible
+text stops it. The client reserves an automatic attempt once and reconciles its
+prefix against confirmation before choosing the remaining canonical text. A
+failed/uncertain preparation is not repeated at confirmation. Explicit Resume
+retains the completed media boundary separately; that cursor is not proof of
+hearing. Input capture and native-job cancellation remain distinct. The existing bounded playback report also accepts this dedicated source and
+its range; read-only `playback_context` uses the same prefix verification, without
+turning it into a reply/action source. Completed media ranges advance a contiguous
+resume cursor, so later playback cannot erase an earlier interrupted gap. Live
+completion after canonical arrival updates the same cursor. The option is not
+receiving-enabled until integrated interruption/context and HTTP/native
+qualification are complete.

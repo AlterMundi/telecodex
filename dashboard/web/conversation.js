@@ -106,6 +106,7 @@ window.Conversation = (() => {
     const speechGaps={chunk:180,reply:450,question:1200};
     let speechWait;
     const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
+    const liveSpeech=window.LiveSpeech?.mount();let canSpeakLive=false;
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:selectFocus,onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
     const taskControls=window.HumanTaskControls?.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,canReply:()=>!readOnly,onReply:task=>{
       if(readOnly || posting || draft.value.trim())return false;
@@ -135,7 +136,7 @@ window.Conversation = (() => {
     function showResponseDraft(value){
       const text=value?.provisional===true && typeof value.text==="string" && value.text.length<=65536?value.text:"";
       const follow=atTimelineEnd();
-      responseDraft.hidden=!text.trim();
+      responseDraft.hidden=!text.trim();responseDraft.dataset.nativeKey=value?`${value.native_turn}:${value.native_item}`:"";
       if(responseDraftBody.dataset.text!==text){setReplyText(responseDraftBody,text);responseDraftBody.dataset.text=text;}
       if(!responseDraft.hidden){
         if(timeline)placeInTimeline(responseDraft,"response-draft",value.observed_at,follow);
@@ -730,12 +731,21 @@ window.Conversation = (() => {
         && active?.auto && !active.verifying && !audio.paused && !audio.muted;
     }
     function followCard(){
+      if(active?.source.kind==="integrator_live"){
+        const source=active.source,key=`${source.native_turn}:${source.native_item}`;
+        if(!responseDraft.hidden && responseDraft.dataset.nativeKey===key)return {box:responseDraft,body:responseDraftBody,expanded:true};
+        return [...cards.values()].find(card=>card.source.native_turn===source.native_turn && card.source.native_item===source.native_item);
+      }
       const original=cards.get(active?.source.id);
       if(original?.source.revision!==active?.source.revision)return;
       return timeline?.contains?.(original?.box)?original:[...progressCards.values()]
         .find(value=>value.source===active.source.id && value.revision===active.source.revision);
     }
     async function loadFollowText(selected){
+      if(selected.source.kind==="integrator_live"){
+        const card=followCard();if(!card?.source || card.textLoading || selected.followTextRequested)return;
+        selected.followTextRequested=true;await readCard(card);if(active===selected)followPlayback();return;
+      }
       const card=cards.get(selected.source.id);
       if(!card || card.textLoading || selected.followTextRequested)return;
       selected.followTextRequested=true;
@@ -763,7 +773,7 @@ window.Conversation = (() => {
         return;
       }
       if(!Number.isSafeInteger(selected.textEnd))return;
-      const original=cards.get(selected.source.id);
+      const original=cards.get(selected.source.id)||card;
       if(!original.expanded || Array.from(replyText(original.body)).length<selected.textEnd){
         void loadFollowText(selected);return;
       }
@@ -846,10 +856,17 @@ window.Conversation = (() => {
       if(speechPositions.delete(source.id)){savePositions();const card=cards.get(source.id);if(card)positionLabel(card);}
     }
     function rememberPosition(){
-      if(!active || active.verifying || !blobUrl)return;
+      if(!active || active.source.kind==="integrator_live" || active.verifying || !blobUrl)return;
       const source=active.source;
       if(source.current===false || source.correction_pending || source.native_binding_current===false)return;
-      if(active.segmentEnded && active.next===null){forgetPosition(source);return;}
+      if(active.segmentEnded && active.next===null){
+        const remaining=liveSpeech?.resume(source);
+        if(remaining!==undefined && remaining<source.text_characters){
+          speechPositions.set(source.id,{source:source.id,revision:source.revision,offset:remaining});savePositions();
+          const card=cards.get(source.id);if(card)positionLabel(card);return;
+        }
+        forgetPosition(source);return;
+      }
       const offset=active.segmentEnded && Number.isSafeInteger(active.next)?active.next:active.offset;
       speechPositions.delete(source.id);speechPositions.set(source.id,{source:source.id,revision:source.revision,offset});
       while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
@@ -931,9 +948,13 @@ window.Conversation = (() => {
     async function drainVoice() {
       if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || !enabled || !canListen || !playbackAllowed())return;
       while(voiceQueue.length&&sessionMuted(voiceQueue[0]))voiceQueue.shift();
-      const next=voiceQueue.shift();voiceStatus();if(!next)return;
-      voiceBusy=true;
-      const result=await listenTo(next,0,{queued:true});
+      voiceBusy=true;const selectionGeneration=generation;
+      const next=voiceQueue.shift() || (canSpeakLive?await liveSpeech?.next():undefined);
+      if(generation!==selectionGeneration){liveSpeech?.unsent(next);return;}
+      voiceStatus();if(!next){voiceBusy=false;return;}
+      if(!voiceEnabled || voiceSuspended || captureBusy || !enabled || !playbackAllowed()){liveSpeech?.unsent(next);voiceBusy=false;return;}
+      if(next.kind==="integrator_live" && !liveSpeech?.admit(next)){voiceBusy=false;return;}
+      const result=await listenTo(next,next.speech_start||0,{queued:true});
       if(result?.failed && result.generation===generation && !active)
         nextSpokenReply("reply",next);
     }
@@ -1125,11 +1146,23 @@ window.Conversation = (() => {
       microphone?.configure(value.can_speak,value.can_stream_transcribe,value.streaming_transcription_mode);
       setCsrf(value.csrf);
       canListen = !readOnly && value.can_listen;canStreamSpeech=canListen && !!value.can_stream_speech;
+      canSpeakLive=canListen && value.can_speak_live_response===true;
+      if(!canSpeakLive)liveSpeech?.reset();
+      else liveSpeech?.observe(value.response_draft,binding);
       if(!canListen && (voiceEnabled || active || speechWait))pause("capability");
       $("#conversation-voice-replies").disabled=!canListen;
       for (const source of value.items)upsert(source);
       if(direction==="after")for(const source of value.items)companion?.reply(source);
-      if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0)))offerVoice(source);
+      if(direction==="after")for(const source of [...value.items].sort((a,b)=>(Date.parse(a.observed_at)||0)-(Date.parse(b.observed_at)||0))){
+        const reconciled=canSpeakLive?await liveSpeech?.reconcile(source,part):undefined;
+        if(reconciled?.changed && active?.source.kind==="integrator_live" && active.source.native_turn===source.native_turn && active.source.native_item===source.native_item)
+          stop("The confirmed response changed. Its updated text remains available.");
+        if(reconciled?.resume!==undefined){
+          speechPositions.set(source.id,{source:source.id,revision:source.revision,offset:reconciled.resume});savePositions();
+          const card=cards.get(source.id);if(card)positionLabel(card);
+        }
+        if(reconciled?.skip)voiceSeen.add(voiceKey(source));else offerVoice(reconciled?.source||source);
+      }
       showResponseDraft(value.response_draft);
       for (const card of cards.values()) card.listen.hidden = !canListen;
       if (direction === "before" && rememberHistory) {
@@ -1364,7 +1397,13 @@ window.Conversation = (() => {
     audio.addEventListener("ended", async () => {
       if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || !playbackAllowed() || !enabled) return;
       presentState({playback:undefined});
-      const selected=active, owned=generation;selected.segmentEnded=true;rememberPosition();
+      const selected=active, owned=generation;selected.segmentEnded=true;
+      const cursor=liveSpeech?.ended(selected.source,selected.offset,selected.textEnd);
+      if(cursor){
+        if(cursor.resume>=cursor.source.text_characters)forgetPosition(cursor.source);
+        else {speechPositions.set(cursor.source.id,{source:cursor.source.id,revision:cursor.source.revision,offset:cursor.resume});savePositions();const card=cards.get(cursor.source.id);if(card)positionLabel(card);}
+      }
+      rememberPosition();
       if (selected.next !== null) {
         audioState("A short pause before continuing…");
         if(await waitForSpeech("chunk",selected.source)){

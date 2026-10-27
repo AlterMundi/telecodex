@@ -156,6 +156,10 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
             native.parse()?,
             true,
         ),
+        ["speech", id, revision, offset] if id.len() <= 448 && revision.len() == 64 => app
+            .shared
+            .store
+            .interaction_live_speech_part(human, cfg.entry(), id, revision, offset.parse()?),
         ["part", id, revision, offset] if id.len() <= 64 && revision.len() == 64 => app
             .shared
             .store

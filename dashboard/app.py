@@ -283,7 +283,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 body = body.replace('    <script src="assets/app.js" defer></script>',
                     '    <script src="/access-client.js" defer></script>\n    <script src="assets/app.js" defer></script>')
             body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
-        for name in ('app.js', 'live.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'style.css'):
+        for name in ('app.js', 'live.js', 'requests.js', 'microphone.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'live-speech.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'style.css'):
             version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
         standalone_entry = (request.query_params.get('view') == 'conversation'
@@ -352,7 +352,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             computer_health.assert_binding()
             data, media = computer_health.assets[name]
             return Response(data, media_type=media)
-        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'voice-stream.js', 'voice-pcm.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'style.css', 'markdown-it.LICENSE', 'markdown-it.SOURCE', 'space-grotesk-latin.woff2', 'OFL.txt'):
+        if name not in ('health-live.js', 'live.js', 'interaction-192.png', 'interaction-512.png', 'app.js', 'requests.js', 'microphone.js', 'voice-stream.js', 'voice-pcm.js', 'visual.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'live-speech.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'style.css', 'markdown-it.LICENSE', 'markdown-it.SOURCE', 'space-grotesk-latin.woff2', 'OFL.txt'):
             raise HTTPException(404)
         version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
         immutable = list(request.query_params.multi_items()) == [('v',version)]
@@ -438,6 +438,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 'presentation_profile':dict(session).get('presentation_profile', companions.default_profile),
                 'can_listen':speech is not None,
                 'can_stream_speech':bool(speech and speech.streaming),
+                'can_speak_live_response':bool(speech and speech.live_response),
                 'can_download_files':can_files,'artifacts':files,
                 'can_speak':bool(getattr(provider, 'receiver', {}).get('voice')),
                 'streaming_transcription_mode':config.get('streaming_transcription',{}).get('mode','prepared'),
@@ -834,6 +835,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 raise ValueError()
             from starlette.concurrency import run_in_threadpool
             canonical = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
+            if canonical.get('kind')=='integrator_live' and not speech.live_response:
+                raise ValueError('Live speech is not selected')
             selected = speech_part(canonical) if speech.incremental else canonical
         except (ProviderUnavailable, OSError, ValueError, KeyError):
             raise HTTPException(409, 'Selected result changed or is unavailable; refresh the conversation') from None
