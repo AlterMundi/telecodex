@@ -816,3 +816,34 @@ shipped-player regression delays those reads and the question registry, fails
 and recovers the registry, and resolves hashes on either side of question
 arrival. It checks source order and no replay of prepared attempts. This is
 scheduling evidence, not a measured device or provider latency improvement.
+
+## Unconfirmed recording review and local recovery
+
+An interrupted final upload retains the exact capture ID, audio digest, bytes and
+selected context. Checking status is read-only; explicit retry uses that same
+original, while a local discard does not cancel already saved server work.
+The shared recording-review controls keep Check, retry, Save audio and explicit
+local discard reachable, including when capture is unconfirmed. The composer
+buttons remain contained at narrow widths; pending text is separate from playback.
+
+Where IndexedDB is available, the client retains at most one unfinished recording
+per origin: at most20MiB of audio plus64KiB of metadata. It is kept until a matching
+server receipt or explicit local discard; an unfinished original is never evicted
+to admit another. Storage operations time out after3s. If storage is unavailable
+or full, the current tab keeps the bounded original and tells the person to save
+an audio copy before leaving. Download offers the original local bytes.
+
+Reload restores only a recording matching the current conversation binding. It
+never captures audio, retranscribes, uploads or dispatches automatically. Matching
+confirmation retires only that local original. The automatic file-ASR fallback,
+uncertain server outcome and explicit decision/retry rules remain unchanged.
+This is recovery for newly protected recordings, not recovery of an earlier blob
+already lost by an old page reload. Browser storage eviction or clearing remains
+a platform limitation; an explicit downloaded copy is independent of it.
+
+A reported lockout on2026-10-27 overlapped a web receiver replacement and subsequent
+concurrency rejections. Those observations do not identify the failed original or
+prove its individual failure cause. The verified UI defect was that uncertainty
+hid the capture/discard controls and a failed status read only repeated a generic
+notice. Keep active-capture continuity distinct from native-session preservation
+when deploying the web service. Full plan301/milestone9; streaming/recovery #271.
