@@ -18,11 +18,11 @@ window.RequestControls = (() => {
   function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false, getCanDecide=()=>true,onSource=()=>{}}) {
     const cards = new Map(), section = $("#conversation-requests"), container = $("#conversation-request-cards");
     const state = $("#conversation-request-state"), more = $("#conversation-requests-more");
-    let generation = 0, observation = 0, cursor = 0, reading = false, probeCursor = 0;
+    let generation = 0, observation = 0, cursor = 0, reading = false, probeCursor = 0, refreshTask;
     const owns = (card, owned) => generation === owned && cards.get(card.id) === card;
     function reset() {
       generation++; cards.clear(); container.replaceChildren(); section.hidden = true;
-      cursor = 0; probeCursor = 0; reading = false; more.hidden = true; state.textContent = "";
+      cursor = 0; probeCursor = 0; reading = false; refreshTask=undefined; more.hidden = true; state.textContent = "";
     }
     function updateControls(card) {
       const allowed = card.view?.actionable && !terminal(card.view) && card.complete
@@ -239,13 +239,18 @@ window.RequestControls = (() => {
       }
       if (owns(card,owned)) await readRequest(card,true);
     }
-    async function refresh(after = 0) {
-      if (reading || !getBinding()) return;
-      const owned = generation, observed = ++observation;
+    function refresh(after = 0) {
+      if(refreshTask)return refreshTask;
+      const task=refreshCurrent(after).finally(()=>{if(refreshTask===task)refreshTask=undefined;});
+      refreshTask=task;return task;
+    }
+    async function refreshCurrent(after = 0) {
+      if (reading || !getBinding()) return false;
+      const owned = generation, observed = ++observation;let current=true;
       reading = true; more.disabled = true;
       try {
         const page = await api(`interaction/requests?after=${after}`);
-        if (owned !== generation) return;
+        if (owned !== generation) return false;
         const seen = new Set();
         const apply = value => {
           if (value.binding !== getBinding()) throw new Error("Conversation changed. Refresh before responding.");
@@ -257,7 +262,7 @@ window.RequestControls = (() => {
         let last = apply(page);
         if (after === 0 && cursor > page.cursor) {
           const tail = await api(`interaction/requests?after=${cursor}`);
-          if (owned !== generation) return;
+          if (owned !== generation) return false;
           last = apply(tail);
         }
         more.hidden = !last.more;
@@ -276,18 +281,20 @@ window.RequestControls = (() => {
             if (card.expanded) {showDetail(card,value,false,0); updateControls(card);}
           } catch(e) {
             if (!owns(card,owned) || version !== card.readVersion || observed < card.observed) return;
-            card.unavailable = true; updateControls(card);
+            current=false;card.unavailable = true; updateControls(card);
             card.note.textContent = "Request unavailable. Check its current state before responding.";
             if (e.status === 401 || e.status === 403) unauthorized(e);
           }
         }));
-        if (owned !== generation) return;
+        if (owned !== generation) return false;
         section.hidden = !cards.size;
         state.textContent = last.more ? "More requests are available." : "You can keep writing while sessions wait for a response.";
+        return current;
       } catch(e) {
-        if (owned !== generation) return;
+        if (owned !== generation) return false;
         section.hidden = false; state.textContent = "Requests unavailable. Refresh to reconnect.";
         if (e.status === 401 || e.status === 403) unauthorized(e);
+        return false;
       } finally {if (owned === generation) {reading = false; more.disabled = false;}}
     }
     more.addEventListener("click", () => refresh(cursor));

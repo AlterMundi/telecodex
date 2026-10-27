@@ -52,7 +52,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const source = n => ({id:`native:${n}`, kind:standalone&&n===1?"integrator_progress":"integrator_answer", sequence:n, observed_at:new Date(1704067200000+n*1000).toISOString(),
     revision:`revision-${n}`, text_sha256:`sha-${n}`, preview:`Reply ${n}`,...sourceOverrides.get(n)});
   const originals = new Map(), telegramOriginals = new Map(), nativeRequests = new Map(), humanTasks=new Map(), nativePosts = [],taskPosts=[];
-  let losePost = false, offlinePost = false, heldPost, heldInputs, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
+  let losePost = false, offlinePost = false, heldPost, heldInputs, heldRequests, heldStatus, heldRoute, routePhase="accepted", submitPhase = "accepted";
   const api = async (route, body) => {
     const url = new URL(route, "https://fixture.invalid/");
     if(pageFailure && url.pathname==="/interaction"){const name=pageFailure;pageFailure=false;throw Object.assign(Error("Synthetic network suspension"),{name});}
@@ -80,7 +80,11 @@ function boot(readOnly=false,standalone=false,options={}) {
       if(body){taskPosts.push({...body});task.state='cancelled';task.can_dismiss=false;return {id:task.id,binding:'fixture',revision:body.revision,dismissed:true};}
       return {...task,offset:0,next_offset:null};
     }
-    if (url.pathname === "/interaction/requests") return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
+    if (url.pathname === "/interaction/requests") {
+      if(options.requestFailure)throw new TypeError("Synthetic question registry outage");
+      if(heldRequests){const held=heldRequests;heldRequests=undefined;held.started();await held.promise;}
+      return {binding:"fixture",items:[...nativeRequests.values()],cursor:nativeRequests.size,more:false};
+    }
     if (url.pathname.startsWith("/interaction/requests/")) {
       if (body) {nativePosts.push(JSON.parse(JSON.stringify(body)));throw new TypeError("Lost decision acknowledgement");}
       return {...nativeRequests.get(url.pathname.split("/").at(-1)),offset:0,next_offset:null};
@@ -231,6 +235,11 @@ function boot(readOnly=false,standalone=false,options={}) {
       const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});
       heldStatus={promise,started,fail};return {entered,release};
     },
+    holdRequests() {
+      let release,started;
+      const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});
+      heldRequests={promise,started};return {entered,release};
+    },
     holdInputs() {
       let release, started;
       const entered=new Promise(yes=>{started=yes;}), promise=new Promise(yes=>{release=yes;});
@@ -377,6 +386,43 @@ function boot(readOnly=false,standalone=false,options={}) {
   await follow.ui.refresh();
   assert.equal(live.scrollTop,live.scrollHeight,'The committed transcript cannot silently leave following mode');
   const until=async check=>{for(let n=0;n<100;n++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error("Voice transition did not finish");};
+  for(const pendingQuestion of [false,true]){
+    const options={liveSpeech:true,immediateHash:true};
+    const ready=boot(false,true,options);ready.addReplies(-8);ready.audio();await ready.ui.refresh();
+    ready.nodes.get('#conversation-voice-replies').handlers.click();await ready.ui.refresh();
+    await until(()=>!ready.nodes.get('#conversation-refresh').disabled);await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(ready.audioCalls.length,0);
+    options.responseDraft={provisional:true,native_turn:'ready-physical',native_item:'ready-item',text:'Useful sentence. More',observed_at:'2100-01-01T00:00:00Z'};
+    if(pendingQuestion)ready.nativeRequest();
+    const questions=ready.holdRequests(),inputs=ready.holdInputs(),refresh=ready.ui.refresh();await questions.entered;
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(ready.audioCalls.length,0,'New speech waits for current question priority');
+    questions.release();await inputs.entered;
+    try{
+      await until(()=>ready.audioCalls.length===1);
+      assert(pendingQuestion?ready.audioCalls[0].source==='request:native-request':ready.audioCalls[0].source.startsWith('live:'),
+        `Useful live speech must not wait for input history, and a current question retains priority: ${JSON.stringify({pendingQuestion,calls:ready.audioCalls})}`);
+    }finally{inputs.release();await refresh;ready.ui.stop();}
+  }
+  {
+    const options={liveSpeech:true,capture:true,immediateHash:true};
+    const offline=boot(false,true,options);offline.addReplies(-8);offline.audio();await offline.ui.refresh();
+    offline.nodes.get('#conversation-voice-replies').handlers.click();await offline.ui.refresh();
+    await until(()=>!offline.nodes.get('#conversation-refresh').disabled);await new Promise(resolve=>setImmediate(resolve));
+    options.responseDraft={provisional:true,native_turn:'offline-physical',native_item:'offline-item',text:'Wait for current questions. More',observed_at:'2100-01-01T00:00:00Z'};
+    options.requestFailure=true;await offline.ui.refresh();offline.capture();offline.finishCapture();
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(offline.audioCalls.length,0,'Failed question observation cannot unlock new automatic speech');
+    options.requestFailure=false;await offline.ui.refresh();await until(()=>offline.audioCalls.length===1);offline.ui.stop();
+  }
+  for(const finishHashWhileReading of [false,true]){
+    const hold={active:true,releases:[]},options={liveSpeech:true,hashHold:hold,responseDraft:{provisional:true,native_turn:'priority-physical',native_item:'priority-item',text:'An early sentence. More',observed_at:'2100-01-01T00:00:00Z'}};
+    const race=boot(false,true,options);race.addReplies(-8);race.audio();await race.ui.refresh();race.nodes.get('#conversation-voice-replies').handlers.click();
+    await until(()=>hold.releases.length===1);race.nativeRequest();const questions=race.holdRequests(),refresh=race.ui.refresh();await questions.entered;
+    if(!finishHashWhileReading){questions.release();await refresh;}
+    hold.releases.shift()();await until(()=>hold.releases.length===1);hold.releases.shift()();hold.active=false;
+    await new Promise(resolve=>setImmediate(resolve));
+    if(finishHashWhileReading){assert.equal(race.audioCalls.length,0,'An in-flight hash cannot bypass the question observation gate');questions.release();await refresh;}
+    await until(()=>race.audioCalls.length===1);assert.equal(race.audioCalls[0].source,'request:native-request','A newly observed question precedes an asynchronously selected prefix');race.ui.stop();
+  }
   const liveOptionsAudio={liveSpeech:true,clock:true,playback:true,capture:true,responseDraft:{provisional:true,native_turn:'physical',native_item:'early',text:'First useful sentence. Remaining text',observed_at:'2100-01-01T00:00:00Z'}};
   const liveVoice=boot(false,true,liveOptionsAudio);liveVoice.audio();await liveVoice.ui.refresh();
   liveVoice.nodes.get('#conversation-voice-replies').handlers.click();await liveVoice.ui.refresh();
