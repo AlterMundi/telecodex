@@ -233,7 +233,7 @@ impl Store {
                 }
             }
             candidates.sort_by_key(|(order, sequence, _, _)| (*order, *sequence));
-            let Some((order, sequence, input, source)) = candidates.pop() else {
+            let Some((order, sequence, _, source)) = candidates.pop() else {
                 // Historical unfinished work is not an unanswered current input.
                 // Its declarations remain in the canonical native result.
                 continue;
