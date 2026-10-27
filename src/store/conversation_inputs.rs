@@ -430,7 +430,7 @@ impl Store {
         reply: Option<ConversationReply>,
     ) -> Result<(ConversationInput, bool)> {
         self.capture_original(
-            human, entry, binding, id, text, None, true, reply, None, None,
+            human, entry, binding, id, text, None, true, reply, None, None, None,
         )
     }
 
@@ -456,6 +456,7 @@ impl Store {
             "",
             Some(voice),
             can_prepare,
+            None,
             None,
             None,
             None,
