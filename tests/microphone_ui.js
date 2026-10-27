@@ -49,6 +49,8 @@ function boot(live=false){
  assert.equal(prepared.state(),'Final recognized sentence','Keep completed recognition visible during durable saving');
  savedHold.resolve();await until(()=>prepared.received.length===1);
  assert.equal(prepared.state(),'Final recognized sentence','Do not replace prepared text with a second-transcription claim');
+ prepared.ui.observe({...prepared.received[0],phase:'preparing'},'Confirming transcript…');assert.equal(prepared.state(),'Final recognized sentence');
+ prepared.ui.observe({...prepared.received[0],phase:'accepted'},'Sent');assert.equal(prepared.state(),'');
  assert.equal(prepared.uploads.length,1);
  const mediaHint={source:'native:7',revision:'a'.repeat(64),segment_offset:240,position_millis:3700,duration_millis:12000,state:'interrupted'};
  const playCapture=boot();playCapture.playback(mediaHint);const heldPlayPermission=playCapture.permission();
@@ -101,7 +103,7 @@ function boot(live=false){
  assert(race.button().disabled,'An old receipt read must not unlock a newer upload');assert.equal(race.received.length,0);uploading.resolve();await until(()=>race.received.length===1);
  const progress=boot();await progress.click();progress.click();await until(()=>progress.received.length===1);
  const saved=progress.received[0];progress.ui.observe({...saved,phase:'routed'},'#Alpha: sent to this session. Work may continue.');
- assert.equal(progress.state(),'Recording saved. #Alpha: sent to this session. Work may continue.','Later canonical metadata must replace stale ASR preparation feedback');
+ assert.equal(progress.state(),'','The input card owns saved/delivery status; do not duplicate it above the composer');
  await progress.click();const recordingState=progress.state();
  progress.ui.observe(saved,'Old receipt');assert.equal(progress.state(),recordingState,'An earlier receipt cannot overwrite a new recording');
  progress.cancel();const discardedState=progress.state();progress.ui.observe(saved,'Old receipt');
