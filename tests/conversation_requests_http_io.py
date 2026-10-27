@@ -102,6 +102,8 @@ def qualify(binary):
         assert next(row for row in j.native_answers if row['id']=='canonical-approval')['result']['decision']=='accept'
         assert decide(approval,{'kind':'approval','choice':'a'}).json()['new_decision'] is False
         assert len(j.native_answers)==2,'A recorded revision replayed a native response'
+        assert j.row('SELECT count(*) FROM incoming_updates')==journal
+        assert not j.messages,'Canonical controls fabricated a Telegram publication'
         # Ordinary direct work stays out of For you, but its current pending is
         # available through the separate owned-session surface and same responder.
         j.hold_direct=True;j.admit('Direct Beta task, never routed by the integrator.',topic=8)
@@ -170,9 +172,9 @@ def qualify(binary):
         assert archived.status_code==200 and archived.json()['recorded']
         assert decide(approval,{'kind':'approval','choice':'a'}).json()['new_decision'] is False
         assert len(j.native_answers)==count and j.row('SELECT count(*) FROM sessions WHERE thread_id=7')==[(0,)]
-        assert j.row('SELECT count(*) FROM incoming_updates')==journal
-        assert not j.messages,'Canonical controls fabricated a Telegram publication'
-        print('PASS authenticated root/routed native controls: full proposal paging, exact multi-question answers, offered approvals only, duplicate revision inspection, simultaneous steer, escaped32KiB answer, restart expiration and no Telegram identity/publication; zero models.')
+        assert j.row('SELECT count(*) FROM incoming_updates')==[(journal[0][0]+1,)],'Only the explicit direct Beta original may add Telegram ingress'
+        assert j.messages and all(m.get('message_thread_id')==8 for m,_ in j.messages),'Canonical controls published outside the ordinary direct Beta topic'
+        print('PASS authenticated root/routed native controls: full proposal paging, exact multi-question answers, offered approvals only, duplicate revision inspection, simultaneous steer, escaped32KiB answer, restart expiration, separate direct-session device decisions and no fabricated Telegram ingress/publication; zero models.')
     finally:
         if client:client.close()
         j.close()
