@@ -500,3 +500,14 @@ punctuation as silent pauses, preserves literal commands and version numbers, an
 never asks for punctuation names. This is a provider-guidance mitigation, not a
 verified cure for the intermittent paragraph report. No blanket punctuation
 stripping, old-audio regeneration or native conversation change is applied.
+
+## Stable pre-realtime receiving checkpoint — 2026-10-27
+
+The human selected `interaction-stable-pre-realtime-2026-10-27` before the next duplex/foreground
+integration. The [component manifest](releases/interaction-stable-pre-realtime-2026-10-27.json)
+pins Telecodex native/web/scripts, the loaded Codex runtime and the exact shared
+auth/Apps composition, with published per-repository tags and executable hashes.
+Earlier functional tags remain immutable. This checkpoint includes current streaming
+ASR, progressive TTS and optional final word timing; it does not claim completion
+of the continuous-voice milestone. Roll back software/configuration only, retaining
+compatible readers, current journals, goals, grants and uncertain effects.
