@@ -51,6 +51,7 @@ mod observer;
 mod observer_cards;
 mod observer_freshness;
 mod presentation;
+pub use observer::SessionObservation;
 pub use observer_cards::{ObserverCard, ObserverPreparation};
 pub use observer_freshness::ObserverFreshness;
 pub(crate) mod topic_publications;

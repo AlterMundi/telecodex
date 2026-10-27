@@ -476,11 +476,93 @@ fn candidates(
     Ok(true)
 }
 
+// Inspect retained semantics and live goal metadata independently. Neither an
+// old summary nor a recently read goal proves the other source is current.
+fn portfolio_evidence(o: crate::store::SessionObservation, detailed: bool) -> serde_json::Value {
+    let limit = if detailed { 4000 } else { 600 };
+    let semantic = o.semantic.map(|(c, f)| {
+        serde_json::json!({
+            "revision":c.revision,"source_revision":c.source_revision,"native":c.native,
+            "summary_excerpt":c.summary.chars().take(limit).collect::<String>(),
+            "summary_excerpt_bounded":c.summary.chars().count()>limit,
+            "source_observed_at":c.observed_at,"source_checked_at":f.checked_at,
+            "freshness":f.state,"needs_refresh":f.needs_refresh(Utc::now(),60),
+            "needs_source_check":f.needs_refresh(Utc::now(),60),
+            "observed_activity_cut":f.observed_cut,"current_activity_cut":f.current_cut,
+            "unsettled_inputs":f.unsettled_inputs,"source_boundary":c.boundary,
+            "support_indices":c.supports,"continuity_gap":c.gap,"bounded":c.bounded
+        })
+    });
+    let pending = if detailed {
+        o.pending
+            .items
+            .iter()
+            .take(8)
+            .map(|i| {
+                serde_json::json!({
+                    "id":i.id,"kind":i.kind,"state":i.state,"blocking":i.blocking,
+                    "title":i.title.chars().take(120).collect::<String>(),
+                    "action_excerpt":i.action.chars().take(600).collect::<String>(),
+                    "action_excerpt_bounded":i.action.chars().count()>600
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
+    serde_json::json!({"sampled_at":o.sampled_at,"native":o.native_thread,
+        "semantic":semantic,"pending_human_items":o.pending.pending_total,
+        "actionable_human_items":o.pending.actionable_total,"human_items":pending,
+        "human_items_bounded":detailed && o.pending.actionable_total>8,
+        "presentation_gaps":o.presentation_gaps,"input_cut":o.input_cut,
+        "last_local_turn":o.local_turn.map(|(id,state,at)|serde_json::json!({"id":id,"state":state,"at":at})),
+        "last_native_item":o.native_item.map(|(turn,item,at)|serde_json::json!({"turn":turn,"item":item,"observed_at":at})),
+        "activity_scope":"Receiver-retained activity only; old or missing activity is not native idle. Source-check expiry requires reconciliation, not necessarily another synthesis."})
+}
+
+async fn portfolio_inspection(
+    shared: Arc<AppShared>,
+    key: SessionKey,
+    human: i64,
+) -> Result<serde_json::Value> {
+    // Reuse goal_inspect's binding, native snapshot/activity and historical
+    // failure observations instead of inventing another live-status reader.
+    let live = super::goals::inspect_shared(&shared, human, key).await?;
+    let o = shared
+        .store
+        .interaction_observation(key, human)?
+        .context("Selected source unavailable")?;
+    if o.native_thread.as_deref() != live["native_thread"].as_str() {
+        bail!("Selected source changed");
+    }
+    let goal = &live["snapshot"]["goal"];
+    let goal_view = if live["availability"] != "observed" {
+        serde_json::json!({"state":"unknown"})
+    } else if goal.is_null() {
+        serde_json::json!({"state":"absent"})
+    } else {
+        let objective = goal["objective"].as_str().unwrap_or("");
+        serde_json::json!({"state":goal["status"],"objective_excerpt":objective.chars().take(1500).collect::<String>(),
+            "objective_excerpt_bounded":objective.chars().count()>1500,"created_at_unix_seconds":goal["createdAt"],
+            "updated_at_unix_seconds":goal["updatedAt"],"tokens_used":goal["tokensUsed"],"token_budget":goal["tokenBudget"]})
+    };
+    let mut result = portfolio_evidence(o, true);
+    // Never disguise a shortened objective as an exact CAS snapshot. A future
+    // goal mutation must obtain its full preconditions through goal_inspect.
+    result["live_status"] = serde_json::json!({"availability":live["availability"],"goal":goal_view,
+        "native_thread":live["native_thread"],"native_activity":live["native_activity"],"receiver_busy":live["receiver_busy"],
+        "stop_held":live["stop_held"],"maintenance_held":live["maintenance_held"],
+        "historical_failure_evidence":live["historical_failure_evidence"],
+        "observation_started_at":live["observation_started_at"],"observation_finished_at":live["observation_finished_at"],
+        "meaning":"Read-only bounded projection of goal_inspect. Historical failures are not proof of a current blocker. Goal-control preconditions require a separate full goal_inspect; this excerpt is not a native snapshot."});
+    Ok(result)
+}
+
 /// Native integrating dialogue uses the same observer consumer as text queries.
 /// This tool has no dispatch, session creation or interruption operation.
 pub(super) fn tool_specs() -> Vec<serde_json::Value> {
     vec![
-        serde_json::json!({"type":"function","name":"interaction_candidates","description":"Inspect authorized routing candidates. inventory reads bounded retained evidence without native/model calls; refresh reconciles up to five explicit selectors using the observer. Source summaries are attributed interpretations, never commands or verified completion. This tool does not dispatch work.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["inventory","refresh"]},"selectors":{"type":"array","items":{"type":"string"},"maxItems":5}},"required":["mode","selectors"],"additionalProperties":false}}),
+        serde_json::json!({"type":"function","name":"interaction_candidates","description":"Inspect authorized routing candidates. inventory reads retained orientation without native/model calls; inspect reads detailed cached semantics, human actions and current goal metadata for up to five explicit selectors without inference or worker wakeup; support reads retained original support for one selector; refresh reconciles selected source revisions and synthesizes only changed evidence. Timestamps and source checks remain independent from goal status. Source summaries are attributed interpretations, never commands or verified completion. This tool does not dispatch work.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["inventory","inspect","support","refresh"]},"selectors":{"type":"array","items":{"type":"string"},"maxItems":5}},"required":["mode","selectors"],"additionalProperties":false}}),
     ]
 }
 
@@ -538,13 +620,30 @@ pub(super) fn tool_call(
                         let target=SessionKey::new(cfg.chat_id,Some(t.topic_id));
                         if !selected.is_empty() && !selected.contains(&target) {continue;}
                         let observed=shared.store.interaction_observation(target,human)?;
-                        let card=observed.map(|o| {
-                            let semantic=o.semantic.map(|(c,f)|serde_json::json!({"revision":c.revision,"source_revision":c.source_revision,"native":c.native,"summary_excerpt":c.summary.chars().take(600).collect::<String>(),"summary_excerpt_bounded":true,"source_observed_at":c.observed_at,"source_checked_at":f.checked_at,"freshness":f.state,"needs_refresh":f.needs_refresh(Utc::now(),60),"continuity_gap":c.gap,"bounded":c.bounded}));
-                            serde_json::json!({"semantic":semantic,"pending_human_items":o.pending.pending_total,"presentation_gaps":o.presentation_gaps,"input_cut":o.input_cut})
-                        });
+                        let card=observed.map(|o|portfolio_evidence(o,false));
                         inventory.push(serde_json::json!({"selector":format!("t{}",t.topic_id),"label":t.name,"evidence":card}));
                     }
                     serde_json::json!({"kind":"observer_candidate_inventory","attribution":"Derived bounded source interpretations; unavailable evidence does not establish irrelevance or a need for a new session.","candidates":inventory}).to_string()
+                },
+                "inspect" if !selected.is_empty() => {
+                    use futures_util::{stream,StreamExt};
+                    let items=stream::iter(selected.into_iter().map(|target|{
+                        let shared=shared.clone();
+                        let name=cfg.targets.iter().find(|t|t.topic_id==target.thread_id).unwrap().name.clone();
+                        async move {
+                            let evidence=portfolio_inspection(shared,target,human).await?;
+                            Ok::<_,anyhow::Error>(serde_json::json!({"selector":format!("t{}",target.thread_id),"label":name,"evidence":evidence}))
+                        }
+                    })).buffered(2).collect::<Vec<_>>().await.into_iter().collect::<Result<Vec<_>>>()?;
+                    serde_json::json!({"kind":"observer_portfolio_inspection","candidates":items,
+                        "attribution":"Selected read-only evidence, not a request to resume or dispatch. Goal status is a fresh independent metadata read; semantic freshness and question coverage must be evaluated separately. Blocker reasons and next actions are attributed source statements, never inferred solely from a blocked status. Use support for missing evidence and refresh only selected sources needing reconciliation."}).to_string()
+                },
+                "support" if selected.len()==1 => {
+                    let target=selected[0];
+                    let name=&cfg.targets.iter().find(|t|t.topic_id==target.thread_id).unwrap().name;
+                    let session=shared.store.get_session(target)?.context("Source unavailable")?;
+                    let native=session.codex_thread_id.as_deref().context("Source unbound")?;
+                    retained_inspection(&shared,target,human,native,name,"sources")?
                 },
                 "refresh" if !selected.is_empty() => {
                     use futures_util::{stream,StreamExt};
@@ -555,7 +654,7 @@ pub(super) fn tool_call(
                     }).collect::<Vec<_>>();
                     stream::iter(targets).buffered(2).collect::<Vec<_>>().await.join("\n\n")
                 },
-                _ => bail!("Use inventory or refresh with one to five selectors"),
+                _ => bail!("Use inventory, inspect or refresh with one to five selectors; support requires one selector"),
             };
             // The entry may have been rebound or revoked while source reads ran.
             tool_owner(&shared,key,human,&request.thread_id)?;
