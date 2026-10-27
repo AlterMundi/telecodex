@@ -7,6 +7,17 @@ The full horizon remains [the maintained roadmap](interaction-roadmap.md).
 
 ## Current implementation boundary
 
+CompAII's selected receiver currently enables `streaming_transcription` in
+`captions` mode, `speech.streaming_output` and `speech.incremental_segments`.
+This was read back from the receiving configuration on 27 October 2026. The
+portable defaults remain off. Captions are revisable previews; Groq file-ASR
+still supplies the committed transcript. Streaming output is source-bound and
+uses the existing HTML audio player. These flags do not establish canonical
+streaming recognition, measured end-to-end latency or complete v0.3 acceptance.
+Current receiving software, health and rollback are recorded through
+[Shared Resources](https://github.com/compaii/shared-resources/blob/main/docs/services/interaction-receiving.md).
+
+
 The optional app integration connects `TranscriptionStream` to the existing
 microphone through an authenticated same-origin WebSocket. In `captions` mode,
 revisable text appears while speaking, while the ordinary compressed MediaRecorder
@@ -179,7 +190,9 @@ allows the next segment to prepare during playback. It is not token-level native
 LLM output streaming, a measured latency result, or completion of foreground
 separation/barge-in. The option is receiving-enabled in CompAII’s selected app after actual-provider
 and Chromium qualification (PR316). This does not change its conversational model.
-Streaming input recognition remains receiving-disabled.
+Streaming input captions are now receiving-enabled; canonical recognition still
+uses the existing final-file transcriber. The earlier deployment record below
+describes PR316 at its adoption time, rather than the current software selection.
 
 
 ### Receiving qualification and next transport
@@ -189,7 +202,7 @@ keyboard-sized phone and desktop dimensions exercised exact prefix validation,
 0→240→880 offset ordering, one-ahead preparation, Pause/Play reuse, Stop and
 composer containment with a synthetic audio element and no audio-device opens.
 Native image-array support from PR300 was selected before these web assets;
-current native source is d6667ba8 and web/scripts source884f884. Active native
+at that adoption native source was d6667ba8 and web/scripts source884f884. Active native
 collectors were reattached without replay, kickoff or goal changes. Retain the
 collection-capable reader when rolling back; never restore old input journals.
 
