@@ -617,3 +617,21 @@ interrupted narration; explicit Play can reuse loaded media and its existing
 prepared prefix. Changed confirmation, binding replacement and explicit Stop
 release obsolete preparations. Completed-range tracking still preserves any
 unsaid gap; preparation is neither playback nor evidence of hearing.
+
+
+## Explicit word-aligned Resume
+
+For canonical text with an available provider-aligned word position, an explicit
+Resume after Stop/reload starts at that saved canonical word-end offset. It does
+not estimate a word from media duration. Missing/unavailable/out-of-range timing
+retains the existing segment boundary, and an earlier interrupted live prefix
+still takes precedence over a later aligned tail. A backward seek updates the
+current position rather than a played high-water mark. Loaded media continues
+at its current media time without another synthesis.
+
+The existing bounded, binding/source/revision-scoped local position record stores
+only the offset, never source text. No native input or persistent schema changes.
+A saved word-end cursor is device playback evidence, not proof of hearing; a
+partly spoken word may repeat. Provisional live prefixes still retain completed
+segment ranges until canonical confirmation; this change refines canonical
+Resume and does not establish complete semantic heard/unsaid coordination.

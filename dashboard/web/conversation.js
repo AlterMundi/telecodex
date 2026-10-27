@@ -850,13 +850,13 @@ window.Conversation = (() => {
       voiceStatus();
     }
     // Client media progress is advisory. Persist only source/revision and the
-    // last segment boundary, never transcript text or a claim of human hearing.
+    // last aligned word or segment boundary, never transcript text or a hearing claim.
     const speechPositions=new Map();let positionBinding;
     const positionKey=()=>"interaction-speech-position:"+binding;
     function positionLabel(card){
       const saved=speechPositions.get(card.source.id);
       card.listen.textContent=saved?.revision===card.source.revision?"Resume audio":"Listen";
-      card.listen.title=saved?.revision===card.source.revision?"Resume from the interrupted segment; part of it may repeat":"Listen to this reply";
+      card.listen.title=saved?.revision===card.source.revision?"Resume from the saved word or segment boundary; part of a word may repeat":"Listen to this reply";
     }
     function savePositions(){
       if(!standalone || !binding)return;
@@ -881,20 +881,23 @@ window.Conversation = (() => {
       if(!active || active.source.kind==="integrator_live" || active.verifying || !blobUrl)return;
       const source=active.source;
       if(source.current===false || source.correction_pending || source.native_binding_current===false)return;
-      if(active.segmentEnded && active.next===null){
-        const remaining=liveSpeech?.resume(source);
-        if(remaining!==undefined && remaining<source.text_characters){
-          speechPositions.set(source.id,{source:source.id,revision:source.revision,offset:remaining});savePositions();
-          const card=cards.get(source.id);if(card)positionLabel(card);return;
-        }
+      const word=alignedPosition();
+      const normal=active.segmentEnded?(Number.isSafeInteger(active.next)?active.next:active.textEnd):(word??active.offset);
+      const contiguous=liveSpeech?.resume(source);
+      // A provider word cursor can refine this segment, but cannot hide an
+      // earlier interrupted/failed live prefix. No duration interpolation.
+      const offset=contiguous===undefined || contiguous>=active.offset?normal:Math.min(normal,contiguous);
+      if(active.next===null && offset===active.textEnd && (active.segmentEnded || word===active.textEnd)){
         forgetPosition(source);return;
       }
-      const normal=active.segmentEnded && Number.isSafeInteger(active.next)?active.next:active.offset;
-      const contiguous=liveSpeech?.resume(source);
-      const offset=contiguous===undefined?normal:Math.min(normal,contiguous);
       speechPositions.delete(source.id);speechPositions.set(source.id,{source:source.id,revision:source.revision,offset});
       while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
       savePositions();const card=cards.get(source.id);if(card)positionLabel(card);
+    }
+    function alignedPosition(){
+      if(!canReportWordPosition || !active || !Number.isFinite(audio.currentTime) || audio.currentTime<0 || audio.currentTime>3600)return;
+      const offset=active.streaming?.position?.(audio.currentTime);
+      if(Number.isSafeInteger(offset) && offset>=active.offset && offset<=active.textEnd && offset<=1000000)return offset;
     }
     function playbackContext(interrupted=false){
       if(!canReportPlayback || !active || !blobUrl || active.verifying || active.segmentEnded
@@ -902,9 +905,8 @@ window.Conversation = (() => {
       const millis=value=>Number.isFinite(value) && value>=0 && value<=3600?Math.floor(value*1000):undefined;
       const position=millis(audio.currentTime),duration=millis(audio.duration);
       if(position===undefined)return;
-      const wordOffset=active.streaming?.position?.(audio.currentTime);
-      const word=canReportWordPosition && Number.isSafeInteger(wordOffset) && wordOffset>=active.offset && wordOffset<=active.textEnd && wordOffset<=1000000
-        ?{word_offset:wordOffset}:{};
+      const wordOffset=alignedPosition();
+      const word=wordOffset===undefined?{}:{word_offset:wordOffset};
       return {source:active.source.id,revision:active.source.revision,segment_offset:active.offset,...word,
         position_millis:position,duration_millis:duration>0?duration:null,state:interrupted?'interrupted':audio.paused?'paused':'playing'};
     }
