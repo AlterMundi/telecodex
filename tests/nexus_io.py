@@ -276,6 +276,25 @@ def known_turn_recovery(binary):
     finally:j.close()
 
 
+def automatic_missing_terminal(binary):
+    j=Nexus(binary,'hold_after_connect')
+    try:
+        j.prepare();j.enqueue();j.wait(lambda:j.state_of()[0]=='accepted')
+        native=j.state_of()[1];starts=j.native_turns;j.stop()
+        with sqlite3.connect(j.root/'state.sqlite') as db:
+            local=db.execute("SELECT local_turn FROM nexus_requests WHERE id='request'").fetchone()[0]
+            db.execute("UPDATE turns SET status='completed' WHERE id=?",(local,))
+        # Only selected native metadata supplies the final and terminal evidence.
+        j.records[('native-topic-7',native)]={'id':native,'status':'completed','items':[{'type':'agentMessage','phase':'final_answer','text':'Automatically recovered selected final.'}]}
+        j.records[('native-topic-7','foreign-turn')]={'id':'foreign-turn','status':'completed','items':[{'type':'agentMessage','phase':'final_answer','text':'Do not select this other reply.'}]}
+        j.start();j.wait(lambda:j.state_of()[0]=='completed')
+        assert j.state_of()[1:]==(native,'Automatically recovered selected final.')
+        assert j.native_turns==starts
+        assert not j.row("SELECT reply FROM nexus_executions WHERE reply LIKE '%other reply%'")
+        print('PASS automatic exact-turn terminal recovery without human reconcile or native replay')
+    finally:j.close()
+
+
 def connect_during_work(binary):
     j=Nexus(binary)
     try:
@@ -363,6 +382,6 @@ def writer_hold_other_target(binary):
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
-    scenarios=(delivered,table_launches,reviewed_iteration,peer_request,controls,refusals,uncertainty,known_turn_recovery,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
+    scenarios=(delivered,table_launches,reviewed_iteration,peer_request,controls,refusals,uncertainty,known_turn_recovery,automatic_missing_terminal,connect_during_work,writer_hold,writer_hold_steer,writer_hold_race,writer_hold_other_target)
     for run in scenarios:
         if len(sys.argv)==2 or run.__name__ in sys.argv[2:]:run(binary)

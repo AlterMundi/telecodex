@@ -66,6 +66,22 @@ impl Store {
         }
         Ok(())
     }
+    /// Completed local collection only selects a native read; it cannot prove
+    /// native completion, supply a reply or authorize resubmitting the input.
+    pub fn nexus_missing_terminals(&self) -> Result<Vec<(i64, String, String)>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT r.local_turn,r.native_turn,json_extract(r.doc,'$.target.native_thread_id')
+             FROM nexus_requests r JOIN turns t ON t.id=r.local_turn
+             LEFT JOIN nexus_executions e ON e.local_turn=r.local_turn AND e.native_turn=r.native_turn
+             WHERE r.phase IN ('accepted','undetermined') AND r.native_turn IS NOT NULL
+               AND t.status IN ('completed','failed','interrupted')
+               AND t.native_thread_id=json_extract(r.doc,'$.target.native_thread_id')
+               AND e.terminal IS NULL ORDER BY r.local_turn LIMIT 20",
+        )?;
+        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
+    }
     pub fn nexus_recover_queue(&self, id: &str) -> Result<bool> {
         Ok(self.conn.lock().expect("store mutex poisoned").execute("UPDATE nexus_requests SET phase='queued',instance_id=? WHERE id=? AND phase='retained_queue' AND dispatch_id IS NULL AND native_turn IS NULL",params![self.instance_id,id])?==1)
     }
@@ -585,6 +601,37 @@ mod tests {
                 .iter()
                 .any(|(_, v)| v["request_id"] == "empty" && v["status"] == "completed")
         );
+    }
+    #[test]
+    fn missing_terminal_requires_exact_admission_and_native_observation() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open(&root.path().join("db"));
+        let defaults = SessionDefaults { cwd: root.path().into(), model: None,
+            reasoning_effort: None, session_prompt: None, sandbox_mode: "read-only".into(),
+            approval_policy: "never".into(), search_mode: crate::config::SearchMode::Disabled, add_dirs: vec![] };
+        let key = crate::models::SessionKey::new(100, Some(7));
+        let session = store.ensure_session(key, 100, &defaults).unwrap();
+        let turn = store.record_turn_started(session.id, &crate::models::TurnRequest {
+            session_key: key, from_user_id: 100, prompt: "Question".into(),
+            runtime_instructions: None, attachments: vec![], review_mode: None,
+            override_search_mode: None }).unwrap();
+        store.record_turn_native_thread(turn, "existing").unwrap();
+        claimed(&store, "recover", turn);
+        store.nexus_phase("recover", "submitting", "").unwrap();
+        assert!(store.nexus_missing_terminals().unwrap().is_empty());
+        store.nexus_accept("recover", turn, "exact-native").unwrap();
+        store.nexus_final(turn, "exact-native", "Retained final").unwrap();
+        // A live collector must not trigger recovery; a local completion still
+        // does not manufacture a native completion receipt.
+        assert!(store.nexus_missing_terminals().unwrap().is_empty());
+        store.record_turn_finished(turn, "completed", Some("Retained final")).unwrap();
+        assert_eq!(store.nexus_missing_terminals().unwrap(), vec![(turn,"exact-native".into(),"existing".into())]);
+        assert!(!store.nexus_outbox().unwrap().iter().any(|(_,r)|r["status"]=="completed"));
+        store.nexus_observed_reply(turn,"exact-native","Retained final","completed").unwrap();
+        assert!(store.nexus_missing_terminals().unwrap().is_empty());
+        assert_eq!(store.nexus_outbox().unwrap().iter().filter(|(_,r)|r["status"]=="completed").count(),1);
+        store.nexus_reconcile_observations().unwrap();
+        assert_eq!(store.nexus_outbox().unwrap().iter().filter(|(_,r)|r["status"]=="completed").count(),1);
     }
     #[test]
     fn restart_reconstructs_observed_receipts_without_replaying_native() {

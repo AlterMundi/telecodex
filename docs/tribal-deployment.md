@@ -134,3 +134,15 @@ requires a fresh genuine human request for each operation; a deployment, old GO,
 Resume or peer request does not provide it. The current human-triggered deadline
 is not a provider spending fence. Peer attention and multi-session routing need
 the separately selected Matrix designs, not an installation-side default.
+
+### Missed Nexus report terminal events
+
+An accepted Nexus reflection can retain its final while the terminal stream event
+is lost. The adapter selects only accepted/uncertain requests whose owning local
+collection has ended and whose recorded native thread matches the frozen target.
+It reads the exact admitted native turn through existing metadata inspection and
+records only an observed terminal status/final through the existing receipt outbox.
+Local completion is selection evidence, never proof of native completion. No
+question is replayed, no thread is replaced, and unavailable observations retain
+uncertainty. Explicit `/nexus reconcile` remains available. A missing dispatch
+acknowledgement is a separate condition and does not authorize this recovery.
