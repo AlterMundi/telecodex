@@ -321,8 +321,19 @@ pub(super) fn snapshot(
         }
         shared.store.artifact_blob_removed(&sha)?;
     }
-    let mut entries = fs::read_dir(out)?.collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|e| e.file_name());
+    let mut entries: Vec<std::ffi::OsString> = if let Some(files) = output.get("files") {
+        files
+            .as_object()
+            .context("Invalid response file selection")?
+            .keys()
+            .map(std::ffi::OsString::from)
+            .collect()
+    } else {
+        fs::read_dir(out)?
+            .map(|entry| entry.map(|v| v.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?
+    };
+    entries.sort();
     if entries.len() > 10 {
         bail!("At most ten generated files per execution are supported")
     }
@@ -331,7 +342,6 @@ pub(super) fn snapshot(
     let mut failed = 0;
     for (index, entry) in entries.into_iter().enumerate() {
         let label = entry
-            .file_name()
             .to_str()
             .filter(|s| {
                 !s.is_empty()
@@ -342,7 +352,6 @@ pub(super) fn snapshot(
             .unwrap_or_else(|| format!("Unsupported output {}", index + 1));
         let result = (|| -> Result<()> {
             let name = entry
-                .file_name()
                 .into_string()
                 .map_err(|_| anyhow!("Unsupported output filename"))?;
             if name.is_empty()
