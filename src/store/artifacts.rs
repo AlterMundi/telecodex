@@ -51,6 +51,22 @@ impl Store {
             ]))?)
         );
         let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut doc = doc.clone();
+        if let Some(files) = doc["output"]["files"].as_object_mut() {
+            let mut previous=conn.prepare("SELECT EXISTS(SELECT 1 FROM interaction_artifact_jobs j,json_each(j.doc,'$.output.files') f WHERE j.local=?1 AND j.human=?2 AND j.job!=?3 AND f.key=?4 AND json(f.value)=json(?5))")?;
+            let mut duplicate = Vec::new();
+            for (name, metadata) in files.iter() {
+                if previous.query_row(
+                    params![local, human, job, name, metadata.to_string()],
+                    |r| r.get::<_, bool>(0),
+                )? {
+                    duplicate.push(name.clone());
+                }
+            }
+            for name in duplicate {
+                files.remove(&name);
+            }
+        }
         conn.execute(
             "INSERT OR IGNORE INTO interaction_artifact_jobs VALUES(?1,?2,?3,?4,'pending','')",
             params![job, local, human, doc.to_string()],
@@ -75,7 +91,7 @@ impl Store {
         if running >= 4 {
             return Ok(None);
         }
-        let selected:Option<(String,i64,String)>=tx.query_row("SELECT j.job,j.local,j.doc FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE j.phase='pending' AND j.human=?1 AND s.creator_user_id=?1 AND t.from_user_id=?1 AND u.allowed=1 ORDER BY j.local LIMIT 1",[human],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let selected:Option<(String,i64,String)>=tx.query_row("SELECT j.job,j.local,j.doc FROM interaction_artifact_jobs j JOIN turns t ON t.id=j.local JOIN sessions s ON s.id=t.session_id JOIN users u ON u.tg_user_id=s.creator_user_id WHERE j.phase='pending' AND j.human=?1 AND s.creator_user_id=?1 AND t.from_user_id=?1 AND u.allowed=1 ORDER BY j.local,j.rowid LIMIT 1",[human],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let Some((job, local, doc)) = selected else {
             return Ok(None);
         };
@@ -683,6 +699,21 @@ mod tests {
         assert_ne!(next, job);
         assert_eq!((actual, doc), (local, second));
         assert!(s.artifact_job_claim(100).unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_checkpoint_jobs_keep_the_first_file_owner_before_copying() {
+        let (_file, s, local, _, _) = setup();
+        let first = json!({"output":{"native":"old-native","turn":"physical","item":"one","files":{"first.txt":[1,2,3]}}});
+        let second = json!({"output":{"native":"old-native","turn":"physical","item":"two","files":{"first.txt":[1,2,3],"second.txt":[4,5,6]}}});
+        s.artifact_job_stage(local, 100, &first).unwrap();
+        let (_, _, claimed) = s.artifact_job_claim(100).unwrap().unwrap();
+        assert_eq!(claimed, first);
+        // The first copy is still running when the next canonical final arrives.
+        s.artifact_job_stage(local, 100, &second).unwrap();
+        let (_, _, claimed) = s.artifact_job_claim(100).unwrap().unwrap();
+        assert!(claimed["output"]["files"].get("first.txt").is_none());
+        assert_eq!(claimed["output"]["files"]["second.txt"], json!([4, 5, 6]));
     }
 
     #[test]
