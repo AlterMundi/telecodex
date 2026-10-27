@@ -239,7 +239,7 @@ def canonical_turn_skips_unused_limits_history(binary):
                 except OSError as error:
                     if error.errno!=errno.ENXIO:raise
                     done.wait(.01);continue
-                opened.set()
+                opened.set();fifo.unlink()
                 try:
                     release.wait(10)
                     os.write(fd,(json.dumps({'timestamp':'2026-10-27T07:00:00Z','payload':{'type':'token_count','rate_limits':{'secondary':{'used_percent':17,'window_minutes':10080,'resets_at':1793200000}}}})+'\n').encode())
@@ -256,17 +256,30 @@ def canonical_turn_skips_unused_limits_history(binary):
         # The legacy unfinished-preview path still has a visible quota banner.
         fake=journey.root/'codex';body=fake.read_text()
         marker="if sys.argv[1:]!=['app-server','proxy']: sys.exit(7)"
-        replacement="""if sys.argv[1:2]==['exec']:
+        replacement="""if sys.argv[1:]==['app-server']:
     import json
-    print(json.dumps({'type':'thread.started','thread_id':'legacy-limits-thread'}),flush=True)
-    print(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'Legacy quota preview completed.'}}),flush=True)
-    print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_tokens':1}}),flush=True)
+    def emit(value):print(json.dumps(value),flush=True)
+    for raw in sys.stdin:
+        message=json.loads(raw);method=message.get('method');ident=message.get('id')
+        if ident is None:continue
+        result={}
+        if method in ('thread/start','thread/resume'):result={'thread':{'id':'legacy-limits-thread'},'model':'fixture-model','modelProvider':'fixture'}
+        elif method=='thread/goal/get':result={'goal':None}
+        elif method=='turn/start':result={'turn':{'id':'legacy-limits-turn'}}
+        emit({'id':ident,'result':result})
+        if method=='turn/start':
+            emit({'method':'turn/started','params':{'threadId':'legacy-limits-thread','turn':{'id':'legacy-limits-turn','status':'inProgress'}}})
+            emit({'method':'item/completed','params':{'threadId':'legacy-limits-thread','turnId':'legacy-limits-turn','item':{'id':'legacy-answer','type':'agentMessage','phase':'final_answer','text':'Legacy quota preview completed.'}}})
+            emit({'method':'turn/completed','params':{'threadId':'legacy-limits-thread','turn':{'id':'legacy-limits-turn','status':'completed'}}})
     sys.exit(0)
 """+marker
         assert marker in body;fake.write_text(body.replace(marker,replacement))
-        journey.config.write_text(journey.config.read_text().replace('shared_app_server=true','shared_app_server=false'))
+        legacy=journey.config.read_text().split('\n[interaction]\n',1)[0]
+        legacy=re.sub(r'\[session_control\]\n.*?(?=\[telegram\])','',legacy,flags=re.S)
+        legacy=legacy.replace('shared_app_server=true','shared_app_server=false').replace('[telegram]\n','[telegram]\nuse_message_drafts=false\n')
+        journey.config.write_text(legacy)
         journey.start();journey.admit('Keep the legacy preview quota.',topic=7)
-        assert opened.wait(5),'Legacy visible preview no longer reads its quota source'
+        journey.wait(lambda:opened.is_set(),seconds=5)
         release.set();journey.wait(lambda:journey.has('Legacy quota preview completed.',7))
         assert any('83%'in message['text']for message,_ in journey.messages),'Legacy quota banner disappeared'
         journey.idle()
