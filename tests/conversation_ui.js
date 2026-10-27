@@ -377,7 +377,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   await follow.ui.refresh();
   assert.equal(live.scrollTop,live.scrollHeight,'The committed transcript cannot silently leave following mode');
   const until=async check=>{for(let n=0;n<100;n++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error("Voice transition did not finish");};
-  const liveOptionsAudio={liveSpeech:true,manualClock:true,playback:true,capture:true,responseDraft:{provisional:true,native_turn:'physical',native_item:'early',text:'First useful sentence. Remaining text',observed_at:'2100-01-01T00:00:00Z'}};
+  const liveOptionsAudio={liveSpeech:true,clock:true,playback:true,capture:true,responseDraft:{provisional:true,native_turn:'physical',native_item:'early',text:'First useful sentence. Remaining text',observed_at:'2100-01-01T00:00:00Z'}};
   const liveVoice=boot(false,true,liveOptionsAudio);liveVoice.audio();await liveVoice.ui.refresh();
   liveVoice.nodes.get('#conversation-voice-replies').handlers.click();await liveVoice.ui.refresh();
   const livePlayer=liveVoice.nodes.get('#conversation-audio');await until(()=>liveVoice.audioCalls.length===1&&!livePlayer.paused&&!livePlayer.muted);
@@ -400,6 +400,22 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(selectionRace.audioCalls.length,0,'Capture invalidates an awaited prefix even after recording finishes');
   hashHold.active=false;await selectionRace.ui.refresh();await until(()=>selectionRace.audioCalls.length===1);
   selectionRace.ui.stop();
+  const gapOptions={liveSpeech:true,clock:true,responseDraft:{provisional:true,native_turn:'gap-physical',native_item:'gap-item',text:'First sentence. Unfinished',observed_at:'2100-01-01T00:00:00Z'}};
+  const gapVoice=boot(false,true,gapOptions);gapVoice.audio();await gapVoice.ui.refresh();gapVoice.failAudio();
+  gapVoice.nodes.get('#conversation-voice-replies').handlers.click();await gapVoice.ui.refresh();await until(()=>gapVoice.clock.pending().includes(450));
+  gapOptions.responseDraft.text='First sentence. Second sentence. Unfinished';await gapVoice.ui.refresh();gapVoice.clock.fire(450);
+  const gapPlayer=gapVoice.nodes.get('#conversation-audio');await until(()=>gapVoice.audioCalls.length===2&&!gapPlayer.paused);
+  gapPlayer.ended=true;await gapPlayer.handlers.ended();
+  const gapText='First sentence. Second sentence. The confirmed tail.';gapOptions.liveText=gapText;gapOptions.responseDraft=null;gapVoice.addReplies(1);
+  gapVoice.overrideSource(9,{native_turn:'gap-physical',native_item:'gap-item',text_characters:gapText.length,preview:gapText});gapVoice.replyTexts.set('native:9',gapText);
+  await gapVoice.ui.refresh();gapVoice.clock.fire(450);await until(()=>gapVoice.audioCalls.length===3&&!gapPlayer.paused);
+  gapVoice.ui.pause();
+  const gapCard=gapVoice.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:9');
+  await gapCard.children[3].children[1].handlers.click();
+  await until(()=>gapVoice.audioCalls.length===4);
+  assert.equal(gapVoice.audioCalls.at(-1).offset,0,'Pause during the canonical tail cannot overwrite an earlier unsaid prefix');
+  gapVoice.ui.stop();
+
 
 
   let voiceSubmissions=0;

@@ -867,7 +867,9 @@ window.Conversation = (() => {
         }
         forgetPosition(source);return;
       }
-      const offset=active.segmentEnded && Number.isSafeInteger(active.next)?active.next:active.offset;
+      const normal=active.segmentEnded && Number.isSafeInteger(active.next)?active.next:active.offset;
+      const contiguous=liveSpeech?.resume(source);
+      const offset=contiguous===undefined?normal:Math.min(normal,contiguous);
       speechPositions.delete(source.id);speechPositions.set(source.id,{source:source.id,revision:source.revision,offset});
       while(speechPositions.size>24)speechPositions.delete(speechPositions.keys().next().value);
       savePositions();const card=cards.get(source.id);if(card)positionLabel(card);
@@ -1076,7 +1078,7 @@ window.Conversation = (() => {
         listen.hidden=readOnly;listen.addEventListener("click", () => {
           if(readOnly || captureBusy)return;
           const saved=speechPositions.get(card.source.id);
-          if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended){
+          if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended && (!saved || saved.offset>=active.offset)){
             voiceSuspended=false;voiceStatus();return startPlayback();
           }
           return listenTo(card.source,saved?.revision===card.source.revision?saved.offset:0);
