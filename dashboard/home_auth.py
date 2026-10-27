@@ -45,6 +45,9 @@ class HomeAuth:
         self.artifacts = self.selected.get('artifact_access', False)
         if type(self.artifacts) is not bool:
             raise ValueError('Explicit shared conversation file permission required')
+        self.alerts = self.selected.get('alerts_access', False)
+        if type(self.alerts) is not bool:
+            raise ValueError('Explicit shared conversation alert permission required')
         self.binding = config['origin'] + config.get('prefix', '/sessions')
 
     def authenticate(self, request):
@@ -66,8 +69,9 @@ class HomeAuth:
                 or not self.provider.authorized(human)):
             raise PermissionError('This account has no receiving conversation grant')
         if request.url.path != '/api/interaction/access' and not permitted(
-                request.method, request.url.path, 'interaction_only', self.artifacts):
+                request.method, request.url.path, 'interaction_only', self.artifacts, self.alerts):
             raise PermissionError('Shared browser access is limited to the conversation')
-        return {'human': human, 'scope': 'interaction_only', 'artifact_access': self.artifacts, 'expires': expires,
+        return {'human': human, 'scope': 'interaction_only', 'artifact_access': self.artifacts,
+                'alerts_access': self.alerts, 'expires': expires,
                 'csrf': hashlib.sha256(('shared-conversation:' + self.binding + ':' + token).encode()).hexdigest(),
                 'label': actor.get('name', 'Your conversation'), 'presentation_profile': 'simple'}

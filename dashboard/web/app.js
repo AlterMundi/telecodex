@@ -21,6 +21,7 @@ let conversationMode = false;
 const acknowledgmentRequests = new Map();
 let resolvedHistoryExpanded = false;
 let alertTrailOpened = false;
+let conversationAlertsRead, conversationAlertsAgain=false, conversationAlertsDenied=false, conversationAlertsGeneration=0, lastConversationAlerts;
 const statuses = {
   active: "Working",
   idle: "Idle",
@@ -334,13 +335,21 @@ function controlButton(op, stale, count) {
 }
 function alerts(data) {
   const section = $("#operations");
-  if (!data || data.state === "not_configured") { section.hidden = true; return; }
+  if (!data || data.state === "not_configured") {
+    section.hidden = true;
+    if(data?.read_only && conversationMode){
+      section.hidden=false;$("#incidents").replaceChildren();
+      $("#operations-summary").textContent="Operational alerts";
+      $("#alerts-state").textContent="Alerts are not configured for this receiver.";
+    }
+    return;
+  }
   section.hidden = false;
   const open = (data.incidents || []).filter((i) => i.projection.processing_state === "open").length;
   const unacknowledged = [...(data.incidents || []), ...(data.resolved_incidents || [])]
     .filter((i) => i.projection.processing_state === "open" && !i.acknowledgments.length).length;
   section.dataset.attention = String(unacknowledged > 0);
-  if (!alertTrailOpened && unacknowledged > 0) { section.open = true; alertTrailOpened = true; }
+  if (!conversationMode && !alertTrailOpened && unacknowledged > 0) { section.open = true; alertTrailOpened = true; }
   $("#operations-summary").textContent = `${data.attention?.symbol ? data.attention.symbol + " " : unacknowledged ? "⚠ " : ""}Operational alerts · ${open} open`
     + (unacknowledged ? ` · ${unacknowledged} unacknowledged` : "");
   $("#alerts-state").textContent = data.state === "unavailable"
@@ -387,21 +396,26 @@ function alerts(data) {
     const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";
     item.append(el("p", `Observation ${incident.freshness} · Delivery: ${deliveries}`, "note"));
     if (incident.acknowledgments.length) item.append(el("p", "Acknowledged. Producer recovery remains separate.", "note"));
-    else {
+    else if (!conversationMode && data.read_only !== true) {
       const button = el("button", "Acknowledge");
       const requestKey = `${p.producer_id}/${p.incident_id}`;
       button.disabled = data.state !== "available";
       button.addEventListener("click", async () => {
         if (!acknowledgmentRequests.has(requestKey)) acknowledgmentRequests.set(requestKey, crypto.randomUUID());
         const requestId = acknowledgmentRequests.get(requestKey); button.disabled = true;
+        const modeGeneration = conversationAlertsGeneration;
         try {
           const acknowledgment = await api("alerts/acknowledge", {producer_id:p.producer_id, incident_id:p.incident_id, request_id:requestId});
+          if (conversationMode || modeGeneration !== conversationAlertsGeneration) return;
           button.textContent = "Acknowledged";
           // Reflect confirmed acceptance immediately; polling supplies durable state.
           const accepted = (items) => (items || []).map((i) => i === incident
             ? {...i, acknowledgments:[acknowledgment]} : i);
           alerts({...data, incidents:accepted(data.incidents), resolved_incidents:accepted(data.resolved_incidents)});
-        } catch (e) { $("#alerts-state").textContent = e.message; button.disabled = false; }
+        } catch (e) {
+          if (conversationMode || modeGeneration !== conversationAlertsGeneration) return;
+          $("#alerts-state").textContent = e.message; button.disabled = false;
+        }
       });
       item.append(button);
     }
@@ -414,6 +428,48 @@ function alerts(data) {
   const uncertain = (data.local_deliveries || []).filter((d) =>
     ["uncertain", "failed"].includes(d.outcome) || d.state === "claim_unconfirmed").length;
   if (uncertain) target.append(el("p", `${uncertain} recent delivery attempt(s) failed or unconfirmed. No automatic resend.`, "note"));
+}
+function closeConversationAlerts() {
+  const section=$("#operations");section.open=false;
+  $("#conversation-alerts-toggle").setAttribute("aria-expanded","false");
+}
+function clearConversationAlerts() {
+  conversationAlertsGeneration++;conversationAlertsRead=undefined;conversationAlertsAgain=false;conversationAlertsDenied=false;lastConversationAlerts=undefined;
+  closeConversationAlerts();delete $("#operations").dataset.conversationOverlay;$("#operations").hidden=true;
+  $("#conversation-alerts-toggle").hidden=true;$("#conversation-alerts-close").hidden=true;
+  $("#incidents").replaceChildren();$("#alerts-state").textContent="";$("#operations-summary").textContent="Operational alerts";
+}
+async function refreshConversationAlerts() {
+  if(!authenticated || !conversationMode || monitorOnly || conversationAlertsDenied)return;
+  if(conversationAlertsRead){conversationAlertsAgain=true;return conversationAlertsRead;}
+  const generation=conversationAlertsGeneration;
+  const current=()=>generation===conversationAlertsGeneration && authenticated && conversationMode;
+  const operation=api("interaction/alerts").then(data=>{
+    if(!current())return;
+    const attention=data.attention;
+    if(attention?.schema!=="telecodex.alert-attention/v1" || !["clear","info","warning","error","unknown"].includes(attention.level)
+      || !Number.isSafeInteger(attention.count) || attention.count<0 || typeof attention.symbol!=="string")throw Error("Alert projection unavailable");
+    lastConversationAlerts={...data,read_only:true};alerts(lastConversationAlerts);
+    const button=$("#conversation-alerts-toggle");button.hidden=attention.level==="clear";
+    button.dataset.level=attention.level;button.textContent=attention.symbol;
+    const label=`Open alerts · ${attention.level}${attention.count ? " · "+attention.count+" unacknowledged" : ""}`;
+    button.title=label;button.setAttribute("aria-label",label);
+    $("#conversation-alerts-close").hidden=false;
+  }).catch(error=>{
+    if(!current())return;
+    if(error.status===403){clearConversationAlerts();conversationAlertsDenied=true;return;}
+    if(error.status===401){clearConversationAlerts();authenticated=false;conversationView?.unauthenticated?.();sharedSignInAction?.();return;}
+    // A failed optional read does not stop speech or lose the conversation draft.
+    const button=$("#conversation-alerts-toggle");button.hidden=false;button.dataset.level="unknown";button.textContent="⚪";
+    button.title="Alerts unavailable";button.setAttribute("aria-label","Open alerts · unavailable");
+    alerts({...lastConversationAlerts,state:"unavailable",read_only:true});
+    $("#conversation-alerts-close").hidden=false;
+  }).finally(()=>{
+    if(conversationAlertsRead!==operation)return;
+    conversationAlertsRead=undefined;
+    if(conversationAlertsAgain && current()){conversationAlertsAgain=false;void refreshConversationAlerts();}
+  });
+  conversationAlertsRead=operation;return operation;
 }
 function render() {
   csrf = snapshot.csrf;
@@ -489,7 +545,7 @@ function traffic(data) {
 }
 async function refresh(force = false) {
   if (refreshing || !authenticated) return;
-  if (conversationMode) return conversationView?.refresh(force);
+  if (conversationMode) { void refreshConversationAlerts(); return conversationView?.refresh(force); }
   if (document.hidden && !force) return;
   refreshing = true;
   $("#refresh").disabled = true;
@@ -603,11 +659,30 @@ tg?.onEvent?.("activated", () => {
 });
 tg?.onEvent?.("deactivated", () => clearInterval(timer));
 tg?.ready?.();
+$("#conversation-alerts-toggle").addEventListener("click",()=>{
+  if(!authenticated || !conversationMode || monitorOnly)return;
+  const section=$("#operations");section.dataset.conversationOverlay="true";
+  section.hidden=false;section.open=!section.open;
+  $("#conversation-alerts-toggle").setAttribute("aria-expanded",String(section.open));
+  if(section.open){$("#conversation-alerts-close").focus?.();void refreshConversationAlerts();}
+});
+$("#conversation-alerts-close").addEventListener("click",()=>{
+  closeConversationAlerts();$("#conversation-alerts-toggle").focus?.();
+});
+document.addEventListener("keydown",event=>{
+  if(event.key==="Escape" && $("#operations").dataset.conversationOverlay==="true" && $("#operations").open){
+    closeConversationAlerts();$("#conversation-alerts-toggle").focus?.();event.preventDefault();event.stopPropagation();
+  }
+});
+$("#operations").addEventListener("toggle",()=>{
+  if(conversationMode && $("#operations").dataset.conversationOverlay==="true")
+    $("#conversation-alerts-toggle").setAttribute("aria-expanded",String($("#operations").open));
+});
 const conversationView = window.Conversation?.mount({
   api,
   headers: () => ({"Content-Type":"application/json", "X-Dashboard-CSRF":csrf || "",...authorizationHeaders()}),
   setCsrf: (value) => { csrf = value; },
-  modeChanged: (enabled, initial) => { conversationMode = enabled; if (!initial) { schedule(); refresh(true); } },
+  modeChanged: (enabled, initial) => { conversationMode = enabled; clearConversationAlerts(); if (!initial) { schedule(); refresh(true); } },
   telegram: tg,
   readOnly: monitorOnly,
   standalone: standaloneConversation,
@@ -619,7 +694,7 @@ const conversationView = window.Conversation?.mount({
     const feedback=$('#feedback');
     const signIn=el('button','Sign in');signIn.type='button';
     sharedSignInAction=()=>{
-      sharedConversationConnected=false;authenticated=false;
+      clearConversationAlerts();sharedConversationConnected=false;authenticated=false;
       $('#conversation-account').textContent='';$('#conversation-account').hidden=true;
       feedback.replaceChildren(el('p','Sign in again to reconnect.'),signIn);
     };
@@ -683,9 +758,9 @@ const conversationView = window.Conversation?.mount({
       }
       await refresh(true);schedule();
     }
-    function clearCredential(){accessVersion++;deviceAuthorization=undefined;csrf=undefined;authenticated=false;conversationView?.unauthenticated?.();document.title=title;sessionStorage.removeItem(storageKey);}
+    function clearCredential(){clearConversationAlerts();accessVersion++;deviceAuthorization=undefined;csrf=undefined;authenticated=false;conversationView?.unauthenticated?.();document.title=title;sessionStorage.removeItem(storageKey);}
     file.addEventListener('change',async()=>{
-      const version=++accessVersion;authenticated=false;conversationView?.unauthenticated?.();
+      clearConversationAlerts();const version=++accessVersion;authenticated=false;conversationView?.unauthenticated?.();
       try{const selected=file.files?.[0];if(!selected || selected.size>4096)throw Error('Select the small operator-issued access file');await openCredential(JSON.parse(await selected.text()),version);}
       catch(error){if(version===accessVersion){clearCredential();feedback.replaceChildren(label,el('p',error.message));}}
       finally{file.value='';}

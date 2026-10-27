@@ -117,6 +117,57 @@ class Companion(unittest.TestCase):
         shorthand=self.client.get('/?view=conversation',headers={'Host':'home.example.test'},follow_redirects=False)
         self.assertEqual(shorthand.status_code,307)
 
+    def test_shared_alert_read_is_explicit_and_does_not_widen_device_or_control_grants(self):
+        class Alerts:
+            binding='fixture-alert-scope'
+            calls=0
+            revoke=None
+            def assert_binding(self): pass
+            def start(self): pass
+            def close(self): pass
+            def snapshot(self):
+                self.calls+=1
+                if self.revoke: self.revoke()
+                return {'state':'available','observer_state':'healthy','incidents':[
+                    {'projection':{'producer_id':'fixture','incident_id':'case','severity':'error',
+                                   'processing_state':'open','summary':'Safe operational summary'},
+                     'acknowledgments':[]}], 'resolved_incidents':[]}
+        alerts=Alerts()
+        self.config['shared_auth']={'enabled':True,'home_origin':'https://home.example.test'}
+        self.config['additional_origins']=['https://home.example.test']
+        def reopen():
+            self.client.close()
+            self.client=TestClient(create_app(self.config,self.provider,lambda raw,bot:int(raw),alerts=alerts),base_url=self.config['origin'])
+        reopen()
+        headers={'Host':'home.example.test','Cookie':'__Host-home='+'h'*43,'Origin':'https://home.example.test'}
+        identity={'contract':'dm.home-session/v1','origin':'https://home.example.test','expires':int(time.time())+3600,
+                  'actor':{'ref':'human:telegram:100','kind':'human','name':'Fixture'}}
+        with patch('dashboard.home_auth.identity_response',return_value=identity):
+            self.assertEqual(self.client.get('/api/interaction/alerts',headers=headers).status_code,403)
+            self.assertEqual(alerts.calls,0,'A default conversation grant must not read operational incidents')
+            self.config['shared_auth']['alerts_access']=True
+            reopen()
+            response=self.client.get('/api/interaction/alerts',headers=headers)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.json()['attention']['level'],'error')
+            self.assertEqual(response.json()['attention']['count'],1)
+            self.assertIs(response.json()['read_only'],True)
+            for path in ('/api/alerts','/api/state','/api/traffic'):
+                self.assertEqual(self.client.get(path,headers=headers).status_code,403,path)
+            self.assertEqual(self.client.post('/api/alerts/acknowledge',json={},headers=headers).status_code,403)
+            self.assertEqual(self.client.post('/api/stop',json={},headers=headers).status_code,403)
+            before=alerts.calls
+            self.assertEqual(self.client.get('/api/interaction/alerts',headers=self.headers).status_code,403,
+                             'Existing companion files do not inherit the separate shared-browser grant')
+            self.assertEqual(alerts.calls,before)
+            identity['actor']['ref']='human:telegram:999'
+            self.assertEqual(self.client.get('/api/interaction/alerts',headers=headers).status_code,403)
+            identity['actor']['ref']='human:telegram:100'
+            alerts.revoke=lambda:setattr(self.provider,'authorized',lambda human:False)
+            denied=self.client.get('/api/interaction/alerts',headers=headers)
+            self.assertEqual(denied.status_code,403,denied.text)
+            self.assertNotIn('Safe operational summary',denied.text,'Post-read revocation must fence the retained snapshot')
+
     def test_delayed_shared_identity_does_not_block_unrelated_dashboard_io(self):
         self.config['shared_auth']={'enabled':True,'home_origin':'https://home.example.test'}
         app=create_app(self.config,self.provider,lambda raw,bot:int(raw))

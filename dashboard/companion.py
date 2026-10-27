@@ -19,7 +19,9 @@ def authority(config, provider):
         separators=(',', ':')).encode()).hexdigest()
 
 
-def permitted(method, path, scope='interaction_only', artifact_access=False):
+def permitted(method, path, scope='interaction_only', artifact_access=False, alerts_access=False):
+    if path == '/api/interaction/alerts':
+        return scope == 'interaction_only' and alerts_access is True and method == 'GET'
     if path == '/api/interaction/artifacts' or path.startswith('/api/interaction/artifacts/'):
         return scope == 'interaction_only' and artifact_access is True and method == 'GET' and re.fullmatch(r'/api/interaction/artifacts(?:/[a-f0-9-]{36})?', path) is not None
     if scope == 'monitor_readonly':

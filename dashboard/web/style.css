@@ -933,3 +933,14 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 
 /* Live captions are useful conversation content, independently of validation errors. */
 .standalone-conversation #conversation-compose-status:has(#conversation-voice-state[data-live-caption="true"]) #conversation-send-state { display:none; }
+
+/* Interaction reuses the receiving Alerts projection and Sessions list. */
+.apps-launcher { display:inline-flex; position:relative; }
+.apps-alerts { position:absolute; top:-3px; right:-5px; display:grid; place-items:center; width:24px; height:24px; min-height:24px; padding:0; border:1px solid var(--line); border-radius:50%; background:var(--bg); font-size:16px; line-height:1; }
+.apps-alerts[hidden] { display:none; }
+.apps-alerts:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+body.conversation-mode #operations[data-conversation-overlay="true"][open] { display:block!important; position:fixed; inset:var(--inspector-top,100px) 12px 12px; z-index:22; overflow:auto; overscroll-behavior:contain; margin:0; padding:16px; border:1px solid var(--line); border-radius:18px; background:var(--bg); box-shadow:0 16px 60px #0008; }
+body.conversation-mode #operations[data-conversation-overlay="true"] > summary { pointer-events:none; padding-right:42px; }
+#conversation-alerts-close { position:sticky; top:0; float:right; min-width:40px; min-height:40px; margin-top:-36px; font-size:24px; z-index:1; }
+
+body.conversation-mode #operations[data-conversation-overlay="true"] #incidents { max-height:none; overflow:visible; }

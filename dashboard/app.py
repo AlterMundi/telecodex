@@ -319,9 +319,11 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         paths = [Path(provider.receiver['db_path'])]
         if config.get('activity_state_dir'):
             paths.append(Path(config['activity_state_dir']) / 'topics.json')
+        alert_reads = dict(session).get('scope') is None or dict(session).get('alerts_access') is True
+        subscribe = getattr(alerts, 'subscribe', None) if alert_reads else None
         async def stream():
             checked = time.monotonic()
-            async for changed in changes(paths):
+            async for changed in changes(paths, subscribe=subscribe):
                 if await request.is_disconnected():
                     break
                 try:
@@ -908,6 +910,18 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             raise HTTPException(403, 'Receiving grant unavailable')
         return {**result, 'app_url':sessions_selection(config)['web_app']['url'],
                 'bot_username':config.get('bot_username')}
+
+    @app.get('/api/interaction/alerts')
+    def conversation_alerts(request: Request):
+        session = authorize(request)
+        if dict(session).get('scope') is not None and dict(session).get('alerts_access') is not True:
+            raise HTTPException(403, 'This conversation has no alert read grant')
+        try:
+            result = alerts.snapshot() if alerts is not None else {'state': 'not_configured'}
+        except (OSError, sqlite3.Error, ValueError):
+            raise HTTPException(503, 'Alerts receiving state unavailable') from None
+        authorize(request)
+        return {**result, 'attention':attention_projection(result), 'read_only':True}
 
     @app.get('/api/alerts')
     def incidents(request: Request):

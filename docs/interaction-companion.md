@@ -129,6 +129,15 @@ to the standalone conversation and shared sign-in returns to that same path.
 `artifact_access = true` additionally permits the receiving conversation's
 existing generated-file downloads; administration and approvals stay separate.
 
+`alerts_access = true` optionally adds a read-only operational-alert list at
+`GET /api/interaction/alerts`. It defaults to false. The Conversation badge and
+list reuse the same receiving Alerts projection and attention rules as Sessions
+and the Apps menu. Existing SSE invalidations include receiving alert changes;
+subscribing does not initiate observation. Opening the badge is explicit and
+leaves the draft and playback nodes intact. Shared-home access cannot acknowledge
+incidents or invoke Sessions controls, and existing device grants are unchanged.
+This grant does not activate model attention or automatic incident handling.
+
 Visible standalone answers expand through the existing immutable source/part
 endpoint without requiring a Read reply click. Intersection-driven reads use at
 most two automatic readers and do not block the next text/voice input. Completed

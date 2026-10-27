@@ -34,7 +34,7 @@
           </svg>
           <h1>Sessions</h1>
         </div>
-        <div class="header-tools"><a class="apps-return" href="https://apps.dmn.homes/" aria-label="Back to Apps">▦ Apps</a><span id="provider">Telecodex</span><button id="conversation-inspect" type="button" hidden aria-label="Under the hood" title="Under the hood" aria-controls="conversation-diagnostics" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m14 6 4 4M4 20l9-9M13 4a6 6 0 0 0-2 7L4 18a1.5 1.5 0 0 0 2 2l7-7a6 6 0 0 0 7-7l-4 4-3-3 4-4a6 6 0 0 0-4 1Z"/></svg></button>
+        <div class="header-tools"><span class="apps-launcher"><a class="apps-return" href="https://apps.dmn.homes/" aria-label="Back to Apps">▦ Apps</a><button id="conversation-alerts-toggle" class="apps-alerts" type="button" hidden aria-label="Open alerts" title="Open alerts" aria-controls="operations" aria-expanded="false"></button></span><span id="provider">Telecodex</span><button id="conversation-inspect" type="button" hidden aria-label="Under the hood" title="Under the hood" aria-controls="conversation-diagnostics" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m14 6 4 4M4 20l9-9M13 4a6 6 0 0 0-2 7L4 18a1.5 1.5 0 0 0 2 2l7-7a6 6 0 0 0 7-7l-4 4-3-3 4-4a6 6 0 0 0-4 1Z"/></svg></button>
         </div>
       </header>
       <div id="feedback" role="status" aria-live="polite">
@@ -144,6 +144,7 @@
       </details>
       <details id="operations" hidden>
         <summary id="operations-summary">Operational alerts</summary>
+        <button id="conversation-alerts-close" type="button" hidden aria-label="Close alerts" title="Close alerts">×</button>
         <div id="alerts-state" role="status" aria-live="polite"></div>
         <div id="incidents"></div>
       </details>
