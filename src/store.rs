@@ -1189,8 +1189,14 @@ impl Store {
         if updated != 1 {
             anyhow::bail!("Collector execution or owner binding changed");
         }
+        let human_publication =
+            workflows::native_transfer_collection_on(&tx, local, human, key, native, physical)?;
+        let mut receipt = serde_json::json!({"native_thread":native,"native_turn":physical,"observed_at":now_string()});
+        if let Some(human) = human_publication {
+            receipt["native_return_human"] = serde_json::json!(human);
+        }
         tx.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![format!("collector_attachment:{local}"),serde_json::to_string(&serde_json::json!({"native_thread":native,"native_turn":physical,"observed_at":now_string()}))?])?;
+            params![format!("collector_attachment:{local}"),serde_json::to_string(&receipt)?])?;
         tx.commit()?;
         Ok(())
     }
