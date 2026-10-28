@@ -498,19 +498,21 @@ or claim a new receiving deployment.
 
 ### Session audio Solo and reset
 
-Session update and result headings expose Mute, Solo (S), and, while a filter is
+Conversation, session update and result headings expose Mute, Solo (S), and, while a filter is
 active, Hear all sessions. Solo clears prior explicit mutes; several selected
 solos form the audible session selection. Removing the last solo restores all
 sessions without reviving old mutes. Hear all sessions clears both sets. These
-filters affect automatic worker updates only: direct conversation and pending
-questions retain their existing attention handling, and explicit Listen remains
-available. Filtering stops excluded automatic playback without pausing global
+filters include automatic conversation replies, progress and live speech as one
+Conversation track. Solo Conversation excludes internal-session updates; muting
+Conversation leaves internal sessions audible. Pending questions retain their
+existing attention handling, and explicit Listen remains available. Filtering stops excluded automatic playback without pausing global
 Voice or native work. Returning a session to the mix never replays silent history.
 
 Preferences are local to the conversation binding, capped at 256 mute and 256
 solo identities in one versioned local-storage document (32 KiB read limit). The
 previous mute-only format is read when the new document is absent and retired on
-the next filter change. No transcript, labels, or audio backlog is persisted.
+the next filter change. The reserved `conversation` identity shares this same
+store and reset control. No transcript, labels, or audio backlog is persisted.
 
 ### Screenshot version and human identity
 
