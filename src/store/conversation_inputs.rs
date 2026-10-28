@@ -157,6 +157,12 @@ impl ConversationInput {
                 .is_some_and(|r| r.source.starts_with("input:"))
             {
                 "The reported input:UUID identifies a device-reported destination question for that retained original, which may be stale. If this utterance clearly clarifies its destination, inspect pending_routes and use resolve_route with that exact pending UUID and this new input_ref. Never guess a newer pending original. If the human changes topic or the intent is unclear, discuss or route normally; context alone selects nothing."
+            } else if self
+                .reply
+                .as_ref()
+                .is_some_and(|r| r.source.starts_with("native:"))
+            {
+                "This is a reference to an earlier message in this integrating conversation, not a worker destination or a native question answer. Use the exact source and revision with interaction_controller conversation_part only if that context is needed. Read a bounded relevant part rather than copying the entire earlier message into context. If the exact revision is unavailable, preserve that uncertainty and ask rather than substituting another message."
             } else {
                 "Use interaction_controller capabilities to inspect questions or answer the selected question from this original input only when its intent is clear; otherwise discuss or route normally. A stale source must not prevent a new topic."
             };

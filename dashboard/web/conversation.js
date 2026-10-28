@@ -1227,7 +1227,7 @@ window.Conversation = (() => {
         const read = node("button", "Read reply"); read.type = "button";
         const listen = node("button", "Listen"); listen.type = "button";
         const error = node("p", "", "reply-error"); error.setAttribute("role", "status");
-        const reply=node("button","Reply to this session");reply.type="button";reply.hidden=readOnly || !["worker_result","matrix_result"].includes(source.kind);
+        const reply=node("button",source.kind.startsWith("integrator_")?"Reply to this message":"Reply to this session");reply.type="button";reply.hidden=readOnly || !["worker_result","matrix_result","integrator_answer","integrator_progress"].includes(source.kind);
         const time=node("time",undefined,"message-time");
         actions.append(read, listen,reply); box.append(title, status, body, actions, error,time);
         box.dataset.sequence = String(source.sequence);
@@ -1235,7 +1235,7 @@ window.Conversation = (() => {
         if(!timeline || source.kind==="worker_progress")container.insertBefore(box, following || null);
         card = {source, box, title, status, body, read, listen, error,time, offset:0, expanded:false};
         cards.set(source.id, card);
-        reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
+        reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result" || card.source.kind.startsWith("integrator_")?{context_only:true}:{})},card.source.label||"this session"));
         read.addEventListener("click",()=>readCard(card));
         listen.hidden=readOnly;listen.addEventListener("click",()=>listenCard(card));
       } else if (card.source.text_sha256 !== source.text_sha256) {

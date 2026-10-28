@@ -433,3 +433,18 @@ Samsung remote configuration research is separate from this client behavior.
 Actual TV playback delayed until a tab switch remains an unresolved receiving
 report under [#326](https://github.com/AlterMundi/telecodex/issues/326), not a
 confirmed autoplay diagnosis or an unsupported-browser conclusion.
+
+## Reply to an exact integrator message
+
+Canonical integrator answer/progress cards expose Reply to this message. It
+freezes the existing source ID and revision as a context-only ConversationReply,
+using the same text/voice composer and exact-original retry path. The earlier
+answer body is not copied. Native references are canonical positive i64 IDs and
+cannot select a worker destination. The integrator can request a relevant bounded
+part with its existing conversation_part reader; a missing exact revision is
+uncertainty, never permission to substitute another message.
+
+Worker Reply to this session retains its existing explicit destination and request
+correlation. The selected source/revision remains in the original input and in
+the worker relay's selection provenance. Neither action copies the complete
+quoted message. Device context does not grant approval or prove hearing.

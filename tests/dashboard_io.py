@@ -367,6 +367,13 @@ class NativeMetadata:
 
 
 class ProviderIO(unittest.TestCase):
+    def test_integrator_message_reference_is_context_only_and_bounded(self):
+        for source in ('native:1','native:9223372036854775807'):
+            Provider.check_reply({'source':source,'revision':'a'*64,'context_only':True})
+        for source in ('native:0','native:01','native:-1','native:9223372036854775808','native:abc'):
+            with self.assertRaises(ValueError):Provider.check_reply({'source':source,'revision':'a'*64,'context_only':True})
+        with self.assertRaises(ValueError):Provider.check_reply({'source':'native:1','revision':'a'*64})
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.root.chmod(0o700)
         self.db=self.root/'bridge.sqlite'

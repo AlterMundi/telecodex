@@ -290,6 +290,16 @@ function boot(readOnly=false,standalone=false,options={}) {
     await localized.ui.refresh();assert.equal(time.hidden,true,'Unknown dates do not invent timestamps');
     localized.ui.stop();
   }
+  const quoted=boot(false,true);await quoted.ui.refresh();
+  const quotedCard=quoted.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:8');
+  const replyHere=quotedCard.children[3].children.find(button=>button.textContent==='Reply to this message');
+  assert(replyHere&&!replyHere.hidden);replyHere.handlers.click();
+  quoted.nodes.get('#conversation-message').value='About that earlier answer';
+  await quoted.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+  const referenceOriginal=[...quoted.originals.values()].at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(referenceOriginal.reply)),{source:'native:8',revision:'revision-8',context_only:true});
+  assert.equal(referenceOriginal.text,'About that earlier answer','Message replies carry a compact reference rather than copying the earlier answer');
+  assert.equal(quoted.nativePosts.length,0,'An integrator message reference does not become a worker destination');quoted.ui.stop();
   const automatic=boot(false,true,{autoText:true});
   const bodies=new Map([['native:8','A complete answer. '.repeat(200)],['native:7','A second topic. '.repeat(200)],['native:6','A third topic. '.repeat(200)]]);
   const holds=new Map();
