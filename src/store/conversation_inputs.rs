@@ -1260,11 +1260,17 @@ impl Store {
 
     pub fn conversation_turn_direct_return(&self, local: i64) -> Result<bool> {
         let conn = self.conn.lock().expect("store mutex poisoned");
+        if super::workflows::native_only_on(&conn, local)? {
+            return Ok(false);
+        }
         Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM turns t LEFT JOIN sessions s ON s.id=t.session_id JOIN conversation_returns p ON p.native_thread=COALESCE(t.native_thread_id,s.codex_thread_id) AND p.human_id=t.from_user_id WHERE t.id=?1 AND p.source_input LIKE 'telegram:%')",[local],|r|r.get(0))?)
     }
 
     pub fn conversation_turn_return(&self, local_turn: i64) -> Result<bool> {
         let conn = self.conn.lock().expect("store mutex poisoned");
+        if super::workflows::native_only_on(&conn, local_turn)? {
+            return Ok(true);
+        }
         let selected:Option<bool>=conn.query_row("SELECT EXISTS(SELECT 1 FROM conversation_returns p WHERE p.native_thread=COALESCE(t.native_thread_id,s.codex_thread_id) AND p.human_id=t.from_user_id AND p.source_input NOT LIKE 'telegram:%') FROM turns t LEFT JOIN sessions s ON s.id=t.session_id WHERE t.id=?1",[local_turn],|r|r.get(0)).optional()?;
         // A deleted/unknown execution is not authority to publish its output.
         Ok(selected.unwrap_or(true))

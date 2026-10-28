@@ -87,6 +87,12 @@ async fn drain(shared: &Arc<AppShared>, key: SessionKey, human: i64, files: bool
                         // A goal control can select the integrating return on an
                         // already-running direct turn. Its opted-in source-topic
                         // projection still uses this same canonical publication.
+                        if !shared
+                            .store
+                            .workflow_native_visible(publication.local_turn)?
+                        {
+                            return Ok(None);
+                        }
                         if (!enabled(shared, key, human)
                             && (!publication.direct
                                 || shared

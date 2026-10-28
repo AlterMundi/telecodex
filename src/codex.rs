@@ -57,6 +57,8 @@ pub struct CodexRunner {
     bounded_turn: Option<BoundedTurn>,
     goal_activation: Option<GoalActivation>,
     client_message_id: Option<String>,
+    tool_output: Option<NativeToolOutput>,
+    rollout_reads: Arc<tokio::sync::Semaphore>,
     dynamic_tools: Vec<Value>,
     session_profiles: Vec<SessionModelProfile>,
 }
@@ -218,6 +220,12 @@ pub enum CodexEvent {
     },
     NativeTurnStarted(String),
     NativeInputAccepted(String),
+    /// Native accepted an internal return into a different physical turn; the
+    /// current collector must not pretend to own that execution or replay it.
+    NativeInternalReturnDetached {
+        client_id: String,
+        turn_id: String,
+    },
     NativeSteerAccepted {
         client_id: String,
         turn_id: String,
@@ -316,7 +324,16 @@ pub struct NativeTerminalObservation {
     pub assistant_text: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NativeToolOutput {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub output: String,
+    pub retain: bool,
+}
+
 pub struct CodexSteerRequest {
+    pub tool_output: Option<NativeToolOutput>,
     pub observation: Option<NativeTerminalObservation>,
     pub images: Vec<std::path::PathBuf>,
     /// Revalidate captured admission at the native write boundary, after any
@@ -331,6 +348,7 @@ pub struct CodexSteerRequest {
 }
 
 struct PendingSteer {
+    tool_output: bool,
     client_id: Option<String>,
     expected_turn_id: String,
     response: oneshot::Sender<CodexSteerResponse>,
@@ -611,6 +629,50 @@ impl CodexRunner {
         }).await.context("selected native reconciliation unavailable")?
     }
     /// Read only through an exact prior native boundary. Absence never authorizes replay.
+    pub async fn workflow_return_history(&self, native: &str, physical: &str) -> Result<Value> {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
+            let result=async {
+                process.initialize().await?;
+                let mut cursor=None::<String>;
+                let mut bytes=0;
+                for _ in 0..6 {
+                    let id=process.send_request("thread/turns/list",json!({"threadId":native,"limit":20,"sortDirection":"desc","itemsView":"full","cursor":cursor})).await?;
+                    match process.await_response(id).await {
+                        Ok(page)=>{
+                            bytes+=serde_json::to_vec(&page)?.len();
+                            if bytes>8*1024*1024 {bail!("Exact native observation exceeds bounded read");}
+                            let turns=page["data"].as_array().context("Exact native observation page missing")?;
+                            if let Some(turn)=turns.iter().find(|t|t["id"]==physical) {return Ok(turn.clone());}
+                            cursor=page["nextCursor"].as_str().map(str::to_owned);
+                            if cursor.is_none(){break;}
+                        }
+                        Err(error) if error.downcast_ref::<RpcError>().is_some_and(|e|e.code==Some(-32601))=>{
+                            let id=process.send_request("thread/read",json!({"threadId":native,"includeTurns":false})).await?;
+                            let metadata=process.await_response(id).await?;
+                            if metadata["thread"]["id"]!=native {bail!("Owned native metadata identity changed");}
+                            let path=PathBuf::from(metadata["thread"]["path"].as_str().context("Owned native rollout path unavailable")?);
+                            let permit=self.rollout_reads.clone().try_acquire_owned().context("Owned rollout reader busy; observation retained")?;
+                            let native=native.to_owned();let physical=physical.to_owned();
+                            // The permit stays inside a blocked filesystem read even
+                            // after this await times out. Later ticks cannot accumulate
+                            // unbounded background reads under host I/O pressure.
+                            return tokio::task::spawn_blocking(move || {
+                                let _permit=permit;
+                                crate::codex_history::read_owned_turn(&path,&native,&physical)
+                            }).await.context("Owned rollout observation failed")?;
+                        }
+                        Err(error)=>return Err(error),
+                    }
+                }
+                bail!("Exact acknowledged native turn unavailable; no replay authorized")
+            }.await;
+            process.shutdown().await?;
+            result
+        }).await.context("Exact native return observation timed out")?
+    }
+
+    /// Read only through an exact prior native boundary. Absence never authorizes replay.
     pub async fn recovery_history(
         &self,
         native: &str,
@@ -663,6 +725,8 @@ impl CodexRunner {
             bounded_turn: None,
             goal_activation: None,
             client_message_id: None,
+            tool_output: None,
+            rollout_reads: Arc::new(tokio::sync::Semaphore::new(1)),
             dynamic_tools: vec![],
             session_profiles: vec![],
         }
@@ -1098,6 +1162,11 @@ impl CodexRunner {
         runner.client_message_id = id;
         runner
     }
+    pub fn with_tool_output(&self, output: NativeToolOutput) -> Self {
+        let mut runner = self.clone();
+        runner.tool_output = Some(output);
+        runner
+    }
     pub fn with_goal_activation(&self, goal: GoalActivation) -> Self {
         let mut runner = self.clone();
         runner.goal_activation = Some(goal);
@@ -1153,6 +1222,7 @@ impl CodexRunner {
             self.bounded_turn.as_ref(),
             self.goal_activation.as_ref(),
             self.client_message_id.as_deref(),
+            self.tool_output.as_ref(),
             &self.dynamic_tools,
             profile.as_ref(),
             session,
@@ -1247,6 +1317,7 @@ async fn run_app_server_turn<F, Fut>(
     bounded: Option<&BoundedTurn>,
     goal_activation: Option<&GoalActivation>,
     client_message_id: Option<&str>,
+    tool_output: Option<&NativeToolOutput>,
     dynamic_tools: &[Value],
     profile: Option<&NativeModelProfile>,
     session: &SessionRecord,
@@ -1438,7 +1509,11 @@ where
         // or unresponsive goal APIs leave ordinary conversations usable.
     }
     let mut params = build_turn_start_params(&thread_id, &effective_session, request);
-    if let Some(id) = client_message_id {
+    if let Some(output)=tool_output {
+        if !request.prompt.is_empty() || !request.attachments.is_empty() || goal_activation.is_some() || bounded.is_some() {bail!("Internal tool output cannot be mixed with human input or goal control");}
+        params["input"]=json!([]);
+        params["toolOutput"]=serde_json::to_value(output)?;
+    } else if let Some(id) = client_message_id {
         params["clientUserMessageId"] = json!(id);
     }
     if let Some(bound) = bounded {
@@ -1476,7 +1551,7 @@ where
                     .send(Err(CodexSteerError::Rejected(error.to_string())));
                 continue;
             }
-            if steer.goal.is_none() {
+            if steer.goal.is_none() && steer.tool_output.is_none() && tool_output.is_none() {
                 let text = match &steer.client_message_id {
                     Some(id) => format!("Additional admitted input {id}:\n{}", steer.text),
                     None => steer.text.clone(),
@@ -1516,6 +1591,7 @@ where
     let mut active_turn_id: Option<String> = adopted_turn;
     let mut interrupt_request_id: Option<u64> = None;
     let mut pending_steers = HashMap::new();
+    let mut detached_returns = HashSet::<String>::new();
     let mut steering_open = true;
     let mut cancel_deadline: Option<Instant> = None;
     let mut turn_error: Option<String> = None;
@@ -1688,6 +1764,8 @@ where
           }
           next_message=process.next_message()=>{
             let Some(message)=next_message? else {break;};
+            if let RpcMessage::Notification{params,..}|RpcMessage::ServerRequest{params,..}=&message
+                && native_event_turn(params).is_some_and(|turn|detached_returns.contains(turn)) {continue;}
             match message{
               RpcMessage::Response{id,result,error}=>{
                 if goal_snapshot_request_id==Some(id) {
@@ -1720,7 +1798,17 @@ where
                     goal_active=goal.status=="active";
                     let _=on_event(CodexEvent::Progress(format!("Goal {}", goal.status))).await?;
                 } else if let Some(pending)=pending_steers.remove(&id) {
-                    let response=steer_response(&pending.expected_turn_id,result.as_ref(),error.as_ref());
+                    if pending.tool_output && error.is_none()
+                        && let Some(turn)=result.as_ref().and_then(|v|v.pointer("/turn/id")).and_then(Value::as_str)
+                        && turn!=pending.expected_turn_id
+                        && let Some(client_id)=pending.client_id.clone() {
+                        let _=on_event(CodexEvent::NativeInternalReturnDetached{client_id,turn_id:turn.into()}).await?;
+                        if detached_returns.len()>=32 {bail!("Detached return observation bound exhausted; exact ACK retained");}
+                        detached_returns.insert(turn.to_owned());
+                    }
+                    let response=if pending.tool_output {
+                        tool_output_response(&pending.expected_turn_id,result.as_ref(),error.as_ref())
+                    } else {steer_response(&pending.expected_turn_id,result.as_ref(),error.as_ref())};
                     if let (Some(client_id),Ok(Some(turn_id)))=(&pending.client_id,&response) {
                         let _=on_event(CodexEvent::NativeSteerAccepted {client_id:client_id.clone(),turn_id:turn_id.clone()}).await?;
                     }
@@ -1912,17 +2000,20 @@ fn event_matches_run(
     if method.starts_with("thread/goal/") {
         return true;
     }
-    let event_turn = params.get("turnId").and_then(Value::as_str).or_else(|| {
-        params
-            .get("turn")
-            .and_then(|turn| turn.get("id"))
-            .and_then(Value::as_str)
-    });
+    let event_turn = native_event_turn(params);
     match (event_turn, active_turn_id) {
         (Some(id), Some(active)) => id == active,
         (Some(_), None) => method == "turn/started",
         (None, _) => !require_scope || !method.starts_with("turn/") && !method.starts_with("item/"),
     }
+}
+fn native_event_turn(params: &Value) -> Option<&str> {
+    params.get("turnId").and_then(Value::as_str).or_else(|| {
+        params
+            .get("turn")
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+    })
 }
 
 /// Sends one queued steering request and tracks its app-server response by request id.
@@ -1941,21 +2032,35 @@ async fn send_steer_request(
             .send(Err(CodexSteerError::Rejected(error.to_string())));
         return Ok(());
     }
-    let request_id = process
-        .send_request(
-            "turn/steer",
-            build_turn_steer_params(
-                thread_id,
-                turn_id,
-                &steer.text,
-                &steer.images,
-                steer.client_message_id.as_deref(),
-            ),
-        )
-        .await?;
+    let internal = steer.tool_output.is_some();
+    let request_id = if let Some(output) = &steer.tool_output {
+        if !steer.text.is_empty() || !steer.images.is_empty() || steer.goal.is_some() {
+            bail!("Mixed internal and human steering");
+        }
+        process
+            .send_request(
+                "turn/start",
+                json!({"threadId":thread_id,"input":[],"toolOutput":output}),
+            )
+            .await?
+    } else {
+        process
+            .send_request(
+                "turn/steer",
+                build_turn_steer_params(
+                    thread_id,
+                    turn_id,
+                    &steer.text,
+                    &steer.images,
+                    steer.client_message_id.as_deref(),
+                ),
+            )
+            .await?
+    };
     pending_steers.insert(
         request_id,
         PendingSteer {
+            tool_output: internal,
             client_id: steer.client_message_id,
             expected_turn_id: turn_id.to_string(),
             response: steer.response,
@@ -1987,6 +2092,28 @@ fn build_turn_steer_params(
         params["clientUserMessageId"] = json!(id);
     }
     params
+}
+
+// An internal turn/start can queue into the current regular writer. Its ACK
+// remains an acceptance observation, never incorporation or publication.
+fn tool_output_response(
+    expected: &str,
+    result: Option<&Value>,
+    error: Option<&RpcError>,
+) -> CodexSteerResponse {
+    if error.is_some() {
+        return steer_response(expected, None, error);
+    }
+    let turn = result
+        .and_then(|v| v.pointer("/turn/id"))
+        .and_then(Value::as_str);
+    if turn == Some(expected) {
+        Ok(Some(expected.into()))
+    } else {
+        Err(CodexSteerError::Undetermined(
+            "Internal return acknowledgment targeted another or unknown native turn".into(),
+        ))
+    }
 }
 
 /// Validates that Codex accepted the steering request for the expected active turn.
@@ -2369,7 +2496,7 @@ where
     loop {
         tokio::select! {
           _=cancel.cancelled()=>{terminate_child(&mut child).await; let _=stderr_task.await; bail!("codex turn cancelled");}
-          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeModelConfigured { .. }|CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageDraft { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::NativeGoalBlocked { .. }|CodexEvent::NativeTurnFailure { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
+          next_line=stdout_lines.next_line()=>{match next_line.context("reading codex stdout failed")?{Some(line)=>{if let Some(event)=parse_exec_event(&line)?{match &event{CodexEvent::ThreadStarted(thread_id)=>summary.codex_thread_id=Some(thread_id.clone()),CodexEvent::AssistantText(text)|CodexEvent::CommentaryCompleted(text)|CodexEvent::FinalAnswerCompleted(text)=>summary.assistant_text=text.clone(),CodexEvent::NativeModelConfigured { .. }|CodexEvent::DynamicToolRequest { .. }|CodexEvent::NativeMessageDraft { .. }|CodexEvent::NativeMessageCompleted { .. }|CodexEvent::NativeTurnSubmitting|CodexEvent::NativeTurnStarted(_)|CodexEvent::NativeInputAccepted(_)|CodexEvent::NativeInternalReturnDetached {..}|CodexEvent::NativeSteerAccepted { .. }|CodexEvent::NativeInputRejected|CodexEvent::NativeTurnTerminal { .. }|CodexEvent::NativeGoalBlocked { .. }|CodexEvent::NativeTurnFailure { .. }|CodexEvent::Progress(_)|CodexEvent::ApprovalRequest(_)|CodexEvent::UserInputRequest { .. }|CodexEvent::UserInputClosed(_)|CodexEvent::UserInputAnswered(_)=>{}} let _ = on_event(event).await?;}},None=>break,}}
         }
     }
     let status = child.wait().await.context("waiting for codex failed")?;
@@ -3668,6 +3795,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                tool_output: None,
                 observation: None,
                 images: vec![],
                 admission_check: None,
@@ -3757,6 +3885,7 @@ mod tests {
         let (response, received) = oneshot::channel();
         steer
             .send(CodexSteerRequest {
+                tool_output: None,
                 observation: None,
                 images: vec![],
                 admission_check: None,
@@ -4247,6 +4376,7 @@ model = "ignored-tui-field"
             None,
             None,
             None,
+            None,
             &[],
             Some(&profile),
             &session,
@@ -4597,6 +4727,24 @@ model = "ignored-tui-field"
 
         assert!(matches!(steer_response("turn-7", Some(&result), None),
             Err(CodexSteerError::Undetermined(message)) if message.contains("turn-8")));
+    }
+
+    #[test]
+    fn internal_return_ack_keeps_native_turn_identity() {
+        assert_eq!(
+            tool_output_response("active", Some(&json!({"turn":{"id":"active"}})), None),
+            Ok(Some("active".into()))
+        );
+        for response in [
+            json!({"turn":{"id":"different"}}),
+            json!({"turnId":"active"}),
+            json!({}),
+        ] {
+            assert!(matches!(
+                tool_output_response("active", Some(&response), None),
+                Err(CodexSteerError::Undetermined(_))
+            ));
+        }
     }
 
     #[test]

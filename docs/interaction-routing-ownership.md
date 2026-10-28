@@ -93,8 +93,10 @@ voice mode, muting internal audio must not hide meaningful results or questions
 from the foreground conversation. This is a required product extension under
 #303/#304/#383. The #405 journal/controller implementation described in
 [interaction.md](interaction.md#bounded-workflow-journal-and-foreground-attention-contract-405)
-adds bounded explicit progression and result/question descriptors. Automatic entry
-return and foreground speech remain unsupported; the existing single-level
+adds bounded explicit progression and result/question descriptors. The #410 native
+entry-return adapter is experimental and disabled by default; its retained
+`toolOutput` transport, uncertain outcomes and publication limits are documented
+there. Automatic-return qualification and foreground speech remain pending; the existing single-level
 helper primitive alone does not implement the full experience.
 
 Extend the existing request/result journal with a bounded workflow declared from
