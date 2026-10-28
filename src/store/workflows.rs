@@ -1039,6 +1039,376 @@ mod tests {
         .unwrap()
         .remove(0)
     }
+    fn routed_result(
+        s: &Store,
+        entry: &SessionRecord,
+        reference: &InputReference,
+    ) -> (Instruction, Delivery) {
+        let (mut source, _) = s
+            .interaction_entry_original(entry.key, 100, "native-1", reference, "conversation")
+            .unwrap();
+        source.target_sessions = vec![
+            s.get_session(SessionKey::new(100, Some(7)))
+                .unwrap()
+                .unwrap()
+                .id,
+        ];
+        let (instruction, _) = s
+            .interaction_admit(&source, SessionKey::new(100, Some(7)), RequestRelation::New)
+            .unwrap();
+        let local = accept(s, &instruction);
+        let instruction = s
+            .interaction_instruction(&instruction.id, 100)
+            .unwrap()
+            .unwrap();
+        let delivery = answer(
+            s,
+            &instruction,
+            local,
+            "ordinary-source",
+            vec![instruction.id.clone()],
+            &"Result α\n".repeat(400),
+        );
+        (instruction, delivery)
+    }
+    #[test]
+    fn ordinary_routed_result_returns_exact_source_without_declaring_workflow() {
+        let (_f, s, entry, plan) = setup();
+        let (_, delivery) = routed_result(&s, &entry, &plan.input_ref);
+        let selected = s
+            .native_routed_result_reserve(100, entry.key, &delivery.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.name, "conversation_attention");
+        let packet: Value = serde_json::from_str(&selected.output).unwrap();
+        assert_eq!(packet["schema"], "telecodex.native-attention/v1");
+        assert_eq!(packet["original_input_ref"], json!(plan.input_ref));
+        assert!(packet.get("workflow").is_none());
+        assert!(packet["evidence"]["source"].get("text").is_none());
+        let revision = packet["evidence"]["revision"].as_str().unwrap();
+        let part = s
+            .native_routed_source(100, entry.key, "native-1", &selected.id, revision, 0)
+            .unwrap();
+        assert_eq!(part["text"].as_str().unwrap().chars().count(), 1600);
+        assert_eq!(part["next_offset"], 1600);
+        assert!(
+            s.native_routed_source(100, entry.key, "wrong-native", &selected.id, revision, 0)
+                .is_err()
+        );
+        assert!(
+            s.native_routed_source(
+                100,
+                entry.key,
+                "native-1",
+                &selected.id,
+                "wrong-revision",
+                0
+            )
+            .is_err()
+        );
+        assert!(
+            s.native_routed_result_reserve(100, entry.key, &delivery.id)
+                .unwrap()
+                .is_none()
+        );
+        s.native_routed_reported(100, entry.key, "native-1", &selected.id, revision)
+            .unwrap();
+        assert!(s.workflow_native_dispatch(&selected.id).is_err());
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM interaction_workflows", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM interaction_sources", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    #[test]
+    fn ordinary_return_reuses_exact_attempt_and_source_publication_fences() {
+        let (_f, s, entry, plan) = setup();
+        let (_, delivery) = routed_result(&s, &entry, &plan.input_ref);
+        let selected = s
+            .native_routed_result_reserve(100, entry.key, &delivery.id)
+            .unwrap()
+            .unwrap();
+        let local = turn(&s, &entry, "");
+        s.workflow_native_link(&selected.id, local).unwrap();
+        s.workflow_native_submitting(&selected.id).unwrap();
+        s.workflow_native_outcome_attempt(
+            &selected.id,
+            1,
+            "accepted",
+            Some("ordinary-attention-physical"),
+        )
+        .unwrap();
+        s.record_native_message(
+            local,
+            "native-1",
+            "ordinary-attention-physical",
+            "offer",
+            Some("final_answer"),
+            "The result is ready; shall we review it?",
+        )
+        .unwrap();
+        let list = s
+            .interaction_presentation_list(100, entry.key, 0, 0)
+            .unwrap();
+        let item = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["preview"] == "The result is ready; shall we review it?")
+            .unwrap();
+        assert_eq!(item["native_returns"], json!([selected.id]));
+        assert!(item.get("workflow_returns").is_none());
+        assert_eq!(item["current"], true);
+        assert!(
+            s.native_returns_recover_unsent(100, entry.key, false, true)
+                .unwrap()
+                .is_empty()
+        );
+        // Expiry invalidates callback publication without inventing another input.
+        let conn = s.conn.lock().unwrap();
+        conn.execute("UPDATE interaction_deliveries SET native_return=json_set(native_return,'$.expires_at','2000-01-01T00:00:00Z') WHERE id=?1", [&delivery.id]).unwrap();
+        drop(conn);
+        assert!(s.workflow_native_dispatch(&selected.id).is_err());
+        let list = s
+            .interaction_presentation_list(100, entry.key, 0, 0)
+            .unwrap();
+        let item = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["preview"] == "The result is ready; shall we review it?")
+            .unwrap();
+        assert_eq!(item["current"], false);
+    }
+    #[test]
+    fn ordinary_question_return_reads_exact_question_and_never_answers_it() {
+        let (_f, s, entry, plan) = setup();
+        let (mut source, _) = s
+            .interaction_entry_original(entry.key, 100, "native-1", &plan.input_ref, "conversation")
+            .unwrap();
+        source.target_sessions = vec![
+            s.get_session(SessionKey::new(100, Some(7)))
+                .unwrap()
+                .unwrap()
+                .id,
+        ];
+        let (instruction, _) = s
+            .interaction_admit(&source, SessionKey::new(100, Some(7)), RequestRelation::New)
+            .unwrap();
+        let local = accept(&s, &instruction);
+        let question = HumanInteraction {
+            id: "c".repeat(32),
+            kind: "native".into(),
+            state: "pending".into(),
+            requester: 100,
+            native_thread: "native-7".into(),
+            local_turn: local,
+            title: "Receiving choice".into(),
+            action: "Answer".into(),
+            blocking: true,
+            source: json!({"kind":"question","conversationIndex":0,"request":{"questions":[{"id":"choice","question":"Which receiving target?","options":[]}]}}),
+        };
+        s.save_interaction(instruction.target, &question, Some("ordinary-question"))
+            .unwrap();
+        let selected = s
+            .native_routed_questions_reserve(100, entry.key, local)
+            .unwrap()
+            .remove(0);
+        let packet: Value = serde_json::from_str(&selected.output).unwrap();
+        let revision = packet["evidence"]["revision"].as_str().unwrap();
+        let part = s
+            .native_routed_source(100, entry.key, "native-1", &selected.id, revision, 0)
+            .unwrap();
+        assert!(
+            part["text"]
+                .as_str()
+                .unwrap()
+                .contains("Which receiving target?")
+        );
+        assert_eq!(part["answer_allowed"], false);
+        s.native_routed_reported(100, entry.key, "native-1", &selected.id, revision)
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM human_interactions WHERE id=?1",
+                [&question.id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "pending"
+        );
+        drop(conn);
+        assert!(
+            s.native_routed_questions_reserve(100, entry.key, local)
+                .unwrap()
+                .is_empty()
+        );
+        s.transition_interaction(instruction.target, 100, &question.id, "pending", "expired")
+            .unwrap();
+        assert!(
+            s.native_routed_source(100, entry.key, "native-1", &selected.id, revision, 0)
+                .is_err()
+        );
+        let direct = session(&s, 8);
+        let direct_local = turn(&s, &direct, "Direct topic work");
+        let mut direct_question = question.clone();
+        direct_question.id = "d".repeat(32);
+        direct_question.native_thread = "native-8".into();
+        direct_question.local_turn = direct_local;
+        s.save_interaction(direct.key, &direct_question, Some("direct-only-question"))
+            .unwrap();
+        assert!(
+            s.native_routed_questions_reserve(100, entry.key, direct_local)
+                .unwrap()
+                .is_empty()
+        );
+    }
+    #[test]
+    fn ordinary_return_restart_preserves_unsent_uncertainty_and_finite_retry() {
+        let (file, s, entry, plan) = setup();
+        let (instruction, first) = routed_result(&s, &entry, &plan.input_ref);
+        let unsent = s
+            .native_routed_result_reserve(100, entry.key, &first.id)
+            .unwrap()
+            .unwrap();
+        let second = answer(
+            &s,
+            &instruction,
+            instruction.local_turn.unwrap(),
+            "second-ordinary-source",
+            vec![instruction.id.clone()],
+            "Another exact result",
+        );
+        let unknown = s
+            .native_routed_result_reserve(100, entry.key, &second.id)
+            .unwrap()
+            .unwrap();
+        let local = turn(&s, &entry, "");
+        s.workflow_native_link(&unknown.id, local).unwrap();
+        s.workflow_native_submitting(&unknown.id).unwrap();
+        drop(s);
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let conn = s.conn.lock().unwrap();
+        let unknown_doc: String = conn
+            .query_row(
+                "SELECT native_return FROM interaction_deliveries WHERE id=?1",
+                [&second.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&unknown_doc).unwrap()["returns"][0]["phase"],
+            "uncertain"
+        );
+        conn.execute("UPDATE interaction_deliveries SET native_return=json_set(native_return,'$.returns[0].retry_after',?2) WHERE id=?1", params![first.id,Utc::now().timestamp()-1]).unwrap();
+        drop(conn);
+        assert!(
+            s.native_returns_recover_unsent(100, entry.key, false, false)
+                .unwrap()
+                .is_empty()
+        );
+        let retry = s
+            .native_returns_recover_unsent(100, entry.key, false, true)
+            .unwrap()
+            .remove(0);
+        assert_eq!(retry.id, unsent.id);
+        assert_eq!(retry.attempts, 2);
+        assert_eq!(
+            serde_json::from_str::<Value>(&retry.output).unwrap()["evidence"],
+            serde_json::from_str::<Value>(&unsent.output).unwrap()["evidence"]
+        );
+        s.workflow_native_outcome_attempt(&retry.id, 1, "accepted", Some("stale-attempt"))
+            .unwrap();
+        assert_eq!(s.workflow_native_dispatch(&retry.id).unwrap().attempts, 2);
+        assert!(s.workflow_native_dispatch(&unknown.id).is_err());
+        s.workflow_native_outcome_attempt(&retry.id, 2, "retained_unsent", None)
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        conn.execute("UPDATE interaction_deliveries SET native_return=json_set(native_return,'$.returns[0].retry_after',?2) WHERE id=?1", params![first.id,Utc::now().timestamp()-1]).unwrap();
+        drop(conn);
+        let last = s
+            .native_returns_recover_unsent(100, entry.key, false, true)
+            .unwrap()
+            .remove(0);
+        assert_eq!(last.id, unsent.id);
+        assert_eq!(last.attempts, 3);
+        s.workflow_native_outcome_attempt(&last.id, 3, "retained_unsent", None)
+            .unwrap();
+        assert!(
+            s.native_returns_recover_unsent(100, entry.key, false, true)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(s.workflow_native_dispatch(&unknown.id).is_err());
+    }
+    #[test]
+    fn ordinary_return_correction_retires_old_source_without_replaying_work() {
+        let (_file, s, entry, plan) = setup();
+        let (instruction, delivery) = routed_result(&s, &entry, &plan.input_ref);
+        let selected = s
+            .native_routed_result_reserve(100, entry.key, &delivery.id)
+            .unwrap()
+            .unwrap();
+        let correction = original(
+            &s,
+            &entry,
+            "Change the selected requirement before announcing the result.",
+        );
+        let (mut source, _) = s
+            .interaction_entry_original(entry.key, 100, "native-1", &correction, "conversation")
+            .unwrap();
+        source.target_sessions = vec![instruction.target_session];
+        let (amended, _) = s
+            .interaction_admit(
+                &source,
+                instruction.target,
+                RequestRelation::Amends(instruction.requests.clone()),
+            )
+            .unwrap();
+        accept(&s, &amended);
+        assert!(s.workflow_native_dispatch(&selected.id).is_err());
+        assert!(
+            s.native_routed_result_reserve(100, entry.key, &delivery.id)
+                .unwrap()
+                .is_none()
+        );
+        let packet: Value = serde_json::from_str(&selected.output).unwrap();
+        assert!(
+            s.native_routed_source(
+                100,
+                entry.key,
+                "native-1",
+                &selected.id,
+                packet["evidence"]["revision"].as_str().unwrap(),
+                0
+            )
+            .is_err()
+        );
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM interaction_instructions", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM interaction_workflows", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
     #[test]
     fn workflow_retains_ownership_exact_scope_milestones_and_final_integration() {
         let (_f, s, e, plan) = setup();

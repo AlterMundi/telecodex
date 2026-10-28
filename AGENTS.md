@@ -137,3 +137,13 @@ empty paginated context durable through existing thread/name/set before cold
 resume. Preserve actual input/ACK history and distinguish fixture rejection from
 Core submission. Current receiving evidence and remaining acceptance live in the
 existing Shared Resources Interaction record; do not rerun completed qualifiers.
+
+Ordinary canonical routed result/question attention is developed under #426 with
+`interaction.native_routed_returns` default off. It reuses the native return
+transport beside canonical source rows; never invent workflows or human inputs
+for ordinary returns. Keep helper/direct/progress exclusions, exact source and
+original binding, source-set publication fences and shared finite retry bounds.
+Use `attention_source` for bounded source reads and `attention_reported` only
+for actual incorporation. Neither operation answers a question, approves work,
+proves hearing or completes the human task. See docs/interaction.md for the
+current development/qualification state and compatible-writer rollback.

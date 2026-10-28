@@ -170,6 +170,8 @@ jobs:
           key: ${{ steps.text-rust-cache.outputs.cache-primary-key }}
       - name: Qualify internal workflow native returns
         run: python3 -B tests/workflow_native_returns_io.py target/release/telecodex
+      - name: Qualify ordinary routed native returns
+        run: python3 -B tests/routed_native_returns_io.py target/release/telecodex
       - name: Qualify the optional shared integrating entry
         run: python3 -B tests/entry_projection_io.py target/release/telecodex
       # Exercise this new slice before the longer unchanged compatibility group.

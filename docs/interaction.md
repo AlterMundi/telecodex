@@ -1243,3 +1243,41 @@ rollback listener must retain this reader and original-selection exclusion while
 workflows are active; an older binary unaware of workflow selections is not a
 compatible operational rollback. Scoped withdrawal/expiry stops future
 admission without deleting checkpoints, accepted work or uncertain operations.
+
+
+### Ordinary routed native attention (development, #426)
+
+`interaction.native_routed_returns` defaults to false, independently of the
+qualified declared-workflow adapter. It extends that same native return transport
+for a current completed canonical result or pending canonical native question
+from actual human-routed work. Internal helper/workflow legs, direct-topic work
+and intermediate progress do not acquire this ordinary return path. No synthetic
+workflow, human input, execution queue or continuous model polling is created.
+
+The source row retains at most16KiB of return metadata and four question versions;
+source text remains in its original journal. Offers expire after15minutes. Current
+entry/native binding, Stop/maintenance epoch, retained original and semantic source
+revision are checked before admission and callback publication. Cosmetic carrier
+or artifact changes do not change the result's semantic revision. On-demand
+`attention_source` reads at most1600 characters; `attention_reported` records
+incorporation only, never hearing, task completion or an answer/approval.
+
+Committed result/question events reserve offers. The existing heartbeat recovers
+only retained known-unsent offers: at most4 claims per heartbeat across both
+adapters, at most3 attempts with2/5-second delays. Submitting/uncertain/acknowledged
+returns are never replayed. Each scoped recovery scan reads at most16 matching
+source rows per canonical table; startup normalization reads at most256 unresolved
+rows per table. No history discovery or replay occurs on enabling the flag.
+Callback source sets use `native-public-set` for ordinary/mixed sources and retain
+legacy workflow marker compatibility. Readers expose neutral `native_returns`
+without mislabelling ordinary sources as workflows. Rollback must keep this
+compatible reader/writer and preserve the journal; disabling the flag does not
+revoke or erase retained outcomes. Full wrapper and receiving qualification of
+this extension remain separate: the synthetic active-result / idle-question /
+idle-result wrapper journey, known-unsent recovery and default-off/no-backfill
+cases now pass against the CI-built source0880473 executable. Ordinary source restart/correction checks also pass, including default-off
+recovery, retained uncertainty, same-intent finite retries and stale-attempt
+fences. Final-tree CI continues. The presentation
+reports loaded `automatic_routed_native_return` separately from retained receipt
+phases. Receiving enablement and real-device acceptance remain pending; this is
+not a stage4 completion or hearing claim.

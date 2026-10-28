@@ -166,6 +166,7 @@ impl Store {
         store.init_conversation_inputs()?;
         store.init_conversation_entry()?;
         store.init_conversation_requests()?;
+        store.init_native_routed_returns()?;
         store.init_matrix()?;
         store.init_goal_delegations()?;
         store.init_goal_retries()?;

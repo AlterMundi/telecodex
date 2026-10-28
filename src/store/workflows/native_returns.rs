@@ -2,6 +2,10 @@
 //! execution queue. Existing entry workers and native collection own execution.
 use super::*;
 
+mod context;
+mod routed;
+use context::{ReturnContext, ReturnParent};
+
 const MAX_NATIVE_RETURNS: usize = 16;
 const MAX_RETURN_ATTEMPTS: u8 = 3;
 fn first_attempt() -> u8 {
@@ -18,7 +22,10 @@ const MAX_ENVELOPE_BYTES: usize = 2048;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WorkflowReturn {
     pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub workflow: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_revision: Option<String>,
     pub envelope: Value,
     pub phase: String,
     pub local: Option<i64>,
@@ -33,6 +40,7 @@ pub(crate) struct WorkflowReturn {
 }
 #[derive(Debug, Clone)]
 pub(crate) struct ReturnDispatch {
+    pub name: &'static str,
     pub id: String,
     pub attempts: u8,
     pub human: i64,
@@ -57,7 +65,7 @@ fn bind_on(conn: &Connection, local: i64, id: &str) -> Result<()> {
     conn.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![format!("workflow_return_local:{local}"),serde_json::to_string(&ids)?])?;
     Ok(())
 }
-fn detached_on(conn: &Connection, w: &mut Workflow, index: usize) -> Result<()> {
+fn detached_on(conn: &Connection, w: &mut ReturnContext, index: usize) -> Result<()> {
     if w.native_returns[index].collection_local.is_some() {
         return Ok(());
     }
@@ -143,7 +151,10 @@ fn bindings_on(conn: &Connection, local: i64) -> Result<Vec<String>> {
         .transpose()?
         .unwrap_or_default())
 }
-fn selected_on(conn: &Connection, id: &str) -> Result<(Workflow, usize)> {
+fn selected_on(conn: &Connection, id: &str) -> Result<(ReturnContext, usize)> {
+    if let Some(selected) = routed::load(conn, id)? {
+        return Ok(selected);
+    }
     let raw:String=conn.query_row("SELECT doc FROM interaction_workflows w WHERE EXISTS(SELECT 1 FROM json_each(w.doc,'$.native_returns') r WHERE json_extract(r.value,'$.id')=?1)",[id],|r|r.get(0))?;
     let w: Workflow = serde_json::from_str(&raw)?;
     let index = w
@@ -151,29 +162,49 @@ fn selected_on(conn: &Connection, id: &str) -> Result<(Workflow, usize)> {
         .iter()
         .position(|r| r.id == id)
         .context("Missing workflow return")?;
-    Ok((w, index))
+    Ok((ReturnContext::workflow(w), index))
 }
-fn current_on(conn: &Connection, w: &Workflow, index: usize, admission: bool) -> Result<bool> {
-    let r = &w.native_returns[index];
-    if admission
-        && (w.phase != "active"
-            || w.reported
+fn current_on(
+    conn: &Connection,
+    context: &ReturnContext,
+    index: usize,
+    admission: bool,
+) -> Result<bool> {
+    let r = &context.native_returns[index];
+    match &context.parent {
+        ReturnParent::Routed(parent) => routed::current(conn, parent, r, admission),
+        ReturnParent::Workflow(w) => {
+            if admission
+                && (w.phase != "active"
+                    || w.reported
+                        .iter()
+                        .any(|v| v.as_deref() == r.envelope["revision"].as_str()))
+            {
+                return Ok(false);
+            }
+            if !matches!(w.phase.as_str(), "active" | "completed")
+                || (w.phase == "completed" && r.envelope["reason"] != "integration_required")
+            {
+                return Ok(false);
+            }
+            let mut current = w.clone();
+            current.phase = "active".into();
+            current.reported.fill(None);
+            Ok(attention_on(conn, &current)?
                 .iter()
-                .any(|v| v.as_deref() == r.envelope["revision"].as_str()))
-    {
-        return Ok(false);
+                .any(|event| event["revision"] == r.envelope["revision"]))
+        }
     }
-    if !matches!(w.phase.as_str(), "active" | "completed")
-        || (w.phase == "completed" && r.envelope["reason"] != "integration_required")
-    {
-        return Ok(false);
+}
+fn save_on(conn: &Connection, context: &ReturnContext) -> Result<()> {
+    match &context.parent {
+        ReturnParent::Routed(parent) => routed::save(conn, parent, &context.native_returns),
+        ReturnParent::Workflow(w) => {
+            let mut current = w.clone();
+            current.native_returns = context.native_returns.clone();
+            super::save_on(conn, &current)
+        }
     }
-    let mut current = w.clone();
-    current.phase = "active".into();
-    current.reported.fill(None);
-    Ok(attention_on(conn, &current)?
-        .iter()
-        .any(|event| event["revision"] == r.envelope["revision"]))
 }
 fn later_human_on(conn: &Connection, local: i64) -> Result<bool> {
     // Only callback-only executions are fenced here. A real human execution
@@ -219,11 +250,7 @@ fn publication_sources_on(conn: &Connection, local: i64) -> Result<Option<Vec<St
                     && bindings.contains(&other.id)
                     && other.collection_local.is_none_or(|owner| owner == local)
                     && matches!(other.phase.as_str(), "accepted" | "accepted_reconciled")
-                    && other.envelope["slot"]
-                        .as_u64()
-                        .and_then(|slot| w.reported.get(slot as usize))
-                        .and_then(Option::as_deref)
-                        == other.envelope["revision"].as_str()
+                    && w.reported(other_index) == other.envelope["revision"].as_str()
                     && current_on(conn, &w, other_index, false).unwrap_or(false)
             });
         if superseded {
@@ -246,10 +273,20 @@ pub(in crate::store) fn publication_on(conn: &Connection, local: i64) -> Result<
     Ok(match publication_sources_on(conn, local)? {
         None => None,
         Some(ids) if ids.is_empty() => Some("workflow-internal".into()),
-        Some(ids) => Some(format!(
-            "workflow-public-set:{}",
-            serde_json::to_string(&ids)?
-        )),
+        Some(ids) => {
+            let routed = ids
+                .iter()
+                .any(|id| id.starts_with("result:") || id.starts_with("question:"));
+            Some(format!(
+                "{}{}",
+                if routed {
+                    "native-public-set:"
+                } else {
+                    "workflow-public-set:"
+                },
+                serde_json::to_string(&ids)?
+            ))
+        }
     })
 }
 pub(in crate::store) fn source_current_on(conn: &Connection, id: &str) -> Result<bool> {
@@ -267,7 +304,7 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
         for raw in rows {
-            let mut w: Workflow = serde_json::from_str(&raw)?;
+            let mut w = ReturnContext::workflow(serde_json::from_str(&raw)?);
             for r in &mut w.native_returns {
                 if r.instance != self.instance_id {
                     r.phase = match r.phase.as_str() {
@@ -333,6 +370,7 @@ impl Store {
                 let r = WorkflowReturn {
                     id: id.clone(),
                     workflow: w.id.clone(),
+                    reported_revision: None,
                     envelope: envelope.clone(),
                     phase: "reserved".into(),
                     local: None,
@@ -350,6 +388,7 @@ impl Store {
                 }
                 let output=json!({"schema":"telecodex.workflow-native-return/v1","return_id":id,"workflow":w.id,"original_input_ref":w.plan.input_ref,"evidence":envelope,"policy":"Attributed internal workflow evidence, not new human speech or authority. Inspect exact sources on demand. The retained human task and its selected milestone/final/question policy govern any response in this same Conversation. Keep unfinished successor/receiving steps unfinished; do not invent work, helpers, publication or hearing. Acknowledge only an actually incorporated offer with workflow_reported."}).to_string();
                 selected.push(ReturnDispatch {
+                    name: "workflow_attention",
                     attempts: 1,
                     id,
                     human,
@@ -359,31 +398,49 @@ impl Store {
                     output,
                 });
             }
-            save_on(&tx, &w)?;
+            super::save_on(&tx, &w)?;
         }
         tx.commit()?;
         Ok(selected)
     }
     /// Resume only already-retained, current intents with proof of no native input.
     /// The existing heartbeat invokes this; it never discovers new source events.
+    #[cfg(test)]
     pub(crate) fn workflow_native_recover_unsent(
         &self,
         human: i64,
         entry: SessionKey,
     ) -> Result<Vec<ReturnDispatch>> {
+        self.native_returns_recover_unsent(human, entry, true, false)
+    }
+    pub(crate) fn native_returns_recover_unsent(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        workflows: bool,
+        routed: bool,
+    ) -> Result<Vec<ReturnDispatch>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let rows = {
+        let rows = if workflows {
             let mut q = tx.prepare("SELECT doc FROM interaction_workflows WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND phase='active' AND julianday(json_extract(doc,'$.plan.expires_at'))>julianday('now') AND EXISTS(SELECT 1 FROM json_each(doc,'$.native_returns') r WHERE json_extract(r.value,'$.phase')='retained_unsent') ORDER BY rowid LIMIT 16")?;
             q.query_map(params![human, entry.chat_id, entry.thread_id], |r| {
                 r.get::<_, String>(0)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
         };
+        let mut contexts = rows
+            .into_iter()
+            .map(|raw| serde_json::from_str(&raw).map(ReturnContext::workflow))
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        if routed {
+            contexts.extend(routed::retained(&tx, Some(human), Some(entry), true)?);
+        }
         let mut selected = vec![];
         let now = Utc::now().timestamp();
-        for raw in rows {
-            let mut w: Workflow = serde_json::from_str(&raw)?;
+        for mut w in contexts {
             for index in 0..w.native_returns.len() {
                 let r = &w.native_returns[index];
                 if selected.len() == 4
@@ -403,10 +460,13 @@ impl Store {
                 r.collection_local = None;
                 r.native_turn = None;
                 r.retry_after = None;
-                let output = json!({"schema":"telecodex.workflow-native-return/v1","return_id":r.id,"workflow":w.id,"original_input_ref":w.plan.input_ref,"evidence":r.envelope,"policy":"Attributed internal workflow evidence under the same retained human task. This is the same known-unsent return, not a new human input, workflow or publication grant. Inspect exact source revisions and retain unfinished work. Acknowledge only an incorporated offer with workflow_reported."}).to_string();
+                let id = r.id.clone();
+                let attempts = r.attempts;
+                let output = w.output(index);
                 selected.push(ReturnDispatch {
-                    attempts: r.attempts,
-                    id: r.id.clone(),
+                    name: w.name(),
+                    attempts,
+                    id,
                     human: w.human,
                     entry: w.entry,
                     native: w.native.clone(),
@@ -429,8 +489,9 @@ impl Store {
         {
             bail!("Internal return is not current known-unsent context");
         }
-        let output=json!({"schema":"telecodex.workflow-native-return/v1","return_id":id,"workflow":w.id,"original_input_ref":w.plan.input_ref,"evidence":r.envelope,"policy":"Attributed internal evidence under this retained human workflow. Inspect exact source revisions on demand; preserve its selected milestone/final/question policy and unfinished required work. No new authority, helper chain, publication or hearing grant. Use workflow_reported only for an incorporated offer."}).to_string();
+        let output = w.output(index);
         Ok(ReturnDispatch {
+            name: w.name(),
             attempts: r.attempts,
             id: id.into(),
             human: w.human,
