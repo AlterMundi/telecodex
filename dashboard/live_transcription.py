@@ -130,6 +130,12 @@ def install(app, config, provider, authorize, origins):
     @app.websocket('/api/interaction/voice/live')
     async def voice_live(socket: WebSocket):
         diagnostic = {'stage':'metadata', 'audio_bytes':0, 'finish_received':False, 'prepared_saved':False}
+        preparation_started = {}
+        preparation_timing = {}
+        def elapsed(stage):
+            started = preparation_started.get(stage)
+            if started is not None:
+                preparation_timing[stage + '_ms'] = round((time.monotonic() - started) * 1000, 2)
         stream = None
         reader = None
         owner = None
@@ -227,13 +233,22 @@ def install(app, config, provider, authorize, origins):
                         elif event['type']=='final':
                             if mode=='captions':
                                 raise ValueError('Live captions are not a confirmed transcript')
+                            elapsed('provider_final')
                             diagnostic['stage'] = 'final_authorization'
+                            preparation_started['final_authorization'] = time.monotonic()
                             await recheck()
+                            elapsed('final_authorization')
                             diagnostic['stage'] = 'save_prepared'
+                            preparation_started['receipt_write'] = time.monotonic()
                             value = await persist_prepared(root,meta['id'],meta['binding'],bytes(pcm),stream.result())
+                            elapsed('receipt_write')
+                            elapsed('finish_to_prepared')
                             diagnostic['prepared_saved'] = True
+                            # Ephemeral durations only: not speech endpoint/acoustic
+                            # latency, and not part of the durable exact-WAV receipt.
                             await send({'type':'prepared','id':meta['id'],
-                                'source_sha256':value['source_sha256'],'text':value['text']})
+                                'source_sha256':value['source_sha256'],'text':value['text'],
+                                'timing':preparation_timing})
                             finished.set(); return
                 reader = asyncio.create_task(receive_provider())
                 checked = time.monotonic()
@@ -281,10 +296,14 @@ def install(app, config, provider, authorize, origins):
                             break
                         if command != {'type':'finish'}:raise ValueError('Unknown capture control')
                         diagnostic['finish_received'] = True
+                        preparation_started['finish_to_prepared'] = time.monotonic()
                         if mode=='captions':raise ValueError('Live captions cannot finalize the original')
                         diagnostic['stage'] = 'finish_authorization'
+                        preparation_started['finish_authorization'] = time.monotonic()
                         await recheck()
+                        elapsed('finish_authorization')
                         diagnostic['stage'] = 'provider_finalize'
+                        preparation_started['provider_final'] = time.monotonic()
                         await asyncio.to_thread(stream.finish)
                         await reader
                         break

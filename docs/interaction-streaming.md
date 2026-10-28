@@ -977,6 +977,18 @@ reload or a binding change removes these local marks. The existing capture UUID
 owns permission/start, first caption, stop/Send, finalization and confirmed HTTP
 receipt marks. A saved original is not native acceptance.
 
+Completed preparation also carries five ephemeral server intervals: finish
+control to prepared receipt, finish authorization, provider-final wait, final
+authorization and receipt writing (including the existing writer admission).
+The ordinary and continuous recorders forward these observations to the same
+eight-history reader. Each duration is independently bounded to 140 seconds;
+unknown/invalid fields are ignored and missing intervals remain unobserved.
+No timings enter the durable exact-WAV receipt, input, transcript or browser
+storage. They distinguish server waits without another provider request. These
+intervals use the server monotonic clock and must not be added to browser marks
+or called final intended speech-to-sound latency. The provider reader and finish
+writer may overlap; the intervals are not an additive phase decomposition.
+
 Presentation drafts and canonical native sources expose optional `local_turn`
 metadata from the already-authorized turn. The browser joins only accepted
 originals and Conversation output in that same local turn, never worker returns,

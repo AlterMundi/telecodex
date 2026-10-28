@@ -34,7 +34,7 @@ function boot(){
  const session=window.ContinuousConversation.create({headers:()=>({}),getBinding:()=>binding,getQuestions:()=>questions,getPlayback:()=>({source:'synthetic-reply',position_millis:123}),
   async retain(original){const v={...original,audio_sha256:Buffer.from(await crypto.subtle.digest('SHA-256',await original.blob.arrayBuffer())).toString('hex')};retained.push(v);return v;},
   async commit(original){commits.push(original);if(commitHold)return commitHold.promise;return {confirmed:true,value:{id:original.id,voice:{audio_sha256:original.audio_sha256}}};},
-  onTiming:(id,stage)=>timings.push({id,stage}),onState:v=>states.push(v),onCaption:v=>captions.push(v),onInterrupt:()=>interrupts++,onSent:v=>sent.push(v),onReview:v=>reviews.push(v)
+  onTiming:(id,stage,detail)=>timings.push({id,stage,detail}),onState:v=>states.push(v),onCaption:v=>captions.push(v),onInterrupt:()=>interrupts++,onSent:v=>sent.push(v),onReview:v=>reviews.push(v)
  });
  const activity=(generation,onset,endpoint)=>analyses.at(-1).emit({schema:'telecodex.turn-activity/v1',type:'activity',generation,audio_bytes:sources.at(-1).bytes,speech_seen:true,speaking:!endpoint,
   ...(onset?{onset:{generation,audio_bytes:sources.at(-1).bytes}}:{}),...(endpoint?{endpoint:{generation,audio_bytes:sources.at(-1).bytes,probability:.9,authority:'analysis_only'}}:{})});
@@ -51,8 +51,10 @@ function boot(){
  await until(()=>f.recorders.length===2&&f.recorders[1].state==='recording');
  assert.equal(f.sources.length,1);assert.equal(f.medias.length,1);assert.equal(f.analyses.length,1);
  assert.equal(f.recorders[1].parts.reduce((n,p)=>n+p.byteLength,0),32,'The boundary gap belongs to the next exact original');
+ f.recorders[0].preparationTiming={provider_final_ms:456};
  f.recorders[0].complete('Una frase');await until(()=>f.sent.length===1);
- assert.deepEqual(f.timings.filter(v=>v.id===f.retained[0].id).map(v=>v.stage),['requested','started','partial','ended','ready']);
+ assert.deepEqual(f.timings.filter(v=>v.id===f.retained[0].id).map(v=>v.stage),['requested','started','partial','ended','ready','prepared']);
+ assert.equal(f.timings.find(v=>v.stage==='prepared').detail.provider_final_ms,456);
  assert.equal(f.retained[0].blob.size,3200);assert.equal(f.commits.length,1);assert.equal(f.session.active,true,'Finalizing an old original does not stop the next microphone capture');
  f.sources[0].emit(3200,3);f.recorders[1].partial('Otra frase');f.activity(2,true,false);f.activity(2,false,true);
  await until(()=>f.recorders.length===3);f.recorders[1].complete('Otra frase');await until(()=>f.sent.length===2);

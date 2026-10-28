@@ -467,8 +467,26 @@ require capability discovery; this is an input hint, not a capability grant.
 stable named dispatch without discovery calls, a fresh subsequent input while
 two workers remain active and their independent attributed returns. Synthetic
 native/model peers prove wiring and lifecycle, not actual model obedience or a
-latency improvement. Those require the v0.3 integrated selected-model journey in
-[#303](https://github.com/AlterMundi/telecodex/issues/303).
+latency improvement.
+
+A bounded source qualification on28October additionally exercised the actual
+selected Sol6.1/openai/medium foreground through this wrapper/controller/store:
+two synthetic canonical originals, two simulated worker peers and one ordinary
+internal result return. The model dispatched clearly named Alpha/Beta using the
+supplied original and stable selectors, ended its foreground reply without waiting,
+answered a separate local arithmetic question while both workers stayed active,
+and read/incorporated Alpha's exact later result before offering it in Conversation.
+Beta remained active; no repeated dispatch, workflow invention, production input,
+Telegram publication or worker-model execution occurred. The three-turn test
+context was observed terminal and archived, not reused for more work.
+
+The local follow-up's submit-to-visible-final observation was2.822seconds, including
+fixture HTTP/control observation. Initial dispatch plus foreground completion and
+both worker admissions took15.997seconds; that combined interval is not first
+response latency. These are single text observations under host load, not a
+controlled baseline comparison, provider distribution, useful sound, phone/hearing
+acceptance or complete stage3 delivery. Complete integrated voice/foreground
+acceptance remains in [#303](https://github.com/AlterMundi/telecodex/issues/303).
 
 
 New native integrating entries also declare the stable `interaction_controller`
