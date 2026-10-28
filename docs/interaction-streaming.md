@@ -875,3 +875,36 @@ receivers also reject unsupported fields. Deploy the compatible backend before
 this client. Durable documents containing the new field require retaining this
 compatible reader during rollback; do not select an older strict document reader
 against them. Existing no-limit documents omit the field and remain unchanged.
+
+## Shared input provider and media policy
+
+Both Telegram voice and app recordings use the native `transcribe_committed`
+preparation and the configured `interaction_asr.py` adapter. Reuse an exact
+completed live transcript when capture identity, original/PCM hashes and final
+receipt agree. A prerecorded Telegram note has no live-capture receipt and uses
+the selected Groq `whisper-large-v3` file route. The human selects that route
+because it is free on the receiving account; do not replace it with a paid live
+request when streaming adds no value. The configured model label alone does not
+identify the recognizer that actually handled an individual clip.
+
+For live captions, select Gemini first. An optional explicit
+`[streaming_transcription.fallback]` selects Qwen with its existing endpoint and
+credential-file reference. Only these two candidates may be opened, and only
+before recognition readiness has been advertised: no PCM can have been admitted
+at that point. Startup readiness has an eight-second bound in addition to the
+existing dial bound and capture deadline. Failed startup closes the old socket
+before selecting the fallback; cancellation closes a late socket as before.
+After readiness, an uncertain stream is never replayed into another paid stream.
+The unchanged local recording/file-ASR recovery remains available and no partial
+caption is admitted as an original. Exact completed receipts record the provider
+actually used, including Qwen fallback.
+
+Audio is transient, not project history. Incoming Telegram downloads retire only
+after durable transcript/provenance commit; browser copies retire after matching
+confirmation and retain unresolved originals under their existing quota. The ASR
+adapter retires only hashed media in a completed preparation manifest. Generated
+reply audio uses the existing bounded speech cache (default one-hour unused age,
+256 MiB ceiling, minimum five-minute reader grace). Maintenance and subsequent
+renders prune eligible completed audio without provider calls; text/receipts and
+uncertain originals remain. These are local service policies, not deletion claims
+about Telegram's remote message storage.
