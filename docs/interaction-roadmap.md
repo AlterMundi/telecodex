@@ -102,6 +102,14 @@ Reuse #271 for streaming ASR/latency/recovery, #278 for speech providers/voice c
 
 Progress and remaining gaps belong here and in the linked issues. Complete this milestone only after the integrated receiving experience is delivered, with its real limitations recorded.
 
+## Turn-taking component evidence
+
+The [CPU turn-taking candidate](interaction-turn-taking.md) records the pinned
+Smart Turn v3.2 runner, measured resource/timing bounds and contrasting synthetic
+versus author-held-out Spanish results. It is not app endpointing or automatic
+Send. Integrating explicit conversational mode, real VAD, generation-fenced
+decisions and recovery remains required alongside responsive foreground work.
+
 ## Delivery tasks
 
 - [ ] #302: select transport and qualify architecture
