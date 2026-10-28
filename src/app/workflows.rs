@@ -326,7 +326,7 @@ async fn deliver(app: &App, selected: crate::store::ReturnDispatch) -> Result<()
     let worker = app.worker_for(selected.entry).await?;
     let active = worker.steer.lock().expect("steer mutex poisoned").clone();
     let output = crate::codex::NativeToolOutput {
-        name: "workflow_attention".into(),
+        name: selected.name.into(),
         namespace: None,
         output: selected.output.clone(),
         retain: true,

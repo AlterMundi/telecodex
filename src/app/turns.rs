@@ -751,7 +751,7 @@ pub(super) async fn process_turn(
     let runner = if let Some(id) = queued.workflow_return.as_deref() {
         let selected = shared.store.workflow_native_dispatch(id)?;
         runner.with_tool_output(crate::codex::NativeToolOutput {
-            name: "workflow_attention".into(),
+            name: selected.name.into(),
             namespace: None,
             output: selected.output,
             retain: true,
