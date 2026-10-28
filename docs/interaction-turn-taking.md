@@ -208,3 +208,21 @@ qualified together. Disable the optional config to retain ordinary Push-to-talk
 and Send. After native update replies have been accepted, rollback must retain
 a reader supporting those compact native references; do not reinterpret or replay
 an original to make an older binary accept it.
+
+
+## Progressive decoder recovery — 2026-10-28
+
+An MSE/source-buffer or media-element decode failure can use the same completed,
+hash-verified MP3 as a normal Blob source. The existing stream retains at most
+8MiB of verified encoded media for its active source (plus the already bounded
+one-ahead preparation); no raw media is added to durable browser storage.
+Corrupt/incomplete transport has no fallback. Switching decoder preserves the
+media cursor, revalidates the same text/source and changes playback generation
+so an earlier play promise cannot stop the replacement. Stop, capture, access
+loss and explicit Pause retain ownership over late fallback completion. No new
+render request, provider call or automatic uncertain retry is permitted.
+
+This fixes an observed implementation gap: media-element errors previously had
+no queue-release/recovery handler. The reported Redmi failure's individual cause
+is still unconfirmed; successful Chromium decoding is not Android/hearing
+acceptance. See #409 for the retained investigation.

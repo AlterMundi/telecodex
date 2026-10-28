@@ -1476,11 +1476,39 @@ window.Conversation = (() => {
       }
     }
 
+    async function fallbackProgressive(selected,owned,position=audio.currentTime){
+      if(!selected?.streaming || selected.usingBlob)return false;
+      if(selected.fallbackPromise)return selected.fallbackPromise;
+      audioState("Recovering playback from the same audio. No new synthesis requested.");
+      selected.fallbackPromise=(async()=>{
+        const result=await selected.streaming.done;
+        if(active!==selected || generation!==owned || captureBusy || voiceSuspended || !enabled || !playbackAllowed())return true;
+        if(!result?.complete || !result.blob?.size)return false;
+        // Reuse only the already verified encoded bytes. No provider/network
+        // retry, new paid attempt, rewritten source or lost playback cursor.
+        selected.generation=++generation;
+        selected.usingBlob=true;selected.resumePosition=Number.isFinite(position)&&position>=0?position:0;
+        selected.streaming.cancel();
+        blobUrl=URL.createObjectURL(result.blob);audio.src=blobUrl;
+        await startPlayback();return true;
+      })();
+      const attempt=selected.fallbackPromise;
+      try{return await attempt;}finally{if(selected.fallbackPromise===attempt)delete selected.fallbackPromise;}
+    }
+    async function audioDecodeFailed(selected=active){
+      if(!selected || active!==selected)return;
+      const owned=generation,position=audio.currentTime;
+      if(await fallbackProgressive(selected,owned,position))return;
+      if(active!==selected || generation!==owned)return;
+      liveSpeech?.interrupt(selected.source);
+      stop("Audio decoding stopped. Your text and playback position remain available.");
+      if(voiceEnabled && !voiceSuspended)nextSpokenReply("reply",selected.source);
+    }
     async function startPlayback() {
       const selected = active;
       if (!selected || !blobUrl || !playbackAllowed() || !enabled || captureBusy) return;
       const owned = selected.generation;
-      const position = audio.currentTime;
+      const position = selected.resumePosition ?? audio.currentTime;
       selected.verifying = true;
       audio.muted = true;
       // Unlock this element on a user gesture; source validation happens muted.
@@ -1498,7 +1526,7 @@ window.Conversation = (() => {
           if(active!==selected || generation!==owned)return;
           verified={...verified,text,next_offset:selected.next};
         }
-        audio.pause(); audio.currentTime = position;
+        audio.pause(); audio.currentTime = position;delete selected.resumePosition;
         selected.verifying = false;
         selected.segmentEnded = false;
         selected.verified=verified;
@@ -1523,6 +1551,10 @@ window.Conversation = (() => {
         if (active !== selected || generation !== owned) return;
         selected.verifying = false;
         audio.pause(); audio.muted = true;
+        if(e.name!=="NotAllowedError" && !transientConnectionError(e) && selected.streaming && !selected.usingBlob){
+          if(await fallbackProgressive(selected,owned,position))return;
+          if(active!==selected || generation!==owned)return;
+        }
         if (e.name === "NotAllowedError") {
           toggle.disabled = false; playLabel("Play audio");
           audioState("Audio ready. Press Play audio to listen.");
@@ -1620,6 +1652,7 @@ window.Conversation = (() => {
         Object.assign(selected,metadata);
         blobUrl = selected.streaming?.url || URL.createObjectURL(blob);
         selected.streaming?.onError(()=>{if(active===selected)stop("Speech stream ended. Your text remains available; no automatic retry.");});
+        selected.streaming?.onDecoderError?.(()=>{if(active===selected)void audioDecodeFailed(selected);});
         if(active!==selected)return;
         audio.src = blobUrl;
         toggle.disabled = false;
@@ -1633,6 +1666,7 @@ window.Conversation = (() => {
         return {failed:true,generation};
       } finally { if (requestAbort === controller) requestAbort = undefined; }
     }
+    audio.addEventListener("error",()=>{void audioDecodeFailed();});
     audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort){playLabel("Play audio");presentState({playback:undefined});}});
     audio.addEventListener("timeupdate",()=>followPlayback());
     audio.addEventListener("playing",()=>{
