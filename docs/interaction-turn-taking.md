@@ -366,3 +366,21 @@ correct absolute original offset288000bytes. The worker closed and raw media
 was not retained. This CPU-only follow-up made no additional ASR request. The
 existing final transcript remains valid; this is not full-duplex, acoustic
 endpoint acceptance or a final-speech-to-audible-response latency result.
+
+## Integrating speech after interruption
+
+The conversation UI fixture exercises a late internal result during confirmed
+human speech: keep the integrated offer queued while the human owns the floor,
+then speak that Conversation source once when the floor is released. Internal
+worker audio stays muted, the interrupted old answer stays paused, and repeated
+observation cannot synthesize the offer again. Playback creates no native answer
+or cancellation. This is state-machine evidence; it does not certify provider
+latency, browser decoding or hearing.
+
+For browser qualification, await asynchronous status reads outside
+`waitForFunction` and assert the returned terminal fields explicitly. The selected
+Playwright implementation treats the predicate's Promise as truthy before its
+resolved boolean. Require the exact attributed response's digital playback and
+media completion before closing the view; an idle native worker or a received
+speech request cannot prove that playback. Retain partial evidence rather than
+repeating completed provider inputs to repair an early verifier exit.
