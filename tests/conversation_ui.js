@@ -454,6 +454,18 @@ function boot(readOnly=false,standalone=false,options={}) {
   bridge.hooks.onInterrupt();bridge.session.floor=true;bridge.hooks.onState({active:true,starting:false,floor:true,pending:false});
   assert(directPlayer.paused,'Actual playback pauses on the confirmed speech-onset callback');assert.equal(direct.nativePosts.length,0,'Barge-in cannot cancel or answer native work');
   const bridgeOriginal={id:'source-bound-original'};assert.equal(bridge.hooks.retain(bridgeOriginal),bridgeOriginal);assert.equal(bridge.hooks.commit(bridgeOriginal),bridgeOriginal);
+  const interruptedCalls=direct.audioCalls.length;
+  direct.overrideSource(10,{kind:'worker_result',target:{chat_id:100,thread_id:7},label:'Alpha',preview:'Internal report ready'});
+  direct.overrideSource(11,{preview:'Alpha reports that the plan is ready. Beta is still working.',native_returns:[{id:'exact-alpha-return',revision:'current-alpha-revision'}]});
+  direct.addReplies(2);await direct.ui.refresh();
+  assert.equal(direct.audioCalls.length,interruptedCalls,'Late result speech waits while the human owns the floor');
+  assert(directPlayer.paused);
+  bridge.session.floor=false;bridge.hooks.onState({active:true,starting:false,floor:false,pending:false});
+  await until(()=>direct.audioCalls.length===interruptedCalls+1&&!directPlayer.paused);
+  assert.equal(direct.audioCalls.at(-1).source,'native:11','Conversation speaks the integrated result, with internal worker audio still muted');
+  assert.equal(direct.nativePosts.length,0,'Result playback cannot cancel or answer native work');
+  await direct.ui.refresh();
+  assert.equal(direct.audioCalls.length,interruptedCalls+1,'Repeated result observation cannot repeat speech or resume the interrupted old answer');
   directOptions.continuous=false;await direct.ui.refresh();assert(!bridge.mode.active);assert(bridge.calls.some(v=>v[0]==='hold'));
   assert(!bridge.calls.some(v=>v[0]==='ordinary-hold'),'A configuration change closes the previously selected continuous owner');
   assert.equal(direct.nodes.get('#conversation-message').value,'Keep this ordinary draft');direct.ui.stop();
