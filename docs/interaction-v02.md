@@ -527,3 +527,21 @@ in shell order; exact deployed source can reproduce it without a Git checkout.
 It contains no actor, host, private state or credentials. A new deployment does
 not rewrite the identifier in an already open page. The authenticated human name
 uses the secondary palette role, separate from the human label and daimon accent.
+
+
+### Inspector session status — 2026-10-28
+
+The Under the hood inspector includes one bounded row per current enrolled
+conversation, reusing the Beacon's authenticated observer read without enabling
+audio or adding another poller. Rows distinguish work, goal status, tools or
+subagents, human attention and error observations. Running duration uses the
+existing collector's actual native turn/command start; unknown starts remain
+unavailable. It is elapsed work time, never a completion estimate or proof that
+a goal is progressing.
+
+The page advances counters locally once per second only while the inspector is
+open and visible, and stops at the existing twenty-second freshness boundary.
+Closing/hiding/resetting stops this display timer. At most65 current rows and
+one frame remain in page memory; no status history, media or telemetry is stored.
+The later compact expressive view for the conversation/avatar is still a design
+requirement, not this precise inspector's acceptance.

@@ -38,6 +38,11 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   assert.equal(sound.state(source(1,{execution:'idle',goal_state:'paused'}),1000000),'passive');
   for(const extra of [{fresh:false},{waiting_for_human:null},{goal_state:'unknown'},{observed_at:1030}])assert.equal(sound.state(source(1,extra),1000000),'unknown');
   assert.equal(sound.state(source(1),1000000,21000),'unknown');
+  const status=sound.sessionStatus(frame([source(1,{work_started_at:875})]),0);
+  assert(status[0].text.includes("2m 5s"));
+  assert(sound.sessionStatus(frame([source(1,{work_started_at:875})]),1000)[0].text.includes("2m 6s"));
+  assert(!sound.sessionStatus(frame([source(1,{work_started_at:875})]),21000)[0].text.includes("2m"),'Stale observations cannot advance a work counter');
+  assert(!sound.sessionStatus(frame([source(1,{execution:"idle",work_started_at:875})]))[0].text.includes("2m"),'Idle cannot inherit a previous running duration');
   const many=frame(Array.from({length:20},(_,n)=>source(n+1)));
   assert.equal(sound.plan(many,vocabulary).voices.length,20);
   const bounded=sound.plan(many,{...vocabulary,max_sessions:8});assert.equal(bounded.voices.length,8);assert.equal(bounded.omitted,12);

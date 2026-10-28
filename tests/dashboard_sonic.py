@@ -52,7 +52,7 @@ topic_id=8
         self.observation={'schema':'telecodex.topic-observations/v1','source':inventory_source(db),
             'connected':True,'observations':{
                 '100:1':{'native':'entry','human':100,'execution':'idle','goal_state':'absent','waiting_for_human':False,'observed_at':time.time()},
-                '100:7':{'native':'worker','human':100,'execution':'working','goal_state':'blocked','waiting_for_human':True,'observed_at':time.time()},
+                '100:7':{'native':'worker','human':100,'work_started_at':time.time()-125,'execution':'working','goal_state':'blocked','waiting_for_human':True,'observed_at':time.time()},
                 '100:8':{'native':'foreign','human':101,'execution':'working','goal_state':'active','waiting_for_human':True,'observed_at':time.time()}}}
         db.close();self.save()
         self.config={'receiver_config':str(self.receiver),'state_dir':str(self.root/'dashboard'),
@@ -80,6 +80,8 @@ topic_id=8
     def test_live_owner_bound_goal_and_human_wait_are_distinct_from_foreign_unknown(self):
         items=self.sources()
         self.assertEqual(items['100:7']['goal_state'],'blocked')
+        self.assertGreater(time.time()-items['100:7']['work_started_at'],124)
+        self.assertIsNone(items['100:8']['work_started_at'])
         self.assertTrue(items['100:7']['waiting_for_human'])
         self.assertFalse(items['100:1']['waiting_for_human'])
         self.assertFalse(items['100:8']['fresh'])

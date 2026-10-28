@@ -1462,7 +1462,7 @@ window.Conversation = (() => {
         }
         if(!readOnly){await taskControls?.refresh();await internalControls?.refresh();}
         await refreshTelegram();
-        void sound?.refresh({observeOnly:standalone});
+        void sound?.refresh({observeOnly:standalone || $("#conversation-diagnostics").open});
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);
         if(graph){
           const closed=[...inputs.values()].filter(card=>!card.trace.open);
