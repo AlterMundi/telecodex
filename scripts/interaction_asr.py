@@ -258,8 +258,16 @@ def process(source, binding, include_retention=False, completed_only=False):
         # still establishes its namespace/intent durably in process_cached().
         with lock(legacy_job / '.lock'):
             state_path = legacy_job / 'state.json'
+            legacy_uncertain = False
             if state_path.exists() or state_path.is_symlink():
-                return process_cached(source, cfg, identity, route_bytes, helper, include_retention, completed_only, locked=True)
+                previous = json.loads(private_bytes(state_path, 2*1024*1024))
+                # An explicit completed-only read may adopt a late streaming
+                # receipt without retrying or rewriting the uncertain provider job.
+                legacy_uncertain = (completed_only and isinstance(previous, dict)
+                    and previous.get('phase') == 'unconfirmed'
+                    and all(previous.get(k) == v for k, v in identity.items()))
+                if not legacy_uncertain:
+                    return process_cached(source, cfg, identity, route_bytes, helper, include_retention, completed_only, locked=True)
             prepared_root = directory(cfg['streaming_cache_root'])
             mirror = prepared_root / ('asr-' + key + '.json')
             retained = mirror.exists() or mirror.is_symlink()
@@ -267,7 +275,7 @@ def process(source, binding, include_retention=False, completed_only=False):
                 state = verified_state(json.loads(private_bytes(mirror, PREPARED_RECORD)), identity)
                 if state.get('preparation_kind') != 'streaming':
                     raise RenderError('invalid-completed-streaming-transcript')
-                return final_result(state, True, include_retention)
+                return final_result(state, not legacy_uncertain, include_retention)
             prepared = streaming_result(cfg, source, source_hash)
             if prepared is not None:
                 state = {**identity, 'phase':'completed', 'preparation_kind':'streaming',
@@ -278,7 +286,7 @@ def process(source, binding, include_retention=False, completed_only=False):
                 with lock(prepared_root / '.lock'):
                     prepared_capacity(prepared_root)
                     atomic(mirror, data)
-                return final_result(state, True, include_retention)
+                return final_result(state, not legacy_uncertain, include_retention)
             return process_cached(source, cfg, identity, route_bytes, helper, include_retention, completed_only, locked=True)
     return process_cached(source, cfg, identity, route_bytes, helper, include_retention, completed_only)
 

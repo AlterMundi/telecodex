@@ -157,7 +157,12 @@ unsupported browsers and unavailable worklet setup keep the current MediaRecorde
 path. No new microphone permission, login, conversational model, or input journal
 format is introduced. Disable streaming to restore ordinary file-ASR for new
 captures; preserve already retained originals, uncertain operations and native
-ASR results. This configuration does not resume/pause goals or cancel work.
+ASR results. An explicit completed-only recovery read may adopt a later verified
+streaming receipt for the exact same original even when its file-ASR job is
+already unconfirmed. It preserves that uncertain job and its evidence, invokes
+no provider, and does not claim its preparation audio was deleted. Missing or
+mismatched receipts remain unconfirmed; ordinary ASR calls never retry that job.
+This configuration does not resume/pause goals or cancel work.
 
 
 ## Qualification
