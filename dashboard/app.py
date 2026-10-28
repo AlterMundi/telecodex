@@ -639,10 +639,10 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                     (('binding', 'x-input-binding'), ('id', 'x-input-id'),
                      ('audio_sha256', 'x-audio-sha256'), ('mime', 'content-type'))}
         capture_stop = request.headers.get('x-recording-stop')
-        if request.url.path.endswith('/voice/limited') and capture_stop != 'duration_limit':
+        if request.url.path.endswith('/voice/limited') and capture_stop not in ('duration_limit','audio_flush_unconfirmed'):
             raise HTTPException(400, 'Limited recording stop reason required')
         if capture_stop is not None:
-            if capture_stop != 'duration_limit':raise HTTPException(400, 'Invalid recording stop reason')
+            if capture_stop not in ('duration_limit','audio_flush_unconfirmed'):raise HTTPException(400, 'Invalid recording stop reason')
             metadata['capture_stop'] = capture_stop
         reply_source = request.headers.get('x-reply-source')
         reply_revision = request.headers.get('x-reply-revision')

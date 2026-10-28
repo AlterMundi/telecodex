@@ -63,7 +63,7 @@ window.VoiceInput = (() => {
     const ownsSend=()=>['permission','recording','ready','finalizing'].includes(phase) || uploading || !!pending;
     let ownedSend=false;
     function syncSend(){
-      const owned=ownsSend();button.hidden=owned&&!pending;
+      const owned=ownsSend();button.hidden=owned&&(!pending || phase==='ready');
       if(send){send.type=owned?'button':'submit';send.setAttribute('aria-label',owned?'Send voice message':'Send text message');
         if(owned)send.disabled=button.disabled || !(['recording','ready'].includes(phase)||pending);else if(ownedSend)send.disabled=!getBinding();}
       ownedSend=owned;
@@ -111,7 +111,7 @@ window.VoiceInput = (() => {
         const value=await recovery.read();
         if(owned!==generation || binding!==getBinding() || phase!=='idle' || pending)return;
         if(value?.binding===binding && value.blob?.size>0 && value.blob.size<=20*1024*1024){
-          pending={...value,uncertainSubmission:true,localRecovery:true};notice('An unfinished recording was recovered. Check its status, retry the same recording, or save a copy. Nothing was resent.',true);
+          pending={...value,uncertainSubmission:true,localRecovery:true};notice('An unfinished recording was recovered. '+(value.captureStop==='audio_flush_unconfirmed'?'The final audio buffer was not confirmed; its ending may be missing. ':value.captureStop==='duration_limit'?'It reached the duration limit; its ending may be incomplete. ':'')+'Check its status, retry the same recording, or save a copy. Nothing was resent.',true);
         }
       }catch(_){if(owned===generation)notice('Local recovery unavailable. Keep this page open until your recording is confirmed.',true);}
       finally{if(owned===generation){restoring=false;controls();}}
@@ -170,17 +170,27 @@ window.VoiceInput = (() => {
       if(owned!==generation)return;
       stopTracks();const preparedText=recorder?.preparedText||selection?.preparedText,captureStop=recorder?.captureStop||selection?.captureStop;recorder=undefined;
       const blob=new Blob(parts,{type:mime});parts=[];bytes=0;
-      if(!commit){phase='ready';parts=[blob];readySelection={binding,selection:{...selection,captureStop:captureStop||'duration_limit',preparedText}};notice('Recording stopped at 2:00. The ending may be incomplete. Send this part or discard it.',true);controls();return;}
+      if(!blob.size){cancelRecording('No audio samples were captured. Nothing was sent.');return;}
       phase='finalizing';controls();
       try {
         if(!blob.size || blob.size>20*1024*1024)throw Error('Recording outside limits');
         const digest=await window.crypto.subtle.digest('SHA-256',await blob.arrayBuffer());
         if(owned!==generation || binding!==getBinding())return;
         const audio_sha256=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
-        pending={captureStop,id:selection?.captureId||window.crypto.randomUUID(),binding,audio_sha256,mime,blob,preparedText,reply:selection?.reference,focusVersion:selection?.version,visual:selection?.visual,files:selection?.files,playback:selection?.playback,captureQuestions:selection?.captureQuestions};phase='idle';
+        const needsReview=!commit || captureStop==='audio_flush_unconfirmed' && !selection?.captureReviewed;
+        pending={captureStop:captureStop||(needsReview?'duration_limit':undefined),id:selection?.captureId||window.crypto.randomUUID(),binding,audio_sha256,mime,blob,preparedText,reply:selection?.reference,focusVersion:selection?.version,visual:selection?.visual,files:selection?.files,playback:selection?.playback,captureQuestions:selection?.captureQuestions};
         try{if(recovery){await recovery.put(pending);pending.localRecovery=true;}}catch{pending.localRecovery=false;}
         if(owned!==generation || binding!==getBinding())return;
-        await upload();
+        if(needsReview){
+          phase='ready';commit=false;parts=[blob];
+          readySelection={binding,selection:{...selection,captureId:pending.id,captureStop:pending.captureStop,preparedText,captureReviewed:true}};
+          notice((captureStop==='audio_flush_unconfirmed'
+            ?'The final audio buffer was not confirmed. The ending may be missing. Send this fragment or discard it.'
+            :'Recording stopped at 2:00. The ending may be incomplete. Send this part or discard it.')
+            +(!pending.localRecovery?' Keep this page open or save an audio copy before leaving.':''),true);
+          controls();return;
+        }
+        phase='idle';await upload();
       } catch(_) {if(owned===generation)cancelRecording('Recording could not be finalized. Nothing was sent.');}
     }
     async function start() {
