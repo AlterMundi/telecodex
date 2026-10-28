@@ -24,7 +24,7 @@ def audio(frequency=440,silence=False):
         wav.writeframes(b''.join(struct.pack('<h',0 if silence else int(5000*math.sin(2*math.pi*frequency*i/16000))) for i in range(3200)))
     return target.getvalue()
 
-def qualify(binary):
+def qualify(binary, stop_reason="duration_limit"):
     j=Requests(str(Path(binary).resolve()));client=None
     try:
         j.start()
@@ -72,16 +72,16 @@ print(json.dumps({'text':item['text'],'final':True}))
         with patch('dashboard.provider.sync_directory',side_effect=OSError('Synthetic directory-sync failure')):
             assert upload(data,failed_sync)[1].status_code==503
         assert not calls() and j.row('SELECT count(*) FROM conversation_inputs WHERE id=?',(failed_sync,))==[(0,)]
-        original,response=upload(data,stop='duration_limit');assert response.status_code==200,response.text
+        original,response=upload(data,stop=stop_reason);assert response.status_code==200,response.text
         assert response.json()['phase']=='preparing' and response.json()['text']==''
         j.wait(lambda:digest in calls());assert not j.packets,'Partial ASR admitted work'
-        repeated=upload(data,original,stop='duration_limit')[1];assert repeated.status_code==200 and not repeated.json()['new_input']
+        repeated=upload(data,original,stop=stop_reason)[1];assert repeated.status_code==200 and not repeated.json()['new_input']
         assert upload(audio(555),original)[1].status_code==400
         assert calls().count(digest)==1
         # Native immutable-identity refusals use the existing unconfirmed-control
         # HTTP response; inspect the retained original rather than replaying it.
         assert upload(data,original)[1].status_code==503,'A retry cannot drop the duration-limit context'
-        assert status(original)['voice']['capture_stop']=='duration_limit'
+        assert status(original)['voice']['capture_stop']==stop_reason
         assert calls().count(digest)==1
         later=str(uuid.uuid4());later_response=client.post('/api/interaction/inputs',json={'binding':binding,'id':later,'text':'Later correction: requirement17.'},headers=headers)
         assert later_response.status_code==200,later_response.text
@@ -94,7 +94,7 @@ print(json.dumps({'text':item['text'],'final':True}))
         retained=status(original);assert retained['text']=='Earlier spoken requirement13.'
         proof=retained['voice']['transcription'];assert proof['capture_id']==original and 'telegram_file_id' not in proof and proof['audio_sha256']==digest
         assert 'not verified written speech' in j.packets[-1][1]['input'][0]['text']
-        assert proof['capture_stop']=='duration_limit'
+        assert proof['capture_stop']==stop_reason
         assert 'wait for or clarify the continuation' in j.packets[-1][1]['input'][0]['text']
         request=json.loads(j.instructions(7)[0][2])['requests']
         j.call('route-older-voice','dispatch',{'input_ref':original,'destinations':[{'selector':'Alpha','relation':'amends','requests':request}]})
@@ -103,11 +103,11 @@ print(json.dumps({'text':item['text'],'final':True}))
         assert '"capture_id":"'+original+'"' in worker_packet and 'Earlier spoken requirement13.' in worker_packet
         orders=j.row("SELECT event_id,id FROM original_ingress_order WHERE channel='conversation' ORDER BY id")
         assert orders[0][0]==original and orders[1][0]==later and orders[0][1]<orders[1][1]
-        assert '"capture_stop":"duration_limit"' in worker_packet
+        assert json.loads(worker_packet.split('Transport provenance: ',1)[1].split('\nCurrent instruction:',1)[0])['transcription']['capture_stop']==stop_reason
         assert '"capture_order":'+str(orders[0][1]) in worker_packet
         assert calls().count(digest)==1 and len(j.packets)==2
         assert not Path(str(j.root/'state.sqlite')+'.voice').joinpath(original).exists()
-        repeated = upload(data,original,stop='duration_limit')[1]
+        repeated = upload(data,original,stop=stop_reason)[1]
         assert repeated.status_code==200 and calls().count(digest)==1
         assert not Path(str(j.root/'state.sqlite')+'.voice').joinpath(original).exists()
         # Silence fails before invoking ASR and leaves ordinary text controls usable.
@@ -118,7 +118,7 @@ print(json.dumps({'text':item['text'],'final':True}))
         recovery_data=audio(610);recovery_digest=register(recovery_data,'Recovered original')
         transcripts[recovery_digest]['fail']=True
         (j.root/'transcripts.json').write_text(json.dumps(transcripts))
-        recovery_id,r=upload(recovery_data,stop='duration_limit');assert r.status_code==200
+        recovery_id,r=upload(recovery_data,stop=stop_reason);assert r.status_code==200
         j.wait(lambda:status(recovery_id)['phase']=='preparation_unconfirmed')
         before_calls=list(calls())
         command={'binding':binding,'id':recovery_id}
@@ -132,7 +132,7 @@ print(json.dumps({'text':item['text'],'final':True}))
         assert calls()==before_calls and status(recovery_id)['text']=='Recovered original'
         saved=status(recovery_id)['voice']['transcription']
         assert saved['capture_id']==recovery_id and saved['audio_sha256']==recovery_digest
-        assert saved['capture_stop']=='duration_limit','Completed-transcript recovery retains the same truncation context'
+        assert saved['capture_stop']==stop_reason,'Completed-transcript recovery retains the same truncation context'
         assert not Path(str(j.root/'state.sqlite')+'.voice').joinpath(recovery_id).exists()
         recover();assert calls()==before_calls
         # The additional accepted original is real fixture work, not another upload.
@@ -167,4 +167,5 @@ print(json.dumps({'text':item['text'],'final':True}))
         if client:client.close()
         j.close()
 
-if __name__=='__main__':qualify(sys.argv[1])
+if __name__=='__main__':
+    for reason in ('duration_limit','audio_flush_unconfirmed'):qualify(sys.argv[1],reason)

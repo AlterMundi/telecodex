@@ -922,3 +922,20 @@ Live provisional and canonical parts share the same native message identity, so
 a skipped tail does not return when its canonical result arrives. A bounded
 128-message in-memory skip selection is cleared when the conversation binding
 changes; existing persisted playback cursors remain independently bounded.
+
+### Unconfirmed capture flush
+
+The PCM recorder waits for its worklet's final buffer before closing an ordinary
+recording. If that acknowledgment does not arrive within the existing six-second
+bound, preserve only the bytes actually received and mark audio_flush_unconfirmed.
+Do not represent that fragment as a confirmed complete capture, even when Send was
+already clicked. Reuse Send/Discard review, retain the fragment in bounded local
+recovery before showing review, and carry the immutable stop reason through the
+existing limited-recording endpoint and native/worker transcription provenance.
+Late worklet events cannot change the offered recording identity. Empty capture
+produces no original. This reproduces a silent-cut path, not the cause of any
+specific historical human recording.
+
+Gemini push-to-talk activityStart/activityEnd agrees with the
+[provider's manual-transcription contract](https://ai.google.dev/gemini-api/docs/live-api/live-transcribe#manual-vad-push-to-talk).
+That contract check alone does not identify a historical missing tail.

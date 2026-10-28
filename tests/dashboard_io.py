@@ -75,12 +75,15 @@ class DashboardHTTP(unittest.TestCase):
         limited=self.client.post('/api/interaction/voice/limited',content=b'synthetic',headers={**headers,'x-recording-stop':'duration_limit'})
         self.assertEqual(limited.status_code,200)
         self.assertEqual(retained[-1][0]['capture_stop'],'duration_limit')
+        interrupted=self.client.post('/api/interaction/voice/limited',content=b'synthetic',headers={**headers,'x-recording-stop':'audio_flush_unconfirmed'})
+        self.assertEqual(interrupted.status_code,200)
+        self.assertEqual(retained[-1][0]['capture_stop'],'audio_flush_unconfirmed')
         self.assertEqual(self.client.post('/api/interaction/voice/limited',content=b'synthetic',headers=headers).status_code,400)
         self.assertEqual(self.client.post('/api/interaction/voice/limited',content=b'synthetic',headers={**headers,'x-recording-stop':'complete'}).status_code,400)
 
         for invalid in (dict(hint,position_millis=True),dict(hint,state='heard'),dict(hint,segment_offset=-1),dict(hint,source='native:0'),dict(hint,source='native:01'),dict(hint,source='native:9223372036854775808'),dict(hint,other='not supported')):
             self.assertEqual(self.client.post('/api/interaction/voice',content=b'synthetic',headers={**headers,'x-playback-context':json.dumps(invalid)}).status_code,400)
-        self.assertEqual(len(retained),2,'Only the two valid recordings reach retaining/dispatch; malformed metadata must fail first')
+        self.assertEqual(len(retained),3,'Only the three valid recordings reach retaining/dispatch; malformed metadata must fail first')
         self.assertEqual(self.client.post('/api/interaction/voice',content=b'synthetic',headers={**headers,'x-playback-context':' '*2049}).status_code,400)
         with self.assertRaises(ValueError):Provider.check_playback(dict(hint,duration_millis=0))
         Provider.check_playback(dict(hint,duration_millis=None))

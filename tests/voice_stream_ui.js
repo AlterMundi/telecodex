@@ -64,6 +64,13 @@ function boot(fail){
   device.stop();w.emit({finished:true});if(mode==='wrong-prepared-id')s.message({type:'prepared',id:'other'});await new Promise(yes=>setImmediate(yes));
   assert.deepEqual(lost.events.map(e=>e.type),['data','stop'],`${mode} must retain one complete local fallback`);assert(Buffer.from(await lost.events[0].data.arrayBuffer()).equals(wav));assert.equal(lost.sockets.length,1,'Never reconnect/replay provider audio');
  }
+ const stalled=boot(),stalledDevice=await stalled.create();stalledDevice.start();stalled.sockets[0].open();stalled.sockets[0].message({type:'ready'});stalled.worklets[0].emit({pcm:samples});stalledDevice.stop();
+ stalled.timers.find(t=>t.ms===6000&&!t.cleared).fn();
+ assert.equal(stalledDevice.captureStop,'audio_flush_unconfirmed','A missing final worklet flush must not present its partial WAV as a complete recording');
+ assert.deepEqual(stalled.events.map(e=>e.type),['data','stop']);
+ assert(Buffer.from(await stalled.events[0].data.arrayBuffer()).equals(wav),'Preserve the actual accumulated fragment');
+ stalled.worklets[0].emit({pcm:pcm(900)});stalled.worklets[0].emit({finished:true});
+ assert.equal(stalled.events.length,2,'A late flush must not change an offered recording identity');
  const delayed=boot(),delayedDevice=await delayed.create();delayedDevice.start();delayed.worklets[0].emit({pcm:samples});delayedDevice.stop();delayed.worklets[0].emit({finished:true});delayed.timers.find(t=>t.ms===5000&&!t.cleared).fn();assert.equal(delayed.events[0].data.size,wav.length,'A provider that never opens cannot lose finalized audio');
  for(const failure of ['module','filter','socket']){const setup=boot(failure);await assert.rejects(setup.create());assert(setup.contexts[0].closed,`${failure} must release its owned audio graph`);}
  class Canonical extends EventTarget{
