@@ -908,3 +908,17 @@ reply audio uses the existing bounded speech cache (default one-hour unused age,
 renders prune eligible completed audio without provider calls; text/receipts and
 uncertain originals remain. These are local service policies, not deletion claims
 about Telegram's remote message storage.
+
+### Skip the current spoken reply
+
+While a reply is preparing or playing, its existing Listen control becomes Skip,
+including the visible coalesced update card. Skip cancels the remaining segments
+of that message and continues the existing automatic queue in order. It does not
+answer questions, modify work, disable Voice Replies, or report unsaid text as
+heard. The actual word/segment cursor remains available for an explicit later
+resume. Pausing retains Resume audio and the ordinary player Play control.
+
+Live provisional and canonical parts share the same native message identity, so
+a skipped tail does not return when its canonical result arrives. A bounded
+128-message in-memory skip selection is cleared when the conversation binding
+changes; existing persisted playback cursors remain independently bounded.

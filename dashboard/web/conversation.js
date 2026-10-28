@@ -106,7 +106,9 @@ window.Conversation = (() => {
     const speechGaps={chunk:180,reply:450,question:1200};
     let speechWait;
     const voiceQueue=[],voiceSeen=new Set(),voiceFinalTimes=new Map();
-    const queuedPreparations=new Map();
+    const queuedPreparations=new Map(),skippedMessages=new Map();
+    const messageKey=source=>sameNative(source,source)?JSON.stringify([source.native_turn,source.native_item]):JSON.stringify([source?.id,source?.revision]);
+    const sameMessage=(a,b)=>a && b && (a.id===b.id && a.revision===b.revision || sameNative(a,b));
     const preparationKey=(source,offset=source?.speech_start||0)=>JSON.stringify([source?.id,source?.revision,offset]);
     const sameNative=(a,b)=>a && b && typeof a.native_turn==="string" && typeof a.native_item==="string" && a.native_turn===b.native_turn && a.native_item===b.native_item;
     function removeQueued(index){
@@ -918,16 +920,39 @@ window.Conversation = (() => {
     const speechPositions=new Map();let positionBinding;
     const positionKey=()=>"interaction-speech-position:"+binding;
     function positionLabel(card){
+      const skipping=active && !active.segmentEnded && !voiceSuspended && (active.auto && !audio.paused || requestAbort) && sameMessage(active.source,card.source);
       const saved=speechPositions.get(card.source.id);
-      card.listen.textContent=saved?.revision===card.source.revision?"Resume audio":"Listen";
-      card.listen.title=saved?.revision===card.source.revision?"Resume from the saved word or segment boundary; part of a word may repeat":"Listen to this reply";
+      card.listen.textContent=skipping?"Skip":saved?.revision===card.source.revision?"Resume audio":"Listen";
+      card.listen.title=skipping?"Skip the rest of this reply and continue the queue":saved?.revision===card.source.revision?"Resume from the saved word or segment boundary; part of a word may repeat":"Listen to this reply";
+    }
+    function playbackLabels(){
+      for(const card of cards.values())positionLabel(card);
+      for(const card of progressCards.values()){
+        const original=cards.get(card.source);if(!original || original.source.revision!==card.revision)continue;
+        card.listen.textContent=original.listen.textContent;
+        card.listen.title=original.listen.title;
+        card.listen.setAttribute("aria-label",`${original.listen.textContent} update`);
+      }
+    }
+    async function skipReply(){
+      const selected=active;if(!selected || captureBusy)return;
+      // A skip is an explicit selection, never a claim that unsaid text was heard.
+      skippedMessages.set(messageKey(selected.source),true);
+      while(skippedMessages.size>128)skippedMessages.delete(skippedMessages.keys().next().value);
+      liveSpeech?.interrupt(selected.source);
+      for(let n=voiceQueue.length-1;n>=0;n--)if(sameMessage(voiceQueue[n],selected.source))removeQueued(n);
+      if(prefetched?.ahead && prefetched.selection)await prefetched.selection;
+      if(active!==selected)return;
+      if(prefetched?.source && !sameMessage(prefetched.source,selected.source))parkPrepared();
+      stop("Reply skipped. Continuing the queue.");
+      if(voiceEnabled && !voiceSuspended)drainVoice();
     }
     function savePositions(){
       if(!standalone || !binding)return false;
       try{const storage=window.localStorage;if(!storage)return false;storage.setItem(positionKey(),JSON.stringify([...speechPositions.values()]));return true;}catch{return false;}
     }
     function loadPositions(){
-      if(positionBinding===binding)return;positionBinding=binding;speechPositions.clear();
+      if(positionBinding===binding)return;positionBinding=binding;speechPositions.clear();skippedMessages.clear();
       if(!standalone)return;
       try{
         const raw=window.localStorage?.getItem(positionKey());if(!raw || raw.length>16384)return;
@@ -1006,7 +1031,7 @@ window.Conversation = (() => {
       voiceFinalTimes.set(key,Math.max(voiceFinalTimes.get(key)||0,time));
     }
     function offerVoice(source) {
-      if(!voiceEnabled || voiceSeen.has(voiceKey(source)))return;
+      if(!voiceEnabled || voiceSeen.has(voiceKey(source)) || skippedMessages.has(messageKey(source)))return;
       voiceSeen.add(voiceKey(source));
       if(voiceSuspended)return;
       if(active?.source.id===source.id && active.source.revision!==source.revision)stop("This reply changed. Refresh before listening.");
@@ -1053,7 +1078,7 @@ window.Conversation = (() => {
     }
     async function drainVoice() {
       if(!voiceEnabled || voiceSuspended || voiceBusy || speechWait || captureBusy || questionRefreshPending || !enabled || !canListen || !playbackAllowed())return;
-      while(voiceQueue.length&&sessionMuted(voiceQueue[0]))removeQueued(0);
+      while(voiceQueue.length&&(sessionMuted(voiceQueue[0]) || skippedMessages.has(messageKey(voiceQueue[0]))))removeQueued(0);
       voiceBusy=true;const selectionGeneration=generation;
       if(prefetched?.ahead && !active?.interrupted)await prefetched.selection;
       if(generation!==selectionGeneration)return;
@@ -1112,7 +1137,7 @@ window.Conversation = (() => {
       requestAbort?.abort(); requestAbort = undefined;
       prefetched?.controller.abort();prefetched=undefined;
       active?.streaming?.cancel();
-      active = undefined;
+      active = undefined;playbackLabels();
       audio.pause(); audio.muted = true;
       audio.removeAttribute("src"); audio.load();
       if (blobUrl) URL.revokeObjectURL(blobUrl);
@@ -1141,7 +1166,7 @@ window.Conversation = (() => {
       audio.pause(); audio.muted = true;
       playLabel("Play audio");
       toggle.disabled = !blobUrl;
-      audioState("Paused. Your replies remain available.");
+      audioState("Paused. Your replies remain available.");playbackLabels();
     }
     function setMode(value, initial = false, navigate = true) {
       if(standalone && !value)return;
@@ -1182,6 +1207,7 @@ window.Conversation = (() => {
     }
     function listenCard(card) {
       if(readOnly || captureBusy || card.listen.disabled)return;
+      if(active && !active.segmentEnded && !voiceSuspended && (active.auto && !audio.paused || requestAbort) && sameMessage(active.source,card.source))return skipReply();
       const saved=speechPositions.get(card.source.id);
       if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended && (!saved || saved.offset>=active.offset)){
         voiceSuspended=false;voiceStatus();return startPlayback();
@@ -1306,6 +1332,7 @@ window.Conversation = (() => {
         if(reconciled?.skip)voiceSeen.add(voiceKey(source));
         else if(direction==="after")offerVoice(reconciled?.source||source);
       }
+      playbackLabels();
       showResponseDraft(value.response_draft);
       if(active?.auto && !audio.paused && !active.verifying)prefetchNext(active);
       for (const card of cards.values()) card.listen.hidden = !canListen;
@@ -1431,7 +1458,7 @@ window.Conversation = (() => {
           ?{source:selected.source.id,revision:selected.source.revision,context_only:true}:undefined;
         playLabel("Pause audio");
         audioState("Playing this reply.");
-        presentState({playback:"playing"});
+        presentState({playback:"playing"});playbackLabels();
         if(mediaSession)try{
           if(window.MediaMetadata)mediaSession.metadata=new window.MediaMetadata({title:selected.source.label||"Conversation reply",artist:"Daimon Interaction"});
           mediaSession.playbackState="playing";
@@ -1519,18 +1546,18 @@ window.Conversation = (() => {
       if(prepared===prefetched)prefetched=undefined;
       queuedPreparations.delete(key);
       if(!chain?.queued){cancelPreparedMessage(source);for(let n=voiceQueue.length-1;n>=0;n--)if(sameNative(voiceQueue[n],source))removeQueued(n);}
-      if(!chain?.queued){liveSpeech?.continueSource(source);voiceSuspended=false;}
+      if(!chain?.queued){skippedMessages.delete(messageKey(source));liveSpeech?.continueSource(source);voiceSuspended=false;}
       stop();
       if(voiceEnabled)voiceBusy=true;
       const owned = generation;
       active = {source, offset, generation:owned, auto:false, focusVersion:chain?.focusVersion ?? focusVersion,queued:!!chain?.queued};
-      const selected = active;
+      const selected = active;playbackLabels();
       $("#conversation-player").hidden = false;
       $("#conversation-playing").textContent = source.kind.startsWith("integrator_") ? "Conversation reply" : source.label;
       presentState({playback:"preparing"});
       audioState("Preparing audio…"); toggle.disabled = true;
       requestAbort = prepared?.controller||new AbortController();
-      const controller = requestAbort;
+      const controller = requestAbort;playbackLabels();
       try {
         const result=prepared?await prepared.result:{value:await requestAudio(source,offset,controller)};
         if(result.error)throw result.error;
@@ -1560,7 +1587,7 @@ window.Conversation = (() => {
     audio.addEventListener("ended", async () => {
       if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || !playbackAllowed() || !enabled) return;
       presentState({playback:undefined});
-      const selected=active, owned=generation;selected.segmentEnded=true;
+      const selected=active, owned=generation;selected.segmentEnded=true;playbackLabels();
       rememberLiveCursor(liveSpeech?.ended(selected.source,selected.offset,selected.textEnd));
       rememberPosition();
       if (selected.next !== null) {
