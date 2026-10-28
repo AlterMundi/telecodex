@@ -269,9 +269,10 @@ window.Conversation = (() => {
       if(stamp<=(settledProgress.get(key)||0) || previous && previous.stamp>stamp)return;
       let card=previous;
       if(!card){
-        const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),inspect=node("button","Inspect update");
+        const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),inspect=node("button","Inspect update"),listen=node("button","Listen");
         const time=node("time",undefined,"message-time");
-        inspect.type="button";box.append(title,body,inspect,time);card={box,title,body,inspect,time};progressCards.set(key,card);
+        inspect.type="button";listen.type="button";box.append(title,body,listen,inspect,time);card={box,title,body,listen,inspect,time};progressCards.set(key,card);
+        listen.addEventListener("click",()=>{const original=cards.get(card.source);if(!original || original.source.revision!==card.revision || !canListen)return;return listenCard(original);});
         inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
       }
       const changed=card.source!==source.id || card.revision!==source.revision;
@@ -279,6 +280,7 @@ window.Conversation = (() => {
       card.box.dataset.sourceId=source.id;
       const original=cards.get(source.id);
       setReplyText(card.body,original?.expanded && original.source.revision===source.revision?replyText(original.body):source.preview);
+      card.listen.hidden=!canListen;card.listen.setAttribute("aria-label",`Listen to update from ${source.label}`);
       messageTime(card.time,source.observed_at);
       placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
       if(changed)textObserver?.unobserve(card.box);
@@ -1126,6 +1128,14 @@ window.Conversation = (() => {
       const query = new URLSearchParams({source:source.id, revision:source.revision, offset:String(offset)});
       return api(`interaction/part?${query}`);
     }
+    function listenCard(card) {
+      if(readOnly || captureBusy || card.listen.disabled)return;
+      const saved=speechPositions.get(card.source.id);
+      if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended && (!saved || saved.offset>=active.offset)){
+        voiceSuspended=false;voiceStatus();return startPlayback();
+      }
+      return listenTo(card.source,saved?.revision===card.source.revision?saved.offset:0);
+    }
     function upsert(source) {
       const followingLive=atTimelineEnd();
       let card = cards.get(source.id);
@@ -1149,14 +1159,7 @@ window.Conversation = (() => {
         cards.set(source.id, card);
         reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
         read.addEventListener("click",()=>readCard(card));
-        listen.hidden=readOnly;listen.addEventListener("click", () => {
-          if(readOnly || captureBusy || listen.disabled)return;
-          const saved=speechPositions.get(card.source.id);
-          if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended && (!saved || saved.offset>=active.offset)){
-            voiceSuspended=false;voiceStatus();return startPlayback();
-          }
-          return listenTo(card.source,saved?.revision===card.source.revision?saved.offset:0);
-        });
+        listen.hidden=readOnly;listen.addEventListener("click",()=>listenCard(card));
       } else if (card.source.text_sha256 !== source.text_sha256) {
         setReplyText(card.body,source.preview);
         card.autoRevision=undefined;card.autoWanted=false;

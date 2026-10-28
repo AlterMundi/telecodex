@@ -445,3 +445,14 @@ not an established diagnosis of the human's particular Android interruption.
 Physical testing must still cover two separate replies while another app is
 foreground and after screen lock. For full OS-managed background playback beyond
 web lifecycle guarantees, the native-mobile roadmap remains the owning track.
+
+
+### Listen to session progress
+
+Visible Update from cards expose Listen alongside Inspect update, reusing the
+original card's source/revision, saved position and verified player. They do not
+create a second speech path or choose a reply destination. An already loaded
+update resumes without another synthesis attempt. The same capture, capability
+and read-only checks apply as for final replies. This addresses the previously
+missing control on the coalesced progress card; it does not add Reply-to-session
+or claim a new receiving deployment.

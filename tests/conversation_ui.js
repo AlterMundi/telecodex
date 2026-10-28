@@ -888,9 +888,15 @@ function boot(readOnly=false,standalone=false,options={}) {
   updateLane.scrollTo=()=>{updateScrolls++;};
   const updateCard=updateLane.children.find(card=>card.children[0]?.children[0]?.textContent==='Update from Alpha');assert(updateCard);
   updateCard.getBoundingClientRect=()=>({top:350});
-  const hiddenUpdate=updatesFollow.nodes.get('#conversation-results').children.find(card=>card.dataset.sourceId==='native:8');
-  await hiddenUpdate.children.flatMap(child=>child.children||[]).find(child=>child.textContent==='Listen').handlers.click();
-  assert.equal(updateScrolls,1,'Follow targets the visible Update from card for the exact spoken source');updatesFollow.ui.stop();
+  const updateListen=updateCard.children.find(child=>child.textContent==='Listen');assert(updateListen&&!updateListen.hidden,'Visible progress updates expose Listen');
+  await updateListen.handlers.click();
+  assert.equal(updatesFollow.audioCalls.at(-1).source,'native:8','Progress Listen selects the exact retained update');
+  assert.equal(updateScrolls,1,'Follow targets the visible Update from card for the exact spoken source');
+  const updateAttempts=updatesFollow.audioCalls.length;await updateListen.handlers.click();
+  assert.equal(updatesFollow.audioCalls.length,updateAttempts,'Listening to an already loaded update reuses its verified player');updatesFollow.ui.stop();
+  const readonlyUpdate=boot(true,true);readonlyUpdate.overrideSource(8,{kind:'worker_progress',target:{chat_id:100,thread_id:77},label:'Alpha'});await readonlyUpdate.ui.refresh();
+  const readonlyProgress=readonlyUpdate.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:8');
+  const readonlyListen=readonlyProgress.children.find(child=>child.textContent==='Listen');assert(readonlyListen.hidden);await readonlyListen.handlers.click();assert.equal(readonlyUpdate.audioCalls.length,0);
 
   {
   const followPreference=new Map(),tracked=boot(false,true,{clock:true,followStorage:followPreference});tracked.audio(true);
