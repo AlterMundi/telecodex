@@ -179,7 +179,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
   if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.()};}};
   if(options.progressive)context.window.SpeechStream={available:()=>true,open(_response,signal){
-    const value={url:'blob:fixture-stream',signal,position:seconds=>options.wordPosition?.(seconds,Number(_response.headers.get("x-presentation-offset"))),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
+    const value={url:'blob:fixture-stream',signal,done:options.streamDone || Promise.resolve({complete:true,blob:new Blob(['verified encoded sample'],{type:'audio/mpeg'})}),onDecoderError(fn){this.decoderError=fn;},position:seconds=>options.wordPosition?.(seconds,Number(_response.headers.get("x-presentation-offset"))),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
   }};
   if(options.liveSpeech)vm.runInContext(fs.readFileSync("dashboard/web/live-speech.js", "utf8"), context);
   if(options.timingEvents)context.window.ConversationTiming={mount:()=>Object.fromEntries(["bind","mark","input","source","pauseApplied"].map(name=>[name,(...args)=>options.timingEvents.push([name,...args])]))};
@@ -871,6 +871,20 @@ function boot(readOnly=false,standalone=false,options={}) {
   lane.scrollTo=value=>{scrolls.push(value);lane.scrollTop=value.top;};
   const spokenCard=n=>lane.children.find(card=>card.dataset.sourceId===`native:${n}`);
   const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>['Listen','Resume audio','Skip'].includes(child.textContent));
+  for(const cancel of [false,true]){
+    let resolveStream;const streamDone=new Promise(resolve=>{resolveStream=resolve;});
+    const fallback=boot(false,true,{incremental:true,progressive:true,streamDone});fallback.audio();await fallback.ui.refresh();
+    const card=fallback.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');
+    await listenButton(card).handlers.click();const player=fallback.nodes.get('#conversation-audio');player.currentTime=3;
+    const calls=fallback.audioCalls.length;player.paused=true;player.handlers.error();
+    if(cancel)fallback.ui.stop();
+    resolveStream({complete:true,blob:new Blob(['verified encoded sample'],{type:'audio/mpeg'})});
+    await new Promise(setImmediate);await new Promise(setImmediate);
+    assert.equal(fallback.audioCalls.length,calls,'Decoder fallback never requests synthesis again');
+    if(cancel)assert.equal(player.paused,true,'Stop owns a late verified fallback');
+    else {await until(()=>!player.paused&&!player.muted);assert.equal(player.currentTime,3,'Decoder fallback preserves the media cursor');assert.equal(fallback.streamedTransports[0].cancelled,true);}
+    fallback.ui.stop();
+  }
   const buffering=boot(false,true,{incremental:true,progressive:true});buffering.audio();await buffering.ui.refresh();
   const heldBuffer=buffering.holdReplyText('native:8');
   const bufferingCard=buffering.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:8');
@@ -1515,7 +1529,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       endOfStream(){this.readyState='ended';}
       open(){this.readyState='open';this.fire('sourceopen');}
     }
-    const window={MediaSource:Media},context={window,URL:{createObjectURL:()=> 'blob:synthetic-stream',revokeObjectURL(){revoked++;}},crypto,Uint8Array,TextDecoder,setTimeout,clearTimeout,atob,Error,Promise};
+    const window={MediaSource:Media},context={window,URL:{createObjectURL:()=> 'blob:synthetic-stream',revokeObjectURL(){revoked++;}},crypto,Uint8Array,TextDecoder,Blob,setTimeout,clearTimeout,atob,Error,Promise};
     vm.runInNewContext(fs.readFileSync('dashboard/web/speech-stream.js','utf8'),context);
     let controller;const response=new Response(new ReadableStream({start(value){controller=value;}}));
     const abort=new AbortController(),stream=window.SpeechStream.open(response,abort.signal);latest.open();
@@ -1529,8 +1543,13 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(first.media.readyState,'open','First audio appended before terminal result');
   first.send({...end,alignment:{offset:240,words:[[240,244,0,200],[245,246,400,600]]}});first.close();assert.equal((await first.stream.done).complete,true);await until(()=>first.media.readyState==='ended');
   assert.equal(first.stream.position(.3),244);assert.equal(first.stream.position(.7),246);assert.equal(first.stream.position(.1),240,'Backward seek follows actual current media time');
+  const decoder=await setup();let decoderErrors=0;decoder.stream.onDecoderError(()=>decoderErrors++);
+  decoder.media.readyState='open';decoder.media.addSourceBuffer=()=>{throw Error('Synthetic decoder unavailable');};decoder.media.fire('sourceopen');
+  decoder.send(audio);decoder.send(end);decoder.close();const retained=await decoder.stream.done;
+  assert.equal(decoderErrors,1);assert(retained.complete&&retained.blob.size===raw.length,'Decoder failure retains only fully verified bytes for local fallback');decoder.stream.cancel();
   const unavailable=await setup();unavailable.send(audio);unavailable.send({...end,alignment:{offset:0,words:[[0,1,200,100]]}});unavailable.close();assert.equal((await unavailable.stream.done).complete,true);assert.equal(unavailable.stream.position(1),undefined,'Bad optional timing does not break successful audio');unavailable.stream.cancel();
   const bad=await setup();bad.send({...audio,sha256:'0'.repeat(64)});const failure=await bad.stream.done;
+  assert.equal(failure.blob,undefined,'Incomplete or corrupt transport never supplies local fallback media');
   assert.equal(failure.complete,false);assert.equal(bad.media.appended.length,0,'Corrupt audio is never appended');
   const stopped=await setup();stopped.send(audio);stopped.abort.abort();await stopped.stream.done;
   assert.equal(stopped.media.appended.length,0,'Stop owns late hash/decode completion');assert.equal(stopped.revoked(),1);
