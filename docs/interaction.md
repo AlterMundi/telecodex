@@ -871,6 +871,18 @@ rather than injecting it as new human speech. Native worker progress snapshots
 its web source at first observation. Duplicate native observations retain that
 original scope, and old progress without a recorded web source is not imported.
 
+Compact worker updates offer **Reply to this update** when the receiving native
+backend advertises `can_reply_updates`. The selection freezes that source ID and
+revision even when a later update replaces the preview. Native worker progress
+and final messages resolve through the same owned presentation source; direct
+work that never selected this web entry remains unavailable. The backend fences
+source revision, target ownership and current native binding, including changes
+during ASR preparation. The original text remains unchanged; the existing relay
+`selection.reply` provenance carries the compact reference. The receiving session
+can read only the needed exact-revision part with `conversation_part`. A reply to
+an update is neither completion of the previous task nor a request for workers
+to arbitrate its destination.
+
 For an interruption or reference to spoken text, `playback_context` reads only the
 selected original's frozen device report and a bounded exact-revision source
 window on demand. See [interrupted-source inspection](interaction-speech.md#on-demand-interrupted-source-inspection).
@@ -980,3 +992,15 @@ blocker reasons and next actions from supported source statements and pending
 items, not from a blocked status alone. Do not revive a dormant conversation to
 answer a status question. This extends #333/#303; it does not by itself complete
 the full portfolio projection, live execution inventory or latency acceptance.
+
+
+### Visual placement of referenced replies
+
+The standalone timeline places a human reply immediately below its exact visible
+source/revision, with sibling replies ordered by their original capture times.
+Unrelated subsequent updates remain outside that reply group. Capture timestamps,
+canonical input identity and compact routing references are unchanged. An update
+that coalesces away after the person answers retains a compact referenced-update
+anchor from the exact still-retained source; it is not a newly authored update.
+A changed/missing revision is never substituted as the reply parent. Refreshing
+moves existing nodes and preserves expanded text, media and drafts.

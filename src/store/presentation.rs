@@ -494,7 +494,7 @@ impl Store {
             }
         }
         let mut result = json!({"schema":"telecodex.presentation-list/v1",
-            "binding":entry_binding(&conn,human,entry,session)?,"items":items,"can_report_playback":true,"can_report_word_position":true,"can_limit_capture_questions":true,
+            "binding":entry_binding(&conn,human,entry,session)?,"items":items,"can_report_playback":true,"can_report_word_position":true,"can_limit_capture_questions":true,"can_reply_updates":true,
             "cursor":{"delivery":deliveries.iter().take(8).next_back().map_or(after_delivery,|r|r.0),
                       "native":natives.iter().take(8).next_back().copied().unwrap_or(after_native)},
             "newest":{"delivery":deliveries.iter().take(8).map(|r|r.0).max().unwrap_or(0),
@@ -1449,6 +1449,63 @@ mod tests {
         assert_eq!(progress.len(), 1);
         assert_eq!(progress[0]["preview"], "Progress for the web");
         assert_eq!(progress[0]["target"], json!(SessionKey::new(100, Some(7))));
+        let reference = crate::store::ConversationReply {
+            source: progress[0]["id"].as_str().unwrap().into(),
+            revision: progress[0]["revision"].as_str().unwrap().into(),
+            context_only: false,
+        };
+        let reply_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"reply-to-progress").to_string();
+        let (original, _) = store
+            .conversation_input_capture_reply(
+                100,
+                entry,
+                &binding,
+                &reply_id,
+                "About that exact update",
+                Some(reference.clone()),
+            )
+            .unwrap();
+        assert_eq!(original.reply, Some(reference.clone()));
+        assert_eq!(
+            original.focus.as_ref().unwrap().target,
+            SessionKey::new(100, Some(7))
+        );
+        let profile:crate::interaction::InteractionConfig=serde_json::from_value(json!({"human_id":100,"chat_id":100,"topic_id":1,"targets":[{"name":"Alpha","topic_id":7}]})).unwrap();
+        let action = store
+            .conversation_route(100, &reply_id, &profile, None)
+            .unwrap()
+            .unwrap();
+        let super::super::conversation_routing::ConversationRouteAction::Worker(routed, true) =
+            action
+        else {
+            panic!("Expected one newly routed reply")
+        };
+        assert_eq!(routed.target.thread_id, 7);
+        assert_eq!(
+            store.interaction_source(&routed.id, 100).unwrap().text,
+            "About that exact update"
+        );
+        let provenance = store
+            .interaction_original_provenance(&routed.id, 100)
+            .unwrap();
+        assert_eq!(
+            provenance["selection"]["reply"],
+            serde_json::to_value(&reference).unwrap()
+        );
+        let mut wrong = reference.clone();
+        wrong.revision = "0".repeat(64);
+        assert!(
+            store
+                .conversation_input_capture_reply(
+                    100,
+                    entry,
+                    &binding,
+                    &Uuid::now_v7().to_string(),
+                    "Stale update",
+                    Some(wrong)
+                )
+                .is_err()
+        );
         assert!(!page.to_string().contains("Direct work stays direct"));
         let echo = store.topic_publication_claim(entry, 100).unwrap().unwrap();
         assert_eq!(echo.kind, "entry_progress");

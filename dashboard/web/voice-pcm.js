@@ -2,7 +2,7 @@
 class InteractionPCM extends AudioWorkletProcessor {
   constructor(){
     super();this.active=true;this.index=0;this.next=0;this.previous=0;this.ratio=sampleRate/16000;
-    this.frames=[];this.port.onmessage=event=>{if(event.data==='finish'){this.active=false;this.flush();this.port.postMessage({finished:true});}};
+    this.observe=false;this.total=0;this.lastEnergy=0;this.energy=0;this.frames=[];this.port.onmessage=event=>{if(event.data==='observe')this.observe=true;if(event.data==='finish'){this.active=false;this.flush();this.port.postMessage({finished:true});}};
   }
   flush(){
     if(!this.frames.length)return;
@@ -16,7 +16,11 @@ class InteractionPCM extends AudioWorkletProcessor {
     for(const current of input){
       while(this.next<=this.index){
         const fraction=this.index===0?1:this.next-(this.index-1);
-        this.frames.push(this.previous+(current-this.previous)*fraction);this.next+=this.ratio;
+        const value=this.previous+(current-this.previous)*fraction;
+        this.frames.push(value);this.total++;this.energy+=value*value;this.next+=this.ratio;
+        // A conservative acoustic freshness hint, not a speech/turn classifier.
+        // It fences a delayed server verdict even before this chunk is flushed.
+        if(this.observe&&this.total%320===0){if(Math.sqrt(this.energy/320)>.018)this.lastEnergy=this.total*2;this.energy=0;this.port.postMessage({activityBytes:this.lastEnergy,totalBytes:this.total*2});}
         if(this.frames.length===1600)this.flush();
       }
       this.previous=current;this.index++;

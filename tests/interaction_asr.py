@@ -111,6 +111,50 @@ class Retention(unittest.TestCase):
         with self.assertRaisesRegex(asr.RenderError,'retained-asr-outcome-no-automatic-retry'):
             self.run_asr()
         self.assertEqual(self.calls(),1)
+    def late_receipt_fixture(self):
+        record, value = self.streaming_fixture()
+        self.run_asr()
+        mirror = next(record.parent.glob('asr-*.json')); mirror.unlink()
+        job = self.identity_job(); job.mkdir(mode=0o700, exist_ok=True)
+        identity = {'schema':'telecodex.interaction-asr-result/v1',
+            'source_sha256':asr.digest(self.source.read_bytes()),
+            'route_sha256':asr.digest(self.route.read_bytes()),
+            'helper_sha256':asr.digest(self.helper.read_bytes()), 'phase':'unconfirmed'}
+        state = job/'state.json'; state.write_bytes(asr.canonical(identity))
+        preparation = job/'preparation'; preparation.mkdir(mode=0o700)
+        original = preparation/'retained.media'; original.write_bytes(b'uncertain provider evidence')
+        return record, value, state, original
+    def test_completed_only_adopts_late_receipt_without_rewriting_uncertain_job(self):
+        record, value, state, original = self.late_receipt_fixture()
+        state_before = state.read_bytes(); original_before = original.read_bytes()
+        with patch.object(asr,'probe_duration',side_effect=AssertionError('No decoding or ASR retry')):
+            for _ in range(2):
+                result = asr.process(self.source,self.binding,completed_only=True,include_retention=True)
+                self.assertEqual(result['text'],value['text'])
+                self.assertFalse(result['preparation_audio_deleted'])
+                record.unlink(missing_ok=True)  # Subsequent reads reuse the retained mirror.
+        self.assertEqual(state.read_bytes(),state_before)
+        self.assertEqual(original.read_bytes(),original_before)
+        self.assertEqual(self.calls(),0)
+        with self.assertRaisesRegex(asr.RenderError,'retained-asr-outcome-no-automatic-retry'):
+            self.run_asr()
+    def test_completed_only_late_receipt_requires_matching_legacy_identity(self):
+        record, value, state, _ = self.late_receipt_fixture()
+        previous = json.loads(state.read_text()); previous['source_sha256']='a'*64
+        state.write_bytes(asr.canonical(previous))
+        with self.assertRaisesRegex(asr.RenderError,'retained-asr-outcome-no-automatic-retry'):
+            asr.process(self.source,self.binding,completed_only=True)
+        self.assertEqual(self.calls(),0)
+    def test_completed_only_missing_or_changed_late_receipt_never_retries(self):
+        record, value, state, _ = self.late_receipt_fixture()
+        before = state.read_bytes()
+        value['source_sha256']='a'*64;record.write_text(json.dumps(value))
+        with self.assertRaisesRegex(asr.RenderError,'invalid-completed-streaming-transcript'):
+            asr.process(self.source,self.binding,completed_only=True)
+        record.unlink()
+        with self.assertRaisesRegex(asr.RenderError,'retained-asr-outcome-no-automatic-retry'):
+            asr.process(self.source,self.binding,completed_only=True)
+        self.assertEqual(self.calls(),0);self.assertEqual(state.read_bytes(),before)
     def test_full_prepared_cache_does_not_disable_ordinary_file_fallback(self):
         root=self.full_prepared_cache();self.assertEqual(self.run_asr()['text'],'Final words')
         self.assertEqual(self.calls(),1);self.assertFalse(list(root.glob('asr-*.json')))

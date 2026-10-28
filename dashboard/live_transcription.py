@@ -18,6 +18,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from .private_state import private_directory, read_json, write_json
 from .transcription import TranscriptionStream, TranscriptionUnavailable
+from .turn_detection import Detector, DetectionUnavailable, command as detection_command
 from scripts.speech_render import lock
 
 
@@ -67,7 +68,7 @@ def install(app, config, provider, authorize, origins):
     mode=selected.get('mode','prepared')
     if (mode not in ('prepared','captions')
             or selected.get('provider','qwen') not in ('qwen','gemini')
-            or set(selected)-{'enabled','endpoint','credential_file','cache_root','mode','provider','fallback'}
+            or set(selected)-{'enabled','endpoint','credential_file','cache_root','mode','provider','fallback','turn_detection'}
             or not {'enabled','endpoint','credential_file','cache_root'}<=set(selected)
             or any(not isinstance(selected[k], str) for k in ('endpoint','credential_file','cache_root'))
             or not all(Path(selected[k]).is_absolute() for k in ('credential_file','cache_root'))):
@@ -81,6 +82,7 @@ def install(app, config, provider, authorize, origins):
             or not Path(fallback['credential_file']).is_absolute()):
         raise ValueError('Select one explicit Qwen fallback for Gemini streaming')
     candidates=[selected]+([fallback] if fallback is not None else [])
+    detector_command = detection_command(selected)
     root = private_directory(selected['cache_root'])
     active = set()
 
@@ -91,6 +93,12 @@ def install(app, config, provider, authorize, origins):
         reader = None
         owner = None
         incoming = None
+        detector = None
+        detector_reader = None
+        sending = asyncio.Lock()
+        async def send(value):
+            async with sending:
+                await socket.send_json(value)
         opening_lock, abandoned, opened = threading.Lock(), threading.Event(), []
         if socket.headers.get('origin') not in origins:
             await socket.close(code=1008); return
@@ -101,13 +109,15 @@ def install(app, config, provider, authorize, origins):
                 if len(raw.encode()) > 8192:
                     raise ValueError('Streaming capture metadata exceeds bound')
                 meta = json.loads(raw)
-                if (not isinstance(meta, dict) or set(meta)-{'id','binding','csrf','authorization','mode'}
+                if (not isinstance(meta, dict) or set(meta)-{'id','binding','csrf','authorization','mode','turn_detection'}
                         or not all(isinstance(meta.get(k),str) for k in ('id','binding','csrf'))
                         or not re.fullmatch('[a-f0-9-]{36}',meta['id'])
                         or not re.fullmatch('[a-f0-9]{64}',meta['binding'])):
                     raise ValueError('One exact capture binding required')
                 if meta.get('mode','prepared')!=mode:
                     raise ValueError('Capture transcription mode changed')
+                if 'turn_detection' in meta and (meta['turn_detection'] is not True or not detector_command):
+                    raise ValueError('Conversational analysis unavailable')
                 provider.input_id(meta['id'])
                 diagnostic['capture_id'] = meta['id']
                 headers = list(socket.scope['headers'])
@@ -136,6 +146,25 @@ def install(app, config, provider, authorize, origins):
                     owner = None
                     raise ValueError('Voice preparation capacity occupied')
                 active.add(owner)
+                if meta.get('turn_detection'):
+                    try:
+                        detector = await Detector.open(detector_command)
+                    except (OSError, DetectionUnavailable, TimeoutError):
+                        await send({'type':'turn_detection_unavailable'})
+                    if detector:
+                        async def receive_detection():
+                            try:
+                                while True:
+                                    event = await detector.receive()
+                                    if event['type'] != 'activity':
+                                        raise DetectionUnavailable('Unexpected analysis response')
+                                    await recheck()
+                                    await send({'type':'turn_activity','id':meta['id'], 'activity':event})
+                            except (DetectionUnavailable, OSError):
+                                await send({'type':'turn_detection_unavailable'})
+                            finally:
+                                await detector.close()
+                        detector_reader = asyncio.create_task(receive_detection())
                 candidate_index=0
                 def open_provider(start=0):
                     nonlocal candidate_index
@@ -182,7 +211,7 @@ def install(app, config, provider, authorize, origins):
                         if event['type']=='ready': ready.set()
                         if event['type'] in ('ready','partial'):
                             await recheck()
-                            await socket.send_json(event)
+                            await send(event)
                         elif event['type']=='final':
                             if mode=='captions':
                                 raise ValueError('Live captions are not a confirmed transcript')
@@ -191,14 +220,24 @@ def install(app, config, provider, authorize, origins):
                             diagnostic['stage'] = 'save_prepared'
                             value = await asyncio.to_thread(save_prepared,root,meta['id'],meta['binding'],bytes(pcm),stream.result())
                             diagnostic['prepared_saved'] = True
-                            await socket.send_json({'type':'prepared','id':meta['id'],
+                            await send({'type':'prepared','id':meta['id'],
                                 'source_sha256':value['source_sha256'],'text':value['text']})
                             finished.set(); return
                 reader = asyncio.create_task(receive_provider())
                 checked = time.monotonic()
                 while not finished.is_set():
                     incoming = asyncio.create_task(socket.receive())
-                    done,_ = await asyncio.wait((incoming,reader), return_when=asyncio.FIRST_COMPLETED)
+                    waiting=[incoming,reader]
+                    if detector_reader is not None:
+                        if detector_reader.done(): await detector_reader
+                        else: waiting.append(detector_reader)
+                    done,_ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+                    if detector_reader in done:
+                        await detector_reader
+                        if incoming not in done and reader not in done:
+                            incoming.cancel()
+                            with suppress(asyncio.CancelledError): await incoming
+                            continue
                     if reader in done:
                         incoming.cancel()
                         with suppress(asyncio.CancelledError): await incoming
@@ -216,6 +255,14 @@ def install(app, config, provider, authorize, origins):
                         diagnostic['audio_bytes'] += len(data)
                         diagnostic['stage'] = 'receiving_audio'
                         if mode=='prepared':pcm.extend(data)
+                        if detector and detector_reader is not None and not detector_reader.done():
+                            try:
+                                await detector.feed(data)
+                            except DetectionUnavailable:
+                                detector_reader.cancel()
+                                with suppress(asyncio.CancelledError,Exception): await detector_reader
+                                detector_reader = None
+                                await send({'type':'turn_detection_unavailable'})
                     else:
                         control = message.get('text','')
                         if len(control.encode())>256:raise ValueError('Control exceeds bound')
@@ -236,7 +283,7 @@ def install(app, config, provider, authorize, origins):
                 WebSocketDisconnect, TimeoutError) as error:
             diagnostic['error_type'] = type(error).__name__
             with suppress(Exception):
-                await socket.send_json({'type':'unavailable','message':'Live transcription unavailable. Your recording has not been submitted.'})
+                await send({'type':'unavailable','message':'Live transcription unavailable. Your recording has not been submitted.'})
         finally:
             # One metadata-only line under the existing bounded system journal.
             # Never include provider events, exception messages, speech or keys.
@@ -253,6 +300,14 @@ def install(app, config, provider, authorize, origins):
                         with suppress(asyncio.CancelledError,Exception):reader.result()
                 if incoming is not None:
                     incoming.cancel()
+                if detector_reader is not None:
+                    detector_reader.cancel()
+                if detector is not None:
+                    closing_detector = asyncio.create_task(detector.close())
+                    closing_detector.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+                    await asyncio.shield(closing_detector)
+                if detector_reader is not None:
+                    with suppress(asyncio.CancelledError,Exception): await detector_reader
                 # A canceled async wait cannot cancel the blocking dial. Its owning
                 # thread closes a late socket instead of orphaning it after timeout.
                 with opening_lock:
