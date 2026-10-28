@@ -64,7 +64,11 @@ frame_ms=100
                 outer=json.loads(result.stdout)
                 assert outer['ok'] and outer['result']['success'],outer
                 return True
-            assert 'Native turn has not started' in result.stderr,(result.stderr,result.stdout)
+            try:
+                refused=json.loads(result.stdout)
+            except json.JSONDecodeError:
+                refused={}
+            assert (refused.get('ok') is False and refused.get('error')=='Native turn has not started') or result.stderr.strip()=='Error: Native turn has not started',(result.stderr,result.stdout)
             return False
         self.wait(ready)
         return selected

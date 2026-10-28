@@ -134,3 +134,36 @@ requires a fresh genuine human request for each operation; a deployment, old GO,
 Resume or peer request does not provide it. The current human-triggered deadline
 is not a provider spending fence. Peer attention and multi-session routing need
 the separately selected Matrix designs, not an installation-side default.
+
+### Missed Nexus report terminal events
+
+An accepted Nexus reflection can retain its final while the terminal stream event
+is lost. The adapter selects only accepted/uncertain requests whose owning local
+collection has ended and whose recorded native thread matches the frozen target.
+It reads the exact admitted native turn through existing metadata inspection and
+records only an observed terminal status/final through the existing receipt outbox.
+Local completion is selection evidence, never proof of native completion. No
+question is replayed, no thread is replaced, and unavailable observations retain
+uncertainty. Explicit `/nexus reconcile` remains available. A missing dispatch
+acknowledgement is a separate condition and does not authorize this recovery.
+
+The automatic lookup requests native `itemsView: "summary"`. The receiving
+native ThreadStore summary preserves the actual final agent item without
+hydrating every tool item from many turns. Explicit full-history reconciliation
+retains its established path. A summary or missing final is never synthesized
+into a reply. The process fixture asserts the bounded summary-view request.
+
+### One recovery after proven uncommitted dispatch
+
+A dispatch helper failure can leave a request remotely queued before any native
+input was possible. The poller may recover that same request once only after a
+fresh owner inspection reports queued/no dispatch and current route/identity,
+worker and maintenance checks pass. The local record must show no dispatch,
+collector, native turn or echo, and the exact dispatch-acknowledgement failure.
+A retained marker bounds recovery even when the helper fails again. Changed
+source/binding, a committed dispatch or missing native acknowledgement never
+qualifies. Uncertainty is retained; no new request ID or human input is invented.
+The first local receipt also freezes the current human Stop admission epoch.
+Recovery cannot cross that epoch, including a stop arriving across worker lookup.
+Legacy entries without this evidence remain retained for explicit review; a
+later active session alone never proves an old input should resume.

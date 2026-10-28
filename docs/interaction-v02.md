@@ -385,3 +385,92 @@ newline behavior. IME composition, composition keycode229 and modifier shortcuts
 do not submit. Repeated keydown and a disabled Send do not create another input.
 The same submit handler retains draft, attachment, pending voice and uncertain
 delivery behavior; there is no separate keyboard dispatch path.
+
+
+### Pending navigation — human correction, 2026-10-27
+
+Keep two surfaces separate: **For you** contains the integrating conversation's
+canonical questions, durable actions and proposals; the header carousel is for
+pending items from internal owned sessions. For you needs permanent explicit
+access, including an understandable empty state. It must not depend on a card
+happening to be visible during refresh.
+
+The internal-session carousel should show one concise session/item line, rotate
+slowly, support horizontal drag and keyboard navigation, and open the selected
+current action. Pause rotation on hover/focus/drag, hidden state, an open detail
+and reduced motion. Retain a stable list entry. Reuse existing ledgers and native
+responders; reading never approves, completes, cancels or resends anything.
+Direct-topic ingress stays direct. Canonical For you scope must never be labelled
+all sessions: global attention needs its own owner-scoped read/navigation contract.
+
+PR377 (source800ae05f81edda02330d6817f2aced457800f4c3) delivered a permanent For you
+header control and readable panel over the same retained card nodes. Existing
+request/conversation state tests pass. A synthetic Chromium component verifies
+open/close, reply-to-composer, preserved draft and explicit empty access. The full
+shipped HTML/JS with synthetic read-only HTTP verifies Escape/draft preservation,
+question/task reply preparation and scrollable dialogs at320/390/1040px. A found
+desktop header overflow was corrected; inspected screenshots and updated metrics
+show contained44px header access and no horizontal overflow. These fixtures send
+no native decisions, models or capture. Global session data/navigation, carousel
+drag/focus and the exact reported Review-item diagnosis remain unfinished.
+PR377 CI40587818579 passed; its web-only release was receiving-verified against
+local/public assets and the successor web process, preserving the existing native
+listener and daemon. This is digital verification, not new device acceptance.
+
+PR379 extends `requests internal list CURSOR` into a separate owner-scoped
+internal-session carousel. Its bounded existing-ledger query excludes the entry,
+rechecks current native/session/turn ownership and retains source dates and
+revisions. Internal detail, question decisions and receipts reuse the existing
+native responder and transactional decision ledger; they never widen canonical
+For you or ordinary capture-question context. Internal durable task detail and
+explicit Dismiss reuse the same task ledger without human completion or work
+cancellation. The internal task view offers no misleading reply-to-integrator
+shortcut for direct-session work.
+
+HTTP and device access use the existing authenticated provider and CSRF contract.
+Conversation-only devices may answer current questions; approval and cancellation
+remain unavailable, with approvals directing the human to Sessions. The carousel
+rotates every6.5seconds when idle, supports drag/arrows and pauses on interaction,
+open detail, hidden state and reduced motion. Its count describes loaded items,
+not a complete global total. Existing card readers retain at most200 requests and
+200 actions per selected source; overflow is visible, pagination does not advance
+past skipped cards, and unsent drafts are never evicted to make room. Closed cards
+can be dismissed locally to load more. Metadata refresh reuses the conversation's
+existing refresh path; it adds no separate network poller or pending store.
+
+This is a draft implementation, not receiving adoption. Qualification includes
+owner-scope/ledger tests, synthetic UI checks and an actual authenticated HTTP to
+synthetic-native journey for a direct-session question, denied device actions,
+CSRF, one decision/receipt and revocation. A passing CI run and integrated browser
+qualification must be recorded separately; this paragraph does not assert either.
+Owning task #61; stage4 attention and native repair remain in plan #301/milestone9.
+
+## Original generic files — #380
+
+The Files composer increment carries unchanged PDFs and other original bytes
+through the retained conversation and native/routed attachment path. This remains
+milestone8 base-experience work. See [the contract and qualification boundary](conversation-files.md).
+A PNG-only selector or an upload receipt does not close native file delivery.
+
+
+### Background reply continuity
+
+Voice-on in the standalone client remains opted in across hidden state and the
+end of an individual reply. Tests cover a later reply arriving while the page is
+still hidden, as well as continuation within one reply; explicit OS/manual Pause
+and Stop keep their existing meaning. This does not prove phone background
+acceptance or override browser/OS suspension.
+
+The notification stream previously aborted on pagehide but restored only for a
+BFCache pageshow. A non-BFCache return could leave the client marked active with
+no subscription. Lifecycle and network recovery now replace that exact stream,
+request a retained-view catch-up and fence obsolete callbacks by generation.
+A single45-second deadline detects missing15-second server heartbeats, then uses
+the existing1–10second reconnect backoff. Each mount retains at most one selected
+subscription, one heartbeat/retry timer and64KiB of unfinished event text. Stop,
+expired access and pagehide abort owned I/O and clear timers; no work is submitted
+or replayed by reconnect. This is a reproduced client failure and correction,
+not an established diagnosis of the human's particular Android interruption.
+Physical testing must still cover two separate replies while another app is
+foreground and after screen lock. For full OS-managed background playback beyond
+web lifecycle guarantees, the native-mobile roadmap remains the owning track.

@@ -97,6 +97,8 @@ name = "Research"
 topic_id = 8
 ```
 
+At startup, an explicit integrating entry creates only its missing local session metadata for an already allowed owner. It performs no native/model request and preserves existing bindings and settings. An unallowed owner or another owner's existing entry is refused. No priming human message, model turn or manual database seed is required.
+
 Use actual existing owned bindings. The entry and targets cannot overlap the
 bounded I/O profile. One selected shared native App Server remains the owner.
 Names are human selectors; `#t7` selects the stable configured topic directly.
@@ -727,8 +729,13 @@ a stable caller request ID, one existing unambiguous topic and at most 16,000
 bytes of session-authored text. It does not copy a transcript or create a topic.
 `session_requests` inspects the latest sixteen retained dependencies.
 
-Runtime context names the selected worker topic and separates its task from
-integrator-only clauses in the unchanged human message. For a continuing request,
+Runtime context names the selected worker topic and instructs it to distinguish
+its task from integrator-only clauses in the unchanged human message. This is
+model guidance, not a retained per-destination task partition. Dispatch stores
+the entire original for every destination; commentary about a split does not
+encode one. Follow [routing ownership](interaction-routing-ownership.md) for
+mixed requests and corrections. A local helper request does not transfer the
+original request, its owner or its human-facing return responsibility. For a continuing request,
 coverage declarations explicitly include earlier applicable instruction IDs whose
 constraints were actually carried forward, together with new incorporated context.
 A declaration covering only the most recent message does not establish cumulative

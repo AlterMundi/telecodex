@@ -241,6 +241,21 @@ impl Store {
         Ok(input.visual)
     }
 
+    pub fn interaction_files(
+        &self,
+        id: &str,
+        human: i64,
+    ) -> Result<Vec<crate::files::FileReference>> {
+        let source = self.interaction_source(id, human)?;
+        if source.channel != "conversation" {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let input = super::conversation_inputs::read_on(&conn, &source.event_id, human)?;
+        super::conversation_inputs::eligible_on(&conn, &input)?;
+        Ok(input.files)
+    }
+
     pub fn interaction_source_order(&self, source: &SourceInput) -> Result<Option<i64>> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         original_order_on(&conn, source)

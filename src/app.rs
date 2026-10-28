@@ -344,6 +344,22 @@ impl App {
             &config.startup_admin_ids,
             &session_defaults,
         )?;
+        // A configured cold entry needs only owned metadata, never a priming turn.
+        if let Some(profile) = &config.interaction {
+            if !store
+                .get_user(profile.human_id)?
+                .is_some_and(|user| user.allowed)
+            {
+                bail!("Configured Interaction owner is not authorized");
+            }
+            if store.get_session(profile.entry())?.is_some() {
+                if store.session_creator(profile.entry())? != profile.human_id {
+                    bail!("Configured Interaction entry belongs to another owner");
+                }
+            } else {
+                store.ensure_session(profile.entry(), profile.human_id, &session_defaults)?;
+            }
+        }
         store.save_bot_state(
             "goal_recovery_backend",
             &serde_json::json!({

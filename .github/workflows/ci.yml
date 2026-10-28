@@ -243,6 +243,8 @@ jobs:
       - run: python3 -B tests/conversation_question_answer_http_io.py target/release/telecodex
       - run: python3 -B tests/conversation_context_http_io.py target/release/telecodex
       - run: python3 -B tests/conversation_live_response_http_io.py target/release/telecodex
+      - run: python3 -B tests/conversation_files_media.py
+      - run: python3 -B tests/conversation_files_http_io.py target/release/telecodex
       - run: python3 -B tests/conversation_visual_http_io.py target/release/telecodex
       - run: python3 -B tests/conversation_direct_routing_http_io.py target/release/telecodex
       - run: python3 -B tests/media_steer_io.py target/release/telecodex
@@ -371,3 +373,4 @@ jobs:
       - run: node tests/microphone_ui.js
       - run: node tests/voice_stream_ui.js
       - run: node tests/visual_ui.js
+      - run: node tests/files_ui.js

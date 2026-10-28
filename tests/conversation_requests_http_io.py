@@ -12,6 +12,14 @@ from conversation_routing_io import CanonicalRouting
 
 class Requests(CanonicalRouting):
     def handle_extra_rpc(self,message,send):
+        method=message.get('method');params=message.get('params',{})
+        if self.routing and getattr(self,'hold_direct',False) and method in ('turn/start','turn/steer') and params.get('threadId')=='native-topic-8' and params.get('clientUserMessageId','').startswith('telegram:'):
+            if method=='turn/start':
+                self.workers['native-topic-8']='internal-direct-turn'
+                send({'id':message['id'],'result':{'turn':{'id':'internal-direct-turn'}}})
+                self.broadcast('native-topic-8','turn/started',{'turn':{'id':'internal-direct-turn','status':'inProgress'}})
+            else:send({'id':message['id'],'result':{'turnId':'internal-direct-turn'}})
+            return True
         if message.get('method') is None and str(message.get('id')).startswith('canonical-'):
             self.native_answers.append(message);return True
         return super().handle_extra_rpc(message,send)
@@ -42,7 +50,7 @@ def qualify(binary):
             'threadId':'native-topic-7','turnId':j.workers['native-topic-7'],'itemId':'owner-command',
             'command':'echo synthetic-only','reason':'Explicit human selection required','availableDecisions':['accept','decline']}})
         j.wait(lambda:j.row("SELECT count(*) FROM human_interactions WHERE state='pending'")==[(2,)])
-        config={'receiver_config':str(j.config),'state_dir':str(j.root/'dashboard'),'origin':'https://example.test','bot_id':123}
+        config={'receiver_config':str(j.config),'state_dir':str(j.root/'dashboard'),'origin':'https://example.test','bot_id':123,'companion':{'enabled':True,'grants_dir':str(j.root/'internal-device-grants')}}
         provider=Provider(config);client=TestClient(create_app(config,provider,lambda raw,bot:int(raw)),base_url=config['origin'])
         headers={'origin':config['origin']}
         assert client.get('/api/interaction/requests').status_code==401
@@ -94,6 +102,54 @@ def qualify(binary):
         assert next(row for row in j.native_answers if row['id']=='canonical-approval')['result']['decision']=='accept'
         assert decide(approval,{'kind':'approval','choice':'a'}).json()['new_decision'] is False
         assert len(j.native_answers)==2,'A recorded revision replayed a native response'
+        assert j.row('SELECT count(*) FROM incoming_updates')==journal
+        assert not j.messages,'Canonical controls fabricated a Telegram publication'
+        # Ordinary direct work stays out of For you, but its current pending is
+        # available through the separate owned-session surface and same responder.
+        j.hold_direct=True;j.admit('Direct Beta task, never routed by the integrator.',topic=8)
+        j.wait(lambda:'native-topic-8' in j.workers)
+        beta_send=next(send for thread,send in j.clients.values() if thread=='native-topic-8')
+        beta_send({'id':'canonical-internal-direct-question','method':'item/tool/requestUserInput','params':{
+            'threadId':'native-topic-8','turnId':j.workers['native-topic-8'],'itemId':'direct-choice','isBlocking':True,
+            'questions':[{'id':'direct','header':'Direct Beta','question':'Which direct requirement should continue?','options':None}]}})
+        j.wait(lambda:bool(j.row("SELECT id FROM human_interactions WHERE state='pending' AND native_thread='native-topic-8'")))
+        # Ledger persistence precedes show_question and live responder publication.
+        # Observing the row is not evidence that its native answer channel exists.
+        def direct_question_ready():
+            response=client.get('/api/interaction/internal',headers=headers)
+            assert response.status_code==200,response.text
+            return any(v['target']['thread_id']==8 and v.get('actionable') is True for v in response.json()['items'])
+        j.wait(direct_question_ready)
+        internal=client.get('/api/interaction/internal',headers=headers);assert internal.status_code==200,internal.text
+        pending=next(v for v in internal.json()['items'] if v['target']['thread_id']==8)
+        assert pending['kind']=='question' and pending['actionable'] and pending['binding']==binding,pending
+        assert pending['id'] not in {v['id'] for v in client.get('/api/interaction/requests',headers=headers).json()['items']}
+        assert client.get('/api/interaction/requests/'+pending['id'],headers=headers).status_code==409
+        selected=client.get('/api/interaction/internal/requests/'+pending['id'],headers=headers)
+        assert selected.status_code==200,selected.text
+        view=selected.json();assert view['actionable'] and view['revision']==pending['revision']
+        assert 'direct requirement' in view['body']
+        from dashboard.companion import Grants
+        grants=Grants(config,provider);grant=grants.enroll('Selected internal pending fixture',j.root/'internal-device.json',3600)
+        device=json.loads((j.root/'internal-device.json').read_text())
+        limited={'origin':config['origin'],'authorization':device['authorization'],'x-dashboard-csrf':device['csrf']}
+        route='/api/interaction/internal/requests/'+view['id']
+        def decision(action):return {'binding':binding,'revision':view['revision'],'action':action}
+        before_answers=len(j.native_answers)
+        for action in ({'kind':'approval','choice':'a'},{'kind':'cancel'}):
+            assert client.post(route,headers=limited,json=decision(action)).status_code==403
+        assert len(j.native_answers)==before_answers,'Conversation-only access acquired approval/cancellation authority'
+        reply=decision({'kind':'answer','text':'Continue the direct requirement once.'})
+        assert client.post(route,headers={k:v for k,v in limited.items() if k!='x-dashboard-csrf'},json=reply).status_code==403
+        result=client.post(route,headers=limited,json=reply);assert result.status_code==200,result.text
+        j.wait(lambda:any(v['id']=='canonical-internal-direct-question' for v in j.native_answers))
+        count=len(j.native_answers)
+        repeated=client.post(route,headers=limited,json=reply);assert repeated.status_code==200,repeated.text
+        assert not repeated.json()['new_decision'] and len(j.native_answers)==count
+        assert client.get(route+'/receipt',headers=limited,params={'revision':view['revision']}).json()['recorded']
+        grants.revoke(grant['grant_id']);assert client.get('/api/interaction/internal',headers=limited).status_code==401
+        assert client.get('/api/interaction/internal',headers=headers).status_code==200
+        j.broadcast('native-topic-8','turn/completed',{'turn':{'id':j.workers['native-topic-8'],'status':'completed'}})
         # A new pending request expires on listener restart and never recreates its response channel.
         root_send({'id':'canonical-restart-question','method':'item/tool/requestUserInput','params':{
             'threadId':j.web_thread,'turnId':j.web_turn,'itemId':'restart-choice','isBlocking':False,
@@ -116,9 +172,9 @@ def qualify(binary):
         assert archived.status_code==200 and archived.json()['recorded']
         assert decide(approval,{'kind':'approval','choice':'a'}).json()['new_decision'] is False
         assert len(j.native_answers)==count and j.row('SELECT count(*) FROM sessions WHERE thread_id=7')==[(0,)]
-        assert j.row('SELECT count(*) FROM incoming_updates')==journal
-        assert not j.messages,'Canonical controls fabricated a Telegram publication'
-        print('PASS authenticated root/routed native controls: full proposal paging, exact multi-question answers, offered approvals only, duplicate revision inspection, simultaneous steer, escaped32KiB answer, restart expiration and no Telegram identity/publication; zero models.')
+        assert j.row('SELECT count(*) FROM incoming_updates')==[(journal[0][0]+1,)],'Only the explicit direct Beta original may add Telegram ingress'
+        assert j.messages and all(m.get('message_thread_id')==8 for m,_ in j.messages),'Canonical controls published outside the ordinary direct Beta topic'
+        print('PASS authenticated root/routed native controls: full proposal paging, exact multi-question answers, offered approvals only, duplicate revision inspection, simultaneous steer, escaped32KiB answer, restart expiration, separate direct-session device decisions and no fabricated Telegram ingress/publication; zero models.')
     finally:
         if client:client.close()
         j.close()
