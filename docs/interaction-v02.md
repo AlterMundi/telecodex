@@ -504,8 +504,10 @@ solos form the audible session selection. Removing the last solo restores all
 sessions without reviving old mutes. Hear all sessions clears both sets. These
 filters include automatic conversation replies, progress and live speech as one
 Conversation track. Solo Conversation excludes internal-session updates; muting
-Conversation leaves internal sessions audible. Pending questions retain their
-existing attention handling, and explicit Listen remains available. Filtering stops excluded automatic playback without pausing global
+Conversation leaves internal sessions audible. Native questions use their actual
+Conversation or internal-session identity, so Solo Conversation also excludes
+internal questions. Sources without a known track stay silent while any Solo is
+selected. Explicit Listen remains available. Filtering stops excluded automatic playback without pausing global
 Voice or native work. Returning a session to the mix never replays silent history.
 
 Preferences are local to the conversation binding, capped at 256 mute and 256

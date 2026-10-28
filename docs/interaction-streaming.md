@@ -950,3 +950,28 @@ specific historical human recording.
 Gemini push-to-talk activityStart/activityEnd agrees with the
 [provider's manual-transcription contract](https://ai.google.dev/gemini-api/docs/live-api/live-transcribe#manual-vad-push-to-talk).
 That contract check alone does not identify a historical missing tail.
+
+
+## Page-local browser timing
+
+Under the hood → Browser voice timing keeps at most eight recording histories
+and sixteen observed response items in memory. It never stores media or text,
+writes storage, sends telemetry, installs a poller or changes native work. Clear,
+reload or a binding change removes these local marks. The existing capture UUID
+owns permission/start, first caption, stop/Send, finalization and confirmed HTTP
+receipt marks. A saved original is not native acceptance.
+
+Presentation drafts and canonical native sources expose optional `local_turn`
+metadata from the already-authorized turn. The browser joins only accepted
+originals and Conversation output in that same local turn, never worker returns,
+old history before Send or a guessed latest reply. When several recorded inputs
+share a steered turn, it leaves response timing unassigned. This observation is
+not proof that a correction was incorporated. Older receivers without the field
+retain capture timing and leave the response link unavailable.
+
+Playback starts are the first unmuted `playing` event of automatic speech; muted
+source validation and deliberate playback of history are excluded. The recorded
+pause duration covers the recording handler applying pause/mute, not acoustic
+silence. First intelligible physical sound, noise/echo and real-device acceptance
+remain separate. Do not add server durations to this browser clock or present
+these diagnostics as a provider benchmark or subsecond speech guarantee.

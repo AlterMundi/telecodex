@@ -93,7 +93,7 @@ window.RequestControls = (() => {
     }
     function audioSource(value) {
       if(value?.kind!=="question" || value.state!=="pending" || !value.actionable)return;
-      return {id:`request:${value.id}`,revision:value.revision,kind:"native_question",label:`${value.label || "Conversation"} · ${value.title || "Question"}`};
+      return {id:`request:${value.id}`,revision:value.revision,kind:"native_question",target:value.target,audio_track:value.audio_track,label:`${value.label || "Conversation"} · ${value.title || "Question"}`};
     }
     function create(value) {
       const box = node("article", undefined, "reply request-card");
@@ -133,7 +133,7 @@ window.RequestControls = (() => {
       listen.addEventListener("click", () => {
         const view=card.view;
         if(typeof onListen!=="function" || !getCanListen() || view?.kind!=="question" || !view.actionable || card.closed || card.busy || card.loading || card.pending || card.unavailable || view.binding!==getBinding())return;
-        return onListen({id:`request:${card.id}`,revision:view.revision,kind:"native_question",label:`${view.label || "Conversation"} · ${view.title || "Question"}`});
+        return onListen({id:`request:${card.id}`,revision:view.revision,kind:"native_question",target:view.target,audio_track:view.audio_track,label:`${view.label || "Conversation"} · ${view.title || "Question"}`});
       });
       text.addEventListener("input", () => {card.answerRevision = card.view?.revision;});
       dismiss.addEventListener("click", () => {

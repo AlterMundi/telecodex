@@ -37,7 +37,7 @@ window.VoiceInput = (() => {
       remove:value=>operation('readwrite',(store,old)=>{if(old?.id===value.id && old.audio_sha256===value.audio_sha256)store.delete('pending');})
     };
   }
-  function mount({api, headers, getBinding, onInput, getReply=()=>undefined, getPlayback=()=>undefined, getCaptureQuestions=()=>undefined, getVisual=()=>undefined, getFiles=()=>undefined, onFilesSent=()=>{}, onVisualSent=()=>{}, pauseAudio, onActivity=()=>{}, unauthorized, telegram}) {
+  function mount({api, headers, getBinding, onInput, onTiming=()=>{}, getReply=()=>undefined, getPlayback=()=>undefined, getCaptureQuestions=()=>undefined, getVisual=()=>undefined, getFiles=()=>undefined, onFilesSent=()=>{}, onVisualSent=()=>{}, pauseAudio, onActivity=()=>{}, unauthorized, telegram}) {
     const box=document.querySelector('#conversation-voice'), button=document.querySelector('#conversation-talk'),send=document.querySelector('#conversation-send');
     const discard=document.querySelector('#conversation-voice-discard'), check=document.querySelector('#conversation-voice-check');
     const state=document.querySelector('#conversation-voice-state'),save=document.querySelector('#conversation-voice-save'),review=document.querySelector('#conversation-recording-review');
@@ -123,6 +123,7 @@ window.VoiceInput = (() => {
       if(!!frozen.visual!==!!value.visual||Array.isArray(frozen.visual)!==Array.isArray(value.visual)||Array.isArray(frozen.visual)&&frozen.visual.length!==value.visual.length||frozen.visual&&Object.keys(frozen.visual).some(k=>JSON.stringify(frozen.visual[k])!==JSON.stringify(value.visual[k])))throw Error('Visual capture does not match this recording.');
       const fileValues=refs=>(refs||[]).map(file=>['file_id','sha256','name','mime','size'].map(key=>file[key]));
       if(JSON.stringify(fileValues(frozen.files))!==JSON.stringify(fileValues(value.files)))throw Error('Original files do not match this recording.');
+      onTiming(frozen.id,'retained');
       latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256,phase:value.phase,preparedText:frozen.preparedText};
       onInput(value,frozen.focusVersion);onVisualSent(frozen.visual);onFilesSent(frozen.files);pending=undefined;phase='idle';
       try{await recovery?.remove(frozen);}catch{}
@@ -147,7 +148,7 @@ window.VoiceInput = (() => {
         try{const original=pending,visual=await getVisual();if(pending!==original||original.binding!==getBinding())return;pending={...original,id:window.crypto.randomUUID(),visual,needsVisualSelection:false};}
         catch(_){notice('Point again or remove the image before retrying this recording.',true);return;}
       }
-      const frozen=pending;uploading=true;controller=new AbortController();const active=controller;
+      const frozen=pending;onTiming(frozen.id,'send');uploading=true;controller=new AbortController();const active=controller;
       const deadline=setTimeout(()=>active.abort(),20000);if(frozen.preparedText)caption(frozen.preparedText);else notice('Saving your recording…');controls();
       try {
         const response=await fetch(frozen.captureStop?'api/interaction/voice/limited':'api/interaction/voice',{method:'POST',credentials:'same-origin',signal:active.signal,
@@ -171,6 +172,7 @@ window.VoiceInput = (() => {
       stopTracks();const preparedText=recorder?.preparedText||selection?.preparedText,captureStop=recorder?.captureStop||selection?.captureStop;recorder=undefined;
       const blob=new Blob(parts,{type:mime});parts=[];bytes=0;
       if(!blob.size){cancelRecording('No audio samples were captured. Nothing was sent.');return;}
+      onTiming(selection?.captureId,'ready');
       phase='finalizing';controls();
       try {
         if(!blob.size || blob.size>20*1024*1024)throw Error('Recording outside limits');
@@ -205,6 +207,7 @@ window.VoiceInput = (() => {
         const fileCandidate=getFiles();const selectedFiles=fileCandidate?.then?await fileCandidate:fileCandidate;
         if(owned!==generation||binding!==getBinding()||document.hidden)return;
         const frozenSelection={...selection,visual:selectedVisual,files:selectedFiles,captureId:window.crypto.randomUUID()};
+        onTiming(frozenSelection.captureId,'requested');
         const media=await window.navigator.mediaDevices.getUserMedia({audio:true,video:false});
         if(owned!==generation || binding!==getBinding() || document.hidden){for(const track of media.getTracks())track.stop();return;}
         stream=media;
@@ -212,13 +215,13 @@ window.VoiceInput = (() => {
         const fallbackMime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4','audio/webm'].find(value=>window.MediaRecorder.isTypeSupported(value));
         const canonical=liveMode==='captions'&&fallbackMime?new window.MediaRecorder(media,{mimeType:fallbackMime,audioBitsPerSecond:64000}):undefined;
         if((liveMode!=='captions'||canonical)&&liveAvailable&&window.StreamingVoice?.supported()){
-          try{current=await window.StreamingVoice.create(media,{headers,binding,canonicalRecorder:canonical,id:frozenSelection.captureId,onPartial:text=>{if(owned===generation&&phase==='recording'){caption(text||'Listening…');}}});}catch{}
+          try{current=await window.StreamingVoice.create(media,{headers,binding,canonicalRecorder:canonical,id:frozenSelection.captureId,onPartial:text=>{if(owned===generation&&phase==='recording'){onTiming(frozenSelection.captureId,'partial');caption(text||'Listening…');}}});}catch{}
         }
         if(owned!==generation||binding!==getBinding()||document.hidden){current?.discard?.();for(const track of media.getTracks())track.stop();return;}
         current=current||canonical;
         const mime=current?(current.mimeType||'audio/wav'):fallbackMime;
         if(!mime)throw Error('No supported recording format');
-        current=current||new window.MediaRecorder(media,{mimeType:mime,audioBitsPerSecond:64000});recorder=current;
+        current=current||new window.MediaRecorder(media,{mimeType:mime,audioBitsPerSecond:64000});recorder=current;current.captureId=frozenSelection.captureId;
         current.addEventListener('dataavailable',event=>{
           if(owned!==generation || !event.data.size)return;
           bytes+=event.data.size;if(bytes>20*1024*1024){cancelRecording('Recording exceeded its size limit. Nothing was sent.');return;}
@@ -226,8 +229,8 @@ window.VoiceInput = (() => {
         });
         current.addEventListener('error',()=>{if(owned===generation)cancelRecording('Recording failed. Nothing was sent.');});
         current.addEventListener('stop',()=>finish(owned,binding,mime,frozenSelection));
-        current.start(250);phase='recording';recordingStarted=clock();caption('Listening…');controls();countdown();
-        timer=setTimeout(()=>{if(owned===generation && current.state==='recording'){phase='finalizing';current.captureStop='duration_limit';current.stop();stopTracks();controls();}},RECORDING_MILLIS);
+        current.start(250);onTiming(frozenSelection.captureId,'started');phase='recording';recordingStarted=clock();caption('Listening…');controls();countdown();
+        timer=setTimeout(()=>{if(owned===generation && current.state==='recording'){phase='finalizing';onTiming(frozenSelection.captureId,'ended');current.captureStop='duration_limit';current.stop();stopTracks();controls();}},RECORDING_MILLIS);
       } catch(error) {
         const reason={NotAllowedError:'Microphone permission was denied. Check this browser’s site permissions.',
           NotFoundError:'This browser could not find an accessible microphone.',
@@ -239,7 +242,7 @@ window.VoiceInput = (() => {
     }
     function submit(){
       if(uploading)return;
-      if(phase==='recording'){commit=true;phase='finalizing';recorder.stop();stopTracks();controls();}
+      if(phase==='recording'){onTiming(recorder.captureId,'send');onTiming(recorder.captureId,'ended');commit=true;phase='finalizing';recorder.stop();stopTracks();controls();}
       else if(phase==='ready'){commit=true;return finish(generation,readySelection.binding,parts[0].type,readySelection.selection);}
       else if(pending)return upload();
     }

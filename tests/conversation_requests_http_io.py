@@ -62,6 +62,8 @@ def qualify(binary):
         assert all('body' not in item and 'choices' not in item for item in page['items'])
         question=next(item for item in page['items'] if item['kind']=='question')
         approval=next(item for item in page['items'] if item['kind']=='approval')
+        assert question['audio_track']=='conversation'
+        assert approval['audio_track']=='session' and approval['target']['thread_id']==7
         def detail(ident,**params):
             r=client.get('/api/interaction/requests/'+ident,params=params,headers=headers)
             assert r.status_code==200,r.text;return r.json()
@@ -122,6 +124,7 @@ def qualify(binary):
         j.wait(direct_question_ready)
         internal=client.get('/api/interaction/internal',headers=headers);assert internal.status_code==200,internal.text
         pending=next(v for v in internal.json()['items'] if v['target']['thread_id']==8)
+        assert pending['audio_track']=='session' and pending['target']['thread_id']==8
         assert pending['kind']=='question' and pending['actionable'] and pending['binding']==binding,pending
         assert pending['id'] not in {v['id'] for v in client.get('/api/interaction/requests',headers=headers).json()['items']}
         assert client.get('/api/interaction/requests/'+pending['id'],headers=headers).status_code==409

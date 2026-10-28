@@ -506,7 +506,7 @@ impl Store {
             AND NOT EXISTS(SELECT 1 FROM interaction_native_messages m WHERE m.native_thread=?4 AND m.native_turn=json_extract(b.value,'$.turn') AND m.item_id=json_extract(b.value,'$.item'))",
             params![format!("interaction-response-draft:{session}"),session,human,native,result["binding"].as_str()],|r|r.get(0)).optional()?;
         result["response_draft"]=draft.and_then(|v|serde_json::from_str::<Value>(&v).ok())
-            .map(|v|json!({"text":v["text"],"native_turn":v["turn"],"native_item":v["item"],"observed_at":v["observed_at"],"provisional":true,"can_listen":false})).unwrap_or(Value::Null);
+            .map(|v|json!({"text":v["text"],"native_turn":v["turn"],"native_item":v["item"],"local_turn":v["local"],"observed_at":v["observed_at"],"provisional":true,"can_listen":false})).unwrap_or(Value::Null);
         if let Some(cursor) = after_matrix {
             result["cursor"]["matrix"] =
                 json!(matrices.iter().take(8).next_back().map_or(cursor, |r| r.0));
@@ -670,7 +670,7 @@ pub(super) fn source_on(
         let found = conn.query_row(&format!(
             "SELECT m.text,m.native_turn,m.item_id,m.phase,m.observed_at,
              t.session_id=?2 AND m.native_thread=?4,s.chat_id,s.thread_id,
-             s.codex_thread_id IS m.native_thread AND s.force_fresh_thread=0
+             s.codex_thread_id IS m.native_thread AND s.force_fresh_thread=0,t.id
              FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn
              JOIN sessions s ON s.id=t.session_id WHERE m.rowid=?1 AND {NATIVE_VISIBILITY}"),
              params![row,entry_session,human,entry_native],|r| {
@@ -678,7 +678,7 @@ pub(super) fn source_on(
                 let phase:Option<String>=r.get(3)?;
                 let phase=phase.as_deref().unwrap_or("final_answer");
                 Ok(json!({"id":id,"kind":if !is_entry {if phase=="commentary" {"worker_progress"} else {"worker_result"}} else if phase=="commentary" {"integrator_progress"} else {"integrator_answer"},
-                    "text":r.get::<_,String>(0)?,"native_turn":r.get::<_,String>(1)?,"native_item":r.get::<_,String>(2)?,"observed_at":r.get::<_,String>(4)?,
+                    "text":r.get::<_,String>(0)?,"native_turn":r.get::<_,String>(1)?,"native_item":r.get::<_,String>(2)?,"local_turn":r.get::<_,i64>(9)?,"observed_at":r.get::<_,String>(4)?,
                     "target":if is_entry {Value::Null} else {json!(SessionKey::new(r.get(6)?,Some(r.get(7)?)))},
                     "current":Value::Null,"correction_pending":Value::Null,"completed":Value::Null,
                     "native_binding_current":r.get::<_,bool>(8)?}))
@@ -977,6 +977,7 @@ mod tests {
             .unwrap();
         assert_eq!(page["response_draft"]["text"], "Useful early text.");
         assert_eq!(page["response_draft"]["provisional"], true);
+        assert_eq!(page["response_draft"]["local_turn"], local);
         assert_eq!(page["response_draft"]["can_listen"], false);
         assert!(
             page["items"]
@@ -1657,6 +1658,7 @@ mod tests {
             .unwrap();
         assert!(source["current"].is_null());
         assert_eq!(source["preview"], "Alpha is still working.");
+        assert!(source["local_turn"].as_i64().is_some_and(|turn| turn > 0));
         assert_eq!(
             source["text_characters"],
             "Alpha is still working.".chars().count()

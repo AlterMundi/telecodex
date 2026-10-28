@@ -181,6 +181,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     const value={url:'blob:fixture-stream',signal,position:seconds=>options.wordPosition?.(seconds,Number(_response.headers.get("x-presentation-offset"))),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
   }};
   if(options.liveSpeech)vm.runInContext(fs.readFileSync("dashboard/web/live-speech.js", "utf8"), context);
+  if(options.timingEvents)context.window.ConversationTiming={mount:()=>Object.fromEntries(["bind","mark","input","source","pauseApplied"].map(name=>[name,(...args)=>options.timingEvents.push([name,...args])]))};
   vm.runInContext(fs.readFileSync("dashboard/web/conversation.js", "utf8"), context);
   if(options.autoText)context.window.IntersectionObserver=class{
     constructor(callback){intersection=callback;}observe(){}unobserve(){}disconnect(){}
@@ -208,11 +209,12 @@ function boot(readOnly=false,standalone=false,options={}) {
     capture(){capture.pauseAudio();capture.onActivity(true);},
     finishCapture(){capture.onActivity(false);},
     capturedInput(value){capture.onInput(value);},
+    timingCapture(id,stage){capture.onTiming(id,stage);},
     failPage(name="TypeError"){pageFailure=name;},failAudio(n=1){audioFailures=n;},
     closeNativeRequest(){Object.assign(nativeRequests.get('native-request'),{state:'answered',actionable:false});},
     overrideSource(n,value){sourceOverrides.set(n,value);},addReplies(n){count+=n;},audio(parts=false){renderAudio=true;multipart=parts;},
-    nativeRequest() {
-      nativeRequests.set("native-request",{id:"native-request",binding:"fixture",revision:"native-revision",state:"pending",actionable:true,kind:"question",title:"Scope",label:"Conversation",body:"Choose scope",choices:[{label:"Selected scope",action:{kind:"option",index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:1,recorded_revisions:[]});
+    nativeRequest(audioTrack="conversation",target={chat_id:100,thread_id:1}) {
+      nativeRequests.set("native-request",{id:"native-request",binding:"fixture",revision:"native-revision",audio_track:audioTrack,target,state:"pending",actionable:true,kind:"question",title:"Scope",label:"Conversation",body:"Choose scope",choices:[{label:"Selected scope",action:{kind:"option",index:0}}],allows_text:true,can_cancel:true,question_index:0,question_total:1,recorded_revisions:[]});
     },
     advanceNativeRequest() {Object.assign(nativeRequests.get("native-request"),{revision:"native-revision-2",question_index:1,title:"Next question"});},
     holdPart() {
@@ -1142,6 +1144,27 @@ function boot(readOnly=false,standalone=false,options={}) {
     await new Promise(resolve=>setTimeout(resolve,20));
     assert.equal(filteredLive.audioCalls.length,0,'The conversation mix also filters direct live-speech selection');filteredLive.ui.stop();
   }
+  const questionMix=boot(false,true,{clock:true});questionMix.audio();await questionMix.ui.refresh();
+  filterControl(questionMix,'native:8','solo').handlers.click();
+  questionMix.nodes.get('#conversation-voice-replies').handlers.click();
+  questionMix.nativeRequest("session",{chat_id:100,thread_id:7});await questionMix.ui.refresh();
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(questionMix.audioCalls.length,0,'Solo Conversation also excludes internal pending questions');
+  questionMix.ui.stop();
+  const localQuestionMix=boot(false,true,{clock:true});localQuestionMix.audio();await localQuestionMix.ui.refresh();
+  filterControl(localQuestionMix,'native:8','solo').handlers.click();
+  localQuestionMix.nodes.get('#conversation-voice-replies').handlers.click();
+  localQuestionMix.nativeRequest();await localQuestionMix.ui.refresh();
+  await until(()=>localQuestionMix.audioCalls.length===1);
+  assert.equal(localQuestionMix.audioCalls[0].source,'request:native-request','Conversation questions remain audible under Solo Conversation');localQuestionMix.ui.stop();
+  const timingEvents=[],timed=boot(false,true,{clock:true,capture:true,timingEvents});timed.audio();await timed.ui.refresh();
+  timed.timingCapture('owned-recording','requested');timed.timingCapture('owned-recording','started');
+  assert(timingEvents.some(event=>event[0]==='mark'&&event[1]==='owned-recording'&&event[2]==='started'));
+  timed.nodes.get('#conversation-voice-replies').handlers.click();timed.addReplies(1);await timed.ui.refresh();
+  const timedPlayer=timed.nodes.get('#conversation-audio');await until(()=>!timedPlayer.paused);
+  const beforePlaying=timingEvents.filter(event=>event[0]==='source'&&event[2]===true).length;
+  timedPlayer.muted=true;timedPlayer.handlers.playing();assert.equal(timingEvents.filter(event=>event[0]==='source'&&event[2]===true).length,beforePlaying,'Muted source validation is not playback timing');
+  timedPlayer.muted=false;timedPlayer.handlers.playing();assert(timingEvents.some(event=>event[0]==='source'&&event[2]===true&&event[1].id==='native:9'));timed.ui.stop();
   const autoQuestion=boot();autoQuestion.audio();await autoQuestion.ui.refresh();
   autoQuestion.nodes.get('#conversation-voice-replies').handlers.click();autoQuestion.nativeRequest();await autoQuestion.ui.refresh();
   const questionPlayer=autoQuestion.nodes.get('#conversation-audio');
