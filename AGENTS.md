@@ -138,7 +138,7 @@ resume. Preserve actual input/ACK history and distinguish fixture rejection from
 Core submission. Current receiving evidence and remaining acceptance live in the
 existing Shared Resources Interaction record; do not rerun completed qualifiers.
 
-Ordinary canonical routed result/question attention is developed under #426 with
+Ordinary canonical routed result/question attention is implemented under #426 with
 `interaction.native_routed_returns` default off. It reuses the native return
 transport beside canonical source rows; never invent workflows or human inputs
 for ordinary returns. Keep helper/direct/progress exclusions, exact source and

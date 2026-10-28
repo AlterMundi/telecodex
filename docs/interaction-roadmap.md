@@ -128,8 +128,12 @@ Progress and remaining gaps belong here and in the linked issues. Complete this 
 The [CPU turn-taking candidate](interaction-turn-taking.md) records the pinned
 Smart Turn v3.2 runner, measured resource/timing bounds and contrasting synthetic
 versus author-held-out Spanish results. Optional avatar-mode source now connects real VAD, capture-generation fences
-and the existing original recovery path. Receiving activation, full duplex,
-foreground responsiveness and internal-result/question offers remain unfinished.
+and the existing original recovery path. Explicit-avatar continuous mode is
+receiving-enabled through PR421/422; PR427 now installs bounded ordinary canonical
+result/question returns through Conversation alongside declared workflows. These
+component deliveries do not complete stages2/3/required4: foreground responsiveness,
+integrated speech/coalescing, physical echo/noise and actual useful-audio latency
+acceptance remain unfinished.
 
 ## Delivery tasks
 
