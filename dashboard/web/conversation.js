@@ -224,6 +224,7 @@ window.Conversation = (() => {
     // transcript, labels, native work state or playback backlog is persisted.
     const mutedSessions=new Set(),soloSessions=new Set();let muteBinding;
     function sessionKey(source){
+      if(["integrator_answer","integrator_progress","integrator_live"].includes(source.kind))return "conversation";
       const target=source.target;
       if(!["worker_progress","worker_result"].includes(source.kind) || !target
         || !Number.isSafeInteger(target.chat_id) || target.thread_id!=null && !Number.isSafeInteger(target.thread_id))return;
@@ -233,6 +234,7 @@ window.Conversation = (() => {
     function restoreSessionKeys(saved,target){
       if(!Array.isArray(saved)||saved.length>256)return;
       for(const key of saved){
+        if(key==="conversation"){target.add(key);continue;}
         if(typeof key!=="string" || key.length>64)continue;
         try{const pair=JSON.parse(key);
           if(Array.isArray(pair)&&pair.length===2&&Number.isSafeInteger(pair[0])&&(pair[1]===null||Number.isSafeInteger(pair[1]))
@@ -260,13 +262,14 @@ window.Conversation = (() => {
         window.localStorage?.removeItem?.("interaction-session-mutes:"+binding);
       }catch{}
       for(const other of [...cards.values(),...progressCards.values()])muteButtonState(other);
+      if(prefetched && sessionMuted(prefetched.source||prefetched.owner)){prefetched.controller.abort();prefetched=undefined;}
       for(let n=voiceQueue.length-1;n>=0;n--)if(sessionMuted(voiceQueue[n]))removeQueued(n);
       if(active?.queued && sessionMuted(active.source))stop("Automatic audio filtered for this session. Its updates remain visible.");
       voiceStatus();Promise.resolve().then(drainVoice);
     }
     function muteButtonState(card){
       if(!card.mute)return;
-      const key=sessionKey(card.muteSource),muted=mutedSessions.has(key),solo=soloSessions.has(key),label=card.muteSource.label||"this session";
+      const key=sessionKey(card.muteSource),muted=mutedSessions.has(key),solo=soloSessions.has(key),label=key==="conversation"?"Conversation":card.muteSource.label||"this session";
       card.mute.setAttribute("aria-pressed",String(muted));
       card.mute.setAttribute("aria-label",`${muted?"Unmute":"Mute"} automatic audio updates from ${label}`);
       card.mute.title=card.mute.getAttribute?.("aria-label") || `${muted?"Unmute":"Mute"} automatic audio updates from ${label}`;
@@ -1091,7 +1094,7 @@ window.Conversation = (() => {
         prepared=prefetched;next=prepared.source;
         const duplicate=voiceQueue.findIndex(source=>source.id===next.id && source.revision===next.revision);
         if(duplicate>=0)voiceQueue.splice(duplicate,1);
-      }else next=voiceQueue.shift() || (canSpeakLive?await liveSpeech?.next():undefined);
+      }else next=voiceQueue.shift() || (canSpeakLive && !sessionMuted({kind:"integrator_live"})?await liveSpeech?.next():undefined);
       if(generation!==selectionGeneration){liveSpeech?.unsent(next);return;}
       if(questionRefreshPending || (next?.kind!=="native_question" && voiceQueue[0]?.kind==="native_question")){
         if(next && !prepared){
@@ -1103,7 +1106,7 @@ window.Conversation = (() => {
       voiceStatus();if(!next){voiceBusy=false;return;}
       const offset=next.speech_start||0;
       prepared ||= queuedPreparations.get(preparationKey(next,offset));
-      if(!voiceEnabled || voiceSuspended || captureBusy || !enabled || !playbackAllowed()){liveSpeech?.unsent(next);voiceBusy=false;return;}
+      if(!voiceEnabled || voiceSuspended || captureBusy || !enabled || !playbackAllowed() || sessionMuted(next)){liveSpeech?.unsent(next);voiceBusy=false;return;}
       if(next.kind==="integrator_live" && !prepared && !liveSpeech?.admit(next)){voiceBusy=false;return;}
       const result=await listenTo(next,offset,{queued:true});
       if(result?.failed && result.generation===generation && !active)
@@ -1521,7 +1524,7 @@ window.Conversation = (() => {
       }finally{clearTimeout(deadline);}
     }
     function prefetchNext(selected){
-      if(!selected.prefetch || voiceSuspended || captureBusy || active!==selected || prefetched || queuedPreparations.size)return;
+      if(!selected.prefetch || voiceSuspended || captureBusy || active!==selected || prefetched || queuedPreparations.size || sessionMuted(selected.source))return;
       if(selected.source.kind!=="integrator_live"){
         if(selected.next===null)return;
         const controller=new AbortController(),source=selected.source,offset=selected.next;
@@ -1532,7 +1535,7 @@ window.Conversation = (() => {
       const owned=generation,waiting={controller:new AbortController(),owner:selected.source,ahead:true};prefetched=waiting;
       waiting.selection=(async()=>{
         const source=await liveSpeech?.next() || liveSpeech?.continuation(selected.source);
-        if(!source || prefetched!==waiting || active!==selected || generation!==owned || voiceSuspended || captureBusy || selected.interrupted){
+        if(!source || prefetched!==waiting || active!==selected || generation!==owned || voiceSuspended || captureBusy || selected.interrupted || sessionMuted(source)){
           liveSpeech?.unsent(source);waiting.controller.abort();if(prefetched===waiting)prefetched=undefined;return;
         }
         if(source.kind==="integrator_live" && !liveSpeech?.admit(source)){prefetched=undefined;return;}

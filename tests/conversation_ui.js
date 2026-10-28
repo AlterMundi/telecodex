@@ -1114,6 +1114,34 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(mix.audioCalls[1].source,'native:11','Reset restores future audio from previously filtered sessions');mix.ui.stop();
   const resetMix=boot(false,true,{followStorage:mixStorage});resetMix.overrideSource(8,{...worker(8,'Beta'),kind:'worker_progress'});await resetMix.ui.refresh();
   assert.equal(filterControl(resetMix,'native:8','reset').hidden,true,'Reset persists across reload');resetMix.ui.stop();
+  const conversationStorage=new Map();
+  const conversationMix=boot(false,true,{clock:true,followStorage:conversationStorage});conversationMix.audio();await conversationMix.ui.refresh();
+  filterControl(conversationMix,'native:8','solo').handlers.click();
+  assert.equal(filterControl(conversationMix,'native:8','solo')['aria-label'],'Remove solo from automatic audio updates from Conversation');
+  conversationMix.nodes.get('#conversation-voice-replies').handlers.click();
+  conversationMix.overrideSource(9,worker(7,'Alpha'));conversationMix.addReplies(2);await conversationMix.ui.refresh();
+  const conversationPlayer=conversationMix.nodes.get('#conversation-audio');
+  await until(()=>conversationMix.audioCalls.length===1&&!conversationPlayer.paused);
+  assert.equal(conversationMix.audioCalls[0].source,'native:10','Solo Conversation excludes internal sessions');
+  filterControl(conversationMix,'native:10','reset').handlers.click();
+  filterControl(conversationMix,'native:10','mute').handlers.click();
+  assert.equal(conversationPlayer.paused,true,'Mute Conversation stops its current automatic audio');
+  conversationMix.overrideSource(11,worker(7,'Alpha'));conversationMix.addReplies(2);await conversationMix.ui.refresh();
+  await until(()=>conversationMix.audioCalls.length===2&&!conversationPlayer.paused);
+  assert.equal(conversationMix.audioCalls[1].source,'native:11','Mute Conversation leaves internal-session audio available');
+  assert.equal(filterControl(conversationMix,'native:12','mute')['aria-pressed'],'true','Conversation cards share one mute identity');
+  conversationMix.ui.stop();
+  const restoredConversation=boot(false,true,{followStorage:conversationStorage});await restoredConversation.ui.refresh();
+  assert.equal(filterControl(restoredConversation,'native:8','mute')['aria-pressed'],'true','Conversation filter survives reload');
+  filterControl(restoredConversation,'native:8','reset').handlers.click();
+  assert.equal(filterControl(restoredConversation,'native:8','mute')['aria-pressed'],'false');restoredConversation.ui.stop();
+  for(const audioMix of [{muted:['conversation'],solo:[]},{muted:[],solo:['[100,7]']}]){
+    const filteredOptions={liveSpeech:true,clock:true,responseDraft:{provisional:true,native_turn:'filtered-physical',native_item:'filtered-item',text:'A useful live sentence. Remaining',observed_at:'2100-01-01T00:00:00Z'},followStorage:new Map([['interaction-session-audio:fixture',JSON.stringify({version:1,...audioMix})]])};
+    const filteredLive=boot(false,true,filteredOptions);filteredLive.audio();await filteredLive.ui.refresh();
+    filteredLive.nodes.get('#conversation-voice-replies').handlers.click();await filteredLive.ui.refresh();
+    await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(filteredLive.audioCalls.length,0,'The conversation mix also filters direct live-speech selection');filteredLive.ui.stop();
+  }
   const autoQuestion=boot();autoQuestion.audio();await autoQuestion.ui.refresh();
   autoQuestion.nodes.get('#conversation-voice-replies').handlers.click();autoQuestion.nativeRequest();await autoQuestion.ui.refresh();
   const questionPlayer=autoQuestion.nodes.get('#conversation-audio');
