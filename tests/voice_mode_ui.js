@@ -43,10 +43,10 @@ direct.mode.update({playback:'playing'});assert.equal(direct.nodes.find(n=>n.cla
 direct.mode.update({playback:undefined});assert(!direct.timers.some(t=>t.ms===900&&!t.cancelled),'Continuous mode never uses the alternating rearm timer');
 const directStatus=direct.nodes.find(n=>n.className==='voice-mode-state');
 direct.mode.update({continuousState:{active:true,remaining:15}});
-assert.equal(directStatus.textContent,'Listening · 0:15 left');assert.equal(directStatus.dataset.nearLimit,'true');
-direct.mode.update({playback:'playing'});assert.equal(directStatus.textContent,'Speaking · listening · 0:15 left');
+assert.equal(directStatus.textContent,'Listening · 0:15');assert.equal(directStatus.dataset.nearLimit,'true');assert.match(directStatus.attributes['aria-label'],/15 seconds of recording remaining/);
+direct.mode.update({playback:'playing'});assert.equal(directStatus.textContent,'Speaking · listening · 0:15');
 direct.mode.update({continuousState:{active:true,remaining:120}});
-assert.equal(directStatus.textContent,'Speaking · listening · 2:00 left');assert.equal(directStatus.dataset.nearLimit,'false');
+assert.equal(directStatus.textContent,'Speaking · listening · 2:00');assert.equal(directStatus.dataset.nearLimit,'false');
 direct.mode.update({continuousState:{active:true,remaining:Infinity}});assert.equal(directStatus.textContent,'Speaking · listening');
 direct.mode.update({continuousState:{active:false,starting:false,pending:true,working:false}});direct.mode.update({pending:false,uploading:true,capture:'idle'});
 assert.equal(direct.nodes.find(n=>n.className==='voice-mode-state').textContent,'Recording needs review','An old ordinary upload cannot clear continuous recovery state');

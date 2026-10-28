@@ -57,15 +57,16 @@ window.ConversationVoiceMode=(()=>{
       if(Object.hasOwn(value,'playback')){playing=value.playback==='playing'||value.playback==='preparing';if(playing)heard=true;}
       if(value.sent){waiting=true;heard=false;}
       if(continuous){
-        const left=remaining===undefined?'':` · ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')} left`;
+        const left=remaining===undefined?'':` · ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')}`;
         status.textContent=preparing?'Preparing voice':directPending?'Recording needs review':directWorking?'Saving your voice':playing&&listening?'Speaking · listening'+left:listening?'Listening'+left:'Voice paused';
         status.dataset.nearLimit=String(listening&&remaining!==undefined&&remaining<=15);
+        status.setAttribute('aria-label',status.textContent+(listening&&remaining!==undefined?`. ${remaining} seconds of recording remaining`:''));
         if(Object.hasOwn(value,'caption'))caption.textContent=value.caption;
         if(directPending)caption.textContent='Return to the conversation to review your recordings.';
         speak.hidden=preparing||listening||directPending;speak.disabled=directWorking||!canStart();speak.textContent='Start voice';
         dialog.dataset.phase=phase==='recording'?'listening':playing?'speaking':'waiting';return;
       }
-      status.dataset.nearLimit='false';
+      status.dataset.nearLimit='false';status.removeAttribute('aria-label');
       const recording=phase==='recording',working=phase==='permission'||phase==='finalizing'||value.uploading;
       status.textContent=recording?`Listening${remaining===undefined?'':` · ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')} left`}`:working?'Saving your voice':playing?'Speaking':pending||phase==='ready'?'Recording needs review':waiting?'Waiting for your reply':'Ready';
       caption.textContent=recording?(value.message||''):pending||phase==='ready'?'Return to the conversation to review your recording.':!waiting&&!playing?(value.message||''):'';
