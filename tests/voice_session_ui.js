@@ -42,6 +42,14 @@ function boot(){
   questions:v=>questions=v,bind:v=>binding=v,permission:()=>{permission=deferred();return permission;},holdCommit:()=>{commitHold=deferred();return commitHold;}};
 }
 (async()=>{
+ const countdown=boot();await countdown.session.start();assert.equal(countdown.states.at(-1).remaining,120);
+ for(let n=0;n<105;n++)countdown.sources[0].emit(32000,0);
+ assert.equal(countdown.states.at(-1).remaining,15,'The displayed budget follows this exact recorder PCM, including silence');
+ const updates=countdown.states.length;countdown.sources[0].emit(320,0);countdown.sources[0].emit(320,0);
+ assert.equal(countdown.states.length,updates,'Subsecond PCM does not create countdown update loops');
+ countdown.recorders[0].partial('Frase');countdown.activity(1,true,false);countdown.activity(1,false,true);
+ await until(()=>countdown.recorders.length===2);assert.equal(countdown.states.at(-1).remaining,120,'The next exact original gets a fresh recording budget');
+ countdown.recorders[0].complete('Frase');await until(()=>countdown.commits.length===1);countdown.session.hold();countdown.recorders[1].complete();await tick();
  const delayed=boot();await delayed.session.start();delayed.sources[0].emit(3200);delayed.activity(1,true,false);
  delayed.activity(1,false,true);delayed.sources[0].emit(64000,0);
  delayed.recorders[0].partial('Una frase completa que llegó después del silencio');

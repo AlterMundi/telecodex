@@ -6,7 +6,8 @@ window.ContinuousConversation=(()=>{
     let active=false,starting=false,stopping=false,epoch=0,binding,source,analysis,media,abort,timer,unsubscribe;
     let current,ring=[],bytes=0,lastEnergy=0,verdict,floor=false,blockedAt=Infinity,order=0,dispatching=false;
     const slots=new Map();
-    function state(message){const pending=[...slots.values()].some(s=>s.review);onState({active,starting,floor,pending,working:!active&&slots.size>0&&!pending,message});}
+    function remaining(){return current?Math.max(0,Math.ceil(120-(bytes-current.start)/32000)):undefined;}
+    function state(message){const pending=[...slots.values()].some(s=>s.review);onState({active,starting,floor,pending,working:!active&&slots.size>0&&!pending,message,remaining:remaining()});}
     function stopTracks(){for(const track of media?.getTracks()||[])track.stop();media=undefined;}
     function closeGraph(){unsubscribe?.();unsubscribe=undefined;source?.close();source=undefined;}
     function review(){onReview([...slots.values()].filter(s=>s.original).map(s=>s.original));}
@@ -135,6 +136,8 @@ window.ContinuousConversation=(()=>{
           ring.push({start:bytes,end,pcm:value.pcm});bytes=end;
           while(ring.length&&ring[0].end<=bytes-256000)ring.shift();
           if(!analysis.feed(value.pcm))hold('Voice analysis stopped. Your recordings are kept.');
+          const left=remaining();
+          if(current&&left!==current.remaining){current.remaining=left;state();}
         });
         source.observe();active=true;starting=false;await arm(0,owned);return active;
       }catch{if(owned!==epoch)return false;hold('Voice could not start. You can keep using the ordinary conversation.');closeGraph();stopTracks();return false;}
