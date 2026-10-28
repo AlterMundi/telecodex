@@ -376,7 +376,36 @@ class ProviderIO(unittest.TestCase):
             Provider.check_reply({'source':source,'revision':'a'*64,'context_only':True})
         for source in ('native:0','native:01','native:-1','native:9223372036854775808','native:abc'):
             with self.assertRaises(ValueError):Provider.check_reply({'source':source,'revision':'a'*64,'context_only':True})
-        with self.assertRaises(ValueError):Provider.check_reply({'source':'native:1','revision':'a'*64})
+        # Worker updates use native originals as routing references. The native
+        # reader verifies worker kind, exact revision and owned current target.
+        for source in ('native:1','native:9223372036854775807'):
+            Provider.check_reply({'source':source,'revision':'a'*64})
+        for source in ('native:0','native:01','native:-1','native:9223372036854775808','native:abc'):
+            with self.assertRaises(ValueError):Provider.check_reply({'source':source,'revision':'a'*64})
+
+    def test_worker_update_voice_reaches_retention_with_exact_routing_reference(self):
+        import hashlib
+        data=b'bounded synthetic recording'
+        reference={'source':'native:42','revision':'a'*64}
+        metadata={'id':'10000000-0000-4000-8000-000000000001',
+                  'binding':'b'*64,'audio_sha256':hashlib.sha256(data).hexdigest(),
+                  'mime':'audio/wav','reply':reference}
+        self.provider.receiver['voice']=True
+        calls=[]
+        with patch.object(self.provider,'assert_binding'), \
+             patch.object(self.provider,'check_files_original'), \
+             patch.object(self.provider,'check_visual_original'), \
+             patch.object(self.provider,'decorate_input',side_effect=lambda value:value), \
+             patch.object(self.provider,'retire_voice_capture'), \
+             patch.object(self.provider,'presentation',side_effect=lambda command:calls.append(command) or {'phase':'preparing'}):
+            self.provider.conversation_voice_submit(metadata,data)
+        retained=Path(str(self.db)+'.voice')/metadata['id']
+        self.assertEqual(retained.read_bytes(),data)
+        self.assertEqual(len(calls),1)
+        submitted=json.loads(calls[0].removeprefix('input voice submit '))
+        self.assertEqual(submitted['reply'],reference)
+        self.assertNotIn('context_only',submitted['reply'],
+                         'Explicit worker reply must keep its destination, not become integrator-only context')
 
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.root.chmod(0o700)

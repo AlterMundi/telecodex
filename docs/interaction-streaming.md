@@ -992,3 +992,12 @@ This uses existing bounded system-journal retention, not another capture store,
 retry worker or model invocation. Locate finish/final/save failure from that
 line before selecting a repair; partial captions do not establish a final receipt.
 Do not replay a retained original to manufacture the missing observation.
+
+
+Worker update reply validation: `native:<positive message id>` is supported for
+explicit worker replies as well as contextual integrator quotes. The dashboard
+validates its bounded syntax; the native presentation reader checks worker kind,
+exact current revision, current binding and owned destination before admission.
+Do not force `context_only` onto an explicit worker reply: that changes routing.
+A rejected upload must not be mistaken for a failed Gemini transcript. Retain the
+exact recording and prepared receipt while inspecting the original admission.
