@@ -32,14 +32,20 @@ pub(super) fn actor_on(
     session.context("Task controller has no current owned execution")
 }
 fn scoped_query(selection: &str) -> String {
+    scoped_query_for(selection, false)
+}
+fn scoped_query_for(selection: &str, internal: bool) -> String {
+    let scope = if internal {
+        "AND s.id<>?6"
+    } else {
+        "AND (s.id=?6 OR (?5=1 AND EXISTS(SELECT 1 FROM interaction_instructions i JOIN interaction_sources x ON x.id=i.input_id WHERE i.session_id=s.id AND x.human_id=?2 AND x.origin_chat=?3 AND x.origin_thread=?4 AND json_extract(i.doc,'$.local_turn')=h.local_turn)))"
+    };
     format!("SELECT h.payload_json,h.state,s.id,s.chat_id,s.thread_id FROM human_interactions h
       JOIN sessions s ON s.id=h.session_id JOIN turns t ON t.id=h.local_turn JOIN users u ON u.tg_user_id=h.requester
       WHERE {selection} AND h.kind='task' AND h.requester=?2 AND s.creator_user_id=?2 AND u.allowed=1
       AND h.native_thread=s.codex_thread_id AND s.force_fresh_thread=0 AND t.session_id=s.id
       AND t.from_user_id=?2 AND t.native_thread_id=h.native_thread
-      AND (s.id=?6 OR (?5=1 AND EXISTS(SELECT 1 FROM interaction_instructions i JOIN interaction_sources x ON x.id=i.input_id
-        WHERE i.session_id=s.id AND x.human_id=?2 AND x.origin_chat=?3 AND x.origin_thread=?4
-        AND json_extract(i.doc,'$.local_turn')=h.local_turn)))")
+      {scope}")
 }
 fn revision(actor: &LiveTaskActor<'_>, item: &HumanInteraction, key: SessionKey) -> String {
     format!(
@@ -167,11 +173,23 @@ impl Store {
         entry: SessionKey,
         id: &str,
     ) -> Result<Value> {
+        self.human_task_scoped(human, entry, id, false)
+    }
+    pub fn internal_human_task(&self, human: i64, entry: SessionKey, id: &str) -> Result<Value> {
+        self.human_task_scoped(human, entry, id, true)
+    }
+    fn human_task_scoped(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+        internal: bool,
+    ) -> Result<Value> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let (session, native) = super::presentation::entry_on(&conn, human, entry)?;
         let (raw, state, _, chat, topic): (String, String, i64, i64, i64) = conn
             .query_row(
-                &scoped_query("h.id=?1"),
+                &scoped_query_for("h.id=?1", internal),
                 params![id, human, entry.chat_id, entry.thread_id, true, session],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
@@ -204,6 +222,27 @@ impl Store {
         id: &str,
         selected_revision: &str,
     ) -> Result<Value> {
+        self.dismiss_human_task_scoped(human, entry, binding, id, selected_revision, false)
+    }
+    pub fn internal_dismiss_human_task(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        selected_revision: &str,
+    ) -> Result<Value> {
+        self.dismiss_human_task_scoped(human, entry, binding, id, selected_revision, true)
+    }
+    fn dismiss_human_task_scoped(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        binding: &str,
+        id: &str,
+        selected_revision: &str,
+        internal: bool,
+    ) -> Result<Value> {
         if selected_revision.len() != 64
             || !selected_revision.bytes().all(|c| c.is_ascii_hexdigit())
         {
@@ -217,7 +256,7 @@ impl Store {
         }
         let (raw, state, chat, topic): (String, String, i64, i64) = tx
             .query_row(
-                &scoped_query("h.id=?1"),
+                &scoped_query_for("h.id=?1", internal),
                 params![id, human, entry.chat_id, entry.thread_id, true, session],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(3)?, row.get(4)?)),
             )

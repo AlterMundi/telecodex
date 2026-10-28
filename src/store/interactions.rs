@@ -2,6 +2,7 @@
 
 use super::*;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumanInteraction {
@@ -214,6 +215,80 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Read-only attention across the owner's current internal sessions.
+    /// This does not widen canonical For you, create a responder, or alter ingress.
+    pub fn internal_pending_page(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        after: i64,
+    ) -> Result<serde_json::Value> {
+        if after < 0 {
+            anyhow::bail!("Invalid internal pending cursor");
+        }
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let (entry_session, native) = super::presentation::entry_on(&tx, human, entry)?;
+        let binding = super::presentation::entry_binding(&tx, human, entry, entry_session)?;
+        let mut stmt = tx.prepare(
+            "SELECT h.rowid,h.payload_json,h.state,s.chat_id,s.thread_id,s.session_title,
+                    h.created_at,h.updated_at
+             FROM human_interactions h JOIN sessions s ON s.id=h.session_id
+             JOIN users u ON u.tg_user_id=h.requester JOIN turns t ON t.id=h.local_turn
+             WHERE h.rowid>?1 AND h.requester=?2 AND s.creator_user_id=?2 AND u.allowed=1
+               AND s.id<>?3 AND h.kind IN ('task','native')
+               AND h.state IN ('pending','answering','unknown')
+               AND s.force_fresh_thread=0 AND s.codex_thread_id=h.native_thread
+               AND t.session_id=s.id AND t.from_user_id=?2 AND t.native_thread_id=h.native_thread
+             ORDER BY h.rowid LIMIT 21",
+        )?;
+        let rows = stmt
+            .query_map(params![after, human, entry_session], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let more = rows.len() > 20;
+        let mut cursor = after;
+        let mut items = Vec::new();
+        for (sequence, raw, state, chat, topic, label, created, updated) in
+            rows.into_iter().take(20)
+        {
+            let mut item: HumanInteraction = serde_json::from_str(&raw)?;
+            item.state = state;
+            let target = SessionKey::new(chat, Some(topic));
+            let revision = format!(
+                "{:x}",
+                sha2::Sha256::digest(
+                    serde_json::json!(["internal-pending/v1", binding, target, item])
+                        .to_string()
+                        .as_bytes()
+                )
+            );
+            items.push(serde_json::json!({"id":item.id,"kind":item.kind,"state":item.state,
+                "target":target,"label":label.unwrap_or_else(||format!("Session {topic}")).chars().take(120).collect::<String>(),
+                "title":item.title.chars().take(200).collect::<String>(),"preview":item.action.chars().take(240).collect::<String>(),
+                "revision":revision,"created_at":created,"updated_at":updated,
+                "source_native":item.native_thread,"live_response":"not_established_by_ledger_read"}));
+            cursor = sequence;
+        }
+        drop(stmt);
+        tx.commit()?;
+        Ok(
+            serde_json::json!({"schema":"telecodex.internal-pending-list/v1",
+            "binding":binding,"entry_binding":[human,entry,entry_session,native],
+            "items":items,"cursor":cursor,"more":more,"read_only":true}),
+        )
     }
 
     #[cfg(test)]
@@ -491,6 +566,156 @@ mod lifecycle_tests {
             links: json!([{ "label":"Evidence","url":"https://example.org/receipt" }]),
         }
     }
+    #[test]
+    fn internal_pending_keeps_entry_separate_and_rechecks_source_ownership() {
+        let (_root, store, worker, turn) = fixture();
+        let entry = SessionKey::new(100, Some(9));
+        let defaults = super::super::tests::defaults();
+        store.ensure_session(entry, 100, &defaults).unwrap();
+        store.set_session_codex_thread(entry, "integrator").unwrap();
+        store.record_turn_native_thread(turn, "source").unwrap();
+        store
+            .save_human_tasks(worker, &[("worker-task".into(), task("worker-task", turn))])
+            .unwrap();
+        let page = store.internal_pending_page(100, entry, 0).unwrap();
+        assert_eq!(page["items"].as_array().unwrap().len(), 1);
+        assert_eq!(page["items"][0]["id"], "worker-task");
+        assert_eq!(page["items"][0]["target"], json!(worker));
+        assert!(page["read_only"].as_bool().unwrap());
+        assert!(store.internal_pending_page(101, entry, 0).is_err());
+        assert!(store.internal_pending_page(100, entry, -1).is_err());
+        assert!(
+            store.internal_pending_page(100, worker, 0).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let cursor = page["cursor"].as_i64().unwrap();
+        assert!(
+            store.internal_pending_page(100, entry, cursor).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .set_session_codex_thread(worker, "replacement")
+            .unwrap();
+        assert!(
+            store.internal_pending_page(100, entry, 0).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        store.set_session_codex_thread(worker, "source").unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute("UPDATE turns SET from_user_id=101 WHERE id=?1", [turn])
+                .unwrap();
+        }
+        assert!(
+            store.internal_pending_page(100, entry, 0).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn internal_task_detail_and_dismiss_share_ledger_without_widening_for_you() {
+        let (_root, store, worker, turn) = fixture();
+        let entry = SessionKey::new(100, Some(9));
+        store
+            .ensure_session(entry, 100, &super::super::tests::defaults())
+            .unwrap();
+        store.set_session_codex_thread(entry, "integrator").unwrap();
+        store.record_turn_native_thread(turn, "source").unwrap();
+        store
+            .save_human_tasks(
+                worker,
+                &[("direct-action".into(), task("direct-action", turn))],
+            )
+            .unwrap();
+        assert!(
+            store
+                .conversation_human_task(100, entry, "direct-action")
+                .is_err()
+        );
+        assert!(
+            store
+                .internal_human_task(101, entry, "direct-action")
+                .is_err()
+        );
+        let selected = store
+            .internal_human_task(100, entry, "direct-action")
+            .unwrap();
+        let binding = selected["binding"].as_str().unwrap();
+        let revision = selected["revision"].as_str().unwrap();
+        assert!(
+            store
+                .internal_dismiss_human_task(100, entry, binding, "direct-action", &"0".repeat(64))
+                .is_err()
+        );
+        let result = store
+            .internal_dismiss_human_task(100, entry, binding, "direct-action", revision)
+            .unwrap();
+        assert_eq!(result["state"], "cancelled");
+        assert_eq!(result["human_completion"], false);
+        assert_eq!(result["work_cancelled"], false);
+        assert_eq!(
+            store
+                .internal_dismiss_human_task(100, entry, binding, "direct-action", revision)
+                .unwrap()["new_dismissal"],
+            false
+        );
+        assert!(
+            store
+                .conversation_human_task(100, entry, "direct-action")
+                .is_err()
+        );
+        assert!(
+            store.internal_pending_page(100, entry, 0).unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn internal_pending_pages_do_not_drop_or_repeat_items() {
+        let (_root, store, worker, turn) = fixture();
+        let entry = SessionKey::new(100, Some(9));
+        store
+            .ensure_session(entry, 100, &super::super::tests::defaults())
+            .unwrap();
+        store.record_turn_native_thread(turn, "source").unwrap();
+        for index in 0..23 {
+            let id = format!("worker-{index}");
+            store
+                .save_human_tasks(worker, &[(id.clone(), task(&id, turn))])
+                .unwrap();
+        }
+        store
+            .transition_interaction(worker, 100, "worker-2", "pending", "completed")
+            .unwrap();
+        let first = store.internal_pending_page(100, entry, 0).unwrap();
+        assert_eq!(first["items"].as_array().unwrap().len(), 20);
+        assert_eq!(first["more"], true);
+        let second = store
+            .internal_pending_page(100, entry, first["cursor"].as_i64().unwrap())
+            .unwrap();
+        assert_eq!(second["items"].as_array().unwrap().len(), 2);
+        assert_eq!(second["more"], false);
+        let ids: std::collections::BTreeSet<_> = first["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(second["items"].as_array().unwrap())
+            .map(|v| v["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 22);
+        assert!(!ids.contains("worker-2"));
+    }
+
     #[test]
     fn pages_have_topic_totals_and_separate_terminal_history() {
         let (_root, store, key, turn) = fixture();

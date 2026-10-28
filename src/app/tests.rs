@@ -3052,3 +3052,98 @@ async fn backend_serves_owner_controls_with_no_telegram_credentials_or_api() {
         .unwrap()
         .unwrap();
 }
+
+fn cold_interaction_config(database: PathBuf, cwd: PathBuf, human: i64) -> Config {
+    let mut config = sample_config(database, cwd);
+    config.startup_admin_ids = vec![100];
+    config.telegram.enabled = false;
+    config.codex.binary = PathBuf::from("/no-native-process-may-start");
+    config.interaction = Some(
+        serde_json::from_value(serde_json::json!({
+            "human_id":human,"chat_id":100,"topic_id":77
+        }))
+        .unwrap(),
+    );
+    config
+}
+
+#[tokio::test]
+async fn cold_interaction_entry_bootstraps_readable_owned_metadata_without_a_model() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("entry.sqlite");
+    let config = cold_interaction_config(path.clone(), root.path().into(), 100);
+    let app = App::bootstrap(config.clone()).await.unwrap();
+    let key = config.interaction.as_ref().unwrap().entry();
+    let entry = app.shared.store.get_session(key).unwrap().unwrap();
+    assert_eq!(app.shared.store.session_creator(key).unwrap(), 100);
+    assert!(entry.codex_thread_id.is_none());
+    assert!(!entry.busy);
+    let page = app
+        .shared
+        .store
+        .interaction_presentation_list(100, key, 0, 0)
+        .unwrap();
+    assert_eq!(page["schema"], "telecodex.presentation-list/v1");
+    assert!(page["items"].as_array().unwrap().is_empty());
+    app.shared
+        .store
+        .set_session_title(key, Some("Retained title"))
+        .unwrap();
+    app.shared
+        .store
+        .set_session_codex_thread(key, "retained-native-history")
+        .unwrap();
+    drop(app);
+    let repeated = App::bootstrap(config).await.unwrap();
+    let current = repeated.shared.store.get_session(key).unwrap().unwrap();
+    assert_eq!(current.id, entry.id);
+    assert_eq!(
+        current.codex_thread_id.as_deref(),
+        Some("retained-native-history")
+    );
+    assert_eq!(current.session_title.as_deref(), Some("Retained title"));
+}
+
+#[tokio::test]
+async fn cold_interaction_entry_never_grants_an_unallowed_owner() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("entry.sqlite");
+    let config = cold_interaction_config(path.clone(), root.path().into(), 200);
+    assert!(App::bootstrap(config.clone()).await.is_err());
+    let store = Store::open(&path, &[100], &SessionDefaults::from(&config.codex)).unwrap();
+    assert!(store.get_user(200).unwrap().is_none());
+    assert!(
+        store
+            .get_session(config.interaction.as_ref().unwrap().entry())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn cold_interaction_entry_never_adopts_another_owners_session() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("entry.sqlite");
+    let config = cold_interaction_config(path.clone(), root.path().into(), 100);
+    let key = config.interaction.as_ref().unwrap().entry();
+    let defaults = SessionDefaults::from(&config.codex);
+    let store = Store::open(&path, &[100, 200], &defaults).unwrap();
+    let original = store.ensure_session(key, 200, &defaults).unwrap();
+    store
+        .set_session_codex_thread(key, "other-owners-history")
+        .unwrap();
+    drop(store);
+    assert!(App::bootstrap(config).await.is_err());
+    let retained = Store::open(&path, &[100, 200], &defaults).unwrap();
+    assert_eq!(retained.session_creator(key).unwrap(), 200);
+    assert_eq!(retained.get_session(key).unwrap().unwrap().id, original.id);
+    assert_eq!(
+        retained
+            .get_session(key)
+            .unwrap()
+            .unwrap()
+            .codex_thread_id
+            .as_deref(),
+        Some("other-owners-history")
+    );
+}

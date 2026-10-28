@@ -131,7 +131,7 @@ window.Conversation = (() => {
     const liveSpeech=window.LiveSpeech?.mount(standalone?{
       read:key=>window.localStorage?.getItem(key),write:(key,value)=>window.localStorage?.setItem(key,value)
     }:undefined);let canSpeakLive=false;
-    let pendingNavigation;
+    let pendingNavigation,internalNavigation,internalControls;
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:(...args)=>{pendingNavigation?.close(false);return selectFocus(...args);},onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
     const taskControls=window.HumanTaskControls?.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,canReply:()=>!readOnly,onReply:task=>{
       if(readOnly || posting || draft.value.trim())return false;
@@ -145,6 +145,25 @@ window.Conversation = (() => {
       line:$("header .header-tools"),panel:$("#conversation-attention"),localOnly:true,
       getItems:()=>[...(requestControls.attentionItems?.()||[]),...(taskControls?.attentionItems?.()||[]),...(goalControls?.attentionItems?.()||[])]
     });
+    if(standalone && !readOnly){
+      const inflight=new Map();
+      const scopedApi=async(path,body)=>{
+        const match=path.match(/^interaction\/(requests|tasks)(\?.*)?$/);
+        if(match && body===undefined){
+          const key=match[2]||"";
+          let work=inflight.get(key);
+          if(!work){work=api(`interaction/internal${key}`);inflight.set(key,work);work.finally(()=>{if(inflight.get(key)===work)inflight.delete(key);}).catch(()=>{});}
+          const page=await work;
+          return {...page,items:page.items.filter(v=>match[1]==="tasks"?v.kind==="task":v.kind!=="task")};
+        }
+        return api(path.replace(/^interaction\/(requests|tasks)/,"interaction/internal/$1"),body);
+      };
+      const requests=window.RequestControls.mount({api:scopedApi,getBinding:()=>binding,setCsrf,unauthorized:failed,prefix:"internal",allowCancel:false,getCanDecide:view=>view?.kind==="question"});
+      const tasks=window.HumanTaskControls?.mount({api:scopedApi,getBinding:()=>binding,setCsrf,unauthorized:failed,prefix:"internal"});
+      const panel=$("#internal-attention");panel.hidden=false;
+      internalNavigation=window.AttentionCarousel?.mount({line:$("#conversation-presence"),panel,getItems:()=>[...requests.attentionItems(),...(tasks?.attentionItems()||[])]});
+      internalControls={refresh:()=>Promise.all([requests.refresh(),tasks?.refresh()]),reset:()=>{internalNavigation?.close(false);requests.reset();tasks?.reset();}};
+    }
     const attachedFiles = readOnly ? undefined : window.FileInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
     const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getPlayback:()=>playbackContext(true),getCaptureQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,getFiles:()=>attachedFiles?.capture(),onFilesSent:refs=>attachedFiles?.consumed(refs),getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
@@ -658,7 +677,7 @@ window.Conversation = (() => {
       const result = await api(`interaction/inputs?before=${before}&direction=${direction}`);
       if (owned !== inputGeneration) return;
       if (result.binding !== binding) throw new Error("Conversation changed. Refresh before sending.");
-      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();}
+      if (inputBinding && inputBinding !== result.binding) {resetInputs(); requestControls.reset(); internalControls?.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();}
       inputBinding = result.binding;
       setCsrf(result.csrf);routingChoices=result.routing_choices||[];
       for (const value of result.items) inputCard(value, observation);
@@ -1150,7 +1169,7 @@ window.Conversation = (() => {
       if (error.status === 401 || error.status === 403) {
         onUnauthorized?.(error);
         clearFiles();
-        pause("access");stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();
+        pause("access");stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); internalControls?.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();
         $("#conversation-answers").replaceChildren();
         $("#conversation-results").replaceChildren();
       } else if(!(standalone && voiceEnabled && !voiceSuspended && transientConnectionError(error)))pause("observation");
@@ -1234,7 +1253,7 @@ window.Conversation = (() => {
     async function page(cursor, direction, rememberHistory = true) {
       const value = await api(`interaction?${new URLSearchParams({...cursor, direction})}`);
       if (binding && value.binding !== binding) {
-        clearVoiceQueue();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();
+        clearVoiceQueue();stop(); cards.clear();clearProgress();clearText(); initialized = false; resetInputs(); requestControls.reset(); internalControls?.reset(); taskControls?.reset(); microphone?.reset(); visual?.reset();attachedFiles?.reset();
         newest = {delivery:0,native:0,matrix:0}; oldest = {delivery:0,native:0,matrix:0};
         $("#conversation-answers").replaceChildren(); $("#conversation-results").replaceChildren();
       }
@@ -1359,7 +1378,7 @@ window.Conversation = (() => {
           }
           await inputPage(0,"before",false);
         }
-        if(!readOnly)await taskControls?.refresh();
+        if(!readOnly){await taskControls?.refresh();await internalControls?.refresh();}
         await refreshTelegram();
         void sound?.refresh({observeOnly:standalone});
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);
