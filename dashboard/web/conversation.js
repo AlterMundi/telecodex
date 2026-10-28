@@ -62,6 +62,7 @@ window.Conversation = (() => {
     if(standalone){
       const presence=$("#conversation-companion"),identity=$("header .identity"),tools=$("header .header-tools"),beacon=$("#conversation-sound-toggle");
       if(presence && identity)identity.append(presence);
+      const build=$("#client-build");if(build && identity)identity.append(build);
       if(tools && beacon){tools.insertBefore(beacon,tools.firstChild);beacon.title="Session sound · Beacon";}
       $("#conversation-sound").append($("#conversation-sound-controls"),$("#conversation-sound-feedback"));
       const compose = $("#conversation-compose"), playback = $("#conversation-audio-tools");
