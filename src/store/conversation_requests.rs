@@ -19,6 +19,7 @@ pub struct ConversationRequest {
     pub entry_binding: Value,
     pub scope: String,
     pub capture_version: String,
+    pub internal: bool,
 }
 
 pub(super) fn read_on(
@@ -27,6 +28,21 @@ pub(super) fn read_on(
     entry: SessionKey,
     id: &str,
 ) -> Result<ConversationRequest> {
+    read_scoped_on(conn, human, entry, id, false)
+}
+
+fn read_scoped_on(
+    conn: &Connection,
+    human: i64,
+    entry: SessionKey,
+    id: &str,
+    internal: bool,
+) -> Result<ConversationRequest> {
+    let selection = if internal {
+        " AND NOT(s.chat_id=?3 AND s.thread_id=?4)"
+    } else {
+        CANONICAL_SCOPE
+    };
     let (session, native) = super::presentation::entry_on(conn, human, entry)?;
     let (raw, state, chat, topic, instance): (String, String, i64, i64, String) = conn
         .query_row(
@@ -37,12 +53,16 @@ pub(super) fn read_on(
          WHERE h.id=?1 AND h.kind='native' AND h.requester=?2 AND u.allowed=1
          AND s.creator_user_id=?2 AND t.from_user_id=?2 AND t.session_id=s.id
          AND h.native_thread=s.codex_thread_id AND t.native_thread_id=h.native_thread
-         AND s.force_fresh_thread=0 {CANONICAL_SCOPE}"
+         AND s.force_fresh_thread=0 {selection}"
             ),
             params![id, human, entry.chat_id, entry.thread_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
-        .context("Native request is outside this owned canonical conversation")?;
+        .context(if internal {
+            "Native request is outside current owned internal sessions"
+        } else {
+            "Native request is outside this owned canonical conversation"
+        })?;
     let mut item: HumanInteraction = serde_json::from_str(&raw)?;
     item.state = state;
     let key = SessionKey::new(chat, Some(topic));
@@ -56,6 +76,11 @@ pub(super) fn read_on(
         super::stopping::admission_epoch_on(conn, entry)?,
         super::stopping::admission_epoch_on(conn, key)?
     ]);
+    let proof = if internal {
+        json!(["internal-pending/v1", proof])
+    } else {
+        proof
+    };
     let scope = format!("{:x}", Sha256::digest(proof.to_string().as_bytes()));
     let index = item.source["conversationIndex"].as_u64().unwrap_or(0);
     let proposal = &item.source["request"]["questions"][index as usize];
@@ -74,6 +99,7 @@ pub(super) fn read_on(
         entry_binding: json!([human, entry, session, native]),
         scope,
         capture_version,
+        internal,
     })
 }
 
@@ -256,6 +282,17 @@ impl Store {
         read_on(&conn, human, entry, id)
     }
 
+    /// Explicit internal-session access; canonical readers retain their existing scope.
+    pub fn internal_native_request(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        id: &str,
+    ) -> Result<ConversationRequest> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        read_scoped_on(&conn, human, entry, id, true)
+    }
+
     /// Commit the explicit human decision before consuming its live responder.
     /// Repeating its revision inspects the receipt, never executes again.
     #[allow(clippy::too_many_arguments)]
@@ -281,7 +318,10 @@ impl Store {
         }
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let current = read_on(&tx, human, entry, &expected.item.id)?;
+        if expected.internal && source_input.is_some() {
+            bail!("Internal-session decisions require their explicit controls");
+        }
+        let current = read_scoped_on(&tx, human, entry, &expected.item.id, expected.internal)?;
         if current.scope != expected.scope || current.binding != expected.binding {
             bail!("Native request binding changed");
         }
@@ -455,6 +495,59 @@ mod tests {
             &json!({"kind":"question","question_id":"scope","question_index":0,"body":"Exact proposal and option descriptions"}),
             &json!({"question_id":"scope","answer":"Selected exact option"}),state,next,None,None)
     }
+    #[test]
+    fn internal_request_controls_do_not_widen_canonical_sources() {
+        let (_file, store, entry, worker, _binding) = fixture();
+        let canonical = store.conversation_request(100, entry, "request-7").unwrap();
+        let internal = store
+            .internal_native_request(100, entry, "request-7")
+            .unwrap();
+        assert_ne!(canonical.scope, internal.scope);
+        assert_ne!(canonical.capture_version, internal.capture_version);
+        assert!(internal.internal);
+        assert!(!canonical.internal);
+        assert!(
+            store
+                .internal_native_request(200, entry, "request-7")
+                .is_err()
+        );
+        assert!(
+            store
+                .internal_native_request(100, worker, "request-7")
+                .is_err()
+        );
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM conversation_returns", [])
+            .unwrap();
+        assert!(store.conversation_request(100, entry, "request-7").is_err());
+        let direct = store
+            .internal_native_request(100, entry, "request-7")
+            .unwrap();
+        assert!(
+            record(
+                &store,
+                entry,
+                &direct,
+                &"b".repeat(64),
+                &json!({"kind":"option","index":0}),
+                "answering",
+                None
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            store
+                .interaction(worker, 100, "request-7")
+                .unwrap()
+                .unwrap()
+                .state,
+            "answering"
+        );
+    }
+
     #[test]
     fn canonical_request_scope_and_exact_receipt_prevent_duplicate_or_changed_decisions() {
         let (_file, store, entry, worker, _binding) = fixture();

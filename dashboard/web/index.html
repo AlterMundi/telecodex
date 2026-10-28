@@ -76,6 +76,16 @@
           <button id="conversation-goals-more" type="button" hidden>More retained controls</button>
         </section>
         </div>
+        <div id="internal-attention" hidden>
+          <section id="internal-requests" hidden aria-label="Session questions and approvals">
+            <h2>Session questions and approvals</h2><p id="internal-request-state" class="note" role="status"></p>
+            <div id="internal-request-cards"></div><button id="internal-requests-more" type="button" hidden>More session requests</button>
+          </section>
+          <section id="internal-tasks" hidden aria-label="Session actions">
+            <h2>Session actions</h2><p id="internal-task-state" class="note" role="status"></p>
+            <div id="internal-task-cards"></div><button id="internal-tasks-more" type="button" hidden>More session actions</button>
+          </section>
+        </div>
         <div id="conversation-timeline" role="log" aria-label="Conversation messages and session updates" hidden></div>
         <form id="conversation-compose" aria-label="Message your conversation">
           <div id="conversation-compose-status">

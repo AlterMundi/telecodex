@@ -742,6 +742,11 @@ class Provider:
             raise ValueError('Invalid native request identity')
         return ident
 
+    def internal_pending(self, after=0):
+        if type(after) is not int or not 0 <= after <= 2**63-1:
+            raise ValueError('Invalid internal pending cursor')
+        return self.presentation(f'requests internal list {after}')
+
     def conversation_requests(self, after=0):
         if type(after) is not int or not 0 <= after <= 2**63 - 1:
             raise ValueError('Invalid native request cursor')
@@ -752,7 +757,7 @@ class Provider:
             raise ValueError('Invalid task cursor')
         return self.presentation(f'requests tasks list {after}')
 
-    def conversation_task_dismiss(self, ident, body):
+    def conversation_task_dismiss(self, ident, body, internal=False):
         import re
         self.request_id(ident)
         if (not isinstance(body, dict) or set(body) != {'binding','revision','action'}
@@ -760,10 +765,10 @@ class Provider:
                 or any(not isinstance(body.get(key), str) or not re.fullmatch('[a-f0-9]{64}', body[key])
                        for key in ('binding','revision'))):
             raise ValueError('Select the current action to dismiss')
-        return self.presentation('requests tasks dismiss '+json.dumps({
+        return self.presentation(('requests internal dismiss ' if internal else 'requests tasks dismiss ')+json.dumps({
             'id':ident,'binding':body['binding'],'revision':body['revision']},separators=(',',':')))
 
-    def conversation_task_detail(self, ident, offset=0, revision=None):
+    def conversation_task_detail(self, ident, offset=0, revision=None, internal=False):
         import re
         self.request_id(ident)
         if type(offset) is not int or not 0<=offset<=10**9:
@@ -773,7 +778,8 @@ class Provider:
         if offset and revision is None:
             raise ValueError('Select the task revision before continuing')
         suffix=' '+revision if revision is not None else ''
-        return self.presentation(f'requests tasks detail {ident} {offset}{suffix}')
+        command='requests internal task' if internal else 'requests tasks detail'
+        return self.presentation(f'{command} {ident} {offset}{suffix}')
 
     def goal_controls(self, before=0):
         if type(before) is not int or not 0 <= before <= 2**63 - 1:
@@ -789,7 +795,7 @@ class Provider:
             raise ValueError('Invalid goal-control identity') from None
         return self.presentation(f'presentation goals detail {ident}')
 
-    def conversation_request_detail(self, ident, offset=0, revision=None):
+    def conversation_request_detail(self, ident, offset=0, revision=None, internal=False):
         import re
         self.request_id(ident)
         if type(offset) is not int or not 0 <= offset <= 10**9:
@@ -799,16 +805,18 @@ class Provider:
         if offset and revision is None:
             raise ValueError('Select the request revision before continuing')
         suffix = ' ' + revision if revision is not None else ''
-        return self.presentation(f'requests detail {ident} {offset}{suffix}')
+        command='requests internal request' if internal else 'requests detail'
+        return self.presentation(f'{command} {ident} {offset}{suffix}')
 
-    def conversation_decision_receipt(self, ident, revision):
+    def conversation_decision_receipt(self, ident, revision, internal=False):
         import re
         self.request_id(ident)
         if not isinstance(revision, str) or not re.fullmatch('[a-f0-9]{64}', revision):
             raise ValueError('Invalid decision revision')
-        return self.presentation(f'requests receipt {ident} {revision}')
+        command='requests internal receipt' if internal else 'requests receipt'
+        return self.presentation(f'{command} {ident} {revision}')
 
-    def conversation_request_decide(self, ident, body):
+    def conversation_request_decide(self, ident, body, internal=False):
         import re
         self.request_id(ident)
         if not isinstance(body, dict) or set(body) != {'binding', 'revision', 'action'}:
@@ -830,7 +838,7 @@ class Provider:
             or kind == 'cancel' and set(action) == {'kind'})
         if not valid:
             raise ValueError('Invalid request action')
-        return self.presentation('requests decide ' + json.dumps({**body, 'id':ident}, ensure_ascii=False))
+        return self.presentation(('requests internal decide ' if internal else 'requests decide ') + json.dumps({**body, 'id':ident}, ensure_ascii=False))
 
     @staticmethod
     def identity(row):

@@ -15,9 +15,9 @@ window.RequestControls = (() => {
         unknown:"Earlier response remains unconfirmed.", cancelled:"Cancellation requested.",
         expired:"This request is closed.", source_changed:"This request is no longer current."})[value.state]
       || "This request has no live response channel.";
-  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false, getCanDecide=()=>true,onSource=()=>{}}) {
-    const cards = new Map(), section = $("#conversation-requests"), container = $("#conversation-request-cards");
-    const state = $("#conversation-request-state"), more = $("#conversation-requests-more");
+  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false, getCanDecide=()=>true,onSource=()=>{},prefix="conversation",allowCancel=true,maxCards=200}) {
+    const cards = new Map(), section = $(`#${prefix}-requests`), container = $(`#${prefix}-request-cards`);
+    const state = $(`#${prefix}-request-state`), more = $(`#${prefix}-requests-more`);
     let generation = 0, observation = 0, cursor = 0, reading = false, probeCursor = 0, refreshTask;
     const owns = (card, owned) => generation === owned && cards.get(card.id) === card;
     function reset() {
@@ -27,7 +27,7 @@ window.RequestControls = (() => {
     function updateControls(card) {
       const allowed = card.view?.actionable && !terminal(card.view) && card.complete
         && !card.reviewRequired && !card.closed && !card.busy && !card.loading && !card.pending && !card.unavailable && card.view.binding === getBinding();
-      const mayDecide=allowed && getCanDecide();
+      const mayDecide=allowed && getCanDecide(card.view||card.meta);
       for (const button of card.choices.children) button.disabled = !mayDecide;
       card.reply.disabled = !allowed;
       card.listen.hidden = card.view?.kind!=="question" || typeof onListen!=="function" || !getCanListen();
@@ -86,7 +86,7 @@ window.RequestControls = (() => {
       }
       card.unavailable=false;card.meta = value;
       card.title.textContent = `${value.label || "Conversation"} · ${value.title || (value.kind === "approval" ? "Approval" : "Question")}`;
-      card.status.textContent = statusText(value) + (!getCanDecide() && value.state==='pending' ? value.kind==='approval' ? ' Open Sessions to review this approval.' : ' Reply through the conversation to answer.' : '');
+      card.status.textContent = statusText(value) + (!getCanDecide(card.view||card.meta) && value.state==='pending' ? value.kind==='approval' ? ' Open Sessions to review this approval.' : ' Reply through the conversation to answer.' : '');
       updateControls(card);
       const source=audioSource(value);if(source)onSource(source);
       return true;
@@ -103,7 +103,7 @@ window.RequestControls = (() => {
       const read = node("button", "Read request"); read.type = "button";
       const choices = node("div", undefined, "reply-actions");
       const form = node("form"), label = node("label", "Your answer"), text = node("textarea");
-      text.rows = 3; text.id = `answer-${value.id}`; label.setAttribute("for", text.id);
+      text.rows = 3; text.id = `${prefix}-answer-${value.id}`; label.setAttribute("for", text.id);
       const submit = node("button", "Send answer"); submit.type = "submit";
       form.append(label, text, submit); form.hidden = true;
       const reply = node("button", "Answer in conversation"); reply.type = "button"; reply.hidden = true;
@@ -161,10 +161,10 @@ window.RequestControls = (() => {
         const button = node("button",choice.label); button.type = "button";
         button.addEventListener("click", () => choose(card,choice.action,value.revision)); card.choices.append(button);
       }
-      card.form.hidden = !value.allows_text || !getCanDecide();
+      card.form.hidden = !value.allows_text || !getCanDecide(card.view||card.meta);
       card.reply.hidden = value.kind!=="question" || !value.allows_text || typeof onReply!=="function";
-      card.cancel.hidden = !value.can_cancel || !getCanDecide();
-      card.choices.hidden = !getCanDecide();
+      card.cancel.hidden = !value.can_cancel || !allowCancel || !getCanDecide(card.view||card.meta);
+      card.choices.hidden = !getCanDecide(card.view||card.meta);
     }
     async function readRequest(card, force = false, userGesture = false) {
       if (card.loading || card.busy) return;
@@ -193,7 +193,8 @@ window.RequestControls = (() => {
       }
     }
     function choose(card, action, expectedRevision) {
-      if (!getCanDecide() || !expectedRevision || card.view?.revision !== expectedRevision || card.reviewRequired || !card.complete || !card.view?.actionable || card.view.binding !== getBinding() || card.pending || card.busy || card.loading || card.unavailable || card.closed) return;
+      if (action.kind==="cancel" && !allowCancel)return;
+      if (!getCanDecide(card.view||card.meta) || !expectedRevision || card.view?.revision !== expectedRevision || card.reviewRequired || !card.complete || !card.view?.actionable || card.view.binding !== getBinding() || card.pending || card.busy || card.loading || card.unavailable || card.closed) return;
       if (action.kind === "answer" && (!action.text.trim() || action.text.includes("\0") || new TextEncoder().encode(action.text).length > 32768)) {
         card.note.textContent = "Write an answer of at most 32 KiB."; return;
       }
@@ -202,7 +203,7 @@ window.RequestControls = (() => {
       return sendDecision(card,frozen);
     }
     async function sendDecision(card, frozen) {
-      if (!getCanDecide() || card.busy || frozen !== card.pending) return;
+      if (!getCanDecide(card.view||card.meta) || card.busy || frozen !== card.pending) return;
       const owned = generation;
       card.busy = true; card.note.textContent = "Sending your decision…"; updateControls(card);
       try {
@@ -251,21 +252,21 @@ window.RequestControls = (() => {
       try {
         const page = await api(`interaction/requests?after=${after}`);
         if (owned !== generation) return false;
-        const seen = new Set();
+        const seen = new Set();let limited=false;
         const apply = value => {
           if (value.binding !== getBinding()) throw new Error("Conversation changed. Refresh before responding.");
           setCsrf(value.csrf);
-          for (const item of value.items) {seen.add(item.id); metadata(cards.get(item.id) || create(item),item,observed);}
-          cursor = Math.max(cursor,value.cursor);
+          for (const item of value.items) {seen.add(item.id); if(!cards.has(item.id)&&cards.size>=maxCards){limited=true;continue;} metadata(cards.get(item.id) || create(item),item,observed);}
+          if(!limited)cursor = Math.max(cursor,value.cursor);
           return value;
         };
         let last = apply(page);
-        if (after === 0 && cursor > page.cursor) {
+        if (!limited && after === 0 && cursor > page.cursor) {
           const tail = await api(`interaction/requests?after=${cursor}`);
           if (owned !== generation) return false;
           last = apply(tail);
         }
-        more.hidden = !last.more;
+        more.hidden = !last.more && !limited;
         // Recheck loaded requests absent from these pages, including ones that
         // another surface answered or the native source retired meanwhile.
         const candidates = [...cards.values()].filter(card => !seen.has(card.id) && !terminal(card.meta) && !card.loading && !card.busy);
@@ -290,7 +291,7 @@ window.RequestControls = (() => {
         }));
         if (owned !== generation) return false;
         section.hidden = !cards.size;
-        state.textContent = last.more ? "More requests are available." : "You can keep writing while sessions wait for a response.";
+        state.textContent = limited ? `Showing up to ${maxCards} loaded requests. Dismiss closed cards to load more, or open Sessions for other pending items.` : last.more ? "More requests are available." : "You can keep writing while sessions wait for a response.";
         return current;
       } catch(e) {
         if (owned !== generation) return false;
@@ -390,16 +391,16 @@ window.GoalControls = (() => {
 // Durable actions share the request ledger, not native question responders.
 // Reply only drafts ordinary human text; Send remains the admission boundary.
 window.HumanTaskControls = (() => {
-  function mount({api,getBinding,setCsrf=()=>{},unauthorized=()=>{},onReply,canReply=()=>true}) {
-    const section=document.querySelector('#conversation-tasks'),container=document.querySelector('#conversation-task-cards');
-    const state=document.querySelector('#conversation-task-state'),more=document.querySelector('#conversation-tasks-more');
+  function mount({api,getBinding,setCsrf=()=>{},unauthorized=()=>{},onReply,canReply=()=>true,prefix="conversation",maxCards=200}) {
+    const section=document.querySelector(`#${prefix}-tasks`),container=document.querySelector(`#${prefix}-task-cards`);
+    const state=document.querySelector(`#${prefix}-task-state`),more=document.querySelector(`#${prefix}-tasks-more`);
     if(!section||!container||!state||!more)return;
     const cards=new Map(),feedback=new Map();let generation=0,reading=false,cursor=0,probe=0;
     const terminal=v=>['answered','completed','cancelled','withdrawn','expired'].includes(v?.state);
     const el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
     const owns=(card,token)=>token===generation&&cards.get(card.id)===card;
     function reset(){generation++;cards.clear();feedback.clear();container.replaceChildren();section.hidden=true;cursor=probe=0;reading=false;more.hidden=true;state.textContent='';}
-    function controls(card){card.dismiss.hidden=!terminal(card.view)&&!(canReply()&&card.view?.can_dismiss===true);card.dismiss.disabled=card.loading||card.unavailable;card.read.disabled=card.loading;card.reply.hidden=!canReply();card.reply.disabled=card.unavailable||card.loading||!card.complete||card.view?.state!=='pending'||card.view.binding!==getBinding();}
+    function controls(card){card.dismiss.hidden=!terminal(card.view)&&!(canReply()&&card.view?.can_dismiss===true);card.dismiss.disabled=card.loading||card.unavailable;card.read.disabled=card.loading;card.reply.hidden=!canReply()||typeof onReply!=="function";card.reply.disabled=card.unavailable||card.loading||!card.complete||card.view?.state!=='pending'||card.view.binding!==getBinding();}
     const feedbackText=card=>{
       if(card.view?.state!=='pending')return;
       const input=feedback.get(`${card.id}:${card.view.revision}`);
@@ -485,12 +486,12 @@ window.HumanTaskControls = (() => {
       try{
         const page=await api(`interaction/tasks?after=${after}`);if(token!==generation)return;
         if(page.binding!==getBinding())throw Error('Conversation changed');setCsrf(page.csrf);
-        const seen=new Set();for(const v of page.items){seen.add(v.id);metadata(cards.get(v.id)||create(v),v);}
-        cursor=Math.max(cursor,page.cursor);more.hidden=!page.more;
+        const seen=new Set();let limited=false;for(const v of page.items){seen.add(v.id);if(!cards.has(v.id)&&cards.size>=maxCards){limited=true;continue;}metadata(cards.get(v.id)||create(v),v);}
+        if(!limited)cursor=Math.max(cursor,page.cursor);more.hidden=!page.more&&!limited;
         const absent=[...cards.values()].filter(c=>!seen.has(c.id)&&!terminal(c.view));
         const selected=absent.length?Array.from({length:Math.min(8,absent.length)},(_,n)=>absent[(probe+n)%absent.length]):[];probe+=selected.length;
         await Promise.all(selected.map(c=>detail(c)));if(token!==generation)return;
-        section.hidden=!cards.size;state.textContent='You can respond here while sessions keep working.';
+        section.hidden=!cards.size;state.textContent=limited?`Showing up to ${maxCards} loaded actions. Dismiss closed cards to load more, or open Sessions for other pending items.`:'You can respond here while sessions keep working.';
       }catch(e){if(token===generation){for(const card of cards.values()){card.unavailable=true;controls(card);}section.hidden=false;state.textContent='Human actions unavailable. Refresh to reconnect.';if([401,403].includes(e.status))unauthorized(e);}}
       finally{if(token===generation){reading=false;more.disabled=false;}}
     }
