@@ -61,6 +61,9 @@ pub struct TranscriptSource {
     pub telegram_file_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_id: Option<String>,
+    /// Device report retained through canonical relay, not an ASR assertion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_stop: Option<String>,
     pub configured_transcriber: String,
     /// Actual recognizer reported by the source-bound owner helper, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -198,7 +201,7 @@ pub async fn transcribe_committed(
     if format!("{:x}", Sha256::digest(read_media(path).await?)) != hash {
         bail!("Voice source changed during preparation");
     }
-    Ok((text,TranscriptSource{audio_sha256:hash,telegram_file_id:telegram_file_id.map(str::to_owned),capture_id:capture_id.map(str::to_owned),configured_transcriber:config.transcriber_label.clone(),actual_transcriber,committed_at:chrono::Utc::now().to_rfc3339(),audio_millis:(pcm.len()/4) as u64*1000/16000,preparation_millis:preparation_started.elapsed().as_millis() as u64,transcription_millis,interpretation:"Machine transcription of the original human voice clip; not exact verified written speech".into()}))
+    Ok((text,TranscriptSource{audio_sha256:hash,telegram_file_id:telegram_file_id.map(str::to_owned),capture_id:capture_id.map(str::to_owned),capture_stop:None,configured_transcriber:config.transcriber_label.clone(),actual_transcriber,committed_at:chrono::Utc::now().to_rfc3339(),audio_millis:(pcm.len()/4) as u64*1000/16000,preparation_millis:preparation_started.elapsed().as_millis() as u64,transcription_millis,interpretation:"Machine transcription of the original human voice clip; not exact verified written speech".into()}))
 }
 
 async fn read_media(path: &Path) -> Result<Vec<u8>> {

@@ -649,9 +649,10 @@ class Provider:
 
     def conversation_voice_submit(self, metadata, data):
         import re
-        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual','playback','capture_questions','files'}:
+        if not isinstance(metadata,dict) or not {'binding','id','audio_sha256','mime'} <= set(metadata) or set(metadata)-{'binding','id','audio_sha256','mime','reply','visual','playback','capture_questions','files','capture_stop'}:
             raise ValueError('Select one original voice recording')
         self.input_id(metadata['id'])
+        if metadata.get('capture_stop') not in (None,'duration_limit'):raise ValueError('Invalid recording stop reason')
         self.check_reply(metadata.get('reply'))
         self.check_playback(metadata.get('playback'))
         self.check_capture_questions(metadata.get('capture_questions'))

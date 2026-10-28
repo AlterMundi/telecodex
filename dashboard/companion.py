@@ -38,7 +38,7 @@ def permitted(method, path, scope='interaction_only', artifact_access=False, ale
             return True
         return re.fullmatch(r'/api/interaction(?:/(?:part|sonic|events|goals(?:/[a-f0-9-]{36})?|inputs(?:/[a-f0-9-]{36}(?:/image|/trace(?:/(?:original|[a-f0-9-]{36}))?)?)?|tasks(?:/[a-f0-9]{32})?|requests(?:/[a-f0-9]{32}(?:/receipt)?)?))?', path) is not None
     if method == 'POST':
-        return path in ('/api/interaction/inputs', '/api/interaction/voice', '/api/interaction/voice/live', '/api/interaction/visual', '/api/interaction/files', '/api/interaction/audio') or re.fullmatch(r'/api/interaction/inputs/[a-f0-9-]{36}/(?:route|retry)', path) is not None or re.fullmatch(r'/api/interaction/tasks/[a-f0-9]{32}', path) is not None
+        return path in ('/api/interaction/inputs', '/api/interaction/voice', '/api/interaction/voice/limited', '/api/interaction/voice/live', '/api/interaction/visual', '/api/interaction/files', '/api/interaction/audio') or re.fullmatch(r'/api/interaction/inputs/[a-f0-9-]{36}/(?:route|retry)', path) is not None or re.fullmatch(r'/api/interaction/tasks/[a-f0-9]{32}', path) is not None
     return False
 
 

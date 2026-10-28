@@ -168,7 +168,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             if request.headers.get('origin') not in allowed:
                 return JSONResponse({'detail': 'Wrong request origin'}, status_code=403)
             # Bound chunked bodies as well as Content-Length before parsing them.
-            if request.url.path in ('/api/interaction/voice','/api/interaction/visual','/api/interaction/files'):
+            if request.url.path in ('/api/interaction/voice','/api/interaction/voice/limited','/api/interaction/visual','/api/interaction/files'):
                 try:
                     selected = await authorize_async(request)
                     if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), selected['csrf']):
@@ -630,6 +630,7 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         return Response(content=data,media_type='image/png')
 
     @app.post('/api/interaction/voice')
+    @app.post('/api/interaction/voice/limited')
     async def conversation_voice(request: Request):
         session = await authorize_async(request)
         if not secrets.compare_digest(request.headers.get('x-dashboard-csrf', ''), session['csrf']):
@@ -637,6 +638,12 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
         metadata = {key:request.headers.get(header, '') for key, header in
                     (('binding', 'x-input-binding'), ('id', 'x-input-id'),
                      ('audio_sha256', 'x-audio-sha256'), ('mime', 'content-type'))}
+        capture_stop = request.headers.get('x-recording-stop')
+        if request.url.path.endswith('/voice/limited') and capture_stop != 'duration_limit':
+            raise HTTPException(400, 'Limited recording stop reason required')
+        if capture_stop is not None:
+            if capture_stop != 'duration_limit':raise HTTPException(400, 'Invalid recording stop reason')
+            metadata['capture_stop'] = capture_stop
         reply_source = request.headers.get('x-reply-source')
         reply_revision = request.headers.get('x-reply-revision')
         if reply_source is not None or reply_revision is not None:

@@ -847,3 +847,31 @@ prove its individual failure cause. The verified UI defect was that uncertainty
 hid the capture/discard controls and a failed status read only repeated a generic
 notice. Keep active-capture continuity distinct from native-session preservation
 when deploying the web service. Full plan301/milestone9; streaming/recovery #271.
+
+## Recording countdown and limit provenance
+
+The microphone shows remaining recording time in the existing caption line,
+right aligned, with a warning color for the final fifteen seconds. The timer
+uses a monotonic clock and starts after microphone permission and capture setup.
+It measures the existing 120-second recording bound, not model tokens or an
+estimate of prompt capacity. The streaming PCM path retains its same bound.
+Reaching it stops capture for explicit Send/Discard review; it never commits an
+original automatically. Prepared text survives that review.
+
+A limit-stopped original carries device-reported `capture_stop: duration_limit`
+through local recovery, exact upload identity, completed-transcript recovery,
+canonical transcript provenance and worker relay. The native prompt explicitly
+warns that the ending may be missing and asks the integrator to wait for or
+clarify continuation. This is a device report, not proof the human intended more
+speech. Transcript text itself stays unchanged. Ordinary manual Send omits it.
+A Send racing streaming cutoff retains the limit marker. A retry cannot add or
+remove that marker from an existing original.
+
+Limited recordings POST to `/api/interaction/voice/limited`, the same handler and
+writer with a required bounded stop reason. The separate route prevents older
+web receivers from silently ignoring a new header and dispatching an unmarked
+fragment; they refuse it while local recovery retains the exact original. Native
+receivers also reject unsupported fields. Deploy the compatible backend before
+this client. Durable documents containing the new field require retaining this
+compatible reader during rollback; do not select an older strict document reader
+against them. Existing no-limit documents omit the field and remain unchanged.

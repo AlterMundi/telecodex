@@ -13,6 +13,7 @@ function memoryRecovery(){
  return {values,open(){const request={result:db};queueMicrotask(()=>request.onsuccess?.());return request;}};
 }
 function boot(live=false,recovery){
+ let now=1000;
  const nodes=new Map(),events={},timers=[],uploads=[],originals=new Map(),received=[],devices=[],activities=[];
  const document={hidden:false,addEventListener(name,fn){events[name]=fn;},querySelector(name){if(!nodes.has(name))nodes.set(name,{hidden:false,disabled:false,textContent:'',handlers:{},setAttribute(k,v){this[k]=v;},addEventListener(n,f){this.handlers[n]=f;}});return nodes.get(name);}};
  let fileReferences,mediaFailure,visual,visualFailure,mediaRequests=0,confirmDiscard=true;const confirmations=[];
@@ -27,11 +28,11 @@ function boot(live=false,recovery){
  const media=()=>({stopped:0,getTracks(){return [{stop:()=>this.stopped++}];}});
  const window={indexedDB:recovery,confirm(message){confirmations.push(message);return confirmDiscard;},isSecureContext:true,MediaRecorder:Recorder,crypto,addEventListener(n,fn){events[n]=fn;},navigator:{mediaDevices:{async getUserMedia(){mediaRequests++;if(mediaFailure)throw mediaFailure;if(permission)return permission.promise;return media();}}}};
  async function fetch(_route,options){
-  uploads.push(options);const id=options.headers['X-Input-Id'];
+  options.route=_route;uploads.push(options);const id=options.headers['X-Input-Id'];
   if(mode==='before'){mode=undefined;throw Error('Offline before capture');}
   if(mode==='visual-refusal'){mode=undefined;return {ok:false,status:400,json:async()=>({code:'visual_reselection',submission_attempted:false})};}
   if(mode==='denied'){mode=undefined;return {ok:false,status:403,json:async()=>({})};}
-  const result={id,phase:capturePhase,retired:captureRetired,visual:options.headers['X-Visual-Reference']?JSON.parse(options.headers['X-Visual-Reference']):undefined,voice:{audio_sha256:options.headers['X-Audio-Sha256']}};if(mode==='visual-extra'){mode=undefined;result.visual.push({source_id:'unexpected-third-image'});}
+  const result={id,phase:capturePhase,retired:captureRetired,visual:options.headers['X-Visual-Reference']?JSON.parse(options.headers['X-Visual-Reference']):undefined,voice:{audio_sha256:options.headers['X-Audio-Sha256'],...(options.headers['X-Recording-Stop']?{capture_stop:options.headers['X-Recording-Stop']}:{})}};if(mode==='visual-extra'){mode=undefined;result.visual.push({source_id:'unexpected-third-image'});}
   if(options.headers['X-File-References']){result.files=JSON.parse(decodeURIComponent(options.headers['X-File-References'])).map(f=>({size:f.size,name:f.name,mime:f.mime,sha256:f.sha256,file_id:f.file_id}));if(mode==='files-changed'){mode=undefined;result.files[0].size++;}}
   originals.set(id,result);
   if(uploadHold)await uploadHold.promise;
@@ -40,12 +41,12 @@ function boot(live=false,recovery){
  }
  let preparation;
  if(live)window.StreamingVoice={supported:()=>true,async create(stream,meta){preparation=meta;const recorder=new Recorder(stream);recorder.discard=()=>recorder.stop();return recorder;}};
- const context=vm.createContext({window,document,Blob,Uint8Array,fetch,AbortController,
+ const context=vm.createContext({Date:{now:()=>now},window,document,Blob,Uint8Array,fetch,AbortController,
   setTimeout(fn,ms){const t={fn,ms};timers.push(t);return t;},clearTimeout(t){if(t)t.closed=true;}});
  vm.runInContext(fs.readFileSync('dashboard/web/microphone.js','utf8'),context);
  let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,getPlayback:()=>playback,getCaptureQuestions:()=>captureQuestions,getFiles:()=>fileReferences,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
  ui.configure(true,live);
- return {files:value=>{fileReferences=value;},ui,nodes,uploads,originals,received,devices,events,timers,media,activities,questions:value=>{captureQuestions=value;},playback:value=>{playback=value;},preparation:()=>preparation,
+ return {advance:ms=>{now+=ms;},files:value=>{fileReferences=value;},ui,nodes,uploads,originals,received,devices,events,timers,media,activities,questions:value=>{captureQuestions=value;},playback:value=>{playback=value;},preparation:()=>preparation,
   confirmation:value=>{confirmDiscard=value;},confirmations,
   button:()=>nodes.get('#conversation-talk'),state:()=>nodes.get('#conversation-voice-state').textContent,
   click:()=>nodes.get('#conversation-talk').handlers.click(),cancel:()=>nodes.get('#conversation-voice-discard').handlers.click(),check:()=>nodes.get('#conversation-voice-check').handlers.click(),
@@ -127,7 +128,14 @@ function boot(live=false,recovery){
  assert.equal(offline.uploads.length,2);assert.deepEqual(offline.uploads[0].headers,offline.uploads[1].headers);assert.equal(offline.uploads[0].body,offline.uploads[1].body,'Explicit retry preserves the exact original bytes');
  const hidden=boot();await hidden.click();hidden.events.pagehide();await until(()=>hidden.devices[0].state==='inactive');assert.equal(hidden.uploads.length,0);assert.equal(hidden.devices[0].stream.stopped,1);
  const delayed=boot(),permission=delayed.permission();const starting=delayed.click();delayed.cancel();const lateMedia=delayed.media();permission.resolve(lateMedia);await starting;assert.equal(lateMedia.stopped,1);assert.equal(delayed.devices.length,0);
- const limit=boot();await limit.click();limit.timers.find(t=>t.ms===120000).fn();await until(()=>limit.button()['aria-label']==='Send recording');assert.equal(limit.uploads.length,0,'Duration limit cannot silently commit speech');limit.click();await until(()=>limit.received.length===1);
+ const counter=boot(true);await counter.click();const remaining=counter.nodes.get('#conversation-voice-remaining');
+ assert.equal(remaining.textContent,'2:00 left');assert.equal(remaining.hidden,false);
+ counter.preparation().onPartial('Revisable words');counter.advance(105000);counter.timers.find(t=>t.ms===1000&&!t.closed).fn();
+ assert.equal(remaining.textContent,'0:15 left');assert.equal(remaining['data-near-limit'],'true');assert.equal(counter.state(),'Revisable words','Counter never replaces live captions');
+ counter.cancel();assert.equal(remaining.hidden,true);assert(counter.timers.filter(t=>t.ms===1000).every(t=>t.closed),'Discard retires the countdown timer');
+ const limit=boot();await limit.click();limit.timers.find(t=>t.ms===120000).fn();await until(()=>limit.button()['aria-label']==='Send recording');assert.equal(limit.uploads.length,0,'Duration limit cannot silently commit speech');limit.click();await until(()=>limit.received.length===1);assert.equal(limit.uploads[0].route,'api/interaction/voice/limited');assert.equal(limit.received[0].voice.capture_stop,'duration_limit');
+ const racedLimit=boot(true);await racedLimit.click();racedLimit.devices[0].captureStop='duration_limit';racedLimit.click();await until(()=>racedLimit.received.length===1);assert.equal(racedLimit.received[0].voice.capture_stop,'duration_limit','Send racing a streaming limit cannot erase the stop reason');
+ const limitStorage=memoryRecovery(),limitedRecovery=boot(true,limitStorage);await until(()=>!limitedRecovery.button().disabled);await limitedRecovery.click();limitedRecovery.devices[0].preparedText='The complete captured fragment';limitedRecovery.timers.find(t=>t.ms===120000).fn();await until(()=>limitedRecovery.button()['aria-label']==='Send recording');limitedRecovery.mode('before');limitedRecovery.click();await until(()=>limitedRecovery.uploads.length===1&&limitedRecovery.state().includes('unconfirmed'));const restoredLimited=boot(false,limitStorage);await until(()=>restoredLimited.state().startsWith('An unfinished recording was recovered'));await restoredLimited.click();await until(()=>restoredLimited.received.length===1);assert.equal(restoredLimited.received[0].voice.capture_stop,'duration_limit');assert.equal(restoredLimited.uploads[0].headers['X-Input-Id'],limitedRecovery.uploads[0].headers['X-Input-Id']);assert.equal(limitStorage.values.size,0);
  for(const [phase,retired,phrase] of [['answered',false,'answer recorded'],['retained_unsent',false,'no work was submitted'],['preparation_unconfirmed',false,'transcription unconfirmed'],['preparing',true,'no longer eligible']]){
   const saved=boot();saved.captureState(phase,retired);await saved.click();saved.click();await until(()=>saved.received.length===1);assert(saved.state().includes(phrase),'A receipt must show actual preparation eligibility');
  }

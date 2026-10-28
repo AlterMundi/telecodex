@@ -154,7 +154,7 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
         }
         let voice = input.voice.context("Original voice capture unavailable")?;
         let payload = json!({"binding":selected.binding,"id":selected.id,
-            "audio_sha256":voice.audio_sha256,"mime":voice.mime,"files":input.files,"visual":input.visual,"reply":input.reply,"playback":input.playback,"capture_questions":input.capture_questions});
+            "audio_sha256":voice.audio_sha256,"mime":voice.mime,"capture_stop":voice.capture_stop,"files":input.files,"visual":input.visual,"reply":input.reply,"playback":input.playback,"capture_questions":input.capture_questions});
         return voice_submit(app, human, cfg.entry(), &payload.to_string(), true).await;
     }
     if let Some(body) = args.strip_prefix("retry ") {
@@ -619,6 +619,8 @@ struct VoiceSubmit {
     audio_sha256: String,
     mime: String,
     #[serde(default)]
+    capture_stop: Option<String>,
+    #[serde(default)]
     visual: Option<crate::visual::VisualSelection>,
     #[serde(default)]
     files: Vec<crate::files::FileReference>,
@@ -660,6 +662,7 @@ async fn voice_submit(
     let voice = ConversationVoice {
         audio_sha256: request.audio_sha256,
         mime: request.mime,
+        capture_stop: request.capture_stop,
         transcription: None,
     };
     voice.validate()?;
