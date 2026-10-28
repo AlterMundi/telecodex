@@ -1134,7 +1134,18 @@ Before native submission the adapter retains intent and rechecks original author
 expiry, generation and the exact source revision. It records `submitting` at the
 native boundary, then distinguishes `accepted`, `rejected`, `uncertain` and
 `retained_unsent`. Restart changes an unsubmitted reservation to `retained_unsent`
-and an unresolved submission to `uncertain`; neither is automatically replayed.
+and an unresolved submission to `uncertain`. With the existing adapter explicitly
+enabled, the maintenance heartbeat can claim the same retained known-unsent intent
+again after2 then5 seconds, at most3 total attempts and4 claims per heartbeat.
+It rechecks current authority, binding, generation, expiry, unreported source and
+revision; it does not discover new events on startup. Submitting, uncertain,
+rejected and acknowledged returns are never retried automatically. Attempts and
+next eligible time remain visible in the existing workflow status. Asynchronous
+observations carry their frozen attempt, so a late earlier ACK cannot acquire a
+later attempt's collection or publication authority. Restart preserves the budget.
+Once retry metadata exists, rollback must retain a compatible journal writer;
+disable the adapter on that writer rather than restoring an older database or
+silently resetting attempt counts.
 An exact native ACK remains retained even if the local waiter later times out.
 For a live-return race whose ACK names a different native turn, the immutable ACK
 is `accepted_uncollected` with that actual turn ID. A distinct callback-only local

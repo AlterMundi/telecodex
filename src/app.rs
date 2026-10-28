@@ -649,6 +649,11 @@ impl App {
                 tracing::warn!("Native output recovery remains pending; no input replayed");
             }
             if !self.shared.shutdown.is_cancelled()
+                && workflows::recover_unsent(self).await.is_err()
+            {
+                tracing::warn!("Known-unsent workflow return recovery remains pending");
+            }
+            if !self.shared.shutdown.is_cancelled()
                 && artifact_outputs::recover(self.shared.clone()).is_err()
             {
                 tracing::warn!("Retained file recovery unconfirmed");
@@ -2986,7 +2991,13 @@ impl App {
                 let nexus_id = turn.nexus.clone();
                 let merge_id = turn.merge.clone();
                 let conversation_input_id = turn.conversation_input.clone();
-                let workflow_return_id = turn.workflow_return.clone();
+                let workflow_return_id = turn.workflow_return.as_ref().and_then(|id| {
+                    shared
+                        .store
+                        .workflow_native_dispatch(id)
+                        .ok()
+                        .map(|r| (id.clone(), r.attempts))
+                });
                 let (registration, result) = match routing::begin(&shared, &turn) {
                     Ok(registration) => {
                         let result = match capacity {
@@ -3020,7 +3031,7 @@ impl App {
                         &tx,
                     );
                 }
-                if let Some(id) = workflow_return_id {
+                if let Some((id, attempt)) = workflow_return_id {
                     let phase = if result
                         .as_ref()
                         .err()
@@ -3030,7 +3041,9 @@ impl App {
                     } else {
                         "uncertain"
                     };
-                    let _ = shared.store.workflow_native_outcome(&id, phase, None);
+                    let _ = shared
+                        .store
+                        .workflow_native_outcome_attempt(&id, attempt, phase, None);
                 }
                 if let Some(id) = merge_id {
                     let _ = shared.store.merge_finish(&id);

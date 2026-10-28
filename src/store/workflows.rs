@@ -212,7 +212,7 @@ fn view_on(conn: &Connection, w: &Workflow) -> Result<Value> {
         } else {
             None
         };
-        returns.push(json!({"id":r.id,"source_revision":r.envelope["revision"],"phase":r.phase,"local_turn":r.local,"collection_local_turn":r.collection_local,"native_turn":r.native_turn,"observation":observation}));
+        returns.push(json!({"id":r.id,"source_revision":r.envelope["revision"],"phase":r.phase,"local_turn":r.local,"collection_local_turn":r.collection_local,"native_turn":r.native_turn,"attempts":r.attempts,"max_attempts":3,"retry_after":r.retry_after,"observation":observation}));
     }
     view["native_returns"] = json!({"limit":16,"retained":returns});
     Ok(view)
@@ -605,7 +605,7 @@ impl Store {
                     .rev()
                     .find(|r| r.envelope["revision"] == envelope["revision"])
                 {
-                    envelope["native_return"] = json!({"id":receipt.id,"phase":receipt.phase,"native_turn":receipt.native_turn});
+                    envelope["native_return"] = json!({"id":receipt.id,"phase":receipt.phase,"native_turn":receipt.native_turn,"attempts":receipt.attempts,"max_attempts":3,"retry_after":receipt.retry_after});
                 }
                 envelopes.push(envelope);
             }
@@ -1408,6 +1408,145 @@ mod tests {
                 .iter()
                 .any(|i| i["preview"] == "The ordinary human answer remains visible.")
         );
+    }
+    fn make_return_due(s: &Store, e: &SessionRecord, workflow: &str) {
+        let conn = s.conn.lock().unwrap();
+        let mut w = load_on(&conn, 100, e.key, workflow).unwrap();
+        for r in &mut w.native_returns {
+            r.retry_after = Some(Utc::now().timestamp() - 1);
+        }
+        save_on(&conn, &w).unwrap();
+    }
+    #[test]
+    fn known_unsent_return_recovers_same_source_with_finite_attempts() {
+        let (f, s, e, plan) = setup();
+        let v = declare(&s, &e, plan);
+        let workflow = v["id"].as_str().unwrap();
+        let first = advance(&s, &e, &v).unwrap();
+        let worker = accept(&s, &first);
+        answer(
+            &s,
+            &first,
+            worker,
+            "source",
+            vec![first.id.clone()],
+            "Ready",
+        );
+        let original = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        let old = turn(&s, &e, "");
+        s.workflow_native_link(&original.id, old).unwrap();
+        s.workflow_native_outcome_attempt(&original.id, 1, "retained_unsent", None)
+            .unwrap();
+        assert!(
+            s.workflow_native_recover_unsent(100, e.key)
+                .unwrap()
+                .is_empty()
+        );
+        for attempt in 2..=3 {
+            make_return_due(&s, &e, workflow);
+            let retry = s
+                .workflow_native_recover_unsent(100, e.key)
+                .unwrap()
+                .remove(0);
+            assert_eq!(retry.id, original.id);
+            assert_eq!(retry.attempts, attempt);
+            assert_eq!(
+                serde_json::from_str::<Value>(&retry.output).unwrap()["evidence"],
+                serde_json::from_str::<Value>(&original.output).unwrap()["evidence"]
+            );
+            assert!(
+                s.workflow_native_recover_unsent(100, e.key)
+                    .unwrap()
+                    .is_empty()
+            );
+            // A late ACK/error for the earlier attempt cannot mutate this claim.
+            s.workflow_native_outcome_attempt(
+                &retry.id,
+                attempt - 1,
+                "accepted",
+                Some("stale-ack"),
+            )
+            .unwrap();
+            s.workflow_native_outcome_attempt(&retry.id, attempt - 1, "uncertain", None)
+                .unwrap();
+            assert_eq!(
+                s.workflow_native_dispatch(&retry.id).unwrap().attempts,
+                attempt
+            );
+            let current = turn(&s, &e, "");
+            s.workflow_native_link(&retry.id, current).unwrap();
+            s.workflow_native_submitting(&retry.id).unwrap();
+            assert!(!s.workflow_native_visible(old).unwrap());
+            s.workflow_native_outcome_attempt(&retry.id, attempt, "retained_unsent", None)
+                .unwrap();
+        }
+        make_return_due(&s, &e, workflow);
+        assert!(
+            s.workflow_native_recover_unsent(100, e.key)
+                .unwrap()
+                .is_empty()
+        );
+        let workflow = workflow.to_owned();
+        drop(s);
+        let s = Store::open(f.path(), &[100], &super::super::tests::defaults()).unwrap();
+        assert!(
+            s.workflow_native_recover_unsent(100, e.key)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            status(&s, &e, &workflow)["native_returns"]["retained"][0]["attempts"],
+            3
+        );
+    }
+    #[test]
+    fn return_recovery_excludes_uncertain_rejected_accepted_and_changed_sources() {
+        for outcome in ["uncertain", "rejected", "accepted", "changed"] {
+            let (_f, s, e, plan) = setup();
+            let v = declare(&s, &e, plan);
+            let workflow = v["id"].as_str().unwrap();
+            let first = advance(&s, &e, &v).unwrap();
+            let worker = accept(&s, &first);
+            answer(
+                &s,
+                &first,
+                worker,
+                "source",
+                vec![first.id.clone()],
+                "Ready",
+            );
+            let r = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+            let local = turn(&s, &e, "");
+            s.workflow_native_link(&r.id, local).unwrap();
+            s.workflow_native_submitting(&r.id).unwrap();
+            if outcome == "changed" {
+                s.workflow_native_outcome_attempt(&r.id, 1, "retained_unsent", None)
+                    .unwrap();
+                answer(
+                    &s,
+                    &first,
+                    worker,
+                    "new-source",
+                    vec![first.id.clone()],
+                    "Corrected",
+                );
+            } else {
+                s.workflow_native_outcome_attempt(
+                    &r.id,
+                    1,
+                    outcome,
+                    (outcome == "accepted").then_some("actual-ack"),
+                )
+                .unwrap();
+            }
+            make_return_due(&s, &e, workflow);
+            assert!(
+                s.workflow_native_recover_unsent(100, e.key)
+                    .unwrap()
+                    .is_empty(),
+                "{outcome}"
+            );
+        }
     }
     #[test]
     fn native_return_restart_keeps_known_unsent_uncertainty_and_ack_separate() {

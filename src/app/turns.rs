@@ -34,6 +34,7 @@ pub(super) async fn process_turn(
         None
     };
     let mut conversation_native = None;
+    let mut workflow_return_attempt = None;
     if let Some(id) = queued.workflow_return.as_deref() {
         let selected = shared.store.workflow_native_dispatch(id)?;
         if selected.entry != queued.request.session_key
@@ -42,6 +43,7 @@ pub(super) async fn process_turn(
         {
             bail!("Workflow return execution binding changed");
         }
+        workflow_return_attempt = Some(selected.attempts);
         conversation_native = Some(selected.native);
     }
     if let Some(id) = queued.conversation_input.as_deref() {
@@ -898,7 +900,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::Approval(receiver))
                             }
                             CodexEvent::NativeInputRejected => {
-                                if let Some(id)=workflow_return.as_deref() {shared.store.workflow_native_outcome(id,"rejected",None)?;}
+                                if let (Some(id),Some(attempt))=(workflow_return.as_deref(),workflow_return_attempt) {shared.store.workflow_native_outcome_attempt(id,attempt,"rejected",None)?;}
                                 shared.store.native_collection_rejected(turn_id)?;
                                 if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Rejected{local_turn:turn_id})?;}
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_transport(id,requester_user_id,turn_id,crate::interaction::TransportPhase::Rejected,None)?;}
@@ -913,12 +915,12 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeInternalReturnDetached {client_id,turn_id:native_id} => {
-                                if let Some(id)=client_id.strip_prefix("workflow-return:") {shared.store.workflow_native_outcome(id,"accepted_uncollected",Some(&native_id))?;}
+                                if let Some((id,attempt))=super::workflows::return_attempt(&client_id) {shared.store.workflow_native_outcome_attempt(id,attempt,"accepted_uncollected",Some(&native_id))?;}
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeSteerAccepted {client_id,turn_id:native_id} => {
-                                if let Some(id)=client_id.strip_prefix("workflow-return:") {
-                                    shared.store.workflow_native_outcome(id,"accepted",Some(&native_id))?;
+                                if let Some((id,attempt))=super::workflows::return_attempt(&client_id) {
+                                    shared.store.workflow_native_outcome_attempt(id,attempt,"accepted",Some(&native_id))?;
                                     return Ok(CodexEventOutcome::None);
                                 }
                                 shared.store.native_input_receipt(turn_id,Some(&client_id),&native_id)?;
@@ -930,8 +932,8 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeInputAccepted(native_id) => {
-                                if let Some(id)=workflow_return.as_deref() {
-                                    shared.store.workflow_native_outcome(id,"accepted",Some(&native_id))?;
+                                if let (Some(id),Some(attempt))=(workflow_return.as_deref(),workflow_return_attempt) {
+                                    shared.store.workflow_native_outcome_attempt(id,attempt,"accepted",Some(&native_id))?;
                                     if let Some(thread)=conversation_native.as_deref() {let _=shared.store.start_response_draft(requester_user_id,session_key,turn_id,thread,&native_id);}
                                 }
                                 shared.store.native_input_receipt(turn_id,None,&native_id)?;
