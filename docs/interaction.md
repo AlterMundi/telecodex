@@ -1217,8 +1217,27 @@ policy must remain observable even during qualification; do not hard-code a fals
 status to represent missing acceptance. A native ACK, delivery uncertainty,
 source integration and human hearing remain different observations.
 
-This source is not receiving deployment or live native qualification. Once a
-workflow has been declared, preserve `interaction_workflows`, all underlying
+CompAII receiving selection,28October2026: PR423/424 is installed and the existing
+adapter is enabled for **declared human workflows**. Full CI40725360141 passed.
+An actual Sol6.1/openai/medium callback-only Root received the source-bound internal
+return through this wrapper, called `workflow_result`, `workflow_reported`,
+`workflow_status` and `workflow_finish`, and published one canonical answer in the
+same Conversation. It contained no native human message or production test input;
+the test context was archived after observed completion. This qualifies that idle
+provider/controller/publication journey, not physical hearing, latency, arbitrary
+session awareness or the whole continuous-voice roadmap. Earlier active-seam
+provider evidence and synthetic active-wrapper coverage retain their own scope.
+
+For actual-provider fixtures, set and inspect the stored entry model/effort:
+changing default preferences does not update seeded synthetic sessions. Use the
+existing `thread/name/set` durability operation before disconnecting an empty
+paginated test context. Its rollout may exist before its metadata index row;
+that does not establish a model turn or justify replacing an uncertain context.
+Retain earlier unknown creation/submission outcomes; fix verifier-only failures
+without repeating model work. Source, installation, incorporation and hearing
+remain separate observations. Other receivers retain their explicit selection.
+
+Once a workflow has been declared, preserve `interaction_workflows`, all underlying
 instructions/results and session authorship during upgrades or rollback. A
 rollback listener must retain this reader and original-selection exclusion while
 workflows are active; an older binary unaware of workflow selections is not a

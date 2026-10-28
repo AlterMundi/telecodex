@@ -130,3 +130,10 @@ only with the adapter enabled and unchanged current source/authority. Keep the
 same intent ID, at most3 attempts (2/5-second delays), frozen attempt correlation
 and compatible-writer rollback. Never retry uncertain, submitting, rejected or
 acknowledged returns; never reuse an earlier local writer's publication grant.
+
+Real-provider workflow fixtures must inspect retained entry model/provider/effort;
+changing defaults leaves seeded session preferences unchanged. Make a task-owned
+empty paginated context durable through existing thread/name/set before cold
+resume. Preserve actual input/ACK history and distinguish fixture rejection from
+Core submission. Current receiving evidence and remaining acceptance live in the
+existing Shared Resources Interaction record; do not rerun completed qualifiers.
