@@ -4,7 +4,7 @@ const tick=()=>new Promise(yes=>setImmediate(yes));
 const until=async f=>{for(let i=0;i<100;i++){if(f())return;await new Promise(yes=>setTimeout(yes,5));}throw Error('Expected continuous voice transition');};
 const deferred=()=>{let resolve;return {promise:new Promise(yes=>resolve=yes),resolve};};
 function boot(){
- const events={},timers=[],analyses=[],sources=[],recorders=[],medias=[],retained=[],commits=[],sent=[],reviews=[],states=[],captions=[];
+ const events={},timers=[],analyses=[],sources=[],recorders=[],medias=[],retained=[],commits=[],sent=[],reviews=[],states=[],captions=[],timings=[];
  let binding='a'.repeat(64),interrupts=0,permission,commitHold,questions={old:'v1'};
  const document={hidden:false,addEventListener:(n,f)=>events[n]=f};
  const window={crypto,addEventListener:(n,f)=>events[n]=f,navigator:{mediaDevices:{async getUserMedia(options){
@@ -34,11 +34,11 @@ function boot(){
  const session=window.ContinuousConversation.create({headers:()=>({}),getBinding:()=>binding,getQuestions:()=>questions,getPlayback:()=>({source:'synthetic-reply',position_millis:123}),
   async retain(original){const v={...original,audio_sha256:Buffer.from(await crypto.subtle.digest('SHA-256',await original.blob.arrayBuffer())).toString('hex')};retained.push(v);return v;},
   async commit(original){commits.push(original);if(commitHold)return commitHold.promise;return {confirmed:true,value:{id:original.id,voice:{audio_sha256:original.audio_sha256}}};},
-  onState:v=>states.push(v),onCaption:v=>captions.push(v),onInterrupt:()=>interrupts++,onSent:v=>sent.push(v),onReview:v=>reviews.push(v)
+  onTiming:(id,stage)=>timings.push({id,stage}),onState:v=>states.push(v),onCaption:v=>captions.push(v),onInterrupt:()=>interrupts++,onSent:v=>sent.push(v),onReview:v=>reviews.push(v)
  });
  const activity=(generation,onset,endpoint)=>analyses.at(-1).emit({schema:'telecodex.turn-activity/v1',type:'activity',generation,audio_bytes:sources.at(-1).bytes,speech_seen:true,speaking:!endpoint,
   ...(onset?{onset:{generation,audio_bytes:sources.at(-1).bytes}}:{}),...(endpoint?{endpoint:{generation,audio_bytes:sources.at(-1).bytes,probability:.9,authority:'analysis_only'}}:{})});
- return {session,analyses,sources,recorders,medias,retained,commits,sent,reviews,states,captions,document,events,timers,activity,interrupts:()=>interrupts,
+ return {session,analyses,sources,recorders,medias,retained,commits,sent,reviews,states,captions,timings,document,events,timers,activity,interrupts:()=>interrupts,
   questions:v=>questions=v,bind:v=>binding=v,permission:()=>{permission=deferred();return permission;},holdCommit:()=>{commitHold=deferred();return commitHold;}};
 }
 (async()=>{
@@ -52,6 +52,7 @@ function boot(){
  assert.equal(f.sources.length,1);assert.equal(f.medias.length,1);assert.equal(f.analyses.length,1);
  assert.equal(f.recorders[1].parts.reduce((n,p)=>n+p.byteLength,0),32,'The boundary gap belongs to the next exact original');
  f.recorders[0].complete('Una frase');await until(()=>f.sent.length===1);
+ assert.deepEqual(f.timings.filter(v=>v.id===f.retained[0].id).map(v=>v.stage),['requested','started','partial','ended','ready']);
  assert.equal(f.retained[0].blob.size,3200);assert.equal(f.commits.length,1);assert.equal(f.session.active,true,'Finalizing an old original does not stop the next microphone capture');
  f.sources[0].emit(3200,3);f.recorders[1].partial('Otra frase');f.activity(2,true,false);f.activity(2,false,true);
  await until(()=>f.recorders.length===3);f.recorders[1].complete('Otra frase');await until(()=>f.sent.length===2);

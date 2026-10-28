@@ -2,7 +2,7 @@
 // Explicit foreground owner. Speech analysis is never itself input admission.
 window.ContinuousConversation=(()=>{
   function create({headers,getBinding,getQuestions=()=>undefined,getPlayback=()=>undefined,
-    retain,commit,onState=()=>{},onCaption=()=>{},onInterrupt=()=>{},onSent=()=>{},onReview=()=>{}}){
+    retain,commit,onState=()=>{},onCaption=()=>{},onInterrupt=()=>{},onSent=()=>{},onReview=()=>{},onTiming=()=>{}}){
     let active=false,starting=false,stopping=false,epoch=0,binding,source,analysis,media,abort,timer,unsubscribe;
     let current,ring=[],bytes=0,samples=0,lastEnergy=0,verdict,floor=false,blockedAt=Infinity,order=0,dispatching=false;
     const slots=new Map();
@@ -13,7 +13,7 @@ window.ContinuousConversation=(()=>{
     function hold(message='Voice mode ended. Review your recordings before sending.'){
       if(stopping){state(message);review();return;}stopping=true;active=false;starting=false;floor=false;clearTimeout(timer);abort?.abort();analysis?.close();analysis=undefined;
       const slot=current;
-      if(slot?.recorder?.state==='recording'){slot.review=true;slot.recorder.stop();}
+      if(slot?.recorder?.state==='recording'){slot.review=true;onTiming(slot.id,'ended');slot.recorder.stop();}
       else if(!slot)closeGraph();
       stopTracks();state(message);review();
     }
@@ -34,7 +34,7 @@ window.ContinuousConversation=(()=>{
       if(end.generation!==slot.generation||a.speaking!==false||end.audio_bytes<=slot.start
          ||end.audio_bytes>bytes||lastEnergy>end.audio_bytes||samples-end.audio_bytes>=32000)return;
       if(!analysis?.boundary(end)){hold('Voice analysis lost its turn boundary. Your recordings are kept.');return;}
-      slot.send=true;floor=false;verdict=undefined;slot.recorder.stop();if(!stopping)state('Finishing your phrase');
+      slot.send=true;floor=false;verdict=undefined;onTiming(slot.id,'ended');slot.recorder.stop();if(!stopping)state('Finishing your phrase');
     }
     function activity(a){
       if(!active||stopping||binding!==getBinding()){if(active)hold('Conversation changed. Your recordings are kept.');return;}
@@ -49,7 +49,7 @@ window.ContinuousConversation=(()=>{
     async function finalized(slot){
       if(stopping&&current===slot){current=undefined;closeGraph();}
       if(!slot.blob){slots.delete(slot.id);if(!stopping)hold('No recording was confirmed. Nothing was sent.');return;}
-      const r=slot.recorder;
+      const r=slot.recorder;onTiming(slot.id,'ready');
       const original={id:slot.id,binding,capture_started:slot.started,blob:slot.blob,mime:'audio/wav',preparedText:r.preparedText,
         captureStop:r.captureStop,captureQuestions:slot.questions,playback:slot.playback};
       slot.original=original;
@@ -84,11 +84,11 @@ window.ContinuousConversation=(()=>{
       if(slots.size>=2){hold('Two recordings are still pending. Review them before continuing.');return;}
       const questions=getQuestions();
       const slot={id:window.crypto.randomUUID(),order:order++,started:Date.now(),start,questions:questions===undefined?undefined:JSON.parse(JSON.stringify(questions)),speech:false,words:false,send:false};
-      slots.set(slot.id,slot);current=slot;verdict=undefined;onCaption('');
+      slots.set(slot.id,slot);current=slot;verdict=undefined;onTiming(slot.id,'requested');onCaption('');
       try{
         const recorder=await window.StreamingVoice.create(undefined,{headers,binding,id:slot.id,captureSource:source,
           initialPCM:end=>prefix(start,end),
-          onPartial:text=>{if(current===slot&&active){slot.words=!!text.trim();onCaption(text);consider();}},
+          onPartial:text=>{if(current===slot&&active){slot.words=!!text.trim();if(slot.words)onTiming(slot.id,'partial');onCaption(text);consider();}},
           onFlushed:end=>{
             slot.end=end;if(current===slot)current=undefined;
             if(stopping)closeGraph();else void arm(end,owned);
@@ -98,7 +98,7 @@ window.ContinuousConversation=(()=>{
         recorder.addEventListener('stop',()=>{void finalized(slot);});
         recorder.addEventListener('error',()=>hold('Voice capture failed. Your recordings are kept.'));
         if(owned!==epoch||stopping){slot.review=true;recorder.discard();slots.delete(slot.id);if(owned===epoch)closeGraph();return;}
-        recorder.start();state('Listening');consider();
+        recorder.start();onTiming(slot.id,'started');state('Listening');consider();
       }catch{slots.delete(slot.id);if(owned!==epoch)return;if(current===slot)current=undefined;hold('Voice capture could not continue. Your earlier recordings are kept.');closeGraph();}
     }
     async function start(){

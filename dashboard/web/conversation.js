@@ -1795,7 +1795,7 @@ window.Conversation = (() => {
     if(standalone&&!readOnly&&microphone)voiceSession=window.ContinuousConversation?.create({
       headers,getBinding:()=>binding,getQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,
       getPlayback:()=>playbackContext(true),retain:original=>microphone.retainContinuous(original),commit:original=>microphone.commitContinuous(original),
-      onInterrupt:beginVoiceCapture,onCaption:text=>voiceMode?.update({caption:text}),
+      onInterrupt:beginVoiceCapture,onCaption:text=>voiceMode?.update({caption:text}),onTiming:(id,stage)=>timing?.mark(id,stage),
       onReview:originals=>{void microphone.reviewContinuous(originals);},
       onState:value=>{
         if(!voiceModePrevious?.continuous)return;

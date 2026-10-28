@@ -123,6 +123,16 @@ The browser preserves the original and requires review on uncertainty.
 
 The browser worklet also enforces its five-minute sample ceiling on the audio
 thread; a frozen main-thread timer cannot accumulate unlimited PCM messages.
+A mounted Chromium journey exercised the shipped HTML, worklet, sockets,
+ordinary original writer, IndexedDB and real audio element with synthetic
+ASR/activity/TTS transports. One microphone/analyzer handled two phrases and two
+exact WAV receipts in order. The second phrase paused an already-playing
+response. Exit stopped the track, restored the avatar/draft and retained the
+unfinished fragment; reload exposed it without recapture or another input.
+These observations do not qualify the actual providers or physical echo/noise.
+Continuous originals also feed the existing bounded page-local timing view;
+endpoint/Stop time is not independently measured final intended speech.
+
 The full stages2/3/required4 roadmap and real-device/provider acceptance remain
 required. Configure no continuous activation from these source fixtures alone.
 
