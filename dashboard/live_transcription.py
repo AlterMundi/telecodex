@@ -18,7 +18,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from .private_state import private_directory, read_json, write_json
 from .transcription import TranscriptionStream, TranscriptionUnavailable
-from .turn_detection import Detector, DetectionUnavailable, command as detection_command
+from .turn_detection import Detector, DetectionUnavailable, analyze_capture, command as detection_command
 from scripts.speech_render import lock
 
 
@@ -93,7 +93,6 @@ def install(app, config, provider, authorize, origins):
         reader = None
         owner = None
         incoming = None
-        detector = None
         detector_reader = None
         sending = asyncio.Lock()
         async def send(value):
@@ -146,25 +145,18 @@ def install(app, config, provider, authorize, origins):
                     owner = None
                     raise ValueError('Voice preparation capacity occupied')
                 active.add(owner)
+                pcm = bytearray()
+                analysis_changed = asyncio.Event()
                 if meta.get('turn_detection'):
-                    try:
-                        detector = await Detector.open(detector_command)
-                    except (OSError, DetectionUnavailable, TimeoutError):
-                        await send({'type':'turn_detection_unavailable'})
-                    if detector:
-                        async def receive_detection():
-                            try:
-                                while True:
-                                    event = await detector.receive()
-                                    if event['type'] != 'activity':
-                                        raise DetectionUnavailable('Unexpected analysis response')
-                                    await recheck()
-                                    await send({'type':'turn_activity','id':meta['id'], 'activity':event})
-                            except (DetectionUnavailable, OSError):
-                                await send({'type':'turn_detection_unavailable'})
-                            finally:
-                                await detector.close()
-                        detector_reader = asyncio.create_task(receive_detection())
+                    async def receive_detection():
+                        async def activity(event):
+                            await recheck()
+                            await send({'type':'turn_activity','id':meta['id'], 'activity':event})
+                        try:
+                            await analyze_capture(lambda: Detector.open(detector_command), pcm, analysis_changed, activity)
+                        except (OSError, DetectionUnavailable, TimeoutError):
+                            await send({'type':'turn_detection_unavailable'})
+                    detector_reader = asyncio.create_task(receive_detection())
                 candidate_index=0
                 def open_provider(start=0):
                     nonlocal candidate_index
@@ -186,7 +178,6 @@ def install(app, config, provider, authorize, origins):
                     raise TranscriptionUnavailable('No configured streaming provider')
                 diagnostic['stage'] = 'provider_open'
                 stream = await asyncio.to_thread(open_provider)
-                pcm = bytearray()
                 ready, finished = asyncio.Event(), asyncio.Event()
                 async def receive_provider():
                     nonlocal stream
@@ -229,11 +220,14 @@ def install(app, config, provider, authorize, origins):
                     incoming = asyncio.create_task(socket.receive())
                     waiting=[incoming,reader]
                     if detector_reader is not None:
-                        if detector_reader.done(): await detector_reader
+                        if detector_reader.done():
+                            await detector_reader
+                            detector_reader = None
                         else: waiting.append(detector_reader)
                     done,_ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
                     if detector_reader in done:
                         await detector_reader
+                        detector_reader = None
                         if incoming not in done and reader not in done:
                             incoming.cancel()
                             with suppress(asyncio.CancelledError): await incoming
@@ -254,15 +248,9 @@ def install(app, config, provider, authorize, origins):
                         await asyncio.to_thread(stream.append,data)
                         diagnostic['audio_bytes'] += len(data)
                         diagnostic['stage'] = 'receiving_audio'
-                        if mode=='prepared':pcm.extend(data)
-                        if detector and detector_reader is not None and not detector_reader.done():
-                            try:
-                                await detector.feed(data)
-                            except DetectionUnavailable:
-                                detector_reader.cancel()
-                                with suppress(asyncio.CancelledError,Exception): await detector_reader
-                                detector_reader = None
-                                await send({'type':'turn_detection_unavailable'})
+                        if mode=='prepared':
+                            pcm.extend(data)
+                            analysis_changed.set()
                     else:
                         control = message.get('text','')
                         if len(control.encode())>256:raise ValueError('Control exceeds bound')
@@ -302,12 +290,9 @@ def install(app, config, provider, authorize, origins):
                     incoming.cancel()
                 if detector_reader is not None:
                     detector_reader.cancel()
-                if detector is not None:
-                    closing_detector = asyncio.create_task(detector.close())
-                    closing_detector.add_done_callback(lambda task: None if task.cancelled() else task.exception())
-                    await asyncio.shield(closing_detector)
                 if detector_reader is not None:
-                    with suppress(asyncio.CancelledError,Exception): await detector_reader
+                    with suppress(asyncio.CancelledError,Exception):
+                        await asyncio.shield(detector_reader)
                 # A canceled async wait cannot cancel the blocking dial. Its owning
                 # thread closes a late socket instead of orphaning it after timeout.
                 with opening_lock:

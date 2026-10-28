@@ -180,15 +180,23 @@ The authenticated existing capture socket explicitly requests analysis; normal
 captures do not create an analysis process. At most two actor-scoped captures
 are active, each120seconds, at most30turn scores, an eight-second PCM tail and
 one pending PCM frame. The child has60CPU seconds/145wall seconds and closes
-with the capture. Its pipe input/output, startup and write waits are bounded.
+with the capture. Its pipe input/output, startup and write waits are bounded. Analysis startup runs
+beside ASR; it never gates recognition readiness, captions or final preparation.
+The analyzer catches up from the same capture PCM with at most eight seconds of
+backlog. Startup frames establish VAD history, but scoring is deferred until the
+current tail, so an old buffered pause cannot create an endpoint. Backlog overflow
+or worker failure disables analysis while keeping ASR and the original available.
+Deploy the bridge and analysis worker from the same source revision: startup
+backfill uses the worker's optional `defer` command. A mismatched older worker
+fails analysis without switching or restarting the existing ASR capture.
 No ML inference, model weights or raw audio are retained in the web process.
 Fullscreen microphone opt-in expires after five minutes and is not persisted.
 Raw original recovery and existing ASR/TTS retention remain separately owned.
 
 One real pinned-model child qualified ready/PCM/close with a silent100ms chunk:
 startup4.346s and chunk plus close365ms under concurrent host load. These are
-not utterance-to-response measurements. Cold startup per capture remains a
-latency limitation; do not claim the sub-second product target from inference
+not utterance-to-response measurements. Cold model startup per capture remains an analysis
+latency limitation even with the ASR-independent startup path; do not claim the sub-second product target from inference
 speed or activate ordinary captures to hide that cost. The real model emitted
 no speech/endpoint for silence, and the child exited0. Browser qualification at
 390/1040px covered actual portrait/fullscreen modules, Escape/keyboard exit,

@@ -233,6 +233,23 @@ class LiveTranscription(unittest.TestCase):
                     ws.send_bytes(b'\0\0');ws.receive_json();grants.revoke(enrolled['grant_id'])
                     ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'unavailable')
         self.assertFalse(any(value.finished for value in Stream.opened))
+    def test_asr_ready_partial_and_final_do_not_wait_for_analysis_startup(self):
+        entered,cancelled=threading.Event(),threading.Event()
+        class SlowAnalysis:
+            @classmethod
+            async def open(cls,_):
+                entered.set()
+                try:await asyncio.sleep(30)
+                finally:cancelled.set()
+        with patch('dashboard.live_transcription.Detector',SlowAnalysis),self.open() as ws:
+            ws.send_json(self.meta(turn_detection=True))
+            self.assertEqual(ws.receive_json()['type'],'ready')
+            self.assertTrue(entered.wait(1));self.assertFalse(cancelled.is_set())
+            ws.send_bytes(b'\0\0'*1600);self.assertEqual(ws.receive_json()['type'],'partial')
+            ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'prepared')
+        self.assertTrue(cancelled.wait(1),'Capture exit must cancel its pending analyzer startup')
+        self.assertTrue(Stream.opened[0].closed_event.wait(1));self.assertEqual(self.provider.calls,[])
+
     def test_completed_receipt_is_immutable_and_requires_matching_audio(self):
         pcm=b'\0\0'*1600
         result={'text':'Retained words','final':True,'model':'synthetic',

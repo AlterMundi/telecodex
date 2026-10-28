@@ -1,6 +1,7 @@
 """One optional, bounded analysis child for an already authorized voice capture."""
 import asyncio
 import base64
+from contextlib import suppress
 import json
 
 from scripts.capture_turn import MODEL_SHA256, SCHEMA, VAD_SHA256
@@ -38,11 +39,11 @@ class Detector:
             await value.close()
             raise
 
-    async def feed(self, pcm):
+    async def feed(self, pcm, *, defer=False):
         if not pcm or len(pcm) > 32000 or len(pcm) % 2:
             raise DetectionUnavailable('Invalid analysis PCM')
         try:
-            self.process.stdin.write(json.dumps({'pcm': base64.b64encode(pcm).decode('ascii')}).encode() + b'\n')
+            self.process.stdin.write(json.dumps({'pcm': base64.b64encode(pcm).decode('ascii'), **({'defer': True} if defer else {})}).encode() + b'\n')
             await asyncio.wait_for(self.process.stdin.drain(), 1)
         except (OSError, TimeoutError, RuntimeError) as error:
             raise DetectionUnavailable('Analysis input unavailable') from error
@@ -75,3 +76,62 @@ class Detector:
                     try: self.process.kill()
                     except ProcessLookupError: pass
                 await self.process.wait()
+
+
+async def analyze_capture(open_worker, pcm, changed, on_activity):
+    """Analyze this capture without blocking ASR; at most8s of analysis backlog.
+
+    Model startup runs beside recognition. The mutable original PCM belongs to
+    the existing capture event loop, never another thread or another capture.
+    Replayed startup frames establish VAD history, but only their current tail
+    may produce an endpoint. No extra audio buffer or model cache is retained.
+    """
+    worker = reader = wake = None
+    try:
+        worker = await open_worker()
+        async def receive():
+            while True:
+                value = await worker.receive()
+                if value.get('type') != 'activity':
+                    raise DetectionUnavailable('Unexpected analysis response')
+                await on_activity(value)
+        reader = asyncio.create_task(receive())
+        fed = 0
+        initial = True
+        while True:
+            changed.clear()
+            end = len(pcm)
+            if end - fed > 256000:
+                raise DetectionUnavailable('Analysis fell behind this capture')
+            while fed < end:
+                stop = min(fed + 32000, end)
+                chunk = bytes(pcm[fed:stop])
+                if initial and stop < end:
+                    await worker.feed(chunk, defer=True)
+                else:
+                    await worker.feed(chunk)
+                fed = stop
+            if end:
+                initial = False
+            if reader.done():
+                await reader
+            wake = asyncio.create_task(changed.wait())
+            done, _ = await asyncio.wait((wake, reader), return_when=asyncio.FIRST_COMPLETED)
+            if reader in done:
+                await reader
+            wake.cancel()
+            with suppress(asyncio.CancelledError):
+                await wake
+            wake = None
+    finally:
+        for task in (reader, wake):
+            if task is not None:
+                task.cancel()
+        if worker is not None:
+            closing = asyncio.create_task(worker.close())
+            closing.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+            await asyncio.shield(closing)
+        for task in (reader, wake):
+            if task is not None:
+                with suppress(asyncio.CancelledError, Exception):
+                    await task
