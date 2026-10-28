@@ -206,15 +206,95 @@ fn save_on(conn: &Connection, context: &ReturnContext) -> Result<()> {
         }
     }
 }
+fn original_here_on(conn: &Connection, local: i64) -> Result<bool> {
+    Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM conversation_inputs c WHERE c.local_turn=?1 AND c.phase='accepted') OR EXISTS(SELECT 1 FROM incoming_updates i WHERE i.turn_id=?1 AND i.status IN ('started','settled','steering'))",[local],|r|r.get(0))?)
+}
+fn human_before_on(conn: &Connection, local: i64, physical: &str) -> Result<bool> {
+    // A replacement keeps the publication lifetime of this exact physical turn.
+    // Its own bookkeeping prompt is not a native human input. Existing real
+    // human/goal execution lifetimes and later accepted originals remain usable.
+    Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM native_collections n JOIN turns old ON old.id=n.local_turn JOIN turns current ON current.id=?1 LEFT JOIN bot_state b ON b.key='collector_attachment:'||old.id WHERE old.id<?1 AND n.first_turn=?2 AND old.session_id=current.session_id AND old.native_thread_id=current.native_thread_id AND old.from_user_id=current.from_user_id AND ((old.prompt!='' AND b.key IS NULL) OR json_extract(b.value,'$.native_return_human')=1 OR EXISTS(SELECT 1 FROM conversation_inputs c WHERE c.local_turn=old.id AND c.phase='accepted') OR EXISTS(SELECT 1 FROM incoming_updates i WHERE i.turn_id=old.id AND i.status IN ('started','settled','steering'))))",params![local,physical],|r|r.get(0))?)
+}
 fn later_human_on(conn: &Connection, local: i64) -> Result<bool> {
-    // Only callback-only executions are fenced here. A real human execution
-    // that received an active internal return keeps its normal publication.
-    let prompt: String =
-        conn.query_row("SELECT prompt FROM turns WHERE id=?", [local], |r| r.get(0))?;
-    if !prompt.is_empty() {
+    if original_here_on(conn, local)? {
         return Ok(true);
     }
-    Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM conversation_inputs c WHERE c.local_turn=?1 AND c.phase='accepted') OR EXISTS(SELECT 1 FROM incoming_updates i WHERE i.turn_id=?1 AND i.status IN ('started','settled','steering'))",[local],|r|r.get(0))?)
+    let attachment: Option<String> = conn
+        .query_row(
+            "SELECT value FROM bot_state WHERE key=?1",
+            [format!("collector_attachment:{local}")],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(raw) = attachment {
+        let value: Value = serde_json::from_str(&raw)?;
+        if let Some(human) = value["native_return_human"].as_bool() {
+            return Ok(human);
+        }
+        return human_before_on(
+            conn,
+            local,
+            value["native_turn"]
+                .as_str()
+                .context("Collector physical identity missing")?,
+        );
+    }
+    let prompt: String = conn.query_row("SELECT prompt FROM turns WHERE id=?1", [local], |r| {
+        r.get(0)
+    })?;
+    Ok(!prompt.is_empty())
+}
+
+/// Move observation, never admission or input authority, to a confirmed owner
+/// collector for the same exact physical turn. Keep stale/unknown sources as
+/// negative publication fences and retain old locals' frozen source bindings.
+pub(in crate::store) fn transfer_collection_on(
+    conn: &Connection,
+    local: i64,
+    human: i64,
+    entry: SessionKey,
+    native: &str,
+    physical: &str,
+) -> Result<Option<bool>> {
+    let ids = {
+        let mut query = conn.prepare("SELECT DISTINCT j.value FROM native_collections n JOIN turns old ON old.id=n.local_turn JOIN turns current ON current.id=?1 JOIN bot_state b ON b.key='workflow_return_local:'||old.id JOIN json_each(b.value) j WHERE old.id<?1 AND n.first_turn=?2 AND old.session_id=current.session_id AND old.native_thread_id=current.native_thread_id AND old.from_user_id=current.from_user_id ORDER BY j.value LIMIT 33")?;
+        query
+            .query_map(params![local, physical], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    anyhow::ensure!(
+        ids.len() <= 32,
+        "Exact native return collection source bound exhausted"
+    );
+    let mut transferred = false;
+    for id in ids {
+        let (mut context, index) = selected_on(conn, &id)?;
+        anyhow::ensure!(
+            context.human == human && context.entry == entry && context.native == native,
+            "Native return collector owner changed"
+        );
+        let receipt = &context.native_returns[index];
+        if receipt
+            .native_turn
+            .as_deref()
+            .is_some_and(|turn| turn != physical)
+        {
+            continue;
+        }
+        anyhow::ensure!(
+            receipt.collection_local.is_none_or(|owner| owner <= local),
+            "Newer native return collector already owns observation"
+        );
+        bind_on(conn, local, &id)?;
+        context.native_returns[index].collection_local = Some(local);
+        save_on(conn, &context)?;
+        transferred = true;
+    }
+    Ok(if transferred {
+        Some(human_before_on(conn, local, physical)?)
+    } else {
+        None
+    })
 }
 pub(in crate::store) fn only_on(conn: &Connection, local: i64) -> Result<bool> {
     Ok(!bindings_on(conn, local)?.is_empty() && !later_human_on(conn, local)?)

@@ -12,7 +12,7 @@ pub(crate) use native_returns::{ReturnDispatch, WorkflowReturn};
 pub(super) use native_returns::{
     only_on as native_only_on, publication_on as native_publication_on,
     reconcile_on as native_reconcile_on, source_current_on as native_source_current_on,
-    visible_on as native_visible_on,
+    transfer_collection_on as native_transfer_collection_on, visible_on as native_visible_on,
 };
 
 const MAX_RETAINED_WORKFLOWS: i64 = 256;
@@ -1408,6 +1408,281 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+    #[test]
+    fn ordinary_callback_replacement_keeps_expired_source_fenced_and_human_input_usable() {
+        let (file, s, entry, plan) = setup();
+        let (_, delivery) = routed_result(&s, &entry, &plan.input_ref);
+        let returned = s
+            .native_routed_result_reserve(100, entry.key, &delivery.id)
+            .unwrap()
+            .unwrap();
+        let old = turn(&s, &entry, "");
+        s.workflow_native_link(&returned.id, old).unwrap();
+        s.native_collection_submitting(old, None).unwrap();
+        s.native_collection_started(old, "callback-physical")
+            .unwrap();
+        s.workflow_native_submitting(&returned.id).unwrap();
+        s.workflow_native_outcome(&returned.id, "accepted", Some("callback-physical"))
+            .unwrap();
+        assert!(s.workflow_native_visible(old).unwrap());
+        {
+            let conn = s.conn.lock().unwrap();
+            conn.execute("UPDATE interaction_deliveries SET native_return=json_set(native_return,'$.expires_at','2000-01-01T00:00:00Z') WHERE id=?1",[&delivery.id]).unwrap();
+        }
+        assert!(!s.workflow_native_visible(old).unwrap());
+        drop(s);
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let successor = turn(
+            &s,
+            &entry,
+            "Owner-local collector attachment; no new native input.",
+        );
+        s.topic_direct_register(successor, 100, entry.key).unwrap();
+        s.record_collector_attachment(successor, entry.key, 100, "native-1", "callback-physical")
+            .unwrap();
+        s.native_collection_started(successor, "callback-physical")
+            .unwrap();
+        s.record_native_message(
+            successor,
+            "native-1",
+            "callback-physical",
+            "late-expired-offer",
+            Some("final_answer"),
+            "Stale callback must stay internal after collector replacement.",
+        )
+        .unwrap();
+        let page = s
+            .interaction_presentation_list(100, entry.key, 0, 0)
+            .unwrap();
+        assert!(
+            !page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["native_item"] == "late-expired-offer"),
+            "Replacing a collector must not erase the exact callback source fence"
+        );
+        // A real later human input in the same execution keeps ordinary rights.
+        let binding = s.conversation_request_binding(100, entry.key).unwrap()["binding"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let id = Uuid::now_v7().to_string();
+        s.conversation_input_capture(
+            100,
+            entry.key,
+            &binding,
+            &id,
+            "My later actual human question",
+        )
+        .unwrap();
+        s.conversation_input_event(100, &id, E::Queue).unwrap();
+        s.conversation_input_event(
+            100,
+            &id,
+            E::Begin {
+                local_turn: successor,
+                steer: true,
+            },
+        )
+        .unwrap();
+        s.conversation_input_event(
+            100,
+            &id,
+            E::Accepted {
+                local_turn: successor,
+            },
+        )
+        .unwrap();
+        s.record_native_message(
+            successor,
+            "native-1",
+            "callback-physical",
+            "real-human-answer",
+            Some("final_answer"),
+            "The later actual human answer remains visible.",
+        )
+        .unwrap();
+        let page = s
+            .interaction_presentation_list(100, entry.key, 0, 0)
+            .unwrap();
+        assert!(
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["native_item"] == "real-human-answer")
+        );
+    }
+    fn replacement_collector(s: &Store, entry: &SessionRecord, physical: &str) -> i64 {
+        let local = turn(
+            s,
+            entry,
+            "Owner-local collector attachment; no new native input.",
+        );
+        s.topic_direct_register(local, 100, entry.key).unwrap();
+        s.record_collector_attachment(local, entry.key, 100, "native-1", physical)
+            .unwrap();
+        s.native_collection_started(local, physical).unwrap();
+        local
+    }
+    #[test]
+    fn replacement_collector_retains_unknown_sibling_and_the_exact_source_set() {
+        let (_file, s, entry, plan) = setup();
+        let (instruction, first) = routed_result(&s, &entry, &plan.input_ref);
+        let second = answer(
+            &s,
+            &instruction,
+            instruction.local_turn.unwrap(),
+            "another-source",
+            vec![instruction.id.clone()],
+            "Another current result",
+        );
+        let a = s
+            .native_routed_result_reserve(100, entry.key, &first.id)
+            .unwrap()
+            .unwrap();
+        let b = s
+            .native_routed_result_reserve(100, entry.key, &second.id)
+            .unwrap()
+            .unwrap();
+        let old = turn(&s, &entry, "");
+        s.native_collection_started(old, "mixed-physical").unwrap();
+        for id in [&a.id, &b.id] {
+            s.workflow_native_link(id, old).unwrap();
+            s.workflow_native_submitting(id).unwrap();
+        }
+        s.workflow_native_outcome(&a.id, "accepted", Some("mixed-physical"))
+            .unwrap();
+        s.workflow_native_outcome(&b.id, "uncertain", None).unwrap();
+        let next = replacement_collector(&s, &entry, "mixed-physical");
+        assert!(
+            !s.workflow_native_visible(next).unwrap(),
+            "An unknown sibling cannot borrow the accepted source's publication"
+        );
+        s.workflow_native_outcome(&b.id, "accepted", Some("mixed-physical"))
+            .unwrap();
+        s.record_native_message(
+            next,
+            "native-1",
+            "mixed-physical",
+            "recovered-offer",
+            Some("final_answer"),
+            "Both exact sources are now confirmed.",
+        )
+        .unwrap();
+        let page = s
+            .interaction_presentation_list(100, entry.key, 0, 0)
+            .unwrap();
+        let item = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["native_item"] == "recovered-offer")
+            .unwrap();
+        let ids = item["native_returns"].as_array().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&json!(a.id)) && ids.contains(&json!(b.id)));
+        assert!(
+            !s.workflow_native_visible(old).unwrap(),
+            "The earlier local cannot borrow the successor's grant"
+        );
+        let newer = replacement_collector(&s, &entry, "mixed-physical");
+        assert!(s.workflow_native_visible(newer).unwrap());
+        assert!(!s.workflow_native_visible(next).unwrap());
+        let other = replacement_collector(&s, &entry, "different-physical");
+        let conn = s.conn.lock().unwrap();
+        assert!(
+            !conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM bot_state WHERE key=?1)",
+                    [format!("workflow_return_local:{other}")],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap(),
+            "Another physical turn cannot inherit these source bindings"
+        );
+    }
+    #[test]
+    fn replacement_collector_preserves_real_human_execution_publication() {
+        let (_file, s, entry, plan) = setup();
+        let (_, delivery) = routed_result(&s, &entry, &plan.input_ref);
+        let selected = s
+            .native_routed_result_reserve(100, entry.key, &delivery.id)
+            .unwrap()
+            .unwrap();
+        let InputReference::Conversation(id) = &plan.input_ref else {
+            unreachable!()
+        };
+        let old = {
+            let conn = s.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT local_turn FROM conversation_inputs WHERE id=?1",
+                [id],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+        };
+        s.native_collection_started(old, "human-physical").unwrap();
+        s.workflow_native_link(&selected.id, old).unwrap();
+        s.workflow_native_submitting(&selected.id).unwrap();
+        s.workflow_native_outcome(&selected.id, "accepted", Some("human-physical"))
+            .unwrap();
+        {
+            let conn = s.conn.lock().unwrap();
+            conn.execute("UPDATE interaction_deliveries SET native_return=json_set(native_return,'$.expires_at','2000-01-01T00:00:00Z') WHERE id=?1",[delivery.id]).unwrap();
+        }
+        let next = replacement_collector(&s, &entry, "human-physical");
+        assert!(s.workflow_native_visible(next).unwrap());
+        s.record_native_message(
+            next,
+            "native-1",
+            "human-physical",
+            "real-original-answer",
+            Some("final_answer"),
+            "The actual human execution keeps its publication.",
+        )
+        .unwrap();
+        let page = s
+            .interaction_presentation_list(100, entry.key, 0, 0)
+            .unwrap();
+        assert!(
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["native_item"] == "real-original-answer")
+        );
+    }
+    #[test]
+    fn declared_callback_replacement_cannot_publish_an_expired_workflow() {
+        let (_file, s, entry, plan) = setup();
+        let workflow = declare(&s, &entry, plan);
+        let instruction = advance(&s, &entry, &workflow).unwrap();
+        let worker = accept(&s, &instruction);
+        answer(
+            &s,
+            &instruction,
+            worker,
+            "workflow-source",
+            vec![instruction.id.clone()],
+            "Declared evidence",
+        );
+        let selected = s.workflow_native_reserve(100, entry.key).unwrap().remove(0);
+        let old = turn(&s, &entry, "");
+        s.native_collection_started(old, "declared-physical")
+            .unwrap();
+        s.workflow_native_link(&selected.id, old).unwrap();
+        s.workflow_native_submitting(&selected.id).unwrap();
+        s.workflow_native_outcome(&selected.id, "accepted", Some("declared-physical"))
+            .unwrap();
+        {
+            let conn = s.conn.lock().unwrap();
+            conn.execute("UPDATE interaction_workflows SET doc=json_set(doc,'$.plan.expires_at','2000-01-01T00:00:00Z') WHERE id=?1",[workflow["id"].as_str().unwrap()]).unwrap();
+        }
+        let next = replacement_collector(&s, &entry, "declared-physical");
+        assert!(!s.workflow_native_visible(next).unwrap());
     }
     #[test]
     fn workflow_retains_ownership_exact_scope_milestones_and_final_integration() {

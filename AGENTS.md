@@ -116,8 +116,12 @@ is experimental and disabled by default (`interaction.native_workflow_returns`).
 Preserve its intent/ACK/uncertainty and exact source publication fences; never replay
 an uncertain internal return or manufacture a user input. Detached ACK recovery
 uses a distinct exact native observation and the existing heartbeat; never rebind the
-old human collector. Keep owned regular rollout/physical-turn boundaries, partial
-source uncertainty and the frozen callback source-set publication fence. Native ACK does not prove
+old human collector. Exact physical-turn collector replacement transfers retained
+return-source bindings, including stale/unknown negative fences, without another
+native input or ACK. Attachment bookkeeping text is not human speech; preserve
+real accepted human execution publication and later originals. Keep owned regular
+rollout/physical-turn boundaries, partial source uncertainty and the frozen
+callback source-set publication fence. Native ACK does not prove
 incorporation. `automatic_native_return` reports actual loaded configuration, separately from
 retained per-envelope native return phases; neither is a completion or hearing
 claim. Keep the receiving feature off until actual wrapper qualification;

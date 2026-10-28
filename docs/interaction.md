@@ -1200,8 +1200,16 @@ integration/coverage gap stays explicit, without another journal or inferred gra
 A withdrawn,
 expired or corrected source cannot publish newly generated callback-only output.
 Previously published canonical text remains historical evidence with `current:false`.
-Later actual human input receives its ordinary publication authority. A completed
-workflow permits the final integrating answer from its retained final-result offer.
+A replacement collector for the same exact physical native turn inherits the
+retained source set atomically with its attachment receipt, including expired
+and uncertain siblings as negative publication fences. Observation ownership
+moves to the successor; the old collector cannot borrow its publication. The
+attachment bookkeeping prompt is not human speech. Real human/goal execution
+publication is preserved across replacement, and later accepted human originals
+retain ordinary publication authority. This changes no native input, attempt,
+ACK, workflow ownership or source deadline. Another physical turn inherits none
+of these bindings. A completed workflow permits the final integrating answer
+from its retained final-result offer.
 `workflow_reported` acknowledges evidence integration, and does not by itself prove
 human publication. Telegram requires its existing explicit projection selection;
 foreground audio still requires the human-selected Conversation surface/player.

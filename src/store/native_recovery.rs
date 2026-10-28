@@ -23,6 +23,7 @@ impl Store {
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS native_input_receipts(update_id INTEGER PRIMARY KEY REFERENCES incoming_updates(update_id),native_thread TEXT NOT NULL,native_turn TEXT NOT NULL,observed_at TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS native_collections(local_turn INTEGER PRIMARY KEY REFERENCES turns(id),anchor TEXT NOT NULL,first_turn TEXT NOT NULL,client_id TEXT,phase TEXT NOT NULL DEFAULT 'open',checked_at TEXT NOT NULL DEFAULT '',detail TEXT NOT NULL DEFAULT '');
+             CREATE INDEX IF NOT EXISTS native_collection_physical ON native_collections(first_turn,local_turn);
              CREATE TABLE IF NOT EXISTS native_recovery_baseline(native_thread TEXT NOT NULL,native_turn TEXT NOT NULL,item_id TEXT NOT NULL,PRIMARY KEY(native_thread,native_turn,item_id));"
         )?;
         if !baseline_exists {
