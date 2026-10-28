@@ -39,8 +39,11 @@ class RoutedReturning(Returning):
             call = 'route-ordinary-source-' + turn
             send({'id': call, 'method': 'item/tool/call', 'params': {
                 'threadId': self.web_thread, 'turnId': turn, 'callId': call,
-                'tool': 'interaction_controller', 'arguments': {'operation': 'attention_source', 'arguments': {
-                    'return_id': output['return_id'], 'revision': output['evidence']['revision']}}}})
+                'tool': 'interaction_controller', 'arguments': output['source_read']}})
+            assert output['source_read'] == {'operation': 'attention_source', 'arguments': {
+                'return_id': output['return_id'], 'revision': output['evidence']['revision']}}
+            assert output['incorporation'] == {'operation': 'attention_reported', 'arguments': {
+                'return_id': output['return_id'], 'revision': output['evidence']['revision']}}
             return True
         if method is None and str(ident).startswith('route-ordinary-source-'):
             assert message['result']['success'], message
@@ -54,8 +57,7 @@ class RoutedReturning(Returning):
             call = 'route-ordinary-report-' + turn
             send({'id': call, 'method': 'item/tool/call', 'params': {
                 'threadId': self.web_thread, 'turnId': turn, 'callId': call,
-                'tool': 'interaction_controller', 'arguments': {'operation': 'attention_reported', 'arguments': {
-                    'return_id': output['return_id'], 'revision': output['evidence']['revision']}}}})
+                'tool': 'interaction_controller', 'arguments': output['incorporation']}})
             return True
         if method is None and str(ident).startswith('route-ordinary-report-'):
             assert message['result']['success'], message

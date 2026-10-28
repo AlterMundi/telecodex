@@ -1284,8 +1284,14 @@ The source row retains at most16KiB of return metadata and four question version
 source text remains in its original journal. Offers expire after15minutes. Current
 entry/native binding, Stop/maintenance epoch, retained original and semantic source
 revision are checked before admission and callback publication. Cosmetic carrier
-or artifact changes do not change the result's semantic revision. On-demand
-`attention_source` reads at most1600 characters; `attention_reported` records
+or artifact changes do not change the result's semantic revision.
+
+The ordinary return includes exact `source_read` and `incorporation` controller
+call arguments, so a known return does not require another capabilities lookup.
+These hints grant no authority and retain the same source/revision validation;
+follow `next_offset` for source pagination and acknowledge only after offering
+the useful information. Their effect on real-provider latency is unmeasured.
+On-demand `attention_source` reads at most1600 characters; `attention_reported` records
 incorporation only, never hearing, task completion or an answer/approval.
 
 Committed result/question events reserve offers. The existing heartbeat recovers

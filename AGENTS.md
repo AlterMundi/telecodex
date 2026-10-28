@@ -100,10 +100,12 @@ Human clarification, 2026-10-28: multi-step work keeps its integrating return
 responsibility until the required successor/receiving steps finish. A worker's
 completed helper result does not complete that whole workflow. Keep canonical
 ownership with the integrator; do not start recursive helper/ownership chains.
-Avatar voice mode must eventually surface meaningful internal results/questions
-through the foreground Conversation despite internal-audio mute. Follow the
-required journal/event extension in docs/interaction-routing-ownership.md; it is
-not yet implemented and creates no autonomous attention or publication grant.
+Avatar voice mode surfaces meaningful internal results/questions through the
+foreground Conversation despite internal-audio mute. The journal/event extension
+and ordinary native returns are implemented; CompAII has selected-stack digital
+spoken-return qualification. Follow docs/interaction-routing-ownership.md and the
+receiving record for remaining device, hearing and useful-latency acceptance.
+Source availability is not peer adoption or a new autonomous attention or publication grant.
 
 Workflow implementation #405 extends the existing instruction/result journal with
 bounded `workflow_*` integrating controller operations, committed-result successor
@@ -124,10 +126,11 @@ rollout/physical-turn boundaries, partial source uncertainty and the frozen
 callback source-set publication fence. Native ACK does not prove
 incorporation. `automatic_native_return` reports actual loaded configuration, separately from
 retained per-envelope native return phases; neither is a completion or hearing
-claim. Keep the receiving feature off until actual wrapper qualification;
-foreground speech still requires Conversation surface adoption.
-Do not emulate that missing seam with fabricated human input, recursive helper
-chains, continuous model polling or an extra coordinator.
+claim. Keep each receiver feature off until its actual wrapper qualification.
+CompAII has qualified and adopted workflow/ordinary returns and useful digital
+Conversation speech; this does not establish peer adoption or physical hearing.
+Do not substitute fabricated human input, recursive helper chains, continuous
+model polling or an extra coordinator for the supported return path.
 
 Known-unsent workflow returns may resume through the existing maintenance heartbeat
 only with the adapter enabled and unchanged current source/authority. Keep the
