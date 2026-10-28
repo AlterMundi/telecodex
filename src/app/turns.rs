@@ -609,7 +609,12 @@ pub(super) async fn process_turn(
     }
 
     enrich_audio_transcripts(&shared, &mut runtime_request, &turn_workspace, &sink).await;
-    let runtime_request = prepare_runtime_request(&session, &runtime_request, &turn_workspace);
+    let mut runtime_request = prepare_runtime_request(&session, &runtime_request, &turn_workspace);
+    if queued.workflow_return.is_some() {
+        // Generic preparation supplies a human-prompt fallback for empty chat
+        // input. Internal context must retain an empty native input vector.
+        runtime_request.prompt.clear();
+    }
     let runtime_request = if queued.workflow_return.is_some() {
         runtime_request
     } else {

@@ -4,6 +4,7 @@ This proves wiring/receipts/audiences, not real native admission or incorporatio
 """
 from datetime import datetime, timedelta, timezone
 import json
+import signal
 from pathlib import Path
 import sys
 from workflow_io import WorkflowJourney
@@ -15,6 +16,13 @@ class Returning(WorkflowJourney):
         self.internal = {}
         self.return_turns = {}
         super().__init__(binary)
+
+    def stop(self):
+        if self.process:
+            self.process.send_signal(signal.SIGINT)
+            self.last_stdout, self.last_stderr = self.process.communicate(timeout=8)
+            assert 'synthetic-question-token' not in self.last_stderr
+            self.process = None
 
     def handle_extra_rpc(self, message, send):
         method = message.get('method'); p = message.get('params', {}); ident = message.get('id')
@@ -140,6 +148,12 @@ def qualify(binary):
         j.idle()
         print('PASS active internal turn/start + idle callback-only turn, actual controller source reads/offer acknowledgment, retained ACKs, same Conversation publication and no fabricated human/Telegram ingress; synthetic native boundary, zero models')
     finally:
+        if sys.exc_info()[0]:
+            j.stop()
+            print('Wrapper stdout:', getattr(j, 'last_stdout', '')[-12000:], file=sys.stderr)
+            print('Wrapper stderr:', getattr(j, 'last_stderr', '')[-12000:], file=sys.stderr)
+            print('Retained turns:', j.row('SELECT id,status,assistant_text FROM turns'), file=sys.stderr)
+            print('Return receipts:', j.row("SELECT json_extract(value,'$.phase') FROM interaction_workflows,json_each(doc,'$.native_returns')"), file=sys.stderr)
         j.close()
 
 
