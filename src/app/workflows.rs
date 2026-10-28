@@ -239,9 +239,116 @@ pub(super) fn returned(
         .store
         .interaction_workflow_return(human, &delivery.id)?
     {
+        let dispatch_app = app.clone();
         tokio::spawn(async move {
-            let _ = super::routing::dispatch(&app, &instruction.id, human).await;
+            let _ = super::routing::dispatch(&dispatch_app, &instruction.id, human).await;
         });
+    }
+    let event_app = app.clone();
+    tokio::spawn(async move {
+        let _ = attention(event_app, human).await;
+    });
+    Ok(())
+}
+
+/// Only committed meaningful workflow events reserve native returns. There is
+/// no startup scan, timer, progress rewrite or peer attention loop here.
+pub(super) fn attention(
+    app: App,
+    human: i64,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        let cfg = super::routing::profile(&app.shared)?;
+        if cfg.human_id != human || !cfg.native_workflow_returns {
+            return Ok(());
+        }
+        for selected in app
+            .shared
+            .store
+            .workflow_native_reserve(human, cfg.entry())?
+        {
+            let id = selected.id.clone();
+            if deliver(&app, selected).await.is_err() {
+                // Reservation without any native boundary remains known unsent.
+                app.shared
+                    .store
+                    .workflow_native_outcome(&id, "retained_unsent", None)?;
+            }
+        }
+        Ok(())
+    })
+}
+async fn deliver(app: &App, selected: crate::store::ReturnDispatch) -> Result<()> {
+    let worker = app.worker_for(selected.entry).await?;
+    let active = worker.steer.lock().expect("steer mutex poisoned").clone();
+    let output = crate::codex::NativeToolOutput {
+        name: "workflow_attention".into(),
+        namespace: None,
+        output: selected.output.clone(),
+        retain: true,
+    };
+    if let Some(active) = active {
+        app.shared
+            .store
+            .workflow_native_link(&selected.id, active.turn_id)?;
+        app.shared.store.workflow_native_submitting(&selected.id)?;
+        let id = selected.id.clone();
+        let shared = app.shared.clone();
+        let (send, receive) = oneshot::channel();
+        let packet = crate::codex::CodexSteerRequest {
+            tool_output: Some(output),
+            observation: None,
+            images: vec![],
+            text: String::new(),
+            client_message_id: Some(format!("workflow-return:{id}")),
+            goal: None,
+            admission_check: Some(Arc::new(move || shared.store.workflow_native_validate(&id))),
+            response: send,
+        };
+        if active.sender.send(packet).is_err() {
+            app.shared
+                .store
+                .workflow_native_outcome(&selected.id, "retained_unsent", None)?;
+            return Ok(());
+        }
+        let shared = app.shared.clone();
+        tokio::spawn(async move {
+            let outcome = tokio::time::timeout(Duration::from_secs(10), receive).await;
+            let (phase, turn) = match outcome {
+                Ok(Ok(Ok(Some(turn)))) => ("accepted", Some(turn)),
+                Ok(Ok(Err(crate::codex::CodexSteerError::Rejected(_)))) => ("rejected", None),
+                _ => ("uncertain", None),
+            };
+            let _ = shared
+                .store
+                .workflow_native_outcome(&selected.id, phase, turn.as_deref());
+        });
+    } else {
+        worker
+            .sender
+            .send(QueuedTurn {
+                request: TurnRequest {
+                    session_key: selected.entry,
+                    from_user_id: selected.human,
+                    prompt: String::new(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+                chat_kind: "conversation".into(),
+                update_id: None,
+                conversation_input: None,
+                workflow_return: Some(selected.id),
+                tribu_admission: None,
+                goal: None,
+                nexus: None,
+                merge: None,
+                stop_resume: None,
+                interaction: None,
+                admission_epoch: selected.epoch,
+            })
+            .map_err(|_| anyhow!("Integrating worker unavailable"))?;
     }
     Ok(())
 }

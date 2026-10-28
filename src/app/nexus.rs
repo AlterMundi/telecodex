@@ -638,6 +638,7 @@ async fn steer(app: &App, id: &str, active: ActiveTurnSteerHandle) -> Result<()>
     if active
         .sender
         .send(CodexSteerRequest {
+            tool_output: None,
             observation: None,
             images: vec![],
             admission_check: None,

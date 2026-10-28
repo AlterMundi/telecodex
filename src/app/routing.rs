@@ -1129,6 +1129,7 @@ fn queue_root(
             .into(),
             update_id: None,
             conversation_input: None,
+            workflow_return: None,
             tribu_admission: None,
             goal: None,
             nexus: None,
@@ -1182,6 +1183,7 @@ fn steer(app: App, i: Instruction, active: ActiveTurnSteerHandle) -> Result<()> 
     let sent = active
         .sender
         .send(CodexSteerRequest {
+            tool_output: None,
             observation: None,
             images: crate::visual::attachments(
                 &app.shared.config.db_path,

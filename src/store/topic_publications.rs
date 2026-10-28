@@ -162,6 +162,9 @@ pub(super) fn native_on(
     item: &str,
     text: &str,
 ) -> Result<()> {
+    if !super::workflows::native_visible_on(conn, local)? {
+        return Ok(());
+    }
     let legacy:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM native_recovery_baseline WHERE native_thread=?1 AND native_turn=?2 AND item_id=?3)",params![thread,turn,item],|r|r.get(0))?;
     if legacy {
         return Ok(());

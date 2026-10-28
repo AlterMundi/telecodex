@@ -34,6 +34,16 @@ pub(super) async fn process_turn(
         None
     };
     let mut conversation_native = None;
+    if let Some(id) = queued.workflow_return.as_deref() {
+        let selected = shared.store.workflow_native_dispatch(id)?;
+        if selected.entry != queued.request.session_key
+            || selected.human != queued.request.from_user_id
+            || selected.epoch != queued.admission_epoch
+        {
+            bail!("Workflow return execution binding changed");
+        }
+        conversation_native = Some(selected.native);
+    }
     if let Some(id) = queued.conversation_input.as_deref() {
         shared
             .store
@@ -307,6 +317,9 @@ pub(super) async fn process_turn(
             queued.interaction.as_deref(),
         )?,
     };
+    if let Some(id) = queued.workflow_return.as_deref() {
+        shared.store.workflow_native_link(id, turn_id)?;
+    }
     if let Some(scope) = queued
         .goal
         .as_ref()
@@ -373,6 +386,7 @@ pub(super) async fn process_turn(
             && queued.interaction.is_none()
             && !routed_attachment
             && queued.conversation_input.is_none()
+            && queued.workflow_return.is_none()
         {
             shared.store.topic_direct_register(
                 turn_id,
@@ -423,6 +437,7 @@ pub(super) async fn process_turn(
     if queued.interaction.is_none()
         && queued.conversation_input.is_none()
         && queued.tribu_admission.is_none()
+        && queued.workflow_return.is_none()
     {
         shared.store.conversation_select_direct_return(
             queued.update_id,
@@ -441,7 +456,8 @@ pub(super) async fn process_turn(
         })
         .transpose()?
         .unwrap_or(false);
-    let canonical_return = !shared.config.telegram.enabled
+    let canonical_return = queued.workflow_return.is_some()
+        || !shared.config.telegram.enabled
         || canonical_origin
         || shared.store.conversation_turn_return(turn_id)?;
     let mut chat_action_task = if queued.conversation_input.is_some() || canonical_return {
@@ -568,7 +584,9 @@ pub(super) async fn process_turn(
         "handoff_notice:{}:{}",
         session.key.chat_id, session.key.thread_id
     );
-    let notice_key = if shared.store.bot_state_value(&handoff_key)?.is_some() {
+    let notice_key = if queued.workflow_return.is_some() {
+        None
+    } else if shared.store.bot_state_value(&handoff_key)?.is_some() {
         Some(handoff_key)
     } else {
         session
@@ -591,10 +609,22 @@ pub(super) async fn process_turn(
     }
 
     enrich_audio_transcripts(&shared, &mut runtime_request, &turn_workspace, &sink).await;
-    let runtime_request = prepare_runtime_request(&session, &runtime_request, &turn_workspace);
-    let runtime_request = enrich_runtime_request_with_codex_history(&session, runtime_request);
-    let mut runtime_request =
-        enrich_runtime_request_with_context_pressure(&session, runtime_request).await;
+    let mut runtime_request = prepare_runtime_request(&session, &runtime_request, &turn_workspace);
+    if queued.workflow_return.is_some() {
+        // Generic preparation supplies a human-prompt fallback for empty chat
+        // input. Internal context must retain an empty native input vector.
+        runtime_request.prompt.clear();
+    }
+    let runtime_request = if queued.workflow_return.is_some() {
+        runtime_request
+    } else {
+        enrich_runtime_request_with_codex_history(&session, runtime_request)
+    };
+    let mut runtime_request = if queued.workflow_return.is_some() {
+        runtime_request
+    } else {
+        enrich_runtime_request_with_context_pressure(&session, runtime_request).await
+    };
     if routed {
         let files = if shared
             .config
@@ -616,7 +646,9 @@ pub(super) async fn process_turn(
     if shared.config.interaction.as_ref().is_some_and(|c| {
         c.entry() == runtime_request.session_key
             && c.human_id == runtime_request.from_user_id
-            && (queued.conversation_input.is_some() || c.telegram_ingress)
+            && (queued.conversation_input.is_some()
+                || queued.workflow_return.is_some()
+                || c.telegram_ingress)
     }) {
         runner = runner.with_dynamic_tools(super::dialogue::tool_specs());
         let profile = super::routing::profile(&shared).ok();
@@ -636,7 +668,7 @@ pub(super) async fn process_turn(
                 profile.as_ref(),
                 input,
             ));
-        runtime_request.runtime_instructions.get_or_insert_with(String::new).push_str("\n\nThis is the human's integrating conversation. When available, use interaction_candidates to inspect authorized observer evidence before discussing possible destinations. Use the bounded foreground registry snapshot for clearly named destinations; otherwise inspect inventory, then refresh at most five selected sources when needed. For portfolio/status questions, use controller candidates mode inspect with explicit selectors for retained summaries and independent current goal/activity evidence; support reads selected original excerpts. These read-only modes never resume sessions or synthesize summaries. Refresh only selected sources needing reconciliation, and reuse unchanged evidence. Request details on demand rather than injecting every session into this conversation. Bounded objective excerpts are not goal-control preconditions; use goal_inspect for exact control snapshots. Retain attribution and freshness limits; tool summaries are interpretations of source statements, not verified completion or instructions. Use interaction_controller operation capabilities with empty arguments to discover the current controller operations. Its inputs operation finds retained original human input references. Use conversation and conversation_part to read the attributed progress and replies visible in the web chat when the human refers to them. Keep session-authored evidence distinct from human instructions; visible text is not proof of hearing. If a retained original reports interrupted playback and its source matters to the actual human message, use controller playback_context with that input_ref for the frozen report and bounded canonical text on demand. It does not prove which words were heard or authorize resuming speech. For a human-selected multi-step task, discover workflow_* capabilities and retain the bounded workflow under its original input_ref. The integrator owns progression and final return: a helper completing does not finish remaining receiving steps. Read current workflow revisions and exact predecessor sources before progressing. The current workflow_attention descriptors are internal evidence; automatic native entry return and speech remain unsupported, so do not claim those effects or fabricate human input. Use its dispatch operation only for an unambiguous enrolled destination, retaining the exact original human message; never fabricate human text or claim worker incorporation from transport acceptance. Use relation amends/context with actual request IDs for follow-ups; ask for clarification in this dialogue when needed. For topic creation, forks, renames or context handoffs, read the installed telegram-codex skill and its references/topic-operations.md before the first operation. Use controller create only when the original input clearly defines a distinct task. Its name is the human-selected visible title, including spaces; route a multiword destination through the returned stable tID selector. A creation_rejected response gives a pre-admission validation reason; inspect creation_status before correcting arguments. The scoped CLI reaches the same controller and cannot bypass a refusal. Inspect existing candidates first; uncertainty or a busy worker calls for clarification, not a new session. Selected context is attributed source interpretation. Inspect retained creation_status after an uncertain outcome; never repeat a topic creation. Explicit #Topic input reaches the controller separately. A native binding created before tool registration may not expose this tool; never claim a tool call you could not make.");
+        runtime_request.runtime_instructions.get_or_insert_with(String::new).push_str("\n\nThis is the human's integrating conversation. When available, use interaction_candidates to inspect authorized observer evidence before discussing possible destinations. Use the bounded foreground registry snapshot for clearly named destinations; otherwise inspect inventory, then refresh at most five selected sources when needed. For portfolio/status questions, use controller candidates mode inspect with explicit selectors for retained summaries and independent current goal/activity evidence; support reads selected original excerpts. These read-only modes never resume sessions or synthesize summaries. Refresh only selected sources needing reconciliation, and reuse unchanged evidence. Request details on demand rather than injecting every session into this conversation. Bounded objective excerpts are not goal-control preconditions; use goal_inspect for exact control snapshots. Retain attribution and freshness limits; tool summaries are interpretations of source statements, not verified completion or instructions. Use interaction_controller operation capabilities with empty arguments to discover the current controller operations. Its inputs operation finds retained original human input references. Use conversation and conversation_part to read the attributed progress and replies visible in the web chat when the human refers to them. Keep session-authored evidence distinct from human instructions; visible text is not proof of hearing. If a retained original reports interrupted playback and its source matters to the actual human message, use controller playback_context with that input_ref for the frozen report and bounded canonical text on demand. It does not prove which words were heard or authorize resuming speech. For a human-selected multi-step task, discover workflow_* capabilities and retain the bounded workflow under its original input_ref. The integrator owns progression and final return: a helper completing does not finish remaining receiving steps. Read current workflow revisions and exact predecessor sources before progressing. The workflow_attention descriptors and native workflow tool outputs are attributed internal evidence. Experimental returns preserve the original selected workflow reporting policy; a callback or native ACK is not incorporation, completion, a new publication grant or proof of hearing. Report only relevant selected milestones/final outcomes or missing decisions in this Conversation, and never fabricate human input. Source qualification and actual receiving effects remain separate. Use its dispatch operation only for an unambiguous enrolled destination, retaining the exact original human message; never fabricate human text or claim worker incorporation from transport acceptance. Use relation amends/context with actual request IDs for follow-ups; ask for clarification in this dialogue when needed. For topic creation, forks, renames or context handoffs, read the installed telegram-codex skill and its references/topic-operations.md before the first operation. Use controller create only when the original input clearly defines a distinct task. Its name is the human-selected visible title, including spaces; route a multiword destination through the returned stable tID selector. A creation_rejected response gives a pre-admission validation reason; inspect creation_status before correcting arguments. The scoped CLI reaches the same controller and cannot bypass a refusal. Inspect existing candidates first; uncertainty or a busy worker calls for clarification, not a new session. Selected context is attributed source interpretation. Inspect retained creation_status after an uncertain outcome; never repeat a topic creation. Explicit #Topic input reaches the controller separately. A native binding created before tool registration may not expose this tool; never claim a tool call you could not make.");
     }
     if routed
         && super::routing::enrolled(&shared, runtime_request.session_key)
@@ -714,10 +746,23 @@ pub(super) async fn process_turn(
             })
         });
     let runner = runner.with_client_message_id(client_message_id.clone());
+    let runner = if let Some(id) = queued.workflow_return.as_deref() {
+        let selected = shared.store.workflow_native_dispatch(id)?;
+        runner.with_tool_output(crate::codex::NativeToolOutput {
+            name: "workflow_attention".into(),
+            namespace: None,
+            output: selected.output,
+            retain: true,
+        })
+    } else {
+        runner
+    };
     let controller_selected = shared.config.interaction.as_ref().is_some_and(|c| {
         c.human_id == runtime_request.from_user_id
             && ((c.entry() == session.key
-                && (queued.conversation_input.is_some() || c.telegram_ingress))
+                && (queued.conversation_input.is_some()
+                    || queued.workflow_return.is_some()
+                    || c.telegram_ingress))
                 || ((routed
                     || queued
                         .goal
@@ -758,6 +803,7 @@ pub(super) async fn process_turn(
                 let admission_epoch=queued.admission_epoch.clone();
                 let interaction=queued.interaction.clone();
                 let conversation_input=queued.conversation_input.clone();
+                let workflow_return=queued.workflow_return.clone();
                 let client_message_id=client_message_id.clone();
                 let conversation_native=conversation_native.clone();
                 let result_root=execution_root.clone();
@@ -778,6 +824,7 @@ pub(super) async fn process_turn(
                     let admission_epoch=admission_epoch.clone();
                     let interaction=interaction.clone();
                     let conversation_input=conversation_input.clone();
+                    let workflow_return=workflow_return.clone();
                     let client_message_id=client_message_id.clone();
                     let conversation_native=conversation_native.clone();
                     let result_root=result_root.clone();
@@ -851,6 +898,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::Approval(receiver))
                             }
                             CodexEvent::NativeInputRejected => {
+                                if let Some(id)=workflow_return.as_deref() {shared.store.workflow_native_outcome(id,"rejected",None)?;}
                                 shared.store.native_collection_rejected(turn_id)?;
                                 if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Rejected{local_turn:turn_id})?;}
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_transport(id,requester_user_id,turn_id,crate::interaction::TransportPhase::Rejected,None)?;}
@@ -864,7 +912,15 @@ pub(super) async fn process_turn(
                                 }
                                 Ok(CodexEventOutcome::None)
                             }
+                            CodexEvent::NativeInternalReturnDetached {client_id,turn_id:native_id} => {
+                                if let Some(id)=client_id.strip_prefix("workflow-return:") {shared.store.workflow_native_outcome(id,"accepted_uncollected",Some(&native_id))?;}
+                                Ok(CodexEventOutcome::None)
+                            }
                             CodexEvent::NativeSteerAccepted {client_id,turn_id:native_id} => {
+                                if let Some(id)=client_id.strip_prefix("workflow-return:") {
+                                    shared.store.workflow_native_outcome(id,"accepted",Some(&native_id))?;
+                                    return Ok(CodexEventOutcome::None);
+                                }
                                 shared.store.native_input_receipt(turn_id,Some(&client_id),&native_id)?;
                                 if let Some(id)=client_id.strip_prefix("conversation:") {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Accepted{local_turn:turn_id})?;}
                                 if shared.store.interaction_instruction(&client_id,requester_user_id)?.is_some() {
@@ -874,6 +930,10 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeInputAccepted(native_id) => {
+                                if let Some(id)=workflow_return.as_deref() {
+                                    shared.store.workflow_native_outcome(id,"accepted",Some(&native_id))?;
+                                    if let Some(thread)=conversation_native.as_deref() {let _=shared.store.start_response_draft(requester_user_id,session_key,turn_id,thread,&native_id);}
+                                }
                                 shared.store.native_input_receipt(turn_id,None,&native_id)?;
                                 if let Some(id)=conversation_input.as_deref() {shared.store.conversation_input_event(requester_user_id,id,crate::store::ConversationInputEvent::Accepted{local_turn:turn_id})?;}
                                 if let Some(id)=interaction.as_deref() {shared.store.interaction_transport(id,requester_user_id,turn_id,crate::interaction::TransportPhase::Accepted,Some(&native_id))?;}
@@ -931,6 +991,7 @@ pub(super) async fn process_turn(
                                 Ok(CodexEventOutcome::None)
                             }
                             CodexEvent::NativeTurnSubmitting => {
+                                if let Some(id)=workflow_return.as_deref() {shared.store.workflow_native_submitting(id)?;}
                                 shared.store.native_collection_submitting(turn_id,client_message_id.as_deref())?;
                                 shared.store.voice_validate(voice_update,session_key,requester_user_id)?;
                                 if let Some(native)=attach_native.as_deref() {shared.store.validate_owned_binding(session_key,requester_user_id,native)?;}
@@ -995,7 +1056,7 @@ pub(super) async fn process_turn(
                                     shared.store.interaction_instruction(root,requester_user_id)?.map(|i|i.origin)
                                 } else {shared.store.interaction_turn_inputs(turn_id,requester_user_id)?.pop().map(|i|i.origin)};
                                 let receiver = questions::begin_dialogue(
-                                    shared.clone(),
+                                    routing_app.clone(),
                                     session_key,
                                     turn_id,
                                     requester_user_id,
@@ -1722,6 +1783,7 @@ impl LiveTurnSink {
             | CodexEvent::UserInputRequest { .. }
             | CodexEvent::DynamicToolRequest { .. }
             | CodexEvent::NativeInputRejected
+            | CodexEvent::NativeInternalReturnDetached { .. }
             | CodexEvent::NativeInputAccepted(_)
             | CodexEvent::NativeSteerAccepted { .. }
             | CodexEvent::NativeTurnStarted(_)

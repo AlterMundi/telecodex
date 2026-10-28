@@ -222,6 +222,7 @@ struct QueuedTurn {
     chat_kind: String,
     update_id: Option<i64>,
     conversation_input: Option<String>,
+    workflow_return: Option<String>,
     tribu_admission: Option<String>,
     goal: Option<crate::codex::GoalActivation>,
     nexus: Option<String>,
@@ -2740,6 +2741,7 @@ impl App {
                 chat_kind: chat_kind.to_string(),
                 update_id,
                 conversation_input: None,
+                workflow_return: None,
                 tribu_admission: admission.map(|a| a.id),
                 goal,
                 nexus,
@@ -2835,6 +2837,7 @@ impl App {
         if active
             .sender
             .send(CodexSteerRequest {
+                tool_output: None,
                 observation: None,
                 images: attachments
                     .iter()
@@ -2983,6 +2986,7 @@ impl App {
                 let nexus_id = turn.nexus.clone();
                 let merge_id = turn.merge.clone();
                 let conversation_input_id = turn.conversation_input.clone();
+                let workflow_return_id = turn.workflow_return.clone();
                 let (registration, result) = match routing::begin(&shared, &turn) {
                     Ok(registration) => {
                         let result = match capacity {
@@ -3015,6 +3019,18 @@ impl App {
                         failure_message.as_deref(),
                         &tx,
                     );
+                }
+                if let Some(id) = workflow_return_id {
+                    let phase = if result
+                        .as_ref()
+                        .err()
+                        .is_some_and(|e| e.is::<crate::codex::NativeInputNotSubmitted>())
+                    {
+                        "retained_unsent"
+                    } else {
+                        "uncertain"
+                    };
+                    let _ = shared.store.workflow_native_outcome(&id, phase, None);
                 }
                 if let Some(id) = merge_id {
                     let _ = shared.store.merge_finish(&id);

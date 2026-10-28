@@ -530,6 +530,7 @@ pub(super) async fn handle_socket(app: &App, request: &Value) -> Result<Value> {
                 chat_kind: "private".into(),
                 update_id: None,
                 conversation_input: None,
+                workflow_return: None,
                 tribu_admission: Some(id.clone()),
                 goal: None,
                 stop_resume: None,

@@ -1010,10 +1010,11 @@ moves existing nodes and preserves expanded text, media and drafts.
 The integrating controller exposes `workflow_declare`, `workflow_status`,
 `workflow_advance`, `workflow_attention`, `workflow_reported`, `workflow_result`,
 `workflow_question`, `workflow_supersede` and `workflow_finish`. This is a journal
-with explicit initial admission and event-driven predeclared successors. Automatic internal-context return into
-an idle integrating native conversation and spoken foreground offers are **not
-implemented**; the contract reports `automatic_native_return:false`. Do not
-report the full #303/#304 workflow experience as delivered from these primitives.
+with explicit initial admission and event-driven predeclared successors. The
+experimental #410 native return adapter is disabled by default; the public contract
+still reports `automatic_native_return:false` pending wrapper qualification and
+receiving adoption. Spoken foreground offers and the full #303/#304 experience
+remain undelivered.
 
 Declaration selects one accepted retained human `input_ref`, a stable
 `request_id`, an RFC3339 `expires_at` no more than seven days away, and one to four
@@ -1102,6 +1103,102 @@ the separately owned integrating Conversation. UI/audio adoption must route
 meaningful offers through its selected finite foreground and the existing
 Conversation player while internal tracks remain muted, without manufacturing
 human input or narrating every progress event.
+
+### Experimental native entry return (#410)
+
+`interaction.native_workflow_returns` defaults to `false`. When explicitly enabled,
+committed canonical results and newly retained pending questions select only the
+bounded meaningful attention envelopes already declared by the original human
+workflow. `successor_ready` is model-free progression and does not cause another
+entry model turn. There is no poller, timer or model rewrite of intermediate progress.
+An idle integrating entry uses its existing worker/admission queue; a live entry
+uses its current native execution. Both submit `turn/start` with `input:[]` and
+`toolOutput:{name,namespace:null,output,retain:true}`. No callback text is submitted
+as human speech or given a native user-message correlation ID. Ordinary direct
+human ingress keeps its existing path. Native admission, Stop, generation, writer
+ownership and maintenance fences remain authoritative.
+
+The retained return is in the same bounded workflow document: at most16 source
+revisions per workflow, each with an envelope of at most2,048 bytes, and capacity
+reserved for later step/final checkpoints. The existing document cap still applies.
+The existing execution journal supplies the local/native turn binding; a bounded
+index (at most32 returns per local execution) links it to the workflow receipt.
+These are transport receipts, not another queue or coordinator. Capacity leaves
+pending source evidence visible; it does not silently drop the workflow or grant
+new model work. Source text remains available through exact `workflow_result` and
+`workflow_question` reads.
+
+Before native submission the adapter retains intent and rechecks original authority,
+expiry, generation and the exact source revision. It records `submitting` at the
+native boundary, then distinguishes `accepted`, `rejected`, `uncertain` and
+`retained_unsent`. Restart changes an unsubmitted reservation to `retained_unsent`
+and an unresolved submission to `uncertain`; neither is automatically replayed.
+An exact native ACK remains retained even if the local waiter later times out.
+For a live-return race whose ACK names a different native turn, the immutable ACK
+is `accepted_uncollected` with that actual turn ID. A distinct callback-only local
+observation row anchors exactly that physical turn; the old execution collector
+keeps its own identity and excludes the detached turn's events. The existing native
+recovery heartbeat observes this row without submitting input, changing goals or
+creating another attention loop. It does not claim live dynamic-tool collection.
+An observed terminal canonical final is imported through the existing canonical
+journal and changes the transport receipt to `accepted_reconciled`. The original
+submission local ID, new collection local ID and exact native ACK remain distinct.
+Receipts from the same submission that ACK the same detached physical turn share
+one observation row and reconcile atomically. A sibling with an unresolved native
+target keeps terminal import pending; an ACK is never guessed from another receipt.
+The canonical report freezes every incorporated receipt's current source grant.
+The helper result still cannot complete overall integration.
+
+Observation uses the existing bounded native turn-history API. On an actual
+unsupported-method response, it requests only the owned thread's metadata through
+`thread/read(includeTurns:false)` and reads the returned regular rollout path. No
+peer/controller argument selects a filesystem path and no other history is scanned.
+The first `session_meta` must name that exact native thread, and the selected
+physical `task_started` and terminal boundary must both be present. Persisted
+assistant IDs/phases are retained, without invented item identities or truncation.
+A header of at most256KiB and tail of at most8MiB bound each file snapshot; a missing
+start, partial terminal, oversized source or missing canonical final remains
+explicitly uncollected. Terminal import admits at most16 canonical items and64KiB
+of canonical text per return. At the existing256-workflow/16-return limits this
+bounds additional collection rows at4,096 and recovered canonical text at256MiB,
+separate from existing native journals and SQLite overhead. Rows retain the existing
+journal/explicit-removal lifecycle, never age-based deletion of authority or history.
+One shared filesystem-read permit remains held until the actual read ends, including
+after the8s caller deadline, so slow I/O cannot accumulate background readers.
+Original deadline, generation, binding, supersession and Stop/maintenance fences
+continue to govern observation; retirement retains the ACK and uncertainty. Turning
+off new native returns does not erase a previously accepted finite observation.
+
+ACK is not incorporation, a useful provider answer, reporting or hearing. An active
+human turn has no native per-input causal attribution for its assistant output;
+its ordinary publication lifetime remains governed by that human turn. For an idle
+callback-only turn, canonical text, response drafts and cached speech are fenced by
+the exact accepted source set and original reporting policies. A possibly submitted
+or stale sibling result/question cannot borrow a current offer's publication grant.
+Rejected/known-unsent context and an exact ACK into another physical collector do
+not widen that source set. Each canonical item freezes its own bounded set, so later
+inputs cannot change which sources authorized an earlier report. Existing
+`workflow_reported` acknowledgment of the exact current version explicitly
+supersedes an older accepted revision in that same workflow/attention slot; native
+ACK alone does not do so. An unresolved question sibling remains fenced. A question
+followed by a resolved final result in another slot has no implicit cross-slot
+coverage declaration: a mixed callback-only output can remain withheld. This
+integration/coverage gap stays explicit, without another journal or inferred grant.
+A withdrawn,
+expired or corrected source cannot publish newly generated callback-only output.
+Previously published canonical text remains historical evidence with `current:false`.
+Later actual human input receives its ordinary publication authority. A completed
+workflow permits the final integrating answer from its retained final-result offer.
+`workflow_reported` acknowledges evidence integration, and does not by itself prove
+human publication. Telegram requires its existing explicit projection selection;
+foreground audio still requires the human-selected Conversation surface/player.
+
+Idle-root and held-active native `toolOutput` seams have separate actual-native
+evidence of useful provider incorporation and retained internal history. These Core
+proofs do not qualify this adapter, its collector or receiver installation. Mock
+boundary tests qualify only the adapter contract. Keep `automatic_native_return:false` until the
+wrapper's useful provider return and retained internal history are observed at the
+actual supported native boundary, and retain any active-turn qualification gap.
 
 This source is not receiving deployment or live native qualification. Once a
 workflow has been declared, preserve `interaction_workflows`, all underlying

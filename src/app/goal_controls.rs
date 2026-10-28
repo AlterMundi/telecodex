@@ -388,6 +388,7 @@ pub(super) async fn activate_control(
         // Re-resolving the worker here could change its local turn in flight.
         let (response, ack) = oneshot::channel();
         let sent = attached.sender.send(crate::codex::CodexSteerRequest {
+            tool_output: None,
             observation: None,
             images: vec![],
             admission_check: None,
@@ -427,7 +428,7 @@ pub(super) async fn activate_control(
         // This is a retained goal control, not a second human message/update.
         if handle.sender.send(QueuedTurn{
             request:TurnRequest{session_key:target.key,from_user_id:human,prompt:"Continue the explicitly authorized native goal. Use its native state and accounting.".into(),runtime_instructions:None,attachments:vec![],review_mode:None,override_search_mode:None},
-            chat_kind:if target.key.chat_id<0{"supergroup"}else{"private"}.into(),update_id:None,conversation_input:None,tribu_admission:None,goal:Some(activation(control)),nexus:None,merge:None,stop_resume:None,interaction:None,admission_epoch:epoch,
+            chat_kind:if target.key.chat_id<0{"supergroup"}else{"private"}.into(),update_id:None,conversation_input:None,workflow_return:None,tribu_admission:None,goal:Some(activation(control)),nexus:None,merge:None,stop_resume:None,interaction:None,admission_epoch:epoch,
         }).is_err() {
             app.shared.store.goal_control_finish(human,entry,id,&attempt,"known_unsent",&json!({"error":"Selected collector admission closed before queuing","automatic_retry":false}))?;
         }
