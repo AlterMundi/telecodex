@@ -82,3 +82,49 @@ and one current human-facing result. Synthetic evidence must not be labeled as
 human correction or production acceptance. Reuse the existing routing evaluator
 for selection and store/controller fixtures for ownership semantics; no paid
 model reruns or replay of this private incident are needed.
+
+
+## Human-selected multi-step workflows and foreground attention
+
+Human clarification, 28 October2026: a task that must produce a result for another
+session is not complete when its first worker finishes. The integrating task must
+retain the successor step and its human-facing return responsibility. In avatar
+voice mode, muting internal audio must not hide meaningful results or questions
+from the foreground conversation. This is a required product extension under
+#303/#304/#383, not a claim that the current single-level dependency primitive
+already implements workflows.
+
+Extend the existing request/result journal with a bounded workflow declared from
+an accepted human instruction: stable workflow ID, original human authority,
+ordered steps, implementation owner, expected result/checkpoint, predecessor,
+current step state and the selected reporting milestones. A step result is
+attributed session evidence; it does not become a new human instruction or expand
+the workflow. Retain native acceptance, incorporation and actual completion as
+different observations. Do not mark the overall human task complete while a
+required receiving/deployment/verification step remains unfinished.
+
+The integrator owns progression. A current, completed, covered predecessor result
+can make the next preauthorized step ready. Recheck its owner, binding, source
+revision and later human corrections before admission. Reuse the existing exact
+request identity and known-unsent recovery; uncertain submission stays uncertain.
+Workers return their scoped result and checkpoint; they do not negotiate a new
+owner or create recursive helper chains. Unsupported extra steps remain explicit
+rather than bypassing the current dependency bound. Cancellation or supersession
+stops only the affected future steps and preserves active/uncertain work.
+
+Use committed result/question/state-change events to advance or request attention;
+no continuous model polling or per-progress LLM rewrite. A model-free selector can
+retain a small, deduplicated envelope containing workflow/step IDs, canonical
+result/question ID and revision, source session, freshness and the reason for
+attention. Read detailed context on demand. Question expiry, amended results,
+reconnect and already-reported outcomes must not produce stale or duplicate offers.
+
+Within the human-selected foreground voice session, route a meaningful event back
+to its still-authorized integrating task. Its native context stays attributed as
+internal evidence. The foreground may report a result, advance a preauthorized
+step, or ask the human for a missing decision. Audio uses the same Conversation
+player and obeys capture/response priority; internal session audio remains muted.
+An offer is not a hearing receipt, workflow completion or permission to start an
+unplanned action. Outside the selected finite foreground session, retain the
+existing visible pending/result surfaces without installing autonomous peer
+attention or treating a return-only wakeup as a new publication grant.

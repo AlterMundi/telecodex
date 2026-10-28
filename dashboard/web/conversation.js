@@ -209,6 +209,42 @@ window.Conversation = (() => {
       diagnostics.querySelector?.(".conversation-diagnostics-content")?.append(historyTools);
     }
     function atTimelineEnd() {return !!timeline && !followingSpeech() && timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<80;}
+    function arrangeTimelineReplies() {
+      if(!timeline)return;
+      const reference=box=>JSON.stringify([box.dataset.sourceId,box.dataset.sourceRevision]);
+      const visible=new Map([...timeline.children].filter(box=>box.dataset.sourceId && !box.dataset.replyAnchor).map(box=>[reference(box),box]));
+      const needed=new Set();
+      for(const card of inputs.values()){
+        const reply=card.value.reply;if(!reply)continue;
+        const key=JSON.stringify([reply.source,reply.revision]);
+        if(visible.has(key))continue;
+        const original=cards.get(reply.source)?.source;
+        if(original?.revision!==reply.revision || original.kind!=="worker_progress")continue;
+        needed.add(key);
+        if(replyAnchors.has(key))continue;
+        // A coalesced update must not replace the exact update the person answered.
+        // Keep a compact visible anchor; routing still carries only the original reference.
+        const box=node("article",undefined,"reply session-update"),time=node("time",undefined,"message-time");
+        box.append(node("h3",`Referenced update from ${original.label}`),node("p",original.preview,"reply-text"),time);
+        messageTime(time,original.observed_at);box.dataset.replyAnchor="true";
+        box.dataset.sourceId=original.id;box.dataset.sourceRevision=original.revision;
+        box.dataset.timelineKey=`reply-source:${key}`;box.dataset.timelineTime=String(Date.parse(original.observed_at)||0);
+        replyAnchors.set(key,box);timeline.append(box);
+      }
+      for(const [key,box] of replyAnchors)if(!needed.has(key)){box.remove();replyAnchors.delete(key);}
+      const chronological=[...timeline.children].sort((a,b)=>Number(a.dataset.timelineTime)-Number(b.dataset.timelineTime)||String(a.dataset.timelineKey).localeCompare(String(b.dataset.timelineKey)));
+      const anchors=new Map(chronological.filter(box=>box.dataset.sourceId).map(box=>[reference(box),box]));
+      const groups=new Map(),attached=new Set();
+      for(const box of chronological){
+        if(!box.dataset.replySource)continue;
+        const anchor=anchors.get(JSON.stringify([box.dataset.replySource,box.dataset.replyRevision]));
+        if(!anchor || anchor===box)continue;
+        if(!groups.has(anchor))groups.set(anchor,[]);groups.get(anchor).push(box);attached.add(box);
+      }
+      const ordered=chronological.filter(box=>!attached.has(box)).flatMap(box=>[box,...(groups.get(box)||[])]);
+      // Move existing nodes only: expanded text, media, focus and drafts stay intact.
+      ordered.forEach((box,index)=>{if(timeline.children[index]!==box)timeline.insertBefore(box,timeline.children[index]||null);});
+    }
     function placeInTimeline(box, key, timestamp, nearEnd=atTimelineEnd()) {
       if(!timeline)return;
       box.dataset.timelineKey=key;
@@ -218,10 +254,11 @@ window.Conversation = (() => {
         (Number(item.dataset.timelineTime)>Number(box.dataset.timelineTime) ||
         (item.dataset.timelineTime===box.dataset.timelineTime && item.dataset.timelineKey>key)));
       timeline.insertBefore(box,following||null);
+      arrangeTimelineReplies();
       if(nearEnd)timeline.scrollTop=timeline.scrollHeight;
     }
     let graphCursor=0;
-    const cards = new Map(),progressCards=new Map(),settledProgress=new Map();
+    const cards = new Map(),progressCards=new Map(),settledProgress=new Map(),replyAnchors=new Map();
     // Device-local audio attention, scoped to this conversation binding. No
     // transcript, labels, native work state or playback backlog is persisted.
     const mutedSessions=new Set(),soloSessions=new Set();let muteBinding,canReplyUpdates=false;
@@ -339,7 +376,7 @@ window.Conversation = (() => {
       }
       const changed=card.source!==source.id || card.revision!==source.revision;
       card.source=source.id;card.revision=source.revision;card.stamp=stamp;sessionTitle(card,source,`Update from ${source.label}`);
-      card.box.dataset.sourceId=source.id;
+      card.box.dataset.sourceId=source.id;card.box.dataset.sourceRevision=source.revision;
       const original=cards.get(source.id);
       setReplyText(card.body,original?.expanded && original.source.revision===source.revision?replyText(original.body):source.preview);
       card.listen.hidden=!canListen;card.listen.setAttribute("aria-label",`Listen to update from ${source.label}`);
@@ -480,7 +517,7 @@ window.Conversation = (() => {
     }
     function resetInputs() {
       voiceMode?.close();showResponseDraft();
-      companion?.reset();sound?.reset();goalControls?.reset();presentationProfile=undefined;
+      companion?.reset();sound?.reset();goalControls?.reset();presentationProfile=undefined;replyAnchors.clear();
       disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren();
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
       latestComposerId = undefined; composerNotice("",false);clearFocus();routingChoices=[];
@@ -678,6 +715,11 @@ window.Conversation = (() => {
       const container = $("#conversation-inputs");
       const following = [...container.children].find(item => item !== card.box
         && Number(item.dataset.sequence) < Number(card.box.dataset.sequence));
+      card.box.dataset.replySource=card.value.reply?.source||"";card.box.dataset.replyRevision=card.value.reply?.revision||"";
+      if(timeline){
+        const original=cards.get(card.value.reply?.source)?.source;
+        card.box.children[0].textContent=card.value.reply?`You · reply to ${original?.kind?.startsWith("integrator_")?"Conversation":original?.label||"earlier message"}`:"You";
+      }
       if(timeline)placeInTimeline(card.box,`input:${card.value.id}`,card.value.received_at || (card.value.origin_kind==="telegram"?"1970-01-01T00:00:00Z":undefined),followingLive);
       else container.insertBefore(card.box, following || null);
       graph?.input(card.value);
@@ -1261,7 +1303,7 @@ window.Conversation = (() => {
       if (active?.source.id === source.id && active.source.revision !== source.revision)
         stop("This reply changed. Refresh before listening.");
       const textChanged=card.source.revision!==source.revision;
-      card.source = source;card.box.dataset.sourceId=source.id;
+      card.source = source;card.box.dataset.sourceId=source.id;card.box.dataset.sourceRevision=source.revision;
       if(!card.expanded && Number.isSafeInteger(source.text_characters) && source.text_characters===Array.from(source.preview).length)card.read.hidden=true;
       for(const file of source.artifacts||[])files.set(file.id,file);
       renderFiles(card);

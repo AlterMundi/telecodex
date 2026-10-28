@@ -4,6 +4,7 @@ from contextlib import suppress
 import hashlib
 import io
 import json
+import logging
 from pathlib import Path
 import re
 import secrets
@@ -87,6 +88,7 @@ def install(app, config, provider, authorize, origins):
 
     @app.websocket('/api/interaction/voice/live')
     async def voice_live(socket: WebSocket):
+        diagnostic = {'stage':'metadata', 'audio_bytes':0, 'finish_received':False, 'prepared_saved':False}
         stream = None
         reader = None
         owner = None
@@ -117,6 +119,7 @@ def install(app, config, provider, authorize, origins):
                 if 'turn_detection' in meta and (meta['turn_detection'] is not True or not detector_command):
                     raise ValueError('Conversational analysis unavailable')
                 provider.input_id(meta['id'])
+                diagnostic['capture_id'] = meta['id']
                 headers = list(socket.scope['headers'])
                 if 'authorization' in meta:
                     if (not isinstance(meta['authorization'],str) or len(meta['authorization'])>128
@@ -181,6 +184,7 @@ def install(app, config, provider, authorize, origins):
                         value.close()
                         raise TranscriptionUnavailable('Capture closed during connection setup')
                     raise TranscriptionUnavailable('No configured streaming provider')
+                diagnostic['stage'] = 'provider_open'
                 stream = await asyncio.to_thread(open_provider)
                 pcm = bytearray()
                 ready, finished = asyncio.Event(), asyncio.Event()
@@ -211,8 +215,11 @@ def install(app, config, provider, authorize, origins):
                         elif event['type']=='final':
                             if mode=='captions':
                                 raise ValueError('Live captions are not a confirmed transcript')
+                            diagnostic['stage'] = 'final_authorization'
                             await recheck()
+                            diagnostic['stage'] = 'save_prepared'
                             value = await asyncio.to_thread(save_prepared,root,meta['id'],meta['binding'],bytes(pcm),stream.result())
+                            diagnostic['prepared_saved'] = True
                             await send({'type':'prepared','id':meta['id'],
                                 'source_sha256':value['source_sha256'],'text':value['text']})
                             finished.set(); return
@@ -245,6 +252,8 @@ def install(app, config, provider, authorize, origins):
                         if not ready.is_set():raise ValueError('Wait for recognition readiness')
                         data = message['bytes']
                         await asyncio.to_thread(stream.append,data)
+                        diagnostic['audio_bytes'] += len(data)
+                        diagnostic['stage'] = 'receiving_audio'
                         if mode=='prepared':pcm.extend(data)
                         if detector and detector_reader is not None and not detector_reader.done():
                             try:
@@ -258,18 +267,30 @@ def install(app, config, provider, authorize, origins):
                         control = message.get('text','')
                         if len(control.encode())>256:raise ValueError('Control exceeds bound')
                         command = json.loads(control)
-                        if command == {'type':'discard'}:break
+                        if command == {'type':'discard'}:
+                            diagnostic['discarded'] = True
+                            break
                         if command != {'type':'finish'}:raise ValueError('Unknown capture control')
+                        diagnostic['finish_received'] = True
                         if mode=='captions':raise ValueError('Live captions cannot finalize the original')
+                        diagnostic['stage'] = 'finish_authorization'
                         await recheck()
+                        diagnostic['stage'] = 'provider_finalize'
                         await asyncio.to_thread(stream.finish)
                         await reader
                         break
         except (HTTPException, ValueError, OSError, UnicodeError, TranscriptionUnavailable,
-                WebSocketDisconnect, TimeoutError):
+                WebSocketDisconnect, TimeoutError) as error:
+            diagnostic['error_type'] = type(error).__name__
             with suppress(Exception):
                 await send({'type':'unavailable','message':'Live transcription unavailable. Your recording has not been submitted.'})
         finally:
+            # One metadata-only line under the existing bounded system journal.
+            # Never include provider events, exception messages, speech or keys.
+            if (mode == 'prepared' and diagnostic['audio_bytes']
+                    and not diagnostic['prepared_saved'] and not diagnostic.get('discarded')):
+                logging.getLogger(__name__).warning('voice_preparation_closed %s',
+                    json.dumps(diagnostic, sort_keys=True))
             try:
                 # Cancel before any cleanup await: WebView teardown can cancel this
                 # handler again while close() unblocks the provider's reader.

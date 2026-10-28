@@ -27,16 +27,17 @@ function boot(readOnly=false,standalone=false,options={}) {
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
       addEventListener(name, fn) { this.handlers[name] = fn; },
-      append(...children) { this.appendCalls=(this.appendCalls||0)+1;for(const child of children){const at=this.children.indexOf(child);if(at>=0)this.children.splice(at,1);this.children.push(child);} },
+      append(...children) { this.appendCalls=(this.appendCalls||0)+1;for(const child of children){if(child.parentNode&&child.parentNode!==this)child.remove();child.parentNode=this;const at=this.children.indexOf(child);if(at>=0)this.children.splice(at,1);this.children.push(child);} },
       replaceChildren(...children) { this.children = children; },
       insertBefore(child, before) {
+        if(child.parentNode&&child.parentNode!==this)child.remove();child.parentNode=this;
         const previous = this.children.indexOf(child);
         if (previous >= 0) this.children.splice(previous,1);
         const at = this.children.indexOf(before);
         this.children.splice(at < 0 ? this.children.length : at, 0, child);
       },
       requestSubmit() {return this.handlers.submit?.({preventDefault(){}});},
-      click() {this.clicked=true;},remove() {this.removed=true;},
+      click() {this.clicked=true;},remove() {this.removed=true;if(this.parentNode){const at=this.parentNode.children.indexOf(this);if(at>=0)this.parentNode.children.splice(at,1);this.parentNode=undefined;}},
       before(...nodes) {this.beforeNodes=nodes;}, pause() { this.paused = true; }, play() {this.paused=false;this.ended=false;return Promise.resolve();}, load() {},
     };
   }
@@ -382,6 +383,22 @@ function boot(readOnly=false,standalone=false,options={}) {
   await workers.ui.refresh();
   assert(workerTimeline.children.some(c=>c.dataset.timelineKey==='native:10'),'the only useful final answer must stay in the main chat');
   assert.equal(compact[0].removed,true,'a returned answer settles an earlier progress preview');
+  const anchoredProgress=workerTimeline.children.find(c=>c.dataset.timelineKey==='input:'+progressReply.id);
+  const exactProgress=workerTimeline.children[workerTimeline.children.indexOf(anchoredProgress)-1];
+  assert.equal(exactProgress.dataset.sourceId,'native:8','A reply stays below its exact older update after coalescing and a final return');
+  assert.equal(exactProgress.dataset.sourceRevision,'revision-8');
+  assert.match(anchoredProgress.children[0].textContent,/reply to Alpha/);
+  const threaded=boot(false,true);threaded.overrideSource(3,{kind:'worker_result',label:'Alpha',target:{chat_id:100,thread_id:7}});
+  threaded.originals.set('reply-later',{id:'reply-later',text:'Second answer to Alpha',reply:{source:'native:3',revision:'revision-3'},sequence:2,phase:'accepted',received_at:'2024-01-01T00:00:12Z'});
+  threaded.originals.set('reply-earlier',{id:'reply-earlier',text:'First answer to Alpha',reply:{source:'native:3',revision:'revision-3'},sequence:1,phase:'accepted',received_at:'2024-01-01T00:00:10Z'});
+  await threaded.ui.refresh();const threadLane=threaded.nodes.get('#conversation-timeline');
+  const order=()=>threadLane.children.map(c=>c.dataset.timelineKey);
+  const target=order().indexOf('native:3');assert.deepEqual(order().slice(target,target+4),['native:3','input:reply-earlier','input:reply-later','native:4']);
+  const retainedThreadReply=threadLane.children[target+1];assert.equal(retainedThreadReply.dataset.timelineTime,String(Date.parse('2024-01-01T00:00:10Z')),'Grouping never rewrites capture time');
+  await threaded.ui.refresh();assert.equal(threadLane.children[target+1],retainedThreadReply,'Polling preserves the same reply node and adjacency');
+  threaded.overrideSource(3,{revision:'new-revision-3'});await threaded.ui.refresh();
+  assert.equal(order().at(-2),'input:reply-earlier','A different source revision is not silently used as the reply parent');
+  threaded.ui.stop();
   const stream=single.nodes.get('#conversation-timeline');
   assert.deepEqual(stream.children.filter(c=>c.dataset.timelineKey).map(c=>c.dataset.timelineKey),['native:1','native:2','native:3','native:4','input:between','native:5','native:6','native:7','native:8']);
   assert.equal(stream.children.find(c=>c.dataset.timelineKey==='native:1').children[1].textContent,'Progress update.');

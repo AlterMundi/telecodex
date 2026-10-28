@@ -200,10 +200,15 @@ class LiveTranscription(unittest.TestCase):
         self.assertFalse(any(x.finished for x in Stream.opened))
         self.assertFalse(list((self.root/'prepared').glob('*.json')))
     def test_replaced_binding_blocks_final_preparation(self):
-        with self.open() as ws:
-            ws.send_json(self.meta());ws.receive_json();ws.send_bytes(b'\0\0');ws.receive_json()
-            self.binding='d'*64
-            ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'unavailable')
+        with self.assertLogs('dashboard.live_transcription',level='WARNING') as logs:
+            with self.open() as ws:
+                ws.send_json(self.meta());ws.receive_json();ws.send_bytes(b'\0\0');ws.receive_json()
+                self.binding='d'*64
+                ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'unavailable')
+            self.assertTrue(Stream.opened[0].closed_event.wait(2))
+        diagnostic=json.loads(logs.records[0].getMessage().split(' ',1)[1])
+        self.assertEqual(diagnostic,{'capture_id':self.ident,'stage':'finish_authorization',
+            'audio_bytes':2,'finish_received':True,'prepared_saved':False,'error_type':'ValueError'})
         self.assertFalse(Stream.opened[0].finished)
         self.assertFalse(list((self.root/'prepared').glob('*.json')))
     def test_revoked_human_cannot_finish_preparation(self):

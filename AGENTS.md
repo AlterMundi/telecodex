@@ -90,3 +90,13 @@ revision-aware spoken offers through existing events; progress is not completion
 Do not replace the normal app or inject all observer history into every turn.
 See docs/interaction-roadmap.md and docs/interaction-turn-taking.md for actual
 implementation status; configuration alone is not receiving qualification.
+
+
+Human clarification, 2026-10-28: multi-step work keeps its integrating return
+responsibility until the required successor/receiving steps finish. A worker's
+completed helper result does not complete that whole workflow. Keep canonical
+ownership with the integrator; do not start recursive helper/ownership chains.
+Avatar voice mode must eventually surface meaningful internal results/questions
+through the foreground Conversation despite internal-audio mute. Follow the
+required journal/event extension in docs/interaction-routing-ownership.md; it is
+not yet implemented and creates no autonomous attention or publication grant.

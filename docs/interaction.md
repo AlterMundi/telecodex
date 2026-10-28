@@ -992,3 +992,15 @@ blocker reasons and next actions from supported source statements and pending
 items, not from a blocked status alone. Do not revive a dormant conversation to
 answer a status question. This extends #333/#303; it does not by itself complete
 the full portfolio projection, live execution inventory or latency acceptance.
+
+
+### Visual placement of referenced replies
+
+The standalone timeline places a human reply immediately below its exact visible
+source/revision, with sibling replies ordered by their original capture times.
+Unrelated subsequent updates remain outside that reply group. Capture timestamps,
+canonical input identity and compact routing references are unchanged. An update
+that coalesces away after the person answers retains a compact referenced-update
+anchor from the exact still-retained source; it is not a newly authored update.
+A changed/missing revision is never substituted as the reply parent. Refreshing
+moves existing nodes and preserves expanded text, media and drafts.
