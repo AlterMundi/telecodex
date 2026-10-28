@@ -2,13 +2,13 @@
 class InteractionPCM extends AudioWorkletProcessor {
   constructor(){
     super();this.active=true;this.index=0;this.next=0;this.previous=0;this.ratio=sampleRate/16000;
-    this.observe=false;this.total=0;this.lastEnergy=0;this.energy=0;this.frames=[];this.port.onmessage=event=>{if(event.data==='observe')this.observe=true;if(event.data==='finish'){this.active=false;this.flush();this.port.postMessage({finished:true});}};
+    this.observe=false;this.total=0;this.lastEnergy=0;this.energy=0;this.frames=[];this.port.onmessage=event=>{if(event.data==='observe')this.observe=true;if(event.data&&typeof event.data.boundary==='string'&&/^[a-zA-Z0-9:-]{1,80}$/.test(event.data.boundary)){this.flush();this.port.postMessage({boundary:event.data.boundary,totalBytes:this.total*2});}if(event.data==='finish'){this.active=false;this.flush();this.port.postMessage({finished:true});}};
   }
   flush(){
     if(!this.frames.length)return;
     const data=new ArrayBuffer(this.frames.length*2),view=new DataView(data);
     this.frames.forEach((value,index)=>view.setInt16(index*2,Math.round(Math.max(-1,Math.min(1,value))*32767),true));
-    this.frames=[];this.port.postMessage({pcm:data},[data]);
+    this.frames=[];this.port.postMessage({pcm:data,totalBytes:this.total*2},[data]);
   }
   process(inputs){
     if(!this.active)return false;

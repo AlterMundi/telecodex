@@ -9,26 +9,64 @@ window.StreamingVoice=(()=>{
     return new Blob([header,...parts],{type:'audio/wav'});
   }
   const supported=()=>!!(window.AudioWorkletNode&&(window.AudioContext||window.webkitAudioContext)&&window.WebSocket);
-  async function create(media,{headers,binding,id,onPartial=()=>{},canonicalRecorder,turnDetection=false,onEndpoint=()=>{},onDetectionUnavailable=()=>{}}){
+  // One explicitly owned foreground graph can outlive an utterance. It never
+  // retains PCM: its bounded consumers own originals and any pre-speech ring.
+  async function openCapture(media){
     const Context=window.AudioContext||window.webkitAudioContext,context=new Context();
-    let worklet;
-    try{await context.audioWorklet.addModule('assets/voice-pcm.js');worklet=new AudioWorkletNode(context,'interaction-pcm');}
-    catch(error){await context.close();throw error;}
-    let source,filter,mute,socket;
+    let worklet,source,filter,mute,started=false,closed=false,expired=false,timer;
+    const listeners=new Set();
+    function emit(value){for(const listener of [...listeners])listener(value);}
+    function close(reason='capture_closed'){
+      if(closed)return;closed=true;clearTimeout(timer);emit({captureError:reason});
+      for(const node of [source,filter,worklet,mute])node?.disconnect();
+      context.close().catch(()=>{});listeners.clear();
+    }
     try{
+      await context.audioWorklet.addModule('assets/voice-pcm.js');worklet=new AudioWorkletNode(context,'interaction-pcm');
       source=context.createMediaStreamSource(media);filter=context.createBiquadFilter();mute=context.createGain();
       filter.type='lowpass';filter.frequency.value=7400;mute.gain.value=0;
+    }catch(error){close();throw error;}
+    worklet.port.onmessage=message=>{
+      if(closed)return;
+      if(message.data.pcm&&message.data.totalBytes>300*32000){
+        if(!expired){expired=true;close('session_limit');}
+        return;
+      }
+      emit(message.data);
+    };
+    return {
+      subscribe(listener){
+        if(closed||listeners.size>=3||typeof listener!=='function')throw Error('Capture consumer unavailable');
+        listeners.add(listener);return ()=>listeners.delete(listener);
+      },
+      start(){
+        if(closed)throw Error('Capture closed');if(started)return;started=true;
+        try{source.connect(filter);filter.connect(worklet);worklet.connect(mute);mute.connect(context.destination);}
+        catch(error){close('capture_unavailable');throw error;}
+        timer=setTimeout(()=>close('session_limit'),300000);
+        context.resume().catch(()=>close('capture_unavailable'));
+      },
+      observe(){if(!closed)worklet.port.postMessage('observe');},
+      boundary(token){if(closed)throw Error('Capture closed');worklet.port.postMessage({boundary:token});},
+      finish(){if(!closed)worklet.port.postMessage('finish');},
+      close,
+      get closed(){return closed;}
+    };
+  }
+  async function create(media,{headers,binding,id,onPartial=()=>{},canonicalRecorder,turnDetection=false,onEndpoint=()=>{},onDetectionUnavailable=()=>{},captureSource}){
+    if(captureSource&&canonicalRecorder)throw Error('Shared PCM cannot split a compressed original');
+    const shared=!!captureSource,capture=captureSource||await openCapture(media);
+    let socket,unsubscribe;
+    try{
       const target=new URL('api/interaction/voice/live',window.location.href);target.protocol=target.protocol==='https:'?'wss:':'ws:';
       socket=new WebSocket(target);
-    }catch(error){
-      for(const node of [source,filter,mute,worklet])if(node)node.disconnect();
-      await context.close();throw error;
-    }
+    }catch(error){if(!shared)capture.close();throw error;}
+    let origin=0,collecting=!shared;
     let ready=false,parts=[],sent=0,bytes=0,ending=false,discarded=false,done=false,timer,finishSent=false,disposed=false,flushed=false;
     let lastEnergy=0,totalSamplesBytes=0,lastEndpoint=0,detectorFailed=false,recognized=false,verdict;
     const events=new EventTarget(),recorder={state:'inactive',mimeType:canonicalRecorder?.mimeType||'audio/wav',addEventListener:(...args)=>events.addEventListener(...args)};
     function event(type,data){const e=new Event(type);if(data!==undefined)Object.defineProperty(e,'data',{value:data});events.dispatchEvent(e);}
-    function dispose(){if(disposed)return;disposed=true;clearTimeout(timer);source.disconnect();filter.disconnect();worklet.disconnect();mute.disconnect();context.close().catch(()=>{});socket.close();}
+    function dispose(){if(disposed)return;disposed=true;clearTimeout(timer);unsubscribe?.();if(!shared)capture.close();socket.close();}
     function complete(){
       if(done)return;done=true;
       if(!discarded && !canonicalRecorder && !flushed)recorder.captureStop ||= 'audio_flush_unconfirmed';
@@ -93,10 +131,15 @@ window.StreamingVoice=(()=>{
       if(canonicalRecorder){parts=[];dispose();}else if(ending&&!canonicalRecorder)complete();
     };
     socket.onclose=unavailable;socket.onerror=unavailable;
-    worklet.port.onmessage=message=>{
+    try{unsubscribe=capture.subscribe(data=>{
+      const message={data:{...data}};
       if(done||discarded)return;
+      if(data.captureError){if(canonicalRecorder){previewFailed();return;}recorder.captureStop=data.captureError;ending=true;complete();return;}
+      if(shared&&data.boundary===id+':begin'){origin=data.totalBytes;collecting=true;return;}
+      if(shared&&data.boundary===id+':end'){collecting=false;message.data.finished=true;}
+      if(shared&&!collecting&&!message.data.finished)return;
       if(Number.isSafeInteger(message.data.activityBytes)&&Number.isSafeInteger(message.data.totalBytes)){
-        lastEnergy=message.data.activityBytes;totalSamplesBytes=message.data.totalBytes;
+        lastEnergy=Math.max(0,message.data.activityBytes-origin);totalSamplesBytes=Math.max(0,message.data.totalBytes-origin);
       }
       if(message.data.pcm){
         if(canonicalRecorder&&disposed)return;
@@ -114,22 +157,22 @@ window.StreamingVoice=(()=>{
         timer=setTimeout(complete,5000);
         if(socket.readyState===WebSocket.CLOSED)complete();
       }
-    };
+    });}catch(error){dispose();throw error;}
     function previewFailed(){
       if(canonicalRecorder){ready=false;parts=[];dispose();}
       else{event('error');recorder.discard();}
     }
     recorder.start=(timeslice)=>{
       recorder.state='recording';canonicalRecorder?.start(timeslice);if(disposed)return;
-      if(turnDetection)worklet.port.postMessage('observe');
       try{
-        source.connect(filter);filter.connect(worklet);worklet.connect(mute);mute.connect(context.destination);
-        context.resume().catch(previewFailed);
+        if(turnDetection)capture.observe();
+        if(shared)capture.boundary(id+':begin');
+        capture.start();
       }catch{previewFailed();}
     };
-    recorder.stop=()=>{if(recorder.state==='inactive'||ending||discarded)return;recorder.state='inactive';if(canonicalRecorder){ending=true;ready=false;dispose();canonicalRecorder.stop();return;}worklet.port.postMessage('finish');timer=setTimeout(complete,6000);};
+    recorder.stop=()=>{if(recorder.state==='inactive'||ending||discarded)return;recorder.state='inactive';if(canonicalRecorder){ending=true;ready=false;dispose();canonicalRecorder.stop();return;}if(shared)capture.boundary(id+':end');else capture.finish();timer=setTimeout(complete,6000);};
     recorder.discard=()=>{if(done)return;discarded=true;if(canonicalRecorder&&canonicalRecorder.state!=='inactive'){canonicalRecorder.stop();dispose();return;}if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'discard'}));complete();};
     return recorder;
   }
-  return {supported,create,wav};
+  return {supported,create,wav,openCapture};
 })();
