@@ -1254,7 +1254,7 @@ mod tests {
                 "native-1",
                 "return-turn",
                 "draft",
-                "Selected milestone. ",
+                "Selected milestone. More current draft text",
                 false,
                 false
             )
