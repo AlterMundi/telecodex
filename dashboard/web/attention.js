@@ -37,7 +37,7 @@ window.AttentionCarousel = (() => {
       if(localOnly){
         all.querySelector(".pending-count").textContent=items.length?String(items.length):"";
         all.setAttribute("aria-label",`For you · ${items.length} pending requests`);all.title="For you";
-      }else {all.textContent=`${items.length} loaded pending`;all.setAttribute("aria-label",`Open list · ${items.length} loaded pending requests`);}
+      }else {all.textContent=String(items.length);all.title="Open pending requests";all.setAttribute("aria-label",`Open list · ${items.length} pending requests`);}
       strip.title=items.length?`${position+1} of ${items.length}`:"";schedule();
     }
     function step(delta){if(!items.length)return;position=(position+delta+items.length)%items.length;render();}

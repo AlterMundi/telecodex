@@ -951,6 +951,7 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 .pending-carousel button { min-height:32px; padding:2px 8px; margin:0; font-size:14px; }
 .pending-current { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; touch-action:pan-y; }
 .pending-all { flex:none; }
+.pending-carousel .pending-all { padding-inline:6px; font-variant-numeric:tabular-nums; color:var(--muted); }
 #conversation-presence[data-pending="true"] { height:auto; min-height:32px; overflow:visible; }
 #conversation-presence[data-pending="true"] > .companion-status-track { display:none; }
 .pending-panel { width:min(760px,calc(100vw - 24px)); max-height:calc(100dvh - 32px); padding:20px; overflow:auto; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:var(--radius,12px); }
