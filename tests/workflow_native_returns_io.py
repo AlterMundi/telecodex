@@ -134,7 +134,9 @@ def qualify(binary):
         j.wait(lambda: len(j.internal_packets) == 2)
         j.wait(lambda: j.row('SELECT busy FROM sessions WHERE thread_id=1') == [(0,)])
         page = j.read('presentation', 'list', '0', '0')['result']
-        native = [item for item in page['items'] if item['kind'] == 'integrator_answer']
+        native = [item for item in page['items'] if item['kind'] == 'integrator_answer'
+                  and item['preview'].startswith('Integrated selected workflow event:')]
+        assert any(item['preview'] == 'Initial goal turn delivered.' for item in page['items']), 'Seeded canonical history was erased'
         assert len(native) == 2, native
         assert any(item.get('workflow_return') for item in native)
         assert not page['workflow_attention']['envelopes']
