@@ -50,19 +50,22 @@ window.ConversationVoiceMode=(()=>{
     function update(value){
       if(!opened)return;
       if(value.connected===false){close();return;}
-      if(value.continuousState){listening=value.continuousState.active;preparing=value.continuousState.starting;directPending=value.continuousState.pending;directWorking=value.continuousState.working;}
+      if(value.continuousState){listening=value.continuousState.active;preparing=value.continuousState.starting;directPending=value.continuousState.pending;directWorking=value.continuousState.working;remaining=Number.isInteger(value.continuousState.remaining)&&value.continuousState.remaining>=0&&value.continuousState.remaining<=120?value.continuousState.remaining:undefined;}
       if(Object.hasOwn(value,'capture'))phase=value.capture||'idle';
       if(Object.hasOwn(value,'pending'))pending=value.pending;
       if(Number.isInteger(value.remaining)&&value.remaining>=0&&value.remaining<=120)remaining=value.remaining;
       if(Object.hasOwn(value,'playback')){playing=value.playback==='playing'||value.playback==='preparing';if(playing)heard=true;}
       if(value.sent){waiting=true;heard=false;}
       if(continuous){
-        status.textContent=preparing?'Preparing voice':directPending?'Recording needs review':directWorking?'Saving your voice':playing&&listening?'Speaking · listening':listening?'Listening':'Voice paused';
+        const left=remaining===undefined?'':` · ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')} left`;
+        status.textContent=preparing?'Preparing voice':directPending?'Recording needs review':directWorking?'Saving your voice':playing&&listening?'Speaking · listening'+left:listening?'Listening'+left:'Voice paused';
+        status.dataset.nearLimit=String(listening&&remaining!==undefined&&remaining<=15);
         if(Object.hasOwn(value,'caption'))caption.textContent=value.caption;
         if(directPending)caption.textContent='Return to the conversation to review your recordings.';
         speak.hidden=preparing||listening||directPending;speak.disabled=directWorking||!canStart();speak.textContent='Start voice';
         dialog.dataset.phase=phase==='recording'?'listening':playing?'speaking':'waiting';return;
       }
+      status.dataset.nearLimit='false';
       const recording=phase==='recording',working=phase==='permission'||phase==='finalizing'||value.uploading;
       status.textContent=recording?`Listening${remaining===undefined?'':` · ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')} left`}`:working?'Saving your voice':playing?'Speaking':pending||phase==='ready'?'Recording needs review':waiting?'Waiting for your reply':'Ready';
       caption.textContent=recording?(value.message||''):pending||phase==='ready'?'Return to the conversation to review your recording.':!waiting&&!playing?(value.message||''):'';

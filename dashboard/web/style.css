@@ -33,6 +33,7 @@
 .voice-mode-portrait { flex:1;min-height:0;width:100%;display:grid;place-items:center;overflow:hidden; }
 .voice-mode-portrait pre { font:clamp(14px,3.6vw,32px)/1.15 ui-monospace,monospace;max-width:100%;margin:0;color:var(--accent);transform:none!important;white-space:pre; }
 .voice-mode-state { font-size:20px;color:var(--accent); }
+.voice-mode-state[data-near-limit="true"] { color:var(--warn); }
 .voice-mode-caption { font-size:16px;line-height:1.4;min-height:2.8em;max-width:42em;max-height:4.2em;overflow:auto;overflow-wrap:anywhere; }
 .voice-mode-controls { display:flex;flex-wrap:wrap;justify-content:center;gap:12px; }
 .voice-mode-controls button { min-height:48px;font:inherit;font-size:16px; }

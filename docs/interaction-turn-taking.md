@@ -76,6 +76,13 @@ hidden state and binding/analysis loss retain originals for review. No provider
 or native request is replayed. Retention and commit are injected from the owning
 ordinary voice path, not a second input endpoint.
 
+The fullscreen status line shows the current original's remaining120-second
+recording budget, including silence already captured for that original. It
+updates only when the remaining whole second changes and uses the existing
+warning color at fifteen seconds. A new recorder resets that budget. This is
+derived from PCM positions, not a second capture timer; the original duration
+limit and explicit review/truncation behavior are unchanged.
+
 The avatar mounts this owner only when the existing optional turn-detection
 configuration also selects `continuous: true`. That selection defaults off. The
 ordinary voice writer retains/submits each exact original; there is no second
