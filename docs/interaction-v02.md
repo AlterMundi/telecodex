@@ -387,6 +387,13 @@ The same submit handler retains draft, attachment, pending voice and uncertain
 delivery behavior; there is no separate keyboard dispatch path.
 
 
+### Visible client version — human correction, 2026-10-28
+
+Keep the palette-colored client identifier in the unused top-left header space
+above the avatar. It must not occupy its own conversation row or overlap the
+name at narrow widths. The identifier names the loaded asset bundle; it is not
+a claim about backend or other-body adoption.
+
 ### Pending navigation — human correction, 2026-10-27
 
 Keep two surfaces separate: **For you** contains the integrating conversation's
