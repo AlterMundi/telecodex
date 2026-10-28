@@ -207,7 +207,7 @@ function boot(live=false,recovery){
  direct.preparation().onPartial('Una intervención terminada');direct.preparation().onEndpoint();
  await until(()=>direct.received.length===1);
  assert.equal(direct.uploads.length,1);assert.equal(direct.uploads[0].headers['X-Reply-Source'],undefined,'Direct voice cannot inherit a worker reply destination');
- assert.equal(direct.uploads[0].headers['X-Original-Files'],undefined);assert.equal(direct.uploads[0].headers['X-Visual-Reference'],undefined);
+ assert.equal(direct.uploads[0].headers['X-File-References'],undefined);assert.equal(direct.uploads[0].headers['X-Visual-Reference'],undefined);
  assert.deepEqual(JSON.parse(direct.uploads[0].headers['X-Playback-Context']),mediaHint,'Avatar interruption retains its heard-position report without adopting a worker reply destination');
  direct.preparation().onEndpoint();assert.equal(direct.uploads.length,1,'A late endpoint cannot admit another original');
  const leaving=boot(true);await leaving.ui.startConversation();leaving.ui.hold();
