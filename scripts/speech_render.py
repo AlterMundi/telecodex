@@ -290,7 +290,17 @@ def audio_occupancy(root):
             try:
                 prior = json.loads(private_bytes(job / 'state.json', 32768))
                 if prior.get('phase') == 'intent':
-                    used += MAX_AUDIO
+                    # A killed renderer leaves its uncertain outcome intact,
+                    # but cannot still write bytes after releasing this lock.
+                    # Reserve capacity only for an actually running writer;
+                    # this never makes the old intent eligible for replay.
+                    try:
+                        with lock(job / '.lock'):
+                            pass
+                    except RenderError as error:
+                        if str(error) != 'render-in-progress':
+                            raise
+                        used += MAX_AUDIO
             except FileNotFoundError:
                 pass
     return used

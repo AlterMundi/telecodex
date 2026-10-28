@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Actual HTTP/filesystem/process contracts; all voices and credentials are fake."""
 import concurrent.futures
+from contextlib import nullcontext
 import base64
 import hashlib
 import http.server
@@ -300,7 +301,8 @@ class Render(unittest.TestCase):
                 before=len(self.calls)
                 # The next maximum-sized render needs8MiB of free capacity in
                 # a16MiB budget; protected occupancy must trigger eligible GC.
-                result=speech.prune_audio({**self.config,'audio_cache_max_bytes':speech.MAX_AUDIO})
+                with speech.lock(protected/'.lock') if phase=='intent' else nullcontext():
+                    result=speech.prune_audio({**self.config,'audio_cache_max_bytes':speech.MAX_AUDIO})
                 self.assertFalse(Path(first['audio_path']).exists())
                 self.assertEqual(json.loads((protected/'state.json').read_text())['phase'],phase)
                 self.assertEqual(result['accounted_audio_bytes'],speech.MAX_AUDIO)
@@ -367,6 +369,8 @@ class Render(unittest.TestCase):
         self.assertFalse(list((self.root / 'cache').rglob('audio.wav')))
 
     def test_killed_request_retains_intent_without_reissuing(self):
+        self.config['audio_cache_max_bytes']=speech.MAX_AUDIO
+        self.binding.write_text(json.dumps(self.config))
         self.hold = True
         child = subprocess.Popen([sys.executable, str(SCRIPT), '--binding', str(self.binding)],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -375,6 +379,7 @@ class Render(unittest.TestCase):
             child.stdin.write(json.dumps(self.request))
             child.stdin.close()
             self.assertTrue(self.entered.wait(timeout=3))
+            self.assertEqual(speech.audio_occupancy(self.root/'cache'),speech.MAX_AUDIO)
             child.kill()
             child.wait(timeout=3)
             state = next((self.root / 'cache').rglob('state.json'))
@@ -382,6 +387,17 @@ class Render(unittest.TestCase):
             with self.assertRaisesRegex(speech.RenderError, 'retained-render-outcome'):
                 self.render()
             self.assertEqual(len(self.calls), 1)
+            self.assertEqual(speech.audio_occupancy(self.root/'cache'),0,
+                             'An orphan intent cannot permanently reserve its maximum audio size')
+            self.hold=False;self.release.set()
+            fresh=self.render({**self.request,'scope':'distinct-after-interruption'})
+            self.assertTrue(Path(fresh['audio_path']).exists())
+            self.assertEqual(len(self.calls),2,'Only the distinct new source may synthesize')
+            self.assertEqual(json.loads(state.read_text())['phase'],'intent',
+                             'Uncertain original outcome remains retained')
+            with self.assertRaisesRegex(speech.RenderError,'retained-render-outcome'):
+                self.render()
+            self.assertEqual(len(self.calls),2)
         finally:
             if child.poll() is None:
                 child.kill()
