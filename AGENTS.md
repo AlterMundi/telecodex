@@ -100,3 +100,14 @@ Avatar voice mode must eventually surface meaningful internal results/questions
 through the foreground Conversation despite internal-audio mute. Follow the
 required journal/event extension in docs/interaction-routing-ownership.md; it is
 not yet implemented and creates no autonomous attention or publication grant.
+
+Workflow implementation #405 extends the existing instruction/result journal with
+bounded `workflow_*` integrating controller operations, committed-result successor
+progression and source-only worker reads. See docs/interaction.md. Preserve the original human authority, exact
+request/result revisions, internal audience and final integrating responsibility.
+One helper completion leaves remaining steps unfinished; only current complete
+coverage plus the integrator checkpoint can finish the workflow. Presentation
+includes bounded result/question attention descriptors; automatic entry wakeup
+and foreground speech are still unsupported (`automatic_native_return:false`).
+Do not emulate that missing seam with fabricated human input, recursive helper
+chains, continuous model polling or an extra coordinator.

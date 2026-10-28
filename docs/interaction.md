@@ -1004,3 +1004,99 @@ that coalesces away after the person answers retains a compact referenced-update
 anchor from the exact still-retained source; it is not a newly authored update.
 A changed/missing revision is never substituted as the reply parent. Refreshing
 moves existing nodes and preserves expanded text, media and drafts.
+
+## Bounded workflow journal and foreground attention contract (#405)
+
+The integrating controller exposes `workflow_declare`, `workflow_status`,
+`workflow_advance`, `workflow_attention`, `workflow_reported`, `workflow_result`,
+`workflow_question`, `workflow_supersede` and `workflow_finish`. This is a journal
+with explicit initial admission and event-driven predeclared successors. Automatic internal-context return into
+an idle integrating native conversation and spoken foreground offers are **not
+implemented**; the contract reports `automatic_native_return:false`. Do not
+report the full #303/#304 workflow experience as delivered from these primitives.
+
+Declaration selects one accepted retained human `input_ref`, a stable
+`request_id`, an RFC3339 `expires_at` no more than seven days away, and one to four
+ordered steps. Each step declares `id`, one enrolled owner `selector`, `after`
+(the preceding step ID, or null for the first), session-authored `scope` (at most
+4,000 bytes), expected `checkpoint` (512 bytes), and optional human-selected
+`milestone` (80 bytes). Declaration does not dispatch. The original is immutable
+and cannot also acquire a competing ordinary dispatch, creation or Matrix plan.
+The step scope is attributed integrator interpretation under that human original;
+it never replaces the original's authorship or authorizes additional work.
+
+`workflow_status` returns exact current journal/coverage evidence and a revision.
+`workflow_advance` selects that revision and reserves one ready step through the
+existing instruction journal and worker dispatch. Once started, a committed
+current completed predecessor result triggers the same integrator-owned advance
+primitive for its next predeclared step. The callback adds no scope and invokes no
+integrator model. It rechecks the exact source, original authority, deadline and
+current workflow revision transactionally; duplicate callbacks never resend an
+existing admission. A restart/uncertain dispatch still requires its owning
+known-unsent recovery instead of callback replay. A predecessor must have a
+current completed canonical result covering its cumulative instructions, including
+corrections. The successor pins that exact predecessor result revision. Its packet
+contains a source descriptor, not a copied result body: use `workflow_result`
+with workflow ID, predecessor step ID, source revision and optional character
+offset to read 4,000 characters at a time. Only the integrating entry and the
+admitted successor owner can read it. Workers cannot declare/progress a workflow
+or turn its internal step into another helper's human parent.
+
+Exact admission retries never dispatch an existing instruction. Queued,
+known-unsent, accepted and uncertain native operations retain the owning journal's
+phases and recovery path. Changed predecessor coverage/revisions expose
+`correction_pending` or `predecessor_changed`; an already admitted successor is
+retained for reconciliation, never silently replayed. Every required step must
+currently complete before `awaiting_integration`; only explicit `workflow_finish`
+with that current revision and a final integration checkpoint retains overall
+completion. A worker completing one step cannot complete the whole workflow.
+`workflow_supersede` requires a later accepted human original with retained ingress
+order. It withdraws future/definitely queued work and preserves accepted and
+uncertain effects. Existing scoped caller controls also withdraw future workflow
+admission. Entry binding/generation changes and expiry retire future progression.
+
+The existing presentation-list response includes `workflow_attention` with schema
+`telecodex.workflow-attention/v1`. Its `envelopes` contain workflow/step IDs, exact
+canonical result or question capture version, source session, current workflow
+revision, reason, optional reporting milestone, deadline and an exact envelope
+revision. Reasons include `reporting_milestone`, `successor_ready`,
+`integration_required`, `reconciliation_required`, `admission_attention_required`
+and `human_decision_required`.
+No source body is injected. Question offers are scoped to the step's exact native
+execution, exclude approvals and disappear when that version is no longer pending.
+`workflow_question` reads the exact offered capture version on demand; it cannot
+answer or approve. Existing human-selected question controls retain their own
+separate decision revision and admission requirements.
+
+The model-free projection reuses the existing presentation/event transport; it
+starts no polling model, coordinator, helper chain or integrating-native wakeup.
+Only a committed canonical result can trigger the bounded predeclared successor;
+progress events cannot create model work. At most
+16 active workflows per entry, four steps per workflow, one result envelope and
+two pending question envelopes per step can be exposed. There is one current
+offer acknowledgment per step/source slot, with no accumulating callback log or
+result-body copies. `workflow_reported` deduplicates an exact integrated offer
+across reconnect; it is neither proof of hearing nor a completion/publication
+receipt. Admission and canonical history remain retained by the existing durable
+request journal; expired/terminal workflows are tombstones needed for exact
+identity, not disposable caches. Active projection and acknowledgment growth are
+bounded independently of that required history.
+
+All workflow results stay internal under the existing canonical audience rules.
+An attention envelope is evidence, never a human instruction, automatic publication
+grant, approval or permission to start an unplanned action. Native entry return
+must use an actual attributed internal-context seam, preserving the runtime's
+admission gates. The existing local-session return path ultimately submits an
+attributed text input to an enrolled worker; it does not establish that seam for
+the separately owned integrating Conversation. UI/audio adoption must route
+meaningful offers through its selected finite foreground and the existing
+Conversation player while internal tracks remain muted, without manufacturing
+human input or narrating every progress event.
+
+This source is not receiving deployment or live native qualification. Once a
+workflow has been declared, preserve `interaction_workflows`, all underlying
+instructions/results and session authorship during upgrades or rollback. A
+rollback listener must retain this reader and original-selection exclusion while
+workflows are active; an older binary unaware of workflow selections is not a
+compatible operational rollback. Scoped withdrawal/expiry stops future
+admission without deleting checkpoints, accepted work or uncertain operations.

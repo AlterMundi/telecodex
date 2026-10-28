@@ -72,6 +72,21 @@ pub(super) fn original_on(
         &reference.event(),
         reference.update(),
     )?;
+    original_owned_on(conn, key, human, native, reference, channel, committed)
+}
+
+// An already selected workflow revalidates the same retained original without
+// treating its own immutable selection as a competing admission.
+pub(super) fn original_owned_on(
+    conn: &Connection,
+    key: SessionKey,
+    human: i64,
+    native: &str,
+    reference: &InputReference,
+    channel: &str,
+    committed: bool,
+) -> Result<(SourceInput, Option<crate::telegram::Message>)> {
+    reference.validate()?;
     match reference {
         InputReference::Telegram(update) => {
             if channel == "telegram:0" {

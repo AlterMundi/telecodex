@@ -1536,6 +1536,11 @@ pub(super) fn result(
         if super::session_requests::returned(app.clone(), &delivery, human).is_err() {
             tracing::warn!("Local dependency return retained without confirmed admission");
         }
+        if super::workflows::returned(app.clone(), &delivery, human).is_err() {
+            tracing::warn!(
+                "Workflow continuation retained without confirmed admission; inspect current source and instruction phases"
+            );
+        }
         publish(shared.clone(), delivery, human);
     }
     Ok(())

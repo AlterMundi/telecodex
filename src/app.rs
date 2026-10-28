@@ -49,6 +49,7 @@ mod topic_publications;
 mod tribu;
 mod turns;
 mod voice;
+mod workflows;
 
 use crate::{
     codex::{

@@ -91,8 +91,11 @@ session is not complete when its first worker finishes. The integrating task mus
 retain the successor step and its human-facing return responsibility. In avatar
 voice mode, muting internal audio must not hide meaningful results or questions
 from the foreground conversation. This is a required product extension under
-#303/#304/#383, not a claim that the current single-level dependency primitive
-already implements workflows.
+#303/#304/#383. The #405 journal/controller implementation described in
+[interaction.md](interaction.md#bounded-workflow-journal-and-foreground-attention-contract-405)
+adds bounded explicit progression and result/question descriptors. Automatic entry
+return and foreground speech remain unsupported; the existing single-level
+helper primitive alone does not implement the full experience.
 
 Extend the existing request/result journal with a bounded workflow declared from
 an accepted human instruction: stable workflow ID, original human authority,
