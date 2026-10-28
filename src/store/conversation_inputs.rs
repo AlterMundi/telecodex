@@ -1620,9 +1620,10 @@ mod tests {
                 .as_deref(),
             Some("duration_limit")
         );
-        let legacy: ConversationVoice =
-            serde_json::from_value(json!({"audio_sha256":"a".repeat(64),"mime":"audio/wav"}))
-                .unwrap();
+        let legacy: ConversationVoice = serde_json::from_value(
+            serde_json::json!({"audio_sha256":"a".repeat(64),"mime":"audio/wav"}),
+        )
+        .unwrap();
         assert!(legacy.capture_stop.is_none());
         assert!(
             serde_json::to_value(legacy)
