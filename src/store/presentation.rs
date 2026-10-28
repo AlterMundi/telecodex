@@ -776,16 +776,24 @@ pub(super) fn source_on(
         if marker.as_deref() == Some("workflow-internal") {
             return Ok(None);
         }
-        if let Some(raw) = marker
-            .as_deref()
-            .and_then(|s| s.strip_prefix("workflow-public-set:"))
-        {
+        if let Some(raw) = marker.as_deref().and_then(|s| {
+            s.strip_prefix("workflow-public-set:")
+                .or_else(|| s.strip_prefix("native-public-set:"))
+        }) {
             let ids: Vec<String> = serde_json::from_str(raw)?;
             if ids.is_empty() || ids.len() > 32 {
                 return Ok(None);
             }
-            source["workflow_return"] = json!(ids[0]);
-            source["workflow_returns"] = json!(ids);
+            source["native_return"] = json!(ids[0]);
+            source["native_returns"] = json!(ids);
+            let workflows: Vec<_> = ids
+                .iter()
+                .filter(|id| !id.starts_with("result:") && !id.starts_with("question:"))
+                .collect();
+            if let Some(first) = workflows.first() {
+                source["workflow_return"] = json!(first);
+                source["workflow_returns"] = json!(workflows);
+            }
             source["current"] = json!(ids.iter().all(|id| {
                 super::workflows::native_source_current_on(conn, id).unwrap_or(false)
             }));

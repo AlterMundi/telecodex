@@ -255,9 +255,8 @@ pub(super) fn tool_call(
             request.tool = match args.operation.as_str() {
                 "workflow_question" | "workflow_supersede" | "workflow_declare"
                 | "workflow_status" | "workflow_advance" | "workflow_attention"
-                | "workflow_reported" | "workflow_finish" | "workflow_result" => {
-                    "interaction_workflow"
-                }
+                | "workflow_reported" | "workflow_finish" | "workflow_result"
+                | "attention_source" | "attention_reported" => "interaction_workflow",
                 "capabilities" => "controller_capabilities",
                 "inputs" => "interaction_inputs",
                 "target_inputs" => "interaction_target_inputs",

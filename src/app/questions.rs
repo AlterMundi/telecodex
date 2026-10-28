@@ -213,6 +213,7 @@ pub(super) async fn begin_dialogue(
         {
             Ok(receiver) => {
                 let _ = super::workflows::attention(app.clone(), requester).await;
+                let _ = super::workflows::routed_questions(&app, requester, local_turn_id).await;
                 if let Ok(decision) = receiver.await {
                     let _ = tx.send(decision);
                 }

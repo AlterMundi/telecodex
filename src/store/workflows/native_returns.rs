@@ -3,6 +3,7 @@
 use super::*;
 
 mod context;
+mod routed;
 use context::{ReturnContext, ReturnParent};
 
 const MAX_NATIVE_RETURNS: usize = 16;
@@ -21,7 +22,10 @@ const MAX_ENVELOPE_BYTES: usize = 2048;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct WorkflowReturn {
     pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub workflow: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_revision: Option<String>,
     pub envelope: Value,
     pub phase: String,
     pub local: Option<i64>,
@@ -148,6 +152,9 @@ fn bindings_on(conn: &Connection, local: i64) -> Result<Vec<String>> {
         .unwrap_or_default())
 }
 fn selected_on(conn: &Connection, id: &str) -> Result<(ReturnContext, usize)> {
+    if let Some(selected) = routed::load(conn, id)? {
+        return Ok(selected);
+    }
     let raw:String=conn.query_row("SELECT doc FROM interaction_workflows w WHERE EXISTS(SELECT 1 FROM json_each(w.doc,'$.native_returns') r WHERE json_extract(r.value,'$.id')=?1)",[id],|r|r.get(0))?;
     let w: Workflow = serde_json::from_str(&raw)?;
     let index = w
@@ -165,6 +172,7 @@ fn current_on(
 ) -> Result<bool> {
     let r = &context.native_returns[index];
     match &context.parent {
+        ReturnParent::Routed(parent) => routed::current(conn, parent, r, admission),
         ReturnParent::Workflow(w) => {
             if admission
                 && (w.phase != "active"
@@ -190,6 +198,7 @@ fn current_on(
 }
 fn save_on(conn: &Connection, context: &ReturnContext) -> Result<()> {
     match &context.parent {
+        ReturnParent::Routed(parent) => routed::save(conn, parent, &context.native_returns),
         ReturnParent::Workflow(w) => {
             let mut current = w.clone();
             current.native_returns = context.native_returns.clone();
@@ -241,10 +250,7 @@ fn publication_sources_on(conn: &Connection, local: i64) -> Result<Option<Vec<St
                     && bindings.contains(&other.id)
                     && other.collection_local.is_none_or(|owner| owner == local)
                     && matches!(other.phase.as_str(), "accepted" | "accepted_reconciled")
-                    && other.envelope["slot"]
-                        .as_u64()
-                        .and_then(|slot| w.reported(slot as usize))
-                        == other.envelope["revision"].as_str()
+                    && w.reported(other_index) == other.envelope["revision"].as_str()
                     && current_on(conn, &w, other_index, false).unwrap_or(false)
             });
         if superseded {
@@ -267,10 +273,20 @@ pub(in crate::store) fn publication_on(conn: &Connection, local: i64) -> Result<
     Ok(match publication_sources_on(conn, local)? {
         None => None,
         Some(ids) if ids.is_empty() => Some("workflow-internal".into()),
-        Some(ids) => Some(format!(
-            "workflow-public-set:{}",
-            serde_json::to_string(&ids)?
-        )),
+        Some(ids) => {
+            let routed = ids
+                .iter()
+                .any(|id| id.starts_with("result:") || id.starts_with("question:"));
+            Some(format!(
+                "{}{}",
+                if routed {
+                    "native-public-set:"
+                } else {
+                    "workflow-public-set:"
+                },
+                serde_json::to_string(&ids)?
+            ))
+        }
     })
 }
 pub(in crate::store) fn source_current_on(conn: &Connection, id: &str) -> Result<bool> {
@@ -354,6 +370,7 @@ impl Store {
                 let r = WorkflowReturn {
                     id: id.clone(),
                     workflow: w.id.clone(),
+                    reported_revision: None,
                     envelope: envelope.clone(),
                     phase: "reserved".into(),
                     local: None,
@@ -388,24 +405,42 @@ impl Store {
     }
     /// Resume only already-retained, current intents with proof of no native input.
     /// The existing heartbeat invokes this; it never discovers new source events.
+    #[cfg(test)]
     pub(crate) fn workflow_native_recover_unsent(
         &self,
         human: i64,
         entry: SessionKey,
     ) -> Result<Vec<ReturnDispatch>> {
+        self.native_returns_recover_unsent(human, entry, true, false)
+    }
+    pub(crate) fn native_returns_recover_unsent(
+        &self,
+        human: i64,
+        entry: SessionKey,
+        workflows: bool,
+        routed: bool,
+    ) -> Result<Vec<ReturnDispatch>> {
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        let rows = {
+        let rows = if workflows {
             let mut q = tx.prepare("SELECT doc FROM interaction_workflows WHERE human_id=?1 AND entry_chat=?2 AND entry_topic=?3 AND phase='active' AND julianday(json_extract(doc,'$.plan.expires_at'))>julianday('now') AND EXISTS(SELECT 1 FROM json_each(doc,'$.native_returns') r WHERE json_extract(r.value,'$.phase')='retained_unsent') ORDER BY rowid LIMIT 16")?;
             q.query_map(params![human, entry.chat_id, entry.thread_id], |r| {
                 r.get::<_, String>(0)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
         };
+        let mut contexts = rows
+            .into_iter()
+            .map(|raw| serde_json::from_str(&raw).map(ReturnContext::workflow))
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        if routed {
+            contexts.extend(routed::retained(&tx, Some(human), Some(entry), true)?);
+        }
         let mut selected = vec![];
         let now = Utc::now().timestamp();
-        for raw in rows {
-            let mut w = ReturnContext::workflow(serde_json::from_str(&raw)?);
+        for mut w in contexts {
             for index in 0..w.native_returns.len() {
                 let r = &w.native_returns[index];
                 if selected.len() == 4
