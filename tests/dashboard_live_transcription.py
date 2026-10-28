@@ -98,6 +98,33 @@ class LiveTranscription(unittest.TestCase):
         trusted=streaming_result({'streaming_cache_root':str(self.root/'prepared')},original,
                                  hashlib.sha256(original.read_bytes()).hexdigest())
         self.assertEqual(trusted,{'text':'Final words','streaming_model':'qwen-audio-3.0-realtime-plus'})
+    def test_preparation_timing_separates_final_provider_and_receipt_without_storage(self):
+        finish = Stream.finish
+        def delayed_finish(stream):
+            time.sleep(.02)
+            finish(stream)
+        def delayed_save(*args):
+            time.sleep(.03)
+            return save_prepared(*args)
+        with patch.object(Stream, 'finish', delayed_finish), patch('dashboard.live_transcription.save_prepared', delayed_save):
+            with self.open() as ws:
+                ws.send_json(self.meta());self.assertEqual(ws.receive_json()['type'],'ready')
+                ws.send_bytes(b'\0\0'*1600);self.assertEqual(ws.receive_json()['type'],'partial')
+                ws.send_json({'type':'finish'})
+                result=ws.receive_json();self.assertEqual(result['type'],'prepared')
+        timing=result['timing']
+        self.assertEqual(set(timing), {'finish_to_prepared_ms','finish_authorization_ms',
+            'provider_final_ms','final_authorization_ms','receipt_write_ms'})
+        self.assertTrue(all(isinstance(v,(int,float)) and 0 <= v <= 140000 for v in timing.values()))
+        self.assertGreaterEqual(timing['provider_final_ms'], 15)
+        self.assertGreaterEqual(timing['receipt_write_ms'], 25)
+        self.assertGreaterEqual(timing['finish_to_prepared_ms'], timing['provider_final_ms'])
+        self.assertGreaterEqual(timing['finish_to_prepared_ms'], timing['receipt_write_ms'])
+        receipt=read_json(self.root/'prepared'/f'{self.ident}.json')
+        self.assertNotIn('timing',receipt)
+        self.assertEqual(receipt['text'],'Final words')
+        self.assertEqual(self.provider.calls,[])
+
     def test_selected_gemini_prepares_exact_original_with_no_dispatch(self):
         self.client.__exit__(None,None,None)
         self.config['streaming_transcription']['provider']='gemini'

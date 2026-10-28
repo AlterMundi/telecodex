@@ -45,7 +45,7 @@ function boot(live=false,recovery){
  const context=vm.createContext({Date:{now:()=>now},window,document,Blob,Uint8Array,fetch,AbortController,
   setTimeout(fn,ms){const t={fn,ms};timers.push(t);return t;},clearTimeout(t){if(t)t.closed=true;}});
  vm.runInContext(fs.readFileSync('dashboard/web/microphone.js','utf8'),context);
- let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,onTiming:(id,stage)=>timing.push({id,stage}),getReply:()=>selection,getPlayback:()=>playback,getCaptureQuestions:()=>captureQuestions,getFiles:()=>fileReferences,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
+ let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,onTiming:(id,stage,detail)=>timing.push({id,stage,detail}),getReply:()=>selection,getPlayback:()=>playback,getCaptureQuestions:()=>captureQuestions,getFiles:()=>fileReferences,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
  ui.configure(true,live);
  return {timing,advance:ms=>{now+=ms;},files:value=>{fileReferences=value;},ui,nodes,uploads,originals,received,devices,events,timers,media,activities,questions:value=>{captureQuestions=value;},playback:value=>{playback=value;},preparation:()=>preparation,
   confirmation:value=>{confirmDiscard=value;},confirmations,
@@ -57,6 +57,7 @@ function boot(live=false,recovery){
 (async()=>{
  const prepared=boot(true);await prepared.click();prepared.preparation().onPartial('Live caption without a prior error');
  assert.equal(prepared.nodes.get('#conversation-voice-state')['data-live-caption'],'true');
+ prepared.devices[0].preparationTiming={provider_final_ms:123};
  prepared.devices[0].preparedText='Final recognized sentence';const savedHold=prepared.holdUpload();
  prepared.nodes.get('#conversation-send').handlers.click();await until(()=>prepared.uploads.length===1);
  assert.equal(prepared.state(),'Final recognized sentence','Keep completed recognition visible during durable saving');
@@ -65,6 +66,7 @@ function boot(live=false,recovery){
  prepared.ui.observe({...prepared.received[0],phase:'preparing'},'Confirming transcript…');assert.equal(prepared.state(),'Final recognized sentence');
  prepared.ui.observe({...prepared.received[0],phase:'accepted'},'Sent');assert.equal(prepared.state(),'');
  assert.equal(prepared.uploads.length,1);
+ assert.equal(prepared.timing.find(v=>v.stage==='prepared').detail.provider_final_ms,123,'Ordinary capture forwards only the exact recorder preparation observation');
  const mediaHint={source:'native:7',revision:'a'.repeat(64),segment_offset:240,position_millis:3700,duration_millis:12000,state:'interrupted'};
  const playCapture=boot();playCapture.playback(mediaHint);const heldPlayPermission=playCapture.permission();
  const playingStart=playCapture.click();playCapture.playback({...mediaHint,position_millis:9900});heldPlayPermission.resolve(playCapture.media());await playingStart;

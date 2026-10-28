@@ -197,6 +197,7 @@ window.VoiceInput = (() => {
     }
     async function finish(owned,binding,mime,selection) {
       if(owned!==generation)return;
+      if(recorder?.preparationTiming)onTiming(selection?.captureId,'prepared',recorder.preparationTiming);
       stopTracks();const preparedText=recorder?.preparedText||selection?.preparedText,captureStop=recorder?.captureStop||selection?.captureStop;recorder=undefined;
       const blob=new Blob(parts,{type:mime});parts=[];bytes=0;
       if(!blob.size){cancelRecording('No audio samples were captured. Nothing was sent.');return;}

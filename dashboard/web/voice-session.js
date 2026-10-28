@@ -50,6 +50,7 @@ window.ContinuousConversation=(()=>{
       if(stopping&&current===slot){current=undefined;closeGraph();}
       if(!slot.blob){slots.delete(slot.id);if(!stopping)hold('No recording was confirmed. Nothing was sent.');return;}
       const r=slot.recorder;onTiming(slot.id,'ready');
+      if(r.preparationTiming)onTiming(slot.id,'prepared',r.preparationTiming);
       const original={id:slot.id,binding,capture_started:slot.started,blob:slot.blob,mime:'audio/wav',preparedText:r.preparedText,
         captureStop:r.captureStop,captureQuestions:slot.questions,playback:slot.playback};
       slot.original=original;

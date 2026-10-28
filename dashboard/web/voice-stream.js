@@ -190,6 +190,7 @@ window.StreamingVoice=(()=>{
           if(canonicalRecorder)throw Error('Live captions cannot confirm the original');
           if(value.id!==id||!ending||!finishSent||typeof value.text!=='string')throw Error('Unexpected prepared recording');
           recorder.preparedText=value.text;
+          recorder.preparationTiming=value.timing;
           complete();
         }else if(value.type==='unavailable'){ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}
       }catch{ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}

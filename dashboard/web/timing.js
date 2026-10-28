@@ -18,6 +18,10 @@ window.ConversationTiming=(()=>{
         const first=field=>Math.min(...matches.map(s=>s[field]).filter(t=>Number.isFinite(t)&&t>=stages.send));
         const row=element('li','');row.append(element('strong',`Recording ${recording.sequence}`));
         row.append(element('p',`First caption: ${duration(stages.started,stages.partial)} · Stop → saved: ${duration(stages.ended,stages.retained)}`));
+        if(recording.preparation){
+          const t=recording.preparation,ms=key=>Number.isFinite(t[key])?`${(t[key]/1000).toFixed(2)} s`:'not observed';
+          row.append(element('p',`Server finish → prepared: ${ms('finish_to_prepared_ms')} · Finish authorization: ${ms('finish_authorization_ms')} · Provider final: ${ms('provider_final_ms')} · Final authorization: ${ms('final_authorization_ms')} · Receipt write: ${ms('receipt_write_ms')} (server intervals; not final speech or sound).`));
+        }
         row.append(element('p',shared?'Shared native turn; response timing unassigned.':`Send → same-turn text: ${duration(stages.send,first('seen'))} · Send → playback: ${duration(stages.send,first('playing'))}`));
         rows.push(row);
       }
@@ -27,11 +31,20 @@ window.ConversationTiming=(()=>{
     function reset(){recordings.clear();sources.clear();sequence=0;pauseMillis=undefined;render();}
     clear.addEventListener('click',reset);
     function bind(value){if(binding!==value){binding=value;reset();}}
-    function mark(id,stage){
-      if(typeof id!=='string'||id.length>128||!['requested','started','partial','ended','send','ready','retained','discarded'].includes(stage))return;
+    function mark(id,stage,detail){
+      if(typeof id!=='string'||id.length>128||!['requested','started','partial','ended','send','ready','retained','discarded','prepared'].includes(stage))return;
       let recording=recordings.get(id);
       if(!recording){if(stage!=='requested')return;recording={sequence:++sequence,stages:{}};recordings.set(id,recording);while(recordings.size>8)recordings.delete(recordings.keys().next().value);}
       if(recording.stages[stage]!==undefined)return;
+      if(stage==='prepared'){
+        if(!detail||typeof detail!=='object'||Array.isArray(detail))return;
+        const clean={};
+        for(const key of ['finish_to_prepared_ms','finish_authorization_ms','provider_final_ms','final_authorization_ms','receipt_write_ms']){
+          if(Number.isFinite(detail[key])&&detail[key]>=0&&detail[key]<=140000)clean[key]=detail[key];
+        }
+        if(!Object.keys(clean).length)return;
+        recording.preparation=clean;
+      }
       recording.stages[stage]=now();render();
     }
     function input(value){
