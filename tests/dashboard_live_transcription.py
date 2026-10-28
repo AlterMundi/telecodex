@@ -250,6 +250,102 @@ class LiveTranscription(unittest.TestCase):
         self.assertTrue(cancelled.wait(1),'Capture exit must cancel its pending analyzer startup')
         self.assertTrue(Stream.opened[0].closed_event.wait(1));self.assertEqual(self.provider.calls,[])
 
+    def analysis(self):
+        class Warm:
+            opened=[]
+            @classmethod
+            async def open(cls,argv,*,continuous=False):
+                self.assertTrue(continuous)
+                value=cls();value.queue=asyncio.Queue();value.pcm=b'';value.closed=False;value.generation=1
+                cls.opened.append(value);return value
+            async def feed(value,pcm):
+                value.pcm+=pcm
+                await value.queue.put({'type':'activity','generation':value.generation,
+                    'audio_bytes':len(value.pcm),'speaking':True,'speech_seen':True,
+                    'onset':{'generation':value.generation,'audio_bytes':len(value.pcm)}})
+            async def boundary(value,boundary):
+                await value.queue.put({'type':'boundary',**boundary});value.generation+=1
+            async def receive(value):return await value.queue.get()
+            async def close(value):value.closed=True
+        return Warm
+
+    def open_activity(self,origin='https://example.test'):
+        return self.client.websocket_connect('/api/interaction/voice/activity',headers={'origin':origin})
+
+    def test_foreground_analysis_stays_warm_between_utterance_boundaries(self):
+        warm=self.analysis()
+        with patch('dashboard.live_transcription.Detector',warm),self.open_activity() as ws:
+            ws.send_json(self.meta());self.assertEqual(ws.receive_json(),{'type':'ready','id':self.ident,'analysis_only':True})
+            ws.send_bytes(b'\0'*3200);first=ws.receive_json();self.assertEqual(first['type'],'turn_activity')
+            self.assertEqual(first['activity']['onset']['generation'],1)
+            ws.send_json({'boundary':{'generation':1,'audio_bytes':3200}})
+            self.assertEqual(ws.receive_json()['type'],'boundary')
+            ws.send_bytes(b'\0'*3200);second=ws.receive_json()
+            self.assertEqual(second['activity']['onset']['generation'],2)
+            self.assertEqual(second['activity']['audio_bytes'],6400)
+            self.assertEqual(len(warm.opened),1)
+            ws.send_json({'type':'close'})
+        self.assertTrue(warm.opened[0].closed)
+        self.assertEqual(Stream.opened,[]);self.assertEqual(self.provider.calls,[])
+        self.assertEqual(list((self.root/'prepared').glob('*.json')),[])
+
+    def test_foreground_auth_revocation_capacity_and_actor_release(self):
+        warm=self.analysis()
+        with patch('dashboard.live_transcription.Detector',warm):
+            with self.assertRaises(WebSocketDisconnect):
+                with self.open_activity('https://wrong.test'):pass
+            for changed in ({'csrf':'wrong'},{'binding':'c'*64}):
+                with self.open_activity() as ws:
+                    ws.send_json(self.meta(**changed));self.assertEqual(ws.receive_json()['type'],'unavailable')
+            self.assertEqual(warm.opened,[])
+            with self.open_activity() as first:
+                first.send_json(self.meta());self.assertEqual(first.receive_json()['type'],'ready')
+                with self.open_activity() as duplicate:
+                    duplicate.send_json(self.meta(id=str(uuid.uuid4())));self.assertEqual(duplicate.receive_json()['type'],'unavailable')
+                first.send_bytes(b'\0'*3200);self.assertEqual(first.receive_json()['type'],'turn_activity')
+                self.provider.allowed=False
+                first.send_bytes(b'\0'*3200);self.assertEqual(first.receive_json()['type'],'unavailable')
+            self.assertTrue(warm.opened[0].closed);self.assertEqual(len(warm.opened[0].pcm),3200)
+            self.provider.allowed=True
+            with self.open_activity() as replacement:
+                replacement.send_json(self.meta(id=str(uuid.uuid4())));self.assertEqual(replacement.receive_json()['type'],'ready')
+                replacement.send_json({'type':'close'})
+        self.assertEqual(self.provider.calls,[])
+
+    def test_foreground_analysis_uses_existing_companion_voice_grants(self):
+        warm=self.analysis();grants=Grants(self.config,self.provider)
+        with patch('dashboard.live_transcription.Detector',warm):
+            for scope in ('monitor_readonly','interaction_only'):
+                path=self.root/(scope+'-activity.json')
+                enrolled=grants.enroll('Synthetic foreground voice',path,3600,scope=scope)
+                credential=read_json(path)
+                with self.open_activity() as ws:
+                    ws.send_json(self.meta(authorization=credential['authorization'],csrf=credential['csrf']))
+                    if scope=='monitor_readonly':
+                        self.assertEqual(ws.receive_json()['type'],'unavailable');self.assertEqual(warm.opened,[])
+                    else:
+                        self.assertEqual(ws.receive_json()['type'],'ready')
+                        grants.revoke(enrolled['grant_id'])
+                        ws.send_bytes(b'\0'*3200);self.assertEqual(ws.receive_json()['type'],'unavailable')
+        self.assertEqual(self.provider.calls,[])
+
+    def test_distinct_asr_utterances_can_overlap_but_not_duplicate_or_exceed_global_bound(self):
+        other=str(uuid.uuid4())
+        with self.open() as first,self.open() as second:
+            first.send_json(self.meta());self.assertEqual(first.receive_json()['type'],'ready')
+            with self.open() as duplicate:
+                duplicate.send_json(self.meta());self.assertEqual(duplicate.receive_json()['type'],'unavailable')
+            second.send_json(self.meta(id=other));self.assertEqual(second.receive_json()['type'],'ready')
+            with self.open() as excess:
+                excess.send_json(self.meta(id=str(uuid.uuid4())));self.assertEqual(excess.receive_json()['type'],'unavailable')
+            first.send_bytes(b'\1\0'*1600);second.send_bytes(b'\2\0'*1600)
+            self.assertEqual(first.receive_json()['type'],'partial');self.assertEqual(second.receive_json()['type'],'partial')
+            first.send_json({'type':'finish'});second.send_json({'type':'finish'})
+            a=first.receive_json();b=second.receive_json()
+            self.assertEqual((a['id'],b['id']),(self.ident,other))
+            self.assertNotEqual(a['source_sha256'],b['source_sha256'])
+        self.assertEqual(len(Stream.opened),2);self.assertEqual(self.provider.calls,[])
+
     def test_completed_receipt_is_immutable_and_requires_matching_audio(self):
         pcm=b'\0\0'*1600
         result={'text':'Retained words','final':True,'model':'synthetic',

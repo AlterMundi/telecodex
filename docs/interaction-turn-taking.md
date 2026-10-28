@@ -56,6 +56,60 @@ between recorders have no original owner. This seam therefore does **not** prove
 continuous listening, automatic barge-in, echo rejection or device acceptance.
 The current alternating avatar trial remains unchanged until that integration.
 
+## Continuous foreground owner in development
+
+`voice-session.js` now owns one explicitly selected microphone/PCM graph and
+one warm activity connection across utterances. It requests browser echo
+cancellation, retains an eight-second gap ring, and creates at most two unresolved
+originals. Confirmed speech onset acquires the conversational floor and invokes
+the existing playback-interruption callback; simply arming the microphone does
+not pause output. Native work is outside this controller's authority.
+
+A current semantic endpoint plus recognized words can select one original for
+commit. Its final PCM acknowledgment starts the next recorder while the prior
+ASR finishes. The recorder takes any samples between boundaries from the gap
+ring, preserving exact WAV continuity. Final ASR results can arrive out of order;
+commit waits for the earliest original. An uncertain predecessor blocks later
+automatic dispatch. Missing recognition, unconfirmed flush, capacity, view exit,
+hidden state and binding/analysis loss retain originals for review. No provider
+or native request is replayed. Retention and commit are injected from the owning
+ordinary voice path, not a second input endpoint.
+
+The owner is implemented and tested but **not mounted by the avatar yet**.
+The ordinary client's durable recovery adapter must support both retained
+originals before mounting it. Existing normal Interaction and the alternating
+trial remain unchanged; no receiving continuous-voice acceptance is claimed.
+
+The authenticated `/api/interaction/voice/activity` connection loads the existing
+pinned CPU worker once for one foreground session. It reuses voice origin,
+credential/CSRF, actor and binding checks; monitor-only grants remain excluded.
+Actor authorization is rechecked on every message/output, and the Conversation
+binding every fifteen seconds and after startup. It neither transcribes nor
+retains media/transcripts nor admits work. At most one analyzer per actor and
+two globally, 300seconds PCM/305seconds handler lifetime, 150CPU seconds,
+90turn scores, an eight-second tail and two recent boundary receipts are allowed.
+Only exact emitted endpoint boundaries can retire the scored prefix; later PCM
+and recurrent VAD state stay intact. Each new speech generation must establish
+its own three positive frames; earlier speech cannot promote later brief noise.
+
+The ordinary ASR pool remains bounded to two streams globally. Distinct UUIDs
+from the same actor can now overlap finalization; duplicate active UUIDs are
+rejected. Normal capture analysis keeps its existing15second startup bound.
+Continuous analysis has one bounded30second preparation (client35seconds), before
+microphone acquisition. One first readiness attempt returned unavailable after
+17.1seconds; the failed receipt is retained. A later fixture initially chose the
+wrong local speech-generator executable, which is a verifier error. The corrected
+actual handler/worker session became ready in2.917seconds and processed two
+synthetic Spanish phrases, each with a speech onset, endpoint and exact boundary
+acknowledgment through that same connection. No ASR, TTS, microphone, original
+admission or native model ran. These are protocol/load observations, not human
+endpoint accuracy, barge-in silence, useful-response latency or phone acceptance.
+
+The browser worklet also enforces its five-minute sample ceiling on the audio
+thread; a frozen main-thread timer cannot accumulate unlimited PCM messages.
+The full stages2/3/required4 roadmap and real-device/provider acceptance remain
+required. Configure no continuous activation from these source fixtures alone.
+
 ## Why combine speech activity with turn analysis
 
 [Pipecat Smart Turn](https://github.com/pipecat-ai/smart-turn) analyzes audio

@@ -17,6 +17,7 @@ class InteractionPCM extends AudioWorkletProcessor {
       while(this.next<=this.index){
         const fraction=this.index===0?1:this.next-(this.index-1);
         const value=this.previous+(current-this.previous)*fraction;
+        if(this.total>=300*16000){this.active=false;this.flush();this.port.postMessage({captureError:'session_limit'});return false;}
         this.frames.push(value);this.total++;this.energy+=value*value;this.next+=this.ratio;
         // A conservative acoustic freshness hint, not a speech/turn classifier.
         // It fences a delayed server verdict even before this chunk is flushed.

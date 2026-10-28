@@ -25,14 +25,15 @@ def command(config):
 
 class Detector:
     @classmethod
-    async def open(cls, argv):
+    async def open(cls, argv, *, continuous=False):
         value = cls()
-        value.process = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE,
+        value.continuous = continuous
+        value.process = await asyncio.create_subprocess_exec(*argv, *(['--continuous'] if continuous else []), stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=8192,
             start_new_session=True)
         try:
-            ready = await asyncio.wait_for(value.receive(), 15)
-            if ready != {'schema': SCHEMA, 'type': 'ready', 'vad_sha256': VAD_SHA256, 'turn_sha256': MODEL_SHA256}:
+            ready = await asyncio.wait_for(value.receive(), 30 if continuous else 15)
+            if ready != {'schema': SCHEMA, 'type': 'ready', 'vad_sha256': VAD_SHA256, 'turn_sha256': MODEL_SHA256, **({'continuous': True} if continuous else {})}:
                 raise DetectionUnavailable('Unexpected analysis worker')
             return value
         except BaseException:
@@ -42,8 +43,16 @@ class Detector:
     async def feed(self, pcm, *, defer=False):
         if not pcm or len(pcm) > 32000 or len(pcm) % 2:
             raise DetectionUnavailable('Invalid analysis PCM')
+        await self.write({'pcm': base64.b64encode(pcm).decode('ascii'), **({'defer': True} if defer else {})})
+
+    async def boundary(self, value):
+        if not self.continuous:
+            raise DetectionUnavailable('Foreground analysis not selected')
+        await self.write({'boundary': value})
+
+    async def write(self, value):
         try:
-            self.process.stdin.write(json.dumps({'pcm': base64.b64encode(pcm).decode('ascii'), **({'defer': True} if defer else {})}).encode() + b'\n')
+            self.process.stdin.write(json.dumps(value).encode() + b'\n')
             await asyncio.wait_for(self.process.stdin.drain(), 1)
         except (OSError, TimeoutError, RuntimeError) as error:
             raise DetectionUnavailable('Analysis input unavailable') from error
@@ -54,7 +63,7 @@ class Detector:
             if not raw or len(raw) > 8192:
                 raise ValueError('Analysis output outside bounds')
             value = json.loads(raw)
-            if not isinstance(value, dict) or value.get('schema') != SCHEMA or value.get('type') not in ('ready', 'activity'):
+            if not isinstance(value, dict) or value.get('schema') != SCHEMA or value.get('type') not in (('ready', 'activity', 'boundary') if self.continuous else ('ready', 'activity')):
                 raise ValueError('Analysis unavailable')
             return value
         except (OSError, ValueError, RuntimeError) as error:
@@ -99,6 +108,8 @@ async def analyze_capture(open_worker, pcm, changed, on_activity):
                 # The worker starts its bounded tail at zero. Client fences
                 # always refer to the complete original, not that local tail.
                 value = {**value, 'audio_bytes': value['audio_bytes'] + origin}
+                if 'onset' in value:
+                    value['onset'] = {**value['onset'], 'audio_bytes': value['onset']['audio_bytes'] + origin}
                 if 'endpoint' in value:
                     value['endpoint'] = {**value['endpoint'],
                         'audio_bytes': value['endpoint']['audio_bytes'] + origin}

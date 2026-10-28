@@ -28,6 +28,7 @@ window.StreamingVoice=(()=>{
     }catch(error){close();throw error;}
     worklet.port.onmessage=message=>{
       if(closed)return;
+      if(message.data.captureError){close(message.data.captureError);return;}
       if(message.data.pcm&&message.data.totalBytes>300*32000){
         if(!expired){expired=true;close('session_limit');}
         return;
@@ -53,7 +54,75 @@ window.StreamingVoice=(()=>{
       get closed(){return closed;}
     };
   }
-  async function create(media,{headers,binding,id,onPartial=()=>{},canonicalRecorder,turnDetection=false,onEndpoint=()=>{},onDetectionUnavailable=()=>{},captureSource}){
+  // One explicitly selected foreground analysis socket. It neither transcribes
+  // nor admits originals; the coordinator owns PCM/original retention and Send.
+  async function openActivity({headers,binding,id,onActivity=()=>{},onUnavailable=()=>{},signal}){
+    if(signal?.aborted)throw Error('Foreground voice closed');
+    const target=new URL('api/interaction/voice/activity',window.location.href);target.protocol=target.protocol==='https:'?'wss:':'ws:';
+    const socket=new WebSocket(target);
+    let ready=false,closed=false,total=0,offset=0,lastEndpoint,pendingBoundary,timer,deadline,resolve,reject;
+    const opened=new Promise((yes,no)=>{resolve=yes;reject=no;});
+    function close(){
+      if(closed)return;closed=true;clearTimeout(timer);clearTimeout(deadline);signal?.removeEventListener('abort',abort);
+      try{if(ready&&socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'close'}));}catch{}
+      socket.close();if(!ready)reject(Error('Foreground voice closed'));
+    }
+    function fail(){if(closed)return;const wasReady=ready;close();if(wasReady)onUnavailable();}
+    function abort(){close();}
+    signal?.addEventListener('abort',abort,{once:true});
+    timer=setTimeout(fail,35000);deadline=setTimeout(fail,300000);
+    socket.onopen=()=>{
+      if(closed)return;
+      try{
+        const values=headers(),authorization=values.Authorization||values.authorization;
+        socket.send(JSON.stringify({id,binding,csrf:values['X-Dashboard-CSRF']||values['x-dashboard-csrf'],...(authorization?{authorization}:{})}));
+      }catch{fail();}
+    };
+    socket.onmessage=event=>{
+      if(closed)return;
+      try{
+        if(typeof event.data!=='string'||event.data.length>8192)throw Error('Invalid activity event');
+        const value=JSON.parse(event.data);
+        if(value.type==='ready'){
+          if(ready||value.id!==id||value.analysis_only!==true)throw Error('Unexpected activity readiness');
+          ready=true;clearTimeout(timer);resolve();return;
+        }
+        if(!ready||value.id!==id||!['turn_activity','boundary'].includes(value.type))throw Error('Activity unavailable');
+        const a=value.activity;
+        if(value.type==='turn_activity'){
+          if(!a||a.schema!=='telecodex.turn-activity/v1'||a.type!=='activity'
+             ||!Number.isSafeInteger(a.audio_bytes)||a.audio_bytes<offset||a.audio_bytes>total
+             ||!Number.isSafeInteger(a.generation)||a.generation<0||typeof a.speaking!=='boolean'||typeof a.speech_seen!=='boolean')throw Error('Invalid activity snapshot');
+          offset=a.audio_bytes;
+          for(const v of [a.onset,a.endpoint].filter(Boolean))if(!Number.isSafeInteger(v.generation)||v.generation<=0||!Number.isSafeInteger(v.audio_bytes)||v.audio_bytes<=0||v.audio_bytes>a.audio_bytes||v.generation>a.generation)throw Error('Invalid speech boundary');
+          if(a.endpoint){
+            if(a.endpoint.generation!==a.generation||a.endpoint.authority!=='analysis_only'||!Number.isFinite(a.endpoint.probability)||a.endpoint.probability<.5||a.endpoint.probability>1)throw Error('Invalid endpoint verdict');
+            lastEndpoint={generation:a.endpoint.generation,audio_bytes:a.endpoint.audio_bytes};
+          }
+          onActivity(a);
+        }else{
+          if(!pendingBoundary||!a||a.schema!=='telecodex.turn-activity/v1'||a.type!=='boundary'||a.generation!==pendingBoundary.generation||a.audio_bytes!==pendingBoundary.audio_bytes)throw Error('Unexpected analysis boundary acknowledgment');
+          pendingBoundary=undefined;
+        }
+      }catch{fail();}
+    };
+    socket.onerror=socket.onclose=fail;
+    await opened;
+    return {
+      feed(pcm){
+        if(closed)return false;
+        if(!(pcm instanceof ArrayBuffer)||!pcm.byteLength||pcm.byteLength%2||pcm.byteLength>32000||total+pcm.byteLength>300*32000||socket.bufferedAmount>256*1024){fail();return false;}
+        try{socket.send(pcm);total+=pcm.byteLength;return true;}catch{fail();return false;}
+      },
+      boundary(value){
+        if(closed||pendingBoundary||!lastEndpoint||value.generation!==lastEndpoint.generation||value.audio_bytes!==lastEndpoint.audio_bytes)return false;
+        try{pendingBoundary=lastEndpoint;socket.send(JSON.stringify({boundary:lastEndpoint}));lastEndpoint=undefined;return true;}catch{fail();return false;}
+      },
+      close,
+      get closed(){return closed;}
+    };
+  }
+  async function create(media,{headers,binding,id,onPartial=()=>{},canonicalRecorder,turnDetection=false,onEndpoint=()=>{},onDetectionUnavailable=()=>{},captureSource,initialPCM=()=>[],onFlushed=()=>{}}){
     if(captureSource&&canonicalRecorder)throw Error('Shared PCM cannot split a compressed original');
     const shared=!!captureSource,capture=captureSource||await openCapture(media);
     let socket,unsubscribe;
@@ -134,8 +203,18 @@ window.StreamingVoice=(()=>{
     try{unsubscribe=capture.subscribe(data=>{
       const message={data:{...data}};
       if(done||discarded)return;
-      if(data.captureError){if(canonicalRecorder){previewFailed();return;}recorder.captureError=data.captureError;recorder.captureStop='audio_flush_unconfirmed';ending=true;complete();return;}
-      if(shared&&data.boundary===id+':begin'){origin=data.totalBytes;collecting=true;return;}
+      if(data.captureError){if(shared&&flushed)return;if(canonicalRecorder){previewFailed();return;}recorder.captureError=data.captureError;recorder.captureStop='audio_flush_unconfirmed';ending=true;complete();return;}
+      if(shared&&data.boundary===id+':begin'){
+        try{
+          const prefix=initialPCM(data.totalBytes);
+          if(!Array.isArray(prefix)||prefix.some(p=>!(p instanceof ArrayBuffer)||p.byteLength%2))throw Error('Invalid capture prefix');
+          const size=prefix.reduce((n,p)=>n+p.byteLength,0);
+          if(size>256000||size>data.totalBytes)throw Error('Capture prefix outside foreground bounds');
+          origin=data.totalBytes-size;collecting=true;
+          for(const p of prefix){if(p.byteLength){parts.push(p);bytes+=p.byteLength;}}pump();
+        }catch{recorder.captureStop='audio_flush_unconfirmed';complete();}
+        return;
+      }
       if(shared&&data.boundary===id+':end'){collecting=false;message.data.finished=true;}
       if(shared&&!collecting&&!message.data.finished)return;
       if(Number.isSafeInteger(message.data.activityBytes)&&Number.isSafeInteger(message.data.totalBytes)){
@@ -155,6 +234,7 @@ window.StreamingVoice=(()=>{
         // Keep the complete local WAV as ordinary file-ASR fallback. Never
         // create an original instruction on this preparation socket.
         timer=setTimeout(complete,5000);
+        if(shared)onFlushed(data.totalBytes);
         if(socket.readyState===WebSocket.CLOSED)complete();
       }
     });}catch(error){dispose();throw error;}
@@ -174,5 +254,5 @@ window.StreamingVoice=(()=>{
     recorder.discard=()=>{if(done)return;discarded=true;if(canonicalRecorder&&canonicalRecorder.state!=='inactive'){canonicalRecorder.stop();dispose();return;}if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'discard'}));complete();};
     return recorder;
   }
-  return {supported,create,wav,openCapture};
+  return {supported,create,wav,openCapture,openActivity};
 })();
