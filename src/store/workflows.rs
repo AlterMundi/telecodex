@@ -1085,6 +1085,7 @@ mod tests {
         assert_eq!(packet["original_input_ref"], json!(plan.input_ref));
         assert!(packet.get("workflow").is_none());
         assert!(packet["evidence"]["source"].get("text").is_none());
+        assert_eq!(packet["source_text_complete"], false);
         let revision = packet["evidence"]["revision"].as_str().unwrap();
         let part = s
             .native_routed_source(100, entry.key, "native-1", &selected.id, revision, 0)
@@ -1223,6 +1224,7 @@ mod tests {
             .unwrap()
             .remove(0);
         let packet: Value = serde_json::from_str(&selected.output).unwrap();
+        assert_eq!(packet["source_text_complete"], false);
         let revision = packet["evidence"]["revision"].as_str().unwrap();
         let part = s
             .native_routed_source(100, entry.key, "native-1", &selected.id, revision, 0)
