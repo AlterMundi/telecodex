@@ -201,13 +201,14 @@ function boot(live=false,recovery){
  const changedPair=boot();changedPair.visual(pair);changedPair.mode('visual-extra');await changedPair.click();changedPair.click();await until(()=>changedPair.state().startsWith('Recording unconfirmed'));
  assert.equal(changedPair.received.length,0,'A receipt with an extra image must not consume the frozen recording');assert.equal(changedPair.uploads.length,1);
  changedPair.originals.values().next().value.visual=pair;await changedPair.check();await until(()=>changedPair.received.length===1);assert.equal(changedPair.uploads.length,1,'Correct receipt observation does not resend audio');
- const direct=boot(true);direct.select({reference:{source:'worker-source',revision:'worker-revision'}});direct.files([{file_id:'draft-file'}]);direct.visual({reference:'draft-image'});
+ const direct=boot(true);direct.select({reference:{source:'worker-source',revision:'worker-revision'}});direct.files([{file_id:'draft-file'}]);direct.visual({reference:'draft-image'});direct.playback(mediaHint);
  await direct.ui.startConversation();assert.equal(direct.preparation().turnDetection,true);
  direct.preparation().onEndpoint();assert.equal(direct.uploads.length,0,'No automatic Send before recognized speech');
  direct.preparation().onPartial('Una intervención terminada');direct.preparation().onEndpoint();
  await until(()=>direct.received.length===1);
  assert.equal(direct.uploads.length,1);assert.equal(direct.uploads[0].headers['X-Reply-Source'],undefined,'Direct voice cannot inherit a worker reply destination');
  assert.equal(direct.uploads[0].headers['X-Original-Files'],undefined);assert.equal(direct.uploads[0].headers['X-Visual-Reference'],undefined);
+ assert.deepEqual(JSON.parse(direct.uploads[0].headers['X-Playback-Context']),mediaHint,'Avatar interruption retains its heard-position report without adopting a worker reply destination');
  direct.preparation().onEndpoint();assert.equal(direct.uploads.length,1,'A late endpoint cannot admit another original');
  const leaving=boot(true);await leaving.ui.startConversation();leaving.ui.hold();
  await until(()=>leaving.state().startsWith('Voice mode ended.'));

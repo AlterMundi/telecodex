@@ -201,7 +201,7 @@ window.VoiceInput = (() => {
     async function start(conversational=false) {
       if(!available || !getBinding() || !supported() || restoring || ownsSend() || document.hidden)return false;
       conversationCapture=conversational;
-      const owned=++generation,binding=getBinding(),captureQuestions=getCaptureQuestions(),selection={...(conversational?{}:getReply()),playback:conversational?undefined:getPlayback(),...(captureQuestions!==undefined?{captureQuestions:JSON.parse(JSON.stringify(captureQuestions))}:{})};latestSaved=undefined;phase='permission';commit=false;parts=[];bytes=0;
+      const owned=++generation,binding=getBinding(),captureQuestions=getCaptureQuestions(),selection={...(conversational?{}:getReply()),playback:getPlayback(),...(captureQuestions!==undefined?{captureQuestions:JSON.parse(JSON.stringify(captureQuestions))}:{})};latestSaved=undefined;phase='permission';commit=false;parts=[];bytes=0;
       notice('Allow microphone access to begin.');pauseAudio();controls();
       try {
         let selectedVisual;
