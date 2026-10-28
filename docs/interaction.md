@@ -1273,4 +1273,11 @@ legacy workflow marker compatibility. Readers expose neutral `native_returns`
 without mislabelling ordinary sources as workflows. Rollback must keep this
 compatible reader/writer and preserve the journal; disabling the flag does not
 revoke or erase retained outcomes. Full wrapper and receiving qualification of
-this extension remain pending; this is not a stage4 completion or hearing claim.
+this extension remain separate: the synthetic active-result / idle-question /
+idle-result wrapper journey, known-unsent recovery and default-off/no-backfill
+cases now pass against the CI-built source0880473 executable. Ordinary source restart/correction checks also pass, including default-off
+recovery, retained uncertainty, same-intent finite retries and stale-attempt
+fences. Final-tree CI continues. The presentation
+reports loaded `automatic_routed_native_return` separately from retained receipt
+phases. Receiving enablement and real-device acceptance remain pending; this is
+not a stage4 completion or hearing claim.

@@ -1273,6 +1273,143 @@ mod tests {
         );
     }
     #[test]
+    fn ordinary_return_restart_preserves_unsent_uncertainty_and_finite_retry() {
+        let (file, s, entry, plan) = setup();
+        let (instruction, first) = routed_result(&s, &entry, &plan.input_ref);
+        let unsent = s
+            .native_routed_result_reserve(100, entry.key, &first.id)
+            .unwrap()
+            .unwrap();
+        let second = answer(
+            &s,
+            &instruction,
+            instruction.local_turn.unwrap(),
+            "second-ordinary-source",
+            vec![instruction.id.clone()],
+            "Another exact result",
+        );
+        let unknown = s
+            .native_routed_result_reserve(100, entry.key, &second.id)
+            .unwrap()
+            .unwrap();
+        let local = turn(&s, &entry, "");
+        s.workflow_native_link(&unknown.id, local).unwrap();
+        s.workflow_native_submitting(&unknown.id).unwrap();
+        drop(s);
+        let s = Store::open(file.path(), &[100], &super::super::tests::defaults()).unwrap();
+        let conn = s.conn.lock().unwrap();
+        let unknown_doc: String = conn
+            .query_row(
+                "SELECT native_return FROM interaction_deliveries WHERE id=?1",
+                [&second.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&unknown_doc).unwrap()["returns"][0]["phase"],
+            "uncertain"
+        );
+        conn.execute("UPDATE interaction_deliveries SET native_return=json_set(native_return,'$.returns[0].retry_after',?2) WHERE id=?1", params![first.id,Utc::now().timestamp()-1]).unwrap();
+        drop(conn);
+        assert!(
+            s.native_returns_recover_unsent(100, entry.key, false, false)
+                .unwrap()
+                .is_empty()
+        );
+        let retry = s
+            .native_returns_recover_unsent(100, entry.key, false, true)
+            .unwrap()
+            .remove(0);
+        assert_eq!(retry.id, unsent.id);
+        assert_eq!(retry.attempts, 2);
+        assert_eq!(
+            serde_json::from_str::<Value>(&retry.output).unwrap()["evidence"],
+            serde_json::from_str::<Value>(&unsent.output).unwrap()["evidence"]
+        );
+        s.workflow_native_outcome_attempt(&retry.id, 1, "accepted", Some("stale-attempt"))
+            .unwrap();
+        assert_eq!(s.workflow_native_dispatch(&retry.id).unwrap().attempts, 2);
+        assert!(s.workflow_native_dispatch(&unknown.id).is_err());
+        s.workflow_native_outcome_attempt(&retry.id, 2, "retained_unsent", None)
+            .unwrap();
+        let conn = s.conn.lock().unwrap();
+        conn.execute("UPDATE interaction_deliveries SET native_return=json_set(native_return,'$.returns[0].retry_after',?2) WHERE id=?1", params![first.id,Utc::now().timestamp()-1]).unwrap();
+        drop(conn);
+        let last = s
+            .native_returns_recover_unsent(100, entry.key, false, true)
+            .unwrap()
+            .remove(0);
+        assert_eq!(last.id, unsent.id);
+        assert_eq!(last.attempts, 3);
+        s.workflow_native_outcome_attempt(&last.id, 3, "retained_unsent", None)
+            .unwrap();
+        assert!(
+            s.native_returns_recover_unsent(100, entry.key, false, true)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(s.workflow_native_dispatch(&unknown.id).is_err());
+    }
+    #[test]
+    fn ordinary_return_correction_retires_old_source_without_replaying_work() {
+        let (_file, s, entry, plan) = setup();
+        let (instruction, delivery) = routed_result(&s, &entry, &plan.input_ref);
+        let selected = s
+            .native_routed_result_reserve(100, entry.key, &delivery.id)
+            .unwrap()
+            .unwrap();
+        let correction = original(
+            &s,
+            &entry,
+            "Change the selected requirement before announcing the result.",
+        );
+        let (mut source, _) = s
+            .interaction_entry_original(entry.key, 100, "native-1", &correction, "conversation")
+            .unwrap();
+        source.target_sessions = vec![instruction.target_session];
+        let (amended, _) = s
+            .interaction_admit(
+                &source,
+                instruction.target,
+                RequestRelation::Amends(instruction.requests.clone()),
+            )
+            .unwrap();
+        accept(&s, &amended);
+        assert!(s.workflow_native_dispatch(&selected.id).is_err());
+        assert!(
+            s.native_routed_result_reserve(100, entry.key, &delivery.id)
+                .unwrap()
+                .is_none()
+        );
+        let packet: Value = serde_json::from_str(&selected.output).unwrap();
+        assert!(
+            s.native_routed_source(
+                100,
+                entry.key,
+                "native-1",
+                &selected.id,
+                packet["evidence"]["revision"].as_str().unwrap(),
+                0
+            )
+            .is_err()
+        );
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM interaction_instructions", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM interaction_workflows", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
     fn workflow_retains_ownership_exact_scope_milestones_and_final_integration() {
         let (_f, s, e, plan) = setup();
         let initial = declare(&s, &e, plan.clone());

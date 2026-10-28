@@ -105,6 +105,8 @@ pub(super) fn view(app: &App, human: i64, entry: SessionKey) -> Result<Value> {
         .interaction_workflow_attention(human, entry)?;
     value["automatic_native_return"] =
         json!(cfg.human_id == human && cfg.entry() == entry && cfg.native_workflow_returns);
+    value["automatic_routed_native_return"] =
+        json!(cfg.human_id == human && cfg.entry() == entry && cfg.native_routed_returns);
     value["native_return_meaning"] = json!(
         "Configured delivery policy and retained outcomes, not incorporation, completion or hearing. Unknown submission must not be replayed."
     );
