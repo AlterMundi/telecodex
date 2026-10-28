@@ -191,7 +191,7 @@ function boot(fail){
  assert(Buffer.from(await stalled.events[0].data.arrayBuffer()).equals(wav),'Preserve the actual accumulated fragment');
  stalled.worklets[0].emit({pcm:pcm(900)});stalled.worklets[0].emit({finished:true});
  assert.equal(stalled.events.length,2,'A late flush must not change an offered recording identity');
- const delayed=boot(),delayedDevice=await delayed.create();delayedDevice.start();delayed.worklets[0].emit({pcm:samples});delayedDevice.stop();delayed.worklets[0].emit({finished:true});delayed.timers.find(t=>t.ms===5000&&!t.cleared).fn();assert.equal(delayed.events[0].data.size,wav.length,'A provider that never opens cannot lose finalized audio');
+ const delayed=boot(),delayedDevice=await delayed.create();delayedDevice.start();delayed.worklets[0].emit({pcm:samples});delayedDevice.stop();delayed.worklets[0].emit({finished:true});delayed.timers.find(t=>t.ms===10000&&!t.cleared).fn();assert.equal(delayed.events[0].data.size,wav.length,'A provider that never opens cannot lose finalized audio');
  for(const failure of ['module','filter','socket']){const setup=boot(failure);await assert.rejects(setup.create());assert(setup.contexts[0].closed,`${failure} must release its owned audio graph`);}
  class Canonical extends EventTarget{
   constructor(){super();this.mimeType='audio/webm;codecs=opus';this.state='inactive';}
@@ -208,7 +208,7 @@ function boot(fail){
   assert.deepEqual(captions.events.map(e=>e.type),['data','stop']);assert.equal(await captions.events[0].data.text(),'compressed-original');
   assert.equal(captions.events[0].data.type,'audio/webm;codecs=opus');assert.equal(canonical.slice,250);
   assert(!socket.sent.some(value=>typeof value==='string'&&JSON.parse(value).type==='finish'),'Captions never finalize or replace the original');
-  assert(!captions.timers.some(t=>!t.cleared&&t.ms===5000),'Send never waits for a provisional final');assert(captions.contexts[0].closed);
+  assert(!captions.timers.some(t=>!t.cleared&&t.ms===10000),'Send never waits for a provisional final');assert(captions.contexts[0].closed);
  }
  for(const failure of ['resume','connect']){
   const preview=boot(failure),original=new Canonical(),capture=await preview.create(original);

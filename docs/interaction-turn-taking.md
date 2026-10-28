@@ -129,7 +129,16 @@ ASR/activity/TTS transports. One microphone/analyzer handled two phrases and two
 exact WAV receipts in order. The second phrase paused an already-playing
 response. Exit stopped the track, restored the avatar/draft and retained the
 unfinished fragment; reload exposed it without recapture or another input.
-These observations do not qualify the actual providers or physical echo/noise.
+These browser observations do not qualify actual providers or physical echo/noise.
+A separate warm source-handler journey with actual configured Gemini recognition
+and pinned CPU models produced partials, one semantic endpoint and boundary
+acknowledgment plus an exact prepared WAV receipt, without native admission.
+Warm readiness was24.53s and final-flush-to-prepared4.96s under current host load.
+The endpoint followed the synthetic active samples; neither that marker nor file
+end proves final intended human speech. Temporary media/receipts were removed.
+That confirmation approached the former five-second browser wait. Finalized PCM
+now waits at most ten seconds for the same provider receipt, then keeps ordinary
+review; it never retranscribes, sends an original or repeats a provider attempt.
 Continuous originals also feed the existing bounded page-local timing view;
 endpoint/Stop time is not independently measured final intended speech.
 
