@@ -220,6 +220,7 @@ impl Store {
                 params![selected.local, first["id"].as_str()],
             )?;
         }
+        super::workflows::native_reconcile_on(&tx, selected.local, turns)?;
         for turn in turns {
             let id = turn["id"]
                 .as_str()
@@ -272,6 +273,8 @@ impl Store {
                 },
                 if terminal && goal_active {
                     "Goal active; waiting for observed native continuation"
+                } else if !terminal && super::workflows::native_only_on(&tx, selected.local)? {
+                    "Exact workflow turn active; terminal canonical result pending"
                 } else {
                     "Native output reconciled"
                 }

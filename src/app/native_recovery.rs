@@ -18,24 +18,28 @@ pub(super) async fn tick(app: &App) -> Result<()> {
     }
     let outcomes =
         futures_util::future::join_all(selected.into_iter().map(|selected| async move {
-            match app
-                .shared
-                .codex
-                .recovery_history(
+            let exact=app.shared.store.workflow_native_collection(selected.local)?;
+            if exact.as_ref().is_some_and(|v|!v.live) {return Ok(());}
+            let history=if let Some(exact)=&exact {
+                if app.shared.config.telegram.enabled && app.shared.config.interaction.as_ref().is_some_and(|c|c.human_id==selected.human && c.entry()==selected.key && c.telegram_projection) {
+                    app.shared.store.topic_projection_register(selected.local,selected.human,selected.key)?;
+                }
+                app.shared.codex.workflow_return_history(&selected.native,&exact.physical).await.map(|turn|(vec![turn],false))
+            } else {app.shared.codex.recovery_history(
                     &selected.native,
                     &selected.anchor,
                     selected.client_id.as_deref(),
                 )
-                .await
-            {
+                .await};
+            match history {
                 Ok((turns, goal_active)) => {
                     let observed = app.shared.store.native_collection_observed(
                         &selected,
                         &turns,
                         goal_active,
-                    )?;
+                    ).inspect_err(|_| {let _=app.shared.store.native_collection_failed(selected.local);})?;
                     super::topic_publications::wake(app.shared.clone(), selected.key);
-                    if let Some(turn) = observed.as_ref().filter(|t| {
+                    if let Some(turn) = observed.as_ref().filter(|t| exact.is_none() && {
                         matches!(
                             t["status"].as_str(),
                             Some("completed" | "failed" | "interrupted")
@@ -83,7 +87,7 @@ pub(super) async fn tick(app: &App) -> Result<()> {
                             });
                         }
                     }
-                    if let Some(turn) = observed.as_ref().filter(|t| t["status"] == "inProgress") {
+                    if let Some(turn) = observed.as_ref().filter(|t| exact.is_none() && t["status"] == "inProgress") {
                         let physical = turn["id"]
                             .as_str()
                             .context("Native active identity missing")?;

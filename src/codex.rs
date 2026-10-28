@@ -58,6 +58,7 @@ pub struct CodexRunner {
     goal_activation: Option<GoalActivation>,
     client_message_id: Option<String>,
     tool_output: Option<NativeToolOutput>,
+    rollout_reads: Arc<tokio::sync::Semaphore>,
     dynamic_tools: Vec<Value>,
     session_profiles: Vec<SessionModelProfile>,
 }
@@ -628,6 +629,50 @@ impl CodexRunner {
         }).await.context("selected native reconciliation unavailable")?
     }
     /// Read only through an exact prior native boundary. Absence never authorizes replay.
+    pub async fn workflow_return_history(&self, native: &str, physical: &str) -> Result<Value> {
+        tokio::time::timeout(Duration::from_secs(8), async {
+            let mut process=AppServerProcess::spawn(&self.binary,self.shared_app_server).await?;
+            let result=async {
+                process.initialize().await?;
+                let mut cursor=None::<String>;
+                let mut bytes=0;
+                for _ in 0..6 {
+                    let id=process.send_request("thread/turns/list",json!({"threadId":native,"limit":20,"sortDirection":"desc","itemsView":"full","cursor":cursor})).await?;
+                    match process.await_response(id).await {
+                        Ok(page)=>{
+                            bytes+=serde_json::to_vec(&page)?.len();
+                            if bytes>8*1024*1024 {bail!("Exact native observation exceeds bounded read");}
+                            let turns=page["data"].as_array().context("Exact native observation page missing")?;
+                            if let Some(turn)=turns.iter().find(|t|t["id"]==physical) {return Ok(turn.clone());}
+                            cursor=page["nextCursor"].as_str().map(str::to_owned);
+                            if cursor.is_none(){break;}
+                        }
+                        Err(error) if error.downcast_ref::<RpcError>().is_some_and(|e|e.code==Some(-32601))=>{
+                            let id=process.send_request("thread/read",json!({"threadId":native,"includeTurns":false})).await?;
+                            let metadata=process.await_response(id).await?;
+                            if metadata["thread"]["id"]!=native {bail!("Owned native metadata identity changed");}
+                            let path=PathBuf::from(metadata["thread"]["path"].as_str().context("Owned native rollout path unavailable")?);
+                            let permit=self.rollout_reads.clone().try_acquire_owned().context("Owned rollout reader busy; observation retained")?;
+                            let native=native.to_owned();let physical=physical.to_owned();
+                            // The permit stays inside a blocked filesystem read even
+                            // after this await times out. Later ticks cannot accumulate
+                            // unbounded background reads under host I/O pressure.
+                            return tokio::task::spawn_blocking(move || {
+                                let _permit=permit;
+                                crate::codex_history::read_owned_turn(&path,&native,&physical)
+                            }).await.context("Owned rollout observation failed")?;
+                        }
+                        Err(error)=>return Err(error),
+                    }
+                }
+                bail!("Exact acknowledged native turn unavailable; no replay authorized")
+            }.await;
+            process.shutdown().await?;
+            result
+        }).await.context("Exact native return observation timed out")?
+    }
+
+    /// Read only through an exact prior native boundary. Absence never authorizes replay.
     pub async fn recovery_history(
         &self,
         native: &str,
@@ -681,6 +726,7 @@ impl CodexRunner {
             goal_activation: None,
             client_message_id: None,
             tool_output: None,
+            rollout_reads: Arc::new(tokio::sync::Semaphore::new(1)),
             dynamic_tools: vec![],
             session_profiles: vec![],
         }
@@ -1545,6 +1591,7 @@ where
     let mut active_turn_id: Option<String> = adopted_turn;
     let mut interrupt_request_id: Option<u64> = None;
     let mut pending_steers = HashMap::new();
+    let mut detached_returns = HashSet::<String>::new();
     let mut steering_open = true;
     let mut cancel_deadline: Option<Instant> = None;
     let mut turn_error: Option<String> = None;
@@ -1717,6 +1764,8 @@ where
           }
           next_message=process.next_message()=>{
             let Some(message)=next_message? else {break;};
+            if let RpcMessage::Notification{params,..}|RpcMessage::ServerRequest{params,..}=&message
+                && native_event_turn(params).is_some_and(|turn|detached_returns.contains(turn)) {continue;}
             match message{
               RpcMessage::Response{id,result,error}=>{
                 if goal_snapshot_request_id==Some(id) {
@@ -1754,6 +1803,8 @@ where
                         && turn!=pending.expected_turn_id
                         && let Some(client_id)=pending.client_id.clone() {
                         let _=on_event(CodexEvent::NativeInternalReturnDetached{client_id,turn_id:turn.into()}).await?;
+                        if detached_returns.len()>=32 {bail!("Detached return observation bound exhausted; exact ACK retained");}
+                        detached_returns.insert(turn.to_owned());
                     }
                     let response=if pending.tool_output {
                         tool_output_response(&pending.expected_turn_id,result.as_ref(),error.as_ref())
@@ -1949,17 +2000,20 @@ fn event_matches_run(
     if method.starts_with("thread/goal/") {
         return true;
     }
-    let event_turn = params.get("turnId").and_then(Value::as_str).or_else(|| {
-        params
-            .get("turn")
-            .and_then(|turn| turn.get("id"))
-            .and_then(Value::as_str)
-    });
+    let event_turn = native_event_turn(params);
     match (event_turn, active_turn_id) {
         (Some(id), Some(active)) => id == active,
         (Some(_), None) => method == "turn/started",
         (None, _) => !require_scope || !method.starts_with("turn/") && !method.starts_with("item/"),
     }
+}
+fn native_event_turn(params: &Value) -> Option<&str> {
+    params.get("turnId").and_then(Value::as_str).or_else(|| {
+        params
+            .get("turn")
+            .and_then(|turn| turn.get("id"))
+            .and_then(Value::as_str)
+    })
 }
 
 /// Sends one queued steering request and tracks its app-server response by request id.

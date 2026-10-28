@@ -11,7 +11,8 @@ mod native_returns;
 pub(crate) use native_returns::{ReturnDispatch, WorkflowReturn};
 pub(super) use native_returns::{
     only_on as native_only_on, publication_on as native_publication_on,
-    source_current_on as native_source_current_on, visible_on as native_visible_on,
+    reconcile_on as native_reconcile_on, source_current_on as native_source_current_on,
+    visible_on as native_visible_on,
 };
 
 const MAX_RETAINED_WORKFLOWS: i64 = 256;
@@ -198,7 +199,22 @@ fn view_on(conn: &Connection, w: &Workflow) -> Result<Value> {
     };
     let mut view = json!({"schema":"telecodex.workflow/v1","id":w.id,"input_ref":w.plan.input_ref,"request_id":w.plan.request_id,"entry":w.entry,"expires_at":w.plan.expires_at,"phase":phase,"steps":steps,"final_checkpoint":w.final_checkpoint,"supersession":w.supersession,"authority":"retained original human input; worker results are internal evidence","publication_grant":false});
     view["revision"] = json!(digest(&view)?);
-    view["native_returns"] = json!({"limit":16,"retained":w.native_returns.iter().map(|r|json!({"id":r.id,"source_revision":r.envelope["revision"],"phase":r.phase,"local_turn":r.local,"native_turn":r.native_turn})).collect::<Vec<_>>()});
+    let mut returns = Vec::new();
+    for r in &w.native_returns {
+        let observation = if let Some(local) = r.collection_local {
+            conn.query_row(
+                "SELECT phase,detail FROM native_collections WHERE local_turn=?1",
+                [local],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .map(|(phase, detail)| json!({"phase":phase,"detail":detail}))
+        } else {
+            None
+        };
+        returns.push(json!({"id":r.id,"source_revision":r.envelope["revision"],"phase":r.phase,"local_turn":r.local,"collection_local_turn":r.collection_local,"native_turn":r.native_turn,"observation":observation}));
+    }
+    view["native_returns"] = json!({"limit":16,"retained":returns});
     Ok(view)
 }
 fn attention_on(conn: &Connection, w: &Workflow) -> Result<Vec<Value>> {
@@ -1430,6 +1446,278 @@ mod tests {
         );
         assert!(s.workflow_native_reserve(100, e.key).unwrap().is_empty());
         assert!(s.workflow_native_validate(&b.id).is_err());
+    }
+    #[test]
+    fn detached_ack_reconciles_only_a_distinct_exact_collection_and_late_final() {
+        let (_f, s, e, plan) = setup();
+        let v = declare(&s, &e, plan);
+        let first = advance(&s, &e, &v).unwrap();
+        let worker = accept(&s, &first);
+        answer(
+            &s,
+            &first,
+            worker,
+            "source",
+            vec![first.id.clone()],
+            "Selected checkpoint",
+        );
+        let dispatch = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        let old = turn(&s, &e, "Actual human execution");
+        s.native_collection_started(old, "old-physical").unwrap();
+        s.workflow_native_link(&dispatch.id, old).unwrap();
+        s.workflow_native_submitting(&dispatch.id).unwrap();
+        s.workflow_native_outcome(&dispatch.id, "accepted_uncollected", Some("new-physical"))
+            .unwrap();
+        s.workflow_native_outcome(
+            &dispatch.id,
+            "accepted_uncollected",
+            Some("another-physical"),
+        )
+        .unwrap();
+        let selected = s.native_collection_next().unwrap().unwrap();
+        assert_ne!(selected.local, old);
+        assert_eq!(selected.anchor, "new-physical");
+        let observation = s
+            .workflow_native_collection(selected.local)
+            .unwrap()
+            .unwrap();
+        assert!(observation.live);
+        assert_eq!(observation.physical, "new-physical");
+        assert!(!s.workflow_native_visible(selected.local).unwrap());
+        let active = json!({"id":"new-physical","status":"inProgress","items":[]});
+        s.native_collection_observed(&selected, &[active], false)
+            .unwrap();
+        assert!(
+            s.native_collection_observed(
+                &selected,
+                &[json!({"id":"old-physical","status":"completed","items":[]})],
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            s.native_collection_observed(
+                &selected,
+                &[json!({"id":"new-physical","status":"completed","items":[]})],
+                false
+            )
+            .is_err()
+        );
+        let final_turn = json!({"id":"new-physical","status":"completed","items":[{"id":"actual-native-item","type":"agentMessage","phase":"final_answer","text":"Late selected workflow report"}]});
+        s.native_collection_observed(&selected, &[final_turn], false)
+            .unwrap();
+        let view = status(&s, &e, v["id"].as_str().unwrap());
+        let receipt = &view["native_returns"]["retained"][0];
+        assert_eq!(receipt["phase"], "accepted_reconciled");
+        assert_eq!(receipt["native_turn"], "new-physical");
+        assert_eq!(receipt["local_turn"], old);
+        assert_eq!(receipt["collection_local_turn"], selected.local);
+        let conn = s.conn.lock().unwrap();
+        let old_state:(String,String)=conn.query_row("SELECT t.status,n.anchor FROM turns t JOIN native_collections n ON n.local_turn=t.id WHERE t.id=?1",[old],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(old_state, ("running".into(), "old-physical".into()));
+        drop(conn);
+        let page = s.interaction_presentation_list(100, e.key, 0, 0).unwrap();
+        assert!(
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["preview"] == "Late selected workflow report"
+                    && item["local_turn"] == selected.local
+                    && item["current"] == true)
+        );
+        assert_ne!(
+            view["phase"], "completed",
+            "A collected helper report cannot finish integration"
+        );
+    }
+    #[test]
+    fn detached_observation_retires_at_original_scope_without_erasing_ack() {
+        let (_f, s, e, plan) = setup();
+        let v = declare(&s, &e, plan);
+        let first = advance(&s, &e, &v).unwrap();
+        let worker = accept(&s, &first);
+        answer(
+            &s,
+            &first,
+            worker,
+            "source",
+            vec![first.id.clone()],
+            "Selected checkpoint",
+        );
+        let dispatch = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        let old = turn(&s, &e, "Actual human execution");
+        s.workflow_native_link(&dispatch.id, old).unwrap();
+        s.workflow_native_submitting(&dispatch.id).unwrap();
+        s.workflow_native_outcome(&dispatch.id, "accepted_uncollected", Some("new-physical"))
+            .unwrap();
+        let selected = s.native_collection_next().unwrap().unwrap();
+        s.interaction_withdraw_session_requests(e.key).unwrap();
+        assert!(
+            !s.workflow_native_collection(selected.local)
+                .unwrap()
+                .unwrap()
+                .live
+        );
+        assert!(s.native_collection_next().unwrap().is_none());
+        let view = status(&s, &e, v["id"].as_str().unwrap());
+        assert_eq!(
+            view["native_returns"]["retained"][0]["phase"],
+            "accepted_uncollected"
+        );
+        assert_eq!(
+            view["native_returns"]["retained"][0]["native_turn"],
+            "new-physical"
+        );
+    }
+    #[test]
+    fn callback_publication_fences_every_accepted_source_in_its_frozen_set() {
+        let (_f, s, e, plan) = setup();
+        let v = declare(&s, &e, plan.clone());
+        let first = advance(&s, &e, &v).unwrap();
+        let worker = accept(&s, &first);
+        answer(
+            &s,
+            &first,
+            worker,
+            "first",
+            vec![first.id.clone()],
+            "First selected checkpoint",
+        );
+        let a = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        let mut next = plan;
+        next.request_id = "second-workflow".into();
+        next.input_ref = original(&s, &e, "Another finite selected human workflow");
+        let second_view = declare(&s, &e, next);
+        let second = advance(&s, &e, &second_view).unwrap();
+        let second_worker = accept(&s, &second);
+        answer(
+            &s,
+            &second,
+            second_worker,
+            "second",
+            vec![second.id.clone()],
+            "Second selected checkpoint",
+        );
+        let b = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        let local = turn(&s, &e, "");
+        s.workflow_native_link(&a.id, local).unwrap();
+        s.workflow_native_submitting(&a.id).unwrap();
+        s.workflow_native_outcome(&a.id, "accepted", Some("callback"))
+            .unwrap();
+        s.workflow_native_link(&b.id, local).unwrap();
+        assert!(
+            s.workflow_native_visible(local).unwrap(),
+            "Known unsent sibling cannot poison accepted context"
+        );
+        s.workflow_native_submitting(&b.id).unwrap();
+        assert!(
+            !s.workflow_native_visible(local).unwrap(),
+            "An unresolved possible input has no causal publication proof"
+        );
+        s.workflow_native_outcome(&b.id, "accepted", Some("callback"))
+            .unwrap();
+        assert!(s.workflow_native_visible(local).unwrap());
+        s.record_native_message(
+            local,
+            "native-1",
+            "callback",
+            "mixed",
+            Some("final_answer"),
+            "Two current selected checkpoints",
+        )
+        .unwrap();
+        let page = s.interaction_presentation_list(100, e.key, 0, 0).unwrap();
+        let mixed = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["preview"] == "Two current selected checkpoints")
+            .unwrap();
+        assert_eq!(mixed["workflow_returns"].as_array().unwrap().len(), 2);
+        answer(
+            &s,
+            &first,
+            worker,
+            "corrected",
+            vec![first.id.clone()],
+            "Corrected first source",
+        );
+        assert!(
+            !s.workflow_native_visible(local).unwrap(),
+            "Current second source cannot publish a stale first source"
+        );
+        s.record_native_message(
+            local,
+            "native-1",
+            "callback",
+            "stale-mixed",
+            Some("final_answer"),
+            "Stale mixed output cannot publish",
+        )
+        .unwrap();
+        let page = s.interaction_presentation_list(100, e.key, 0, 0).unwrap();
+        assert!(
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(
+                    |i| i["preview"] == "Two current selected checkpoints" && i["current"] == false
+                )
+        );
+        assert!(
+            !page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["preview"] == "Stale mixed output cannot publish")
+        );
+        let corrected = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        s.workflow_native_link(&corrected.id, local).unwrap();
+        s.workflow_native_submitting(&corrected.id).unwrap();
+        s.workflow_native_outcome(&corrected.id, "accepted", Some("callback"))
+            .unwrap();
+        assert!(
+            !s.workflow_native_visible(local).unwrap(),
+            "ACK does not declare integration of the corrected source"
+        );
+        let offer: Value = serde_json::from_str(&corrected.output).unwrap();
+        s.interaction_workflow_reported(
+            100,
+            e.key,
+            "native-1",
+            v["id"].as_str().unwrap(),
+            offer["evidence"]["revision"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            s.workflow_native_visible(local).unwrap(),
+            "Explicit current same-slot incorporation supersedes the old source"
+        );
+        s.record_native_message(
+            local,
+            "native-1",
+            "callback",
+            "current-mixed",
+            Some("final_answer"),
+            "Current explicitly incorporated checkpoints",
+        )
+        .unwrap();
+        let page = s.interaction_presentation_list(100, e.key, 0, 0).unwrap();
+        let current = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["preview"] == "Current explicitly incorporated checkpoints")
+            .unwrap();
+        assert_eq!(current["workflow_returns"].as_array().unwrap().len(), 2);
+        assert!(
+            !current["workflow_returns"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(a.id))
+        );
     }
     #[test]
     fn native_return_count_is_bounded_and_source_corrections_fence_submission() {

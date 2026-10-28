@@ -1134,16 +1134,53 @@ native boundary, then distinguishes `accepted`, `rejected`, `uncertain` and
 `retained_unsent`. Restart changes an unsubmitted reservation to `retained_unsent`
 and an unresolved submission to `uncertain`; neither is automatically replayed.
 An exact native ACK remains retained even if the local waiter later times out.
-For a live-return race whose ACK names a different native turn, the receipt is
-`accepted_uncollected` with that actual turn ID. The old execution collector keeps
-its own identity; this adapter does not claim incorporation or silently rebind it.
-That case requires reconciliation through the owning native execution path.
+For a live-return race whose ACK names a different native turn, the immutable ACK
+is `accepted_uncollected` with that actual turn ID. A distinct callback-only local
+observation row anchors exactly that physical turn; the old execution collector
+keeps its own identity and excludes the detached turn's events. The existing native
+recovery heartbeat observes this row without submitting input, changing goals or
+creating another attention loop. It does not claim live dynamic-tool collection.
+An observed terminal canonical final is imported through the existing canonical
+journal and changes the transport receipt to `accepted_reconciled`. The original
+submission local ID, new collection local ID and exact native ACK remain distinct.
+The helper result still cannot complete overall integration.
+
+Observation uses the existing bounded native turn-history API. On an actual
+unsupported-method response, it requests only the owned thread's metadata through
+`thread/read(includeTurns:false)` and reads the returned regular rollout path. No
+peer/controller argument selects a filesystem path and no other history is scanned.
+The first `session_meta` must name that exact native thread, and the selected
+physical `task_started` and terminal boundary must both be present. Persisted
+assistant IDs/phases are retained, without invented item identities or truncation.
+A header of at most256KiB and tail of at most8MiB bound each file snapshot; a missing
+start, partial terminal, oversized source or missing canonical final remains
+explicitly uncollected. Terminal import admits at most16 canonical items and64KiB
+of canonical text per return. At the existing256-workflow/16-return limits this
+bounds additional collection rows at4,096 and recovered canonical text at256MiB,
+separate from existing native journals and SQLite overhead. Rows retain the existing
+journal/explicit-removal lifecycle, never age-based deletion of authority or history.
+One shared filesystem-read permit remains held until the actual read ends, including
+after the8s caller deadline, so slow I/O cannot accumulate background readers.
+Original deadline, generation, binding, supersession and Stop/maintenance fences
+continue to govern observation; retirement retains the ACK and uncertainty. Turning
+off new native returns does not erase a previously accepted finite observation.
 
 ACK is not incorporation, a useful provider answer, reporting or hearing. An active
 human turn has no native per-input causal attribution for its assistant output;
 its ordinary publication lifetime remains governed by that human turn. For an idle
 callback-only turn, canonical text, response drafts and cached speech are fenced by
-the exact current workflow source and its original reporting policy. A withdrawn,
+the exact accepted source set and original reporting policies. A possibly submitted
+or stale sibling result/question cannot borrow a current offer's publication grant.
+Rejected/known-unsent context and an exact ACK into another physical collector do
+not widen that source set. Each canonical item freezes its own bounded set, so later
+inputs cannot change which sources authorized an earlier report. Existing
+`workflow_reported` acknowledgment of the exact current version explicitly
+supersedes an older accepted revision in that same workflow/attention slot; native
+ACK alone does not do so. An unresolved question sibling remains fenced. A question
+followed by a resolved final result in another slot has no implicit cross-slot
+coverage declaration: a mixed callback-only output can remain withheld. This
+integration/coverage gap stays explicit, without another journal or inferred grant.
+A withdrawn,
 expired or corrected source cannot publish newly generated callback-only output.
 Previously published canonical text remains historical evidence with `current:false`.
 Later actual human input receives its ordinary publication authority. A completed

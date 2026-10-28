@@ -630,6 +630,114 @@ fn read_rollout_runtime(path: &Path) -> Result<Option<CodexThreadRuntimeSummary>
     Ok(runtime)
 }
 
+/// Read one acknowledged physical turn from a native-owned regular rollout.
+/// The caller obtains the path from thread/read for its already owned binding;
+/// this never discovers paths, imports another turn or treats a tail as complete.
+pub(crate) fn read_owned_turn(
+    path: &Path,
+    thread: &str,
+    physical: &str,
+) -> Result<serde_json::Value> {
+    use serde_json::{Value, json};
+    use std::io::{Read, Seek, SeekFrom};
+    const HEADER: u64 = 256 * 1024;
+    const TAIL: u64 = 8 * 1024 * 1024;
+    anyhow::ensure!(
+        fs::symlink_metadata(path)?.file_type().is_file(),
+        "Owned rollout is not a regular file"
+    );
+    let mut file = File::open(path).context("Owned rollout unavailable")?;
+    let size = file.metadata()?.len();
+    let mut header = Vec::new();
+    BufReader::new((&mut file).take(HEADER)).read_until(b'\n', &mut header)?;
+    anyhow::ensure!(
+        header.last() == Some(&b'\n'),
+        "Owned rollout header missing or oversized"
+    );
+    let meta: Value = serde_json::from_slice(&header)?;
+    anyhow::ensure!(
+        meta["type"] == "session_meta" && meta["payload"]["id"] == thread,
+        "Owned rollout session identity changed"
+    );
+    let start = size.saturating_sub(TAIL);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    (&mut file).take(size - start).read_to_end(&mut bytes)?;
+    anyhow::ensure!(
+        bytes.len() as u64 == size - start,
+        "Owned rollout changed during observation"
+    );
+    let mut lines = bytes.split_inclusive(|b| *b == b'\n');
+    if start > 0 {
+        lines.next();
+    }
+    let mut current = None::<String>;
+    let mut found = false;
+    let mut items = Vec::new();
+    for line in lines {
+        let line = line
+            .strip_suffix(b"\n")
+            .context("Owned rollout snapshot is partial")?;
+        if line.is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_slice(line) {
+            Ok(v) => v,
+            Err(_) => anyhow::bail!("Owned rollout snapshot is partial"),
+        };
+        let p = &value["payload"];
+        if value["type"] == "event_msg" {
+            match p["type"].as_str() {
+                Some("task_started" | "turn_started") => {
+                    current = p["turn_id"].as_str().map(str::to_owned);
+                    if current.as_deref() == Some(physical) {
+                        anyhow::ensure!(!found, "Owned rollout repeats the selected boundary");
+                        found = true;
+                    }
+                }
+                Some("task_complete" | "turn_complete" | "turn_aborted")
+                    if p["turn_id"] == physical && current.as_deref() == Some(physical) =>
+                {
+                    return Ok(
+                        json!({"id":physical,"status":if p["type"]=="turn_aborted" {"interrupted"} else {"completed"},"items":items,"source":"owned_rollout"}),
+                    );
+                }
+                _ => {}
+            }
+        }
+        if current.as_deref() == Some(physical)
+            && value["type"] == "response_item"
+            && p["type"] == "message"
+            && p["role"] == "assistant"
+            && matches!(p["phase"].as_str(), Some("commentary" | "final_answer"))
+        {
+            let id = p["id"]
+                .as_str()
+                .filter(|v| !v.is_empty() && v.len() <= 128)
+                .context("Owned canonical item identity missing")?;
+            anyhow::ensure!(
+                p["status"] != "incomplete",
+                "Owned canonical item is partial"
+            );
+            let text = p["content"]
+                .as_array()
+                .context("Owned canonical content missing")?
+                .iter()
+                .filter(|v| v["type"] == "output_text")
+                .filter_map(|v| v["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("");
+            anyhow::ensure!(items.len() < 256, "Owned turn has too many canonical items");
+            items.push(json!({"id":id,"type":"agentMessage","phase":p["phase"],"text":text}));
+        }
+    }
+    anyhow::ensure!(
+        found,
+        "Owned exact turn boundary missing or outside bounded tail"
+    );
+    Ok(json!({"id":physical,"status":"inProgress","items":[],"source":"owned_rollout"}))
+}
+
 fn activity_state_from_event_value(
     value: &serde_json::Value,
 ) -> Option<(String, CodexThreadActivityState)> {
@@ -983,6 +1091,69 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn owned_turn_observation_requires_exact_regular_source_and_closed_boundary() {
+        use serde_json::json;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("owned.jsonl");
+        let rows = [
+            json!({"type":"session_meta","payload":{"id":"owned"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"unrelated"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","id":"other","content":[{"type":"output_text","text":"Unrelated history"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"unrelated"}}),
+            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"selected"}}),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","id":"native-item","content":[{"type":"output_text","text":"Exact final"}]}}),
+            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":"selected"}}),
+        ];
+        let body = rows
+            .iter()
+            .map(|r| r.to_string() + "\n")
+            .collect::<String>();
+        fs::write(&path, &body).unwrap();
+        let turn = read_owned_turn(&path, "owned", "selected").unwrap();
+        assert_eq!(turn["status"], "completed");
+        assert_eq!(turn["items"].as_array().unwrap().len(), 1);
+        assert_eq!(turn["items"][0]["id"], "native-item");
+        assert_eq!(turn["items"][0]["text"], "Exact final");
+        assert!(read_owned_turn(&path, "another-owner", "selected").is_err());
+        assert!(read_owned_turn(&path, "owned", "missing").is_err());
+        fs::write(&path, body.trim_end()).unwrap();
+        assert!(
+            read_owned_turn(&path, "owned", "selected").is_err(),
+            "Uncommitted terminal line is not completion"
+        );
+        fs::write(
+            &path,
+            rows[..6]
+                .iter()
+                .map(|r| r.to_string() + "\n")
+                .collect::<String>(),
+        )
+        .unwrap();
+        assert_eq!(
+            read_owned_turn(&path, "owned", "selected").unwrap()["status"],
+            "inProgress"
+        );
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link.jsonl");
+            std::os::unix::fs::symlink(&path, &link).unwrap();
+            assert!(read_owned_turn(&link, "owned", "selected").is_err());
+        }
+    }
+
+    #[test]
+    fn owned_turn_observation_never_infers_a_missing_tail_boundary() {
+        use std::io::{Seek, SeekFrom, Write};
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("large.jsonl");
+        let mut file = File::create(&path).unwrap();
+        file.write_all(b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"owned\"}}\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"old\"}}\n").unwrap();
+        file.seek(SeekFrom::Start(9 * 1024 * 1024)).unwrap();
+        file.write_all(b"\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"old\"}}\n").unwrap();
+        assert!(read_owned_turn(&path, "owned", "old").is_err());
+    }
 
     fn escaped_json_path(path: &Path) -> String {
         path.display().to_string().replace('\\', "\\\\")

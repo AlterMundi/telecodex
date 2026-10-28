@@ -11,6 +11,8 @@ pub(crate) struct WorkflowReturn {
     pub envelope: Value,
     pub phase: String,
     pub local: Option<i64>,
+    #[serde(default)]
+    pub collection_local: Option<i64>,
     pub native_turn: Option<String>,
     pub instance: String,
 }
@@ -22,6 +24,65 @@ pub(crate) struct ReturnDispatch {
     pub native: String,
     pub epoch: String,
     pub output: String,
+}
+pub(crate) struct ReturnObservation {
+    pub physical: String,
+    pub live: bool,
+}
+fn bind_on(conn: &Connection, local: i64, id: &str) -> Result<()> {
+    let mut ids = bindings_on(conn, local)?;
+    if ids.iter().any(|v| v == id) {
+        return Ok(());
+    }
+    if ids.len() >= 32 {
+        bail!("Workflow return execution bound exhausted");
+    }
+    ids.push(id.into());
+    conn.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![format!("workflow_return_local:{local}"),serde_json::to_string(&ids)?])?;
+    Ok(())
+}
+fn detached_on(conn: &Connection, w: &mut Workflow, index: usize) -> Result<()> {
+    if w.native_returns[index].collection_local.is_some() {
+        return Ok(());
+    }
+    let Ok((session, native)) = owner_on(conn, w.human, w.entry) else {
+        return Ok(());
+    };
+    if native != w.native {
+        return Ok(());
+    }
+    let request = TurnRequest {
+        session_key: w.entry,
+        from_user_id: w.human,
+        prompt: String::new(),
+        runtime_instructions: None,
+        attachments: vec![],
+        review_mode: None,
+        override_search_mode: None,
+    };
+    let local = crate::store::record_turn_started_on(conn, session, &request, None)?;
+    let live = current_on(conn, w, index, false)?;
+    conn.execute(
+        "UPDATE turns SET status=?3,native_thread_id=?2,completed_at=?4 WHERE id=?1",
+        params![
+            local,
+            w.native,
+            if live {
+                "observing"
+            } else {
+                "observation_retired"
+            },
+            if live { None } else { Some(now_string()) }
+        ],
+    )?;
+    bind_on(conn, local, &w.native_returns[index].id)?;
+    let physical = w.native_returns[index]
+        .native_turn
+        .as_deref()
+        .context("Detached ACK identity missing")?;
+    conn.execute("INSERT INTO native_collections(local_turn,anchor,first_turn,phase,detail) VALUES(?1,?2,?2,?3,'Exact acknowledged workflow return; no input replay')",params![local,physical,if current_on(conn,w,index,false)? {"open"} else {"retired"}])?;
+    w.native_returns[index].collection_local = Some(local);
+    Ok(())
 }
 fn bindings_on(conn: &Connection, local: i64) -> Result<Vec<String>> {
     let raw: Option<String> = conn
@@ -82,32 +143,66 @@ pub(in crate::store) fn only_on(conn: &Connection, local: i64) -> Result<bool> {
     Ok(!bindings_on(conn, local)?.is_empty() && !later_human_on(conn, local)?)
 }
 pub(in crate::store) fn visible_on(conn: &Connection, local: i64) -> Result<bool> {
+    Ok(publication_sources_on(conn, local)?.is_none_or(|ids| !ids.is_empty()))
+}
+fn publication_sources_on(conn: &Connection, local: i64) -> Result<Option<Vec<String>>> {
     let bindings = bindings_on(conn, local)?;
     if bindings.is_empty() || later_human_on(conn, local)? {
-        return Ok(true);
+        return Ok(None);
     }
-    for id in bindings {
-        let (w, index) = selected_on(conn, &id)?;
-        if w.native_returns[index].phase == "accepted" && current_on(conn, &w, index, false)? {
-            return Ok(true);
+    let mut sources = Vec::new();
+    for id in &bindings {
+        let (w, index) = selected_on(conn, id)?;
+        let r = &w.native_returns[index];
+        if r.collection_local.is_some_and(|other| other != local) {
+            continue;
+        }
+        match r.phase.as_str() {
+            "reserved" | "retained_unsent" | "rejected" => continue,
+            _ => {}
+        }
+        let superseded = w
+            .native_returns
+            .iter()
+            .enumerate()
+            .any(|(other_index, other)| {
+                other.id != r.id
+                    && other.envelope["slot"] == r.envelope["slot"]
+                    && bindings.contains(&other.id)
+                    && other.collection_local.is_none_or(|owner| owner == local)
+                    && matches!(other.phase.as_str(), "accepted" | "accepted_reconciled")
+                    && other.envelope["slot"]
+                        .as_u64()
+                        .and_then(|slot| w.reported.get(slot as usize))
+                        .and_then(Option::as_deref)
+                        == other.envelope["revision"].as_str()
+                    && current_on(conn, &w, other_index, false).unwrap_or(false)
+            });
+        if superseded {
+            continue;
+        }
+        match r.phase.as_str() {
+            "accepted" | "accepted_reconciled" if current_on(conn, &w, index, false)? => {
+                sources.push(id.clone())
+            }
+            // Native output has no per-input causal attribution. A stale or
+            // possibly incorporated sibling cannot borrow another offer's grant.
+            _ => return Ok(Some(Vec::new())),
         }
     }
-    Ok(false)
+    Ok(Some(sources))
 }
 /// Freeze whether a new canonical item has the selected workflow's publication
 /// authority. Old items keep history; no later binding can widen an internal item.
 pub(in crate::store) fn publication_on(conn: &Connection, local: i64) -> Result<Option<String>> {
-    let ids = bindings_on(conn, local)?;
-    if ids.is_empty() || later_human_on(conn, local)? {
-        return Ok(None);
-    }
-    for id in ids {
-        let (w, index) = selected_on(conn, &id)?;
-        if w.native_returns[index].phase == "accepted" && current_on(conn, &w, index, false)? {
-            return Ok(Some(format!("workflow-public:{id}")));
-        }
-    }
-    Ok(Some("workflow-internal".into()))
+    Ok(match publication_sources_on(conn, local)? {
+        None => None,
+        Some(ids) if ids.is_empty() => Some("workflow-internal".into()),
+        Some(ids) => Some(format!(
+            "workflow-public-set:{}",
+            serde_json::to_string(&ids)?
+        )),
+    })
 }
 pub(in crate::store) fn source_current_on(conn: &Connection, id: &str) -> Result<bool> {
     let (w, index) = selected_on(conn, id)?;
@@ -133,6 +228,11 @@ impl Store {
                         other => other,
                     }
                     .into();
+                }
+            }
+            for index in 0..w.native_returns.len() {
+                if w.native_returns[index].phase == "accepted_uncollected" {
+                    detached_on(&tx, &mut w, index)?;
                 }
             }
             save_on(&tx, &w)?;
@@ -182,6 +282,7 @@ impl Store {
                     envelope: envelope.clone(),
                     phase: "reserved".into(),
                     local: None,
+                    collection_local: None,
                     native_turn: None,
                     instance: self.instance_id.clone(),
                 };
@@ -237,12 +338,7 @@ impl Store {
         if !owned {
             bail!("Workflow return writer changed");
         }
-        let mut ids = bindings_on(&tx, local)?;
-        if ids.len() >= 32 {
-            bail!("Workflow return execution bound exhausted");
-        }
-        ids.push(id.into());
-        tx.execute("INSERT INTO bot_state(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![format!("workflow_return_local:{local}"),serde_json::to_string(&ids)?])?;
+        bind_on(&tx, local, id)?;
         w.native_returns[index].local = Some(local);
         save_on(&tx, &w)?;
         tx.commit()?;
@@ -297,6 +393,9 @@ impl Store {
         }
         .into();
         r.native_turn = native_turn.map(str::to_owned);
+        if phase == "accepted_uncollected" {
+            detached_on(&tx, &mut w, index)?;
+        }
         save_on(&tx, &w)?;
         tx.commit()?;
         Ok(())
@@ -304,6 +403,98 @@ impl Store {
     pub(crate) fn workflow_native_visible(&self, local: i64) -> Result<bool> {
         visible_on(&self.conn.lock().expect("store mutex poisoned"), local)
     }
+    /// Only a distinct callback-only observation owns a detached ACK. It cannot
+    /// subscribe the previous human collector to another physical turn.
+    pub(crate) fn workflow_native_collection(
+        &self,
+        local: i64,
+    ) -> Result<Option<ReturnObservation>> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        for id in bindings_on(&tx, local)? {
+            let (w, index) = selected_on(&tx, &id)?;
+            let r = &w.native_returns[index];
+            if r.collection_local != Some(local) {
+                continue;
+            }
+            let live = current_on(&tx, &w, index, false)?;
+            if !live {
+                tx.execute("UPDATE native_collections SET phase='retired',detail='Workflow observation scope retired; exact ACK retained' WHERE local_turn=?1",[local])?;
+                tx.execute("UPDATE turns SET status='observation_retired',completed_at=?2 WHERE id=?1 AND status='observing'",params![local,now_string()])?;
+            }
+            let result = ReturnObservation {
+                physical: r.native_turn.clone().context("Detached ACK missing")?,
+                live,
+            };
+            tx.commit()?;
+            return Ok(Some(result));
+        }
+        Ok(None)
+    }
+}
+
+/// Called inside canonical recovery's transaction, before recording its items.
+/// Exact ACK and collection ownership are immutable; partial/no-final snapshots
+/// cannot obtain publication authority or be reported as reconciled.
+pub(in crate::store) fn reconcile_on(conn: &Connection, local: i64, turns: &[Value]) -> Result<()> {
+    for id in bindings_on(conn, local)? {
+        let (mut w, index) = selected_on(conn, &id)?;
+        let r = &w.native_returns[index];
+        if r.collection_local != Some(local) {
+            continue;
+        }
+        anyhow::ensure!(
+            turns.len() == 1 && turns[0]["id"].as_str() == r.native_turn.as_deref(),
+            "Workflow observation escaped exact acknowledged turn"
+        );
+        anyhow::ensure!(
+            current_on(conn, &w, index, false)?,
+            "Workflow observation scope retired"
+        );
+        let turn = &turns[0];
+        if turn["status"] == "inProgress" {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            matches!(
+                turn["status"].as_str(),
+                Some("completed" | "failed" | "interrupted")
+            ),
+            "Workflow terminal observation malformed"
+        );
+        let canonical = turn["items"]
+            .as_array()
+            .context("Exact workflow items missing")?
+            .iter()
+            .filter(|i| i["type"] == "agentMessage")
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            canonical.len() <= 16
+                && canonical
+                    .iter()
+                    .map(|i| i["text"].as_str().map_or(0, str::len))
+                    .sum::<usize>()
+                    <= 64 * 1024,
+            "Exact workflow canonical output exceeds recovery bound; source retained"
+        );
+        let final_item = turn["items"]
+            .as_array()
+            .and_then(|v| {
+                v.iter().rev().find(|i| {
+                    i["type"] == "agentMessage"
+                        && i["phase"] == "final_answer"
+                        && i["text"].as_str().is_some_and(|t| !t.trim().is_empty())
+                })
+            })
+            .context(
+                "Exact terminal workflow return has no canonical final; reconciliation pending",
+            )?;
+        w.native_returns[index].phase = "accepted_reconciled".into();
+        save_on(conn, &w)?;
+        conn.execute("UPDATE turns SET status=?2,assistant_text=?3,completed_at=?4 WHERE id=?1 AND status IN ('observing','completed','failed','interrupted')",params![local,turn["status"].as_str(),final_item["text"].as_str(),now_string()])?;
+        return Ok(());
+    }
+    Ok(())
 }
 
 impl Store {

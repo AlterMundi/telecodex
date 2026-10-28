@@ -776,7 +776,21 @@ pub(super) fn source_on(
         if marker.as_deref() == Some("workflow-internal") {
             return Ok(None);
         }
-        if let Some(id) = marker
+        if let Some(raw) = marker
+            .as_deref()
+            .and_then(|s| s.strip_prefix("workflow-public-set:"))
+        {
+            let ids: Vec<String> = serde_json::from_str(raw)?;
+            if ids.is_empty() || ids.len() > 32 {
+                return Ok(None);
+            }
+            source["workflow_return"] = json!(ids[0]);
+            source["workflow_returns"] = json!(ids);
+            source["current"] = json!(ids.iter().all(|id| {
+                super::workflows::native_source_current_on(conn, id).unwrap_or(false)
+            }));
+            source["internal_evidence_input"] = json!(true);
+        } else if let Some(id) = marker
             .as_deref()
             .and_then(|s| s.strip_prefix("workflow-public:"))
         {

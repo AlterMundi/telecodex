@@ -42,6 +42,23 @@ mod session_requests;
 mod workflows;
 pub(crate) use workflows::{ReturnDispatch, WORKFLOW_CAPACITY_ERROR};
 pub use workflows::{WorkflowPlan, WorkflowStep};
+fn record_turn_started_on(
+    conn: &Connection,
+    session: i64,
+    request: &TurnRequest,
+    root: Option<&str>,
+) -> Result<i64> {
+    conn.execute("INSERT INTO turns(session_id,from_user_id,prompt,review_json,status,started_at,completed_at,assistant_text) VALUES(?1,?2,?3,?4,'running',?5,NULL,NULL)",params![session,request.from_user_id,request.prompt,serde_json::to_string(&request.review_mode)?,now_string()])?;
+    let id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO bot_state(key,value) VALUES(?1,?2)",
+        params![
+            format!("execution_root:{id}"),
+            serde_json::to_string(&root)?
+        ],
+    )?;
+    Ok(id)
+}
 mod stopping;
 mod voice;
 pub use conversation_inputs::{
@@ -1182,23 +1199,9 @@ impl Store {
         request: &TurnRequest,
         root: Option<&str>,
     ) -> Result<i64> {
-        let review_json = serde_json::to_string(&request.review_mode)?;
-        let now = now_string();
         let mut conn = self.conn.lock().expect("store mutex poisoned");
         let tx = conn.transaction()?;
-        tx.execute(
-            "INSERT INTO turns(session_id, from_user_id, prompt, review_json, status, started_at, completed_at, assistant_text)
-             VALUES (?1, ?2, ?3, ?4, 'running', ?5, NULL, NULL)",
-            params![session_id, request.from_user_id, request.prompt, review_json, now],
-        )?;
-        let id = tx.last_insert_rowid();
-        tx.execute(
-            "INSERT INTO bot_state(key,value) VALUES(?1,?2)",
-            params![
-                format!("execution_root:{id}"),
-                serde_json::to_string(&root)?
-            ],
-        )?;
+        let id = record_turn_started_on(&tx, session_id, request, root)?;
         tx.commit()?;
         Ok(id)
     }
