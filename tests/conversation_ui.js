@@ -1056,11 +1056,11 @@ function boot(readOnly=false,standalone=false,options={}) {
   const otherBinding=boot(false,true,{followStorage:new Map([['interaction-session-mutes:another-binding',JSON.stringify(['[100,7]'])]])});
   otherBinding.overrideSource(8,{...worker(7,'Alpha'),kind:'worker_progress'});await otherBinding.ui.refresh();
   assert.equal(muteControl(otherBinding,'native:8')['aria-pressed'],'false','Another conversation binding cannot mute this one');otherBinding.ui.stop();
-  const mixStorage=new Map([['interaction-session-mutes:binding',JSON.stringify(['[100,7]'])]]);
+  const mixStorage=new Map([['interaction-session-mutes:fixture',JSON.stringify(['[100,7]'])]]);
   const mix=boot(false,true,{clock:true,followStorage:mixStorage});mix.audio();
   mix.overrideSource(8,{...worker(7,'Alpha'),kind:'worker_progress'});await mix.ui.refresh();
   const filterControl=(fixture,id,name)=>fixture.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId===id&&!c.removed).children[0].children.flatMap(c=>[c,...c.children]).find(c=>c.className===`session-audio-${name}`);
-  muteControl(mix,'native:8').handlers.click();
+  assert.equal(muteControl(mix,'native:8')['aria-pressed'],'true','Existing mute-only preferences migrate on first filter change');
   filterControl(mix,'native:8','solo').handlers.click();
   assert.equal(muteControl(mix,'native:8')['aria-pressed'],'false','Solo clears previous explicit mutes');
   assert.equal(filterControl(mix,'native:8','solo')['aria-pressed'],'true');
