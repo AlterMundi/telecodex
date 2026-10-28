@@ -5,6 +5,7 @@ No bot update consumer, independent model client or arbitrary process kill.
 import hashlib
 from contextlib import closing
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -15,7 +16,7 @@ import threading
 import time
 import tomllib
 
-from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp, read_topic_inventory, topic_activity_inventory, pending_requests, goal_recovery_state
+from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp, read_topic_inventory, topic_activity_inventory, pending_requests, goal_recovery_state, read_owner_json, inventory_source
 from scripts.speech_render import sync_directory
 
 
@@ -257,6 +258,15 @@ class Provider:
         with closing(readonly(self.receiver['db_path'])) as db:
             inventory=read_topic_inventory(db,Path(directory)/'topics.json') if directory else topic_activity_inventory(db,{})
             owned={item['key']:item for item in inventory['items'] if item['human']==self.human}
+            quota={'state':'unavailable'}
+            try:health=read_owner_json(Path(directory)/'health.json') if directory else {}
+            except (OSError,ValueError):health={}
+            observed=health.get('updated_at');available=health.get('weekly_available');reset=health.get('weekly_resets_at')
+            if (health.get('source')==inventory_source(db) and health.get('connected') is True
+                    and type(observed) in (int,float) and math.isfinite(observed) and 0<=time.time()-observed<=20
+                    and type(available) in (int,float) and math.isfinite(available) and 0<=available<=100):
+                quota={'state':'observed','available_percent':available,'observed_at':observed,
+                    'resets_at':reset if type(reset) in (int,float) and math.isfinite(reset) and reset>0 else None}
             items=[]
             for key,label in selected.items():
                 item=owned.get(key,{})
@@ -276,7 +286,7 @@ class Provider:
         return {**descriptor(self.config),'schema':'telecodex.sonic-state/v1','observed_at':time.time(),
             'configured':bool(directory),'connected':inventory['connected'],
             'scope':'canonical routing registry and entry; current owned bindings only',
-            'sources':items,'truncated':inventory['truncated']}
+            'weekly_quota':quota,'sources':items,'truncated':inventory['truncated']}
 
     def presentation_part(self, source, revision, offset):
         import re

@@ -138,6 +138,14 @@ window.ConversationSound = (() => {
       return {label:String(source.label||source.id||"Session").slice(0,128),text:parts.join(" · "),fresh};
     });
   }
+  function weeklyQuota(frame,elapsed=0){
+    const quota=frame?.weekly_quota,at=frame?.observed_at+Math.max(0,elapsed)/1000;
+    if(quota?.state!=="observed" || !Number.isFinite(quota.available_percent) || quota.available_percent<0 || quota.available_percent>100 || !Number.isFinite(quota.observed_at) || !Number.isFinite(at) || at-quota.observed_at<0 || at-quota.observed_at>20)return "Weekly quota unavailable.";
+    const reset=quota.resets_at;
+    if(!Number.isFinite(reset))return `Weekly · ${Math.round(quota.available_percent)}% available · renewal unavailable`;
+    const remaining=Math.max(0,Math.floor(reset-at)),days=Math.floor(remaining/86400),hours=Math.floor(remaining/3600)%24,minutes=Math.floor(remaining/60)%60;
+    return `Weekly · ${Math.round(quota.available_percent)}% available · renews in ${days}d ${hours}h ${minutes}m`;
+  }
   function mount({api,unauthorized=()=>{},getAuthority=()=>"",onState=()=>{},now=()=>performance.now()}={}) {
     const button=document.querySelector("#conversation-sound-toggle"),status=document.querySelector("#conversation-sound-status"),score=document.querySelector("#conversation-sound-score"),volume=document.querySelector("#conversation-sound-volume");
     if(!button || !status || !score || !volume)return;
@@ -149,10 +157,11 @@ window.ConversationSound = (() => {
     function drawStatus(){
       clearTimeout(statusClock);
       if(!statusList || !statusNote)return;
-      const rows=sessionStatus(statusFrame,Math.max(0,now()-statusReceived));
+      const elapsed=Math.max(0,now()-statusReceived),rows=sessionStatus(statusFrame,elapsed);
+      const quota=document.querySelector("#conversation-weekly-quota");if(quota)quota.textContent=weeklyQuota(statusFrame,elapsed);
       statusList.replaceChildren(...rows.map(source=>{const row=document.createElement("li"),label=document.createElement("strong"),detail=document.createElement("span");label.textContent=source.label;detail.textContent=source.text;row.append(label,detail);return row;}));
       statusNote.textContent=rows.length?`${rows.filter(s=>s.fresh).length} / ${rows.length} current observations${statusFrame.truncated?" · additional sources unavailable":""}. Elapsed time is observed work duration, not estimated progress.`:"Session observations unavailable.";
-      if(inspector?.open && !document.hidden && rows.some(s=>s.fresh))statusClock=setTimeout(drawStatus,1000);
+      if(inspector?.open && !document.hidden && (rows.some(s=>s.fresh) || weeklyQuota(statusFrame,elapsed).startsWith("Weekly ·")))statusClock=setTimeout(drawStatus,1000);
     }
     inspector?.addEventListener("toggle",drawStatus);
     const engine=renderer({changed(running){suspended=!running;if(enabled){button.textContent=running?"≈ Mute Beacon":"≈ Resume Beacon";if(!running)setStatus("Audio suspended · tap to resume");}}});
@@ -201,5 +210,5 @@ window.ConversationSound = (() => {
     window.addEventListener("offline",disable);
     return {refresh,reset(){statusFrame=undefined;drawStatus();disable();local={};},disable,update(patch){local={...local,...patch};engine.setDucking(voiceLevel());if(enabled && frame)draw();}};
   }
-  return {state,components,validate,plan,renderer,mount,sessionStatus};
+  return {state,components,validate,plan,renderer,mount,sessionStatus,weeklyQuota};
 })();
