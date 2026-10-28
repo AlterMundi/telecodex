@@ -118,7 +118,9 @@ an uncertain internal return or manufacture a user input. Detached ACK recovery
 uses a distinct exact native observation and the existing heartbeat; never rebind the
 old human collector. Keep owned regular rollout/physical-turn boundaries, partial
 source uncertainty and the frozen callback source-set publication fence. Native ACK does not prove
-incorporation. `automatic_native_return:false` remains until actual wrapper
-qualification; foreground speech still requires Conversation surface adoption.
+incorporation. `automatic_native_return` reports actual loaded configuration, separately from
+retained per-envelope native return phases; neither is a completion or hearing
+claim. Keep the receiving feature off until actual wrapper qualification;
+foreground speech still requires Conversation surface adoption.
 Do not emulate that missing seam with fabricated human input, recursive helper
 chains, continuous model polling or an extra coordinator.

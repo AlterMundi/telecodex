@@ -595,7 +595,20 @@ impl Store {
         for row in q.query_map(params![human, entry.chat_id, entry.thread_id], |r| {
             r.get::<_, String>(0)
         })? {
-            envelopes.extend(attention_on(&conn, &serde_json::from_str(&row?)?)?);
+            let workflow: Workflow = serde_json::from_str(&row?)?;
+            for mut envelope in attention_on(&conn, &workflow)? {
+                // Delivery metadata never changes the source revision, reserves
+                // another return, or converts an ACK into human incorporation.
+                if let Some(receipt) = workflow
+                    .native_returns
+                    .iter()
+                    .rev()
+                    .find(|r| r.envelope["revision"] == envelope["revision"])
+                {
+                    envelope["native_return"] = json!({"id":receipt.id,"phase":receipt.phase,"native_turn":receipt.native_turn});
+                }
+                envelopes.push(envelope);
+            }
         }
         Ok(
             json!({"schema":"telecodex.workflow-attention/v1","envelopes":envelopes,"bounded":true,"max_workflows":16,"max_steps":4,"max_envelopes":192,"automatic_native_return":false,"publication_grant":false}),
@@ -1227,6 +1240,11 @@ mod tests {
         let before = status(&s, &e, initial["id"].as_str().unwrap());
         let selected = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
         assert!(selected.output.contains("Attributed internal"));
+        let reserved_attention = s.interaction_workflow_attention(100, e.key).unwrap();
+        let reserved_event = &reserved_attention["envelopes"][0];
+        assert_eq!(reserved_event["native_return"]["id"], selected.id);
+        assert_eq!(reserved_event["native_return"]["phase"], "reserved");
+        let source_revision = reserved_event["revision"].clone();
         assert_eq!(
             status(&s, &e, initial["id"].as_str().unwrap())["revision"],
             before["revision"]
@@ -1242,6 +1260,14 @@ mod tests {
             .unwrap();
         s.workflow_native_outcome(&selected.id, "uncertain", None)
             .unwrap();
+        let accepted_attention = s.interaction_workflow_attention(100, e.key).unwrap();
+        let accepted_event = &accepted_attention["envelopes"][0];
+        assert_eq!(accepted_event["native_return"]["phase"], "accepted");
+        assert_eq!(
+            accepted_event["native_return"]["native_turn"],
+            "return-turn"
+        );
+        assert_eq!(accepted_event["revision"], source_revision);
         assert!(s.workflow_native_visible(local).unwrap());
         assert!(s.conversation_turn_return(local).unwrap());
         assert!(

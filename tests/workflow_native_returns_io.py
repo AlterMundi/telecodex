@@ -128,7 +128,9 @@ def qualify(binary):
         j.stop()
         j.config.write_text(j.config.read_text().replace('[interaction]\n', '[interaction]\nnative_workflow_returns=true\n') + j.target_config)
         j.start(); j.wait_control_socket(j.socket); j.routing = True
-        binding = j.read('presentation', 'list', '0', '0')['result']['binding']
+        page = j.read('presentation', 'list', '0', '0')['result']
+        assert page['workflow_attention']['automatic_native_return'] is True, 'Enabled return adapter reported disabled'
+        binding = page['binding']
         journal = j.row('SELECT count(*) FROM incoming_updates')
         j.messages.clear(); j.telegram_methods.clear()
         original, _ = j.submit(binding, 'A produces a checkpoint; B verifies it. Report the checkpoint and return here with the final verification.')
@@ -141,7 +143,8 @@ def qualify(binary):
                     {'id': 'verify', 'selector': 't8', 'after': 'produce', 'scope': 'Verify the exact checkpoint.',
                      'checkpoint': 'Receiving verification', 'milestone': None}]}
         view = j.call('route-declare', 'workflow_declare', plan)
-        j.call('route-start', 'workflow_advance', {'workflow': view['id'], 'revision': view['revision']})
+        started = j.call('route-start', 'workflow_advance', {'workflow': view['id'], 'revision': view['revision']})
+        assert started['automatic_native_return'] is True
         j.wait(lambda: j.instructions(7) and j.instructions(7)[0][1] == 'accepted')
         j.answer_worker(7, 'Selected predecessor evidence.')
         j.wait(lambda: len(j.internal_packets) == 1)
