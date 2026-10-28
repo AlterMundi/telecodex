@@ -3,6 +3,7 @@
 Synthetic peers/accounts only; this does not claim real-provider or hearing acceptance.
 """
 import json
+import hashlib
 from pathlib import Path
 import sys
 from conversation_routing_io import CanonicalRouting
@@ -36,6 +37,13 @@ class RoutedReturning(Returning):
             if len(self.internal_packets) > 1:
                 self.web_turn = turn
                 self.broadcast(self.web_thread, 'turn/started', {'turn': {'id': turn, 'status': 'inProgress'}})
+            if output['source_text_complete']:
+                source = output['evidence']['source']
+                assert source['kind'] == 'canonical_result'
+                assert len(source['preview']) <= 180
+                assert hashlib.sha256(source['preview'].encode()).hexdigest() == source['text_sha256']
+                self.report_source(send, turn, output, {'text': source['preview'], 'answer_allowed': False})
+                return True
             call = 'route-ordinary-source-' + turn
             send({'id': call, 'method': 'item/tool/call', 'params': {
                 'threadId': self.web_thread, 'turnId': turn, 'callId': call,
@@ -47,27 +55,33 @@ class RoutedReturning(Returning):
             source = json.loads(message['result']['contentItems'][0]['text'])
             turn = str(ident).removeprefix('route-ordinary-source-')
             send, output = self.internal[turn]
-            if output['evidence']['source']['kind'] == 'native_question':
-                assert 'Which receiving target?' in source['text'] and source['answer_allowed'] is False
-            else:
-                assert source['text'] in ('Ordinary Alpha result.', 'Ordinary Beta result.')
-            call = 'route-ordinary-report-' + turn
-            send({'id': call, 'method': 'item/tool/call', 'params': {
-                'threadId': self.web_thread, 'turnId': turn, 'callId': call,
-                'tool': 'interaction_controller', 'arguments': {'operation': 'attention_reported', 'arguments': {
-                    'return_id': output['return_id'], 'revision': output['evidence']['revision']}}}})
+            assert not output['source_text_complete']
+            self.report_source(send, turn, output, source)
             return True
         if method is None and str(ident).startswith('route-ordinary-report-'):
             assert message['result']['success'], message
             turn = str(ident).removeprefix('route-ordinary-report-')
-            self.broadcast(self.web_thread, 'item/completed', {'turnId': turn, 'item': {
-                'id': 'ordinary-offer-' + turn, 'type': 'agentMessage', 'phase': 'final_answer',
-                'text': 'Ordinary integrating offer: ' + self.internal[turn][1]['evidence']['reason']}})
             self.broadcast(self.web_thread, 'turn/completed', {'turn': {'id': turn, 'status': 'completed'}})
             return True
         # Preserve actual-human worker provenance; the workflow-only fixture
         # intentionally rejects this source kind and is not our parent handler.
         return CanonicalRouting.handle_extra_rpc(self, message, send)
+
+    def report_source(self, send, turn, output, source):
+        if output['evidence']['source']['kind'] == 'native_question':
+            assert 'Which receiving target?' in source['text'] and source['answer_allowed'] is False
+        else:
+            assert source['text'] in ('Ordinary Alpha result.', 'Ordinary Beta result.')
+        assert output['after_offer'] == {'operation': 'attention_reported', 'arguments': {
+            'return_id': output['return_id'], 'revision': output['evidence']['revision']}}
+        # Exercise incorporation after providing the actual offer, not before.
+        self.broadcast(self.web_thread, 'item/completed', {'turnId': turn, 'item': {
+            'id': 'ordinary-offer-' + turn, 'type': 'agentMessage', 'phase': 'commentary',
+            'text': 'Ordinary integrating offer: ' + output['evidence']['reason']}})
+        call = 'route-ordinary-report-' + turn
+        send({'id': call, 'method': 'item/tool/call', 'params': {
+            'threadId': self.web_thread, 'turnId': turn, 'callId': call,
+            'tool': 'interaction_controller', 'arguments': output['after_offer']}})
 
 
 def setup(binary, enabled):

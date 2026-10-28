@@ -1284,8 +1284,18 @@ The source row retains at most16KiB of return metadata and four question version
 source text remains in its original journal. Offers expire after15minutes. Current
 entry/native binding, Stop/maintenance epoch, retained original and semantic source
 revision are checked before admission and callback publication. Cosmetic carrier
-or artifact changes do not change the result's semantic revision. On-demand
-`attention_source` reads at most1600 characters; `attention_reported` records
+or artifact changes do not change the result's semantic revision.
+
+`source_text_complete` identifies a nonempty existing result preview of at most180
+characters whose raw UTF-8 SHA256 matches the full current canonical result.
+That exact text is already present in the envelope and needs no second source
+read. A mismatched/truncated preview or native question still uses the existing
+source reader. The `after_offer` controller call acknowledges only actual
+incorporation after useful output. These metadata hints retain the existing
+source/publication fences and add no stored text or authority; their effect on
+real-provider latency requires qualification.
+
+On-demand `attention_source` reads at most1600 characters; `attention_reported` records
 incorporation only, never hearing, task completion or an answer/approval.
 
 Committed result/question events reserve offers. The existing heartbeat recovers
