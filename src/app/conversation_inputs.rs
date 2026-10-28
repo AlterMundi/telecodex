@@ -485,6 +485,7 @@ async fn submit(app: App, input: ConversationInput) -> Result<()> {
         crate::files::rendered(&app.shared.config.db_path, &input.files)?
     );
     let packet = CodexSteerRequest {
+        tool_output: None,
         observation: None,
         images: crate::visual::attachments(&app.shared.config.db_path, input.visual.as_ref())?
             .into_iter()
@@ -599,6 +600,7 @@ fn enqueue(
             chat_kind: "conversation".into(),
             update_id: None,
             conversation_input: Some(input.id.clone()),
+            workflow_return: None,
             tribu_admission: None,
             goal: None,
             nexus: None,

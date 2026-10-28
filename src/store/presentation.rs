@@ -105,6 +105,9 @@ impl Store {
         if native != thread {
             return Ok(false);
         }
+        if !super::workflows::native_visible_on(&conn, local)? {
+            return Ok(false);
+        }
         let valid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM turns t JOIN native_collections n ON n.local_turn=t.id WHERE t.id=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND t.native_thread_id=?4 AND t.status='running' AND t.completed_at IS NULL)",params![local,session,human,thread],|r|r.get(0))?;
         if !valid {
             return Ok(false);
@@ -138,6 +141,9 @@ impl Store {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let (session, native) = entry_on(&conn, human, entry)?;
         if native != thread {
+            return Ok(false);
+        }
+        if !super::workflows::native_visible_on(&conn, local)? {
             return Ok(false);
         }
         let valid:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM turns t WHERE t.id=?1 AND t.session_id=?2 AND t.from_user_id=?3 AND t.native_thread_id=?4 AND t.status='running' AND t.completed_at IS NULL)
@@ -505,8 +511,17 @@ impl Store {
             AND json_extract(b.value,'$.thread')=?4 AND json_extract(b.value,'$.generation')=?5 AND length(trim(json_extract(b.value,'$.text')))>0
             AND NOT EXISTS(SELECT 1 FROM interaction_native_messages m WHERE m.native_thread=?4 AND m.native_turn=json_extract(b.value,'$.turn') AND m.item_id=json_extract(b.value,'$.item'))",
             params![format!("interaction-response-draft:{session}"),session,human,native,result["binding"].as_str()],|r|r.get(0)).optional()?;
-        result["response_draft"]=draft.and_then(|v|serde_json::from_str::<Value>(&v).ok())
-            .map(|v|json!({"text":v["text"],"native_turn":v["turn"],"native_item":v["item"],"local_turn":v["local"],"observed_at":v["observed_at"],"provisional":true,"can_listen":false})).unwrap_or(Value::Null);
+        let draft = draft.and_then(|v| serde_json::from_str::<Value>(&v).ok());
+        result["response_draft"] = match draft {
+            Some(v)
+                if v["local"].as_i64().is_some_and(|local| {
+                    super::workflows::native_visible_on(&conn, local).unwrap_or(false)
+                }) =>
+            {
+                json!({"text":v["text"],"native_turn":v["turn"],"native_item":v["item"],"local_turn":v["local"],"observed_at":v["observed_at"],"provisional":true,"can_listen":false})
+            }
+            _ => Value::Null,
+        };
         if let Some(cursor) = after_matrix {
             result["cursor"]["matrix"] =
                 json!(matrices.iter().take(8).next_back().map_or(cursor, |r| r.0));
@@ -545,12 +560,20 @@ impl Store {
         }
         // Confirmation wins over a residual snapshot. An earlier item can remain
         // audible during later work only through its ordinary canonical record.
-        let canonical: Option<String> = conn.query_row(
-            &format!("SELECT m.text FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn JOIN sessions s ON s.id=t.session_id
+        let canonical: Option<i64> = conn.query_row(
+            &format!("SELECT m.rowid FROM interaction_native_messages m JOIN turns t ON t.id=m.local_turn JOIN sessions s ON s.id=t.session_id
                 WHERE m.native_thread=?4 AND m.native_turn=?5 AND m.item_id=?6 AND t.session_id=?2 AND {NATIVE_VISIBILITY}"),
             params![0,session,human,native,fields[1],fields[2]],|r|r.get(0)).optional()?;
-        let text = if let Some(text) = canonical {
-            crate::interaction::visible_answer(&text).to_owned()
+        let text = if let Some(row) = canonical {
+            let source = source_on(&conn, human, entry, &format!("native:{row}"))?
+                .context("Live speech source is internal or retired")?;
+            if source["current"] == false {
+                bail!("Live speech workflow source changed");
+            }
+            source["text"]
+                .as_str()
+                .context("Canonical speech text missing")?
+                .to_owned()
         } else {
             let snapshot: Option<String> = conn.query_row(
                 "SELECT b.value FROM bot_state b JOIN turns t ON t.id=json_extract(b.value,'$.local') JOIN native_collections n ON n.local_turn=t.id
@@ -560,6 +583,11 @@ impl Store {
                 params![format!("interaction-response-draft:{session}"),session,human,native,generation,fields[1],fields[2]],|r|r.get(0)).optional()?;
             let snapshot: Value =
                 serde_json::from_str(&snapshot.context("Live speech source retired")?)?;
+            if !snapshot["local"].as_i64().is_some_and(|local| {
+                super::workflows::native_visible_on(&conn, local).unwrap_or(false)
+            }) {
+                bail!("Live workflow draft source retired");
+            }
             snapshot["text"]
                 .as_str()
                 .context("Live speech text unavailable")?
@@ -730,6 +758,35 @@ pub(super) fn source_on(
             .optional()?;
         if let Some(raw) = raw {
             source["companion_hint"] = serde_json::from_str(&raw)?;
+        }
+    }
+    if let Some(local) = source["local_turn"].as_i64() {
+        let marker: Option<String> = conn
+            .query_row(
+                "SELECT presentation_input FROM interaction_native_messages WHERE rowid=?1",
+                [source["id"]
+                    .as_str()
+                    .and_then(|s| s.strip_prefix("native:"))
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0)],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        if marker.as_deref() == Some("workflow-internal") {
+            return Ok(None);
+        }
+        if let Some(id) = marker
+            .as_deref()
+            .and_then(|s| s.strip_prefix("workflow-public:"))
+        {
+            source["workflow_return"] = json!(id);
+            source["current"] =
+                json!(super::workflows::native_source_current_on(conn, id).unwrap_or(false));
+            source["internal_evidence_input"] = json!(true);
+        } else if super::workflows::native_only_on(conn, local)? {
+            // Pre-upgrade/unmarked callback items cannot acquire authority later.
+            return Ok(None);
         }
     }
     // Canonical native items keep controller metadata. All reader/player views

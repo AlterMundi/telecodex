@@ -41,6 +41,11 @@ pub(super) fn record_native_message_on(
                JOIN turns t ON t.id=?4 WHERE p.native_thread=?1 AND p.human_id=t.from_user_id AND ?8=0))",
         params![thread, turn, item, local_turn, phase, text, now_string(),internal_only],
     )? == 1;
+    if inserted {
+        if let Some(marker) = super::workflows::native_publication_on(conn, local_turn)? {
+            conn.execute("UPDATE interaction_native_messages SET presentation_input=?4 WHERE native_thread=?1 AND native_turn=?2 AND item_id=?3",params![thread,turn,item,marker])?;
+        }
+    }
     if !inserted {
         let matches: bool = conn.query_row(
             "SELECT phase IS ?4 AND text=?5 FROM interaction_native_messages

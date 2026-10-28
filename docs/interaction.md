@@ -1010,10 +1010,11 @@ moves existing nodes and preserves expanded text, media and drafts.
 The integrating controller exposes `workflow_declare`, `workflow_status`,
 `workflow_advance`, `workflow_attention`, `workflow_reported`, `workflow_result`,
 `workflow_question`, `workflow_supersede` and `workflow_finish`. This is a journal
-with explicit initial admission and event-driven predeclared successors. Automatic internal-context return into
-an idle integrating native conversation and spoken foreground offers are **not
-implemented**; the contract reports `automatic_native_return:false`. Do not
-report the full #303/#304 workflow experience as delivered from these primitives.
+with explicit initial admission and event-driven predeclared successors. The
+experimental #410 native return adapter is disabled by default; the public contract
+still reports `automatic_native_return:false` pending wrapper qualification and
+receiving adoption. Spoken foreground offers and the full #303/#304 experience
+remain undelivered.
 
 Declaration selects one accepted retained human `input_ref`, a stable
 `request_id`, an RFC3339 `expires_at` no more than seven days away, and one to four
@@ -1102,6 +1103,60 @@ the separately owned integrating Conversation. UI/audio adoption must route
 meaningful offers through its selected finite foreground and the existing
 Conversation player while internal tracks remain muted, without manufacturing
 human input or narrating every progress event.
+
+### Experimental native entry return (#410)
+
+`interaction.native_workflow_returns` defaults to `false`. When explicitly enabled,
+committed canonical results and newly retained pending questions select only the
+bounded meaningful attention envelopes already declared by the original human
+workflow. `successor_ready` is model-free progression and does not cause another
+entry model turn. There is no poller, timer or model rewrite of intermediate progress.
+An idle integrating entry uses its existing worker/admission queue; a live entry
+uses its current native execution. Both submit `turn/start` with `input:[]` and
+`toolOutput:{name,namespace:null,output,retain:true}`. No callback text is submitted
+as human speech or given a native user-message correlation ID. Ordinary direct
+human ingress keeps its existing path. Native admission, Stop, generation, writer
+ownership and maintenance fences remain authoritative.
+
+The retained return is in the same bounded workflow document: at most16 source
+revisions per workflow, each with an envelope of at most2,048 bytes, and capacity
+reserved for later step/final checkpoints. The existing document cap still applies.
+The existing execution journal supplies the local/native turn binding; a bounded
+index (at most32 returns per local execution) links it to the workflow receipt.
+These are transport receipts, not another queue or coordinator. Capacity leaves
+pending source evidence visible; it does not silently drop the workflow or grant
+new model work. Source text remains available through exact `workflow_result` and
+`workflow_question` reads.
+
+Before native submission the adapter retains intent and rechecks original authority,
+expiry, generation and the exact source revision. It records `submitting` at the
+native boundary, then distinguishes `accepted`, `rejected`, `uncertain` and
+`retained_unsent`. Restart changes an unsubmitted reservation to `retained_unsent`
+and an unresolved submission to `uncertain`; neither is automatically replayed.
+An exact native ACK remains retained even if the local waiter later times out.
+For a live-return race whose ACK names a different native turn, the receipt is
+`accepted_uncollected` with that actual turn ID. The old execution collector keeps
+its own identity; this adapter does not claim incorporation or silently rebind it.
+That case requires reconciliation through the owning native execution path.
+
+ACK is not incorporation, a useful provider answer, reporting or hearing. An active
+human turn has no native per-input causal attribution for its assistant output;
+its ordinary publication lifetime remains governed by that human turn. For an idle
+callback-only turn, canonical text, response drafts and cached speech are fenced by
+the exact current workflow source and its original reporting policy. A withdrawn,
+expired or corrected source cannot publish newly generated callback-only output.
+Previously published canonical text remains historical evidence with `current:false`.
+Later actual human input receives its ordinary publication authority. A completed
+workflow permits the final integrating answer from its retained final-result offer.
+`workflow_reported` acknowledges evidence integration, and does not by itself prove
+human publication. Telegram requires its existing explicit projection selection;
+foreground audio still requires the human-selected Conversation surface/player.
+
+The idle-root native `toolOutput` seam has separate actual-native evidence. Mock
+boundary tests qualify the adapter contract; they do not qualify an active native
+queue or receiver installation. Keep `automatic_native_return:false` until the
+wrapper's useful provider return and retained internal history are observed at the
+actual supported native boundary, and retain any active-turn qualification gap.
 
 This source is not receiving deployment or live native qualification. Once a
 workflow has been declared, preserve `interaction_workflows`, all underlying

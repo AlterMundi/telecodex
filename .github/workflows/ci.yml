@@ -280,7 +280,7 @@ jobs:
           # Bound the existing isolated fixture concurrency at four; retain every
           # case, log and nonzero exit result.
           with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-              jobs = [pool.submit(qualify, suite) for suite in ('routing_io.py', 'observer_io.py', 'observer_tool_io.py', 'observer_interview_io.py', 'semantic_routing_io.py', 'creation_io.py', 'creation_recovery_io.py', 'attention_io.py', 'session_requests_io.py', 'workflow_io.py', 'presentation_control_io.py', 'conversation_input_control_io.py', 'conversation_routing_io.py', 'conversation_clarification_io.py')]
+              jobs = [pool.submit(qualify, suite) for suite in ('routing_io.py', 'observer_io.py', 'observer_tool_io.py', 'observer_interview_io.py', 'semantic_routing_io.py', 'creation_io.py', 'creation_recovery_io.py', 'attention_io.py', 'session_requests_io.py', 'workflow_io.py', 'workflow_native_returns_io.py', 'presentation_control_io.py', 'conversation_input_control_io.py', 'conversation_routing_io.py', 'conversation_clarification_io.py')]
               for job in concurrent.futures.as_completed(jobs):
                   suite, result = job.result()
                   print(f'{suite}: exit {result.returncode}', flush=True)

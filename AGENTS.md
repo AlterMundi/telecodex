@@ -107,7 +107,11 @@ progression and source-only worker reads. See docs/interaction.md. Preserve the 
 request/result revisions, internal audience and final integrating responsibility.
 One helper completion leaves remaining steps unfinished; only current complete
 coverage plus the integrator checkpoint can finish the workflow. Presentation
-includes bounded result/question attention descriptors; automatic entry wakeup
-and foreground speech are still unsupported (`automatic_native_return:false`).
+includes bounded result/question attention descriptors. The #410 native adapter
+is experimental and disabled by default (`interaction.native_workflow_returns`).
+Preserve its intent/ACK/uncertainty and exact source publication fences; never replay
+an uncertain internal return or manufacture a user input. Native ACK does not prove
+incorporation. `automatic_native_return:false` remains until actual wrapper
+qualification; foreground speech still requires Conversation surface adoption.
 Do not emulate that missing seam with fabricated human input, recursive helper
 chains, continuous model polling or an extra coordinator.

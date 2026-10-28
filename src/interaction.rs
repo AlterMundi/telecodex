@@ -19,6 +19,9 @@ pub struct InteractionConfig {
     /// Optional copies in the integrating entry, independent of work-topic copies.
     #[serde(default)]
     pub telegram_entry_projection: bool,
+    /// Experimental finite workflow context returns; default off until qualified.
+    #[serde(default)]
+    pub native_workflow_returns: bool,
     pub artifact_store: Option<ArtifactConfig>,
     #[serde(default)]
     pub targets: Vec<Target>,
@@ -514,6 +517,7 @@ mod tests {
             telegram_ingress: false,
             telegram_projection: false,
             telegram_entry_projection: false,
+            native_workflow_returns: false,
             artifact_store: None,
             max_active_workers: 2,
             discover_owned_sessions: false,

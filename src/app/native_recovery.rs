@@ -61,6 +61,7 @@ pub(super) async fn tick(app: &App) -> Result<()> {
                                 .map(str::to_owned);
                             let (response, _) = oneshot::channel();
                             let _ = active.sender.send(CodexSteerRequest {
+                tool_output: None,
                                 observation: Some(crate::codex::NativeTerminalObservation {
                                     turn_id: turn["id"]
                                         .as_str()

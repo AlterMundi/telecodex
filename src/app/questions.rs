@@ -180,7 +180,7 @@ async fn show_question(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn begin_dialogue(
-    shared: Arc<AppShared>,
+    app: App,
     native_session: SessionKey,
     local_turn_id: i64,
     requester: i64,
@@ -189,6 +189,7 @@ pub(super) async fn begin_dialogue(
     closed: CancellationToken,
     return_route: Option<crate::interaction::ReturnRoute>,
 ) -> Result<oneshot::Receiver<UserInputDecision>> {
+    let shared = app.shared.clone();
     request.validate()?;
     let (tx, rx) = oneshot::channel();
     // Telegram cooldown/delivery must not hold the native event pump.
@@ -211,6 +212,7 @@ pub(super) async fn begin_dialogue(
         .await
         {
             Ok(receiver) => {
+                let _ = super::workflows::attention(app.clone(), requester).await;
                 if let Ok(decision) = receiver.await {
                     let _ = tx.send(decision);
                 }
