@@ -1371,6 +1371,8 @@ mod tests {
             "First checkpoint",
         );
         let a = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        // Failure before a native submitting observation remains known unsent.
+        s.workflow_native_outcome(&a.id, "uncertain", None).unwrap();
         answer(
             &s,
             &first,

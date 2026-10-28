@@ -288,7 +288,14 @@ impl Store {
         {
             bail!("Native return acknowledgment identity missing");
         }
-        r.phase = phase.into();
+        // A local failure before the native boundary is known unsent. The
+        // caller need not infer submission from an unrelated execution error.
+        r.phase = if phase == "uncertain" && r.phase == "reserved" {
+            "retained_unsent"
+        } else {
+            phase
+        }
+        .into();
         r.native_turn = native_turn.map(str::to_owned);
         save_on(&tx, &w)?;
         tx.commit()?;
