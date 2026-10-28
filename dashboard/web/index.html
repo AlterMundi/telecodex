@@ -20,6 +20,7 @@
     <script src="assets/markdown-it.min.js" defer></script>
     <script src="assets/markdown.js" defer></script>
     <script src="assets/attention.js" defer></script>
+    <script src="assets/timing.js" defer></script>
     <script src="assets/conversation.js" defer></script>
     <script src="assets/live.js" defer></script>
     <script src="assets/app.js" defer></script>
@@ -131,6 +132,7 @@
         <details id="conversation-diagnostics">
         <summary>Under the hood <span aria-hidden="true">+</span></summary>
         <div class="conversation-diagnostics-content">
+        <details id="conversation-timing"><summary>Browser voice timing</summary><p class="note">Only this page, up to eight recordings. Playback starts are browser events, not proof of intelligible sound or correction uptake. Reload or Clear removes these timings.</p><button id="conversation-timing-clear" type="button">Clear timings</button><p id="conversation-timing-pause" class="note"></p><ol id="conversation-timing-records"></ol></details>
         <details id="conversation-sound"><summary>Session sound <span id="conversation-sound-status" role="status">Off</span></summary>
           <p id="conversation-sound-vocabulary" class="note"></p>
           <p class="note">Each session contributes to the chord. Ratios are an authored vocabulary to explore; unknown state stays visible. Voice capture and replies quiet this layer. Hiding this page stops it.</p>

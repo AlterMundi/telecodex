@@ -368,6 +368,7 @@ jobs:
       - run: node tests/dashboard_sonic_offline.mjs
       - run: node tests/markdown_ui.js
       - run: node tests/live_speech_ui.js
+      - run: node tests/timing_ui.js
       - run: node tests/conversation_ui.js
       - run: node tests/conversation_requests_ui.js
       - run: node tests/microphone_ui.js

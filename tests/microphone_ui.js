@@ -39,14 +39,15 @@ function boot(live=false,recovery){
   if(mode==='after'){mode=undefined;throw Error('Lost acknowledgement');}
   return {ok:true,json:async()=>result};
  }
+ const timing=[];
  let preparation;
  if(live)window.StreamingVoice={supported:()=>true,async create(stream,meta){preparation=meta;const recorder=new Recorder(stream);recorder.discard=()=>recorder.stop();return recorder;}};
  const context=vm.createContext({Date:{now:()=>now},window,document,Blob,Uint8Array,fetch,AbortController,
   setTimeout(fn,ms){const t={fn,ms};timers.push(t);return t;},clearTimeout(t){if(t)t.closed=true;}});
  vm.runInContext(fs.readFileSync('dashboard/web/microphone.js','utf8'),context);
- let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,getReply:()=>selection,getPlayback:()=>playback,getCaptureQuestions:()=>captureQuestions,getFiles:()=>fileReferences,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
+ let ui;ui=window.VoiceInput.mount({headers:()=>({'X-Dashboard-CSRF':'synthetic'}),getBinding:()=>binding,onTiming:(id,stage)=>timing.push({id,stage}),getReply:()=>selection,getPlayback:()=>playback,getCaptureQuestions:()=>captureQuestions,getFiles:()=>fileReferences,getVisual:()=>{if(visualFailure)throw Error('Selected image loading or unavailable');return visual;},pauseAudio(){paused++;},onActivity(value){activities.push(value);},onInput(value){received.push(value);},unauthorized(){unauthorized++;ui.reset();},async api(route){if(receiptHold)await receiptHold.promise;const value=originals.get(route.split('/').at(-1));if(!value)throw Error('No recording');return value;}});
  ui.configure(true,live);
- return {advance:ms=>{now+=ms;},files:value=>{fileReferences=value;},ui,nodes,uploads,originals,received,devices,events,timers,media,activities,questions:value=>{captureQuestions=value;},playback:value=>{playback=value;},preparation:()=>preparation,
+ return {timing,advance:ms=>{now+=ms;},files:value=>{fileReferences=value;},ui,nodes,uploads,originals,received,devices,events,timers,media,activities,questions:value=>{captureQuestions=value;},playback:value=>{playback=value;},preparation:()=>preparation,
   confirmation:value=>{confirmDiscard=value;},confirmations,
   button:()=>nodes.get('#conversation-talk'),state:()=>nodes.get('#conversation-voice-state').textContent,
   click:()=>nodes.get('#conversation-talk').handlers.click(),cancel:()=>nodes.get('#conversation-voice-discard').handlers.click(),check:()=>nodes.get('#conversation-voice-check').handlers.click(),
@@ -85,6 +86,8 @@ function boot(live=false,recovery){
  assert(preparation.id&&preparation.binding==='original-binding');preparation.onPartial('unfinished words');
  assert.equal(live.state(),'unfinished words');assert.equal(live.uploads.length,0,'Live recognition cannot dispatch the original');
  live.nodes.get('#conversation-send').handlers.click();await until(()=>live.received.length===1);
+ assert.deepEqual(live.timing.map(event=>event.stage),['requested','started','partial','send','ended','ready','send','retained']);
+ assert(live.timing.every(event=>event.id===preparation.id),'Capture timing owns the same immutable original across finalization/upload');
  assert.equal(live.uploads.length,1);assert.equal(live.uploads[0].headers['X-Input-Id'],preparation.id,'Streaming preparation and original admission must own the same capture UUID');assert.equal(live.uploads[0].body.type,'audio/wav');
  const hinted=boot();hinted.select({reference:{source:'delivery:11111111-1111-1111-1111-111111111111',revision:'a'.repeat(64),context_only:true},version:1});
  await hinted.click();hinted.click();await until(()=>hinted.received.length===1);

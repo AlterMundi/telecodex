@@ -75,6 +75,12 @@ fn response(snapshot: &ConversationRequest, payload: &Value, offset: usize) -> R
     result["capture_version"] = json!(snapshot.capture_version);
     result["binding"] = json!(snapshot.binding);
     result["entry_binding"] = snapshot.entry_binding.clone();
+    result["target"] = json!(snapshot.key);
+    result["audio_track"] = json!(if json!(snapshot.key) == snapshot.entry_binding[1] {
+        "conversation"
+    } else {
+        "session"
+    });
     result["state"] = json!(snapshot.item.state);
     result["title"] = json!(snapshot.item.title.chars().take(200).collect::<String>());
     result["offset"] = json!(offset);
@@ -299,6 +305,8 @@ pub(super) async fn command(app: &App, human: i64, args: &str) -> Result<Value> 
                             "question_index",
                             "question_total",
                             "capture_version",
+                            "target",
+                            "audio_track",
                         ] {
                             item[key] = detail[key].clone();
                         }
