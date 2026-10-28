@@ -545,3 +545,7 @@ Closing/hiding/resetting stops this display timer. At most65 current rows and
 one frame remain in page memory; no status history, media or telemetry is stored.
 The later compact expressive view for the conversation/avatar is still a design
 requirement, not this precise inspector's acceptance.
+
+Human-facing update cards keep Listen and Reply to this update. They do not
+open the inspector through an Inspect shortcut; detailed originals and routing
+remain available through the explicit header Under the hood control.
