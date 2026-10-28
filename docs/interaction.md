@@ -1080,7 +1080,17 @@ across reconnect; it is neither proof of hearing nor a completion/publication
 receipt. Admission and canonical history remain retained by the existing durable
 request journal; expired/terminal workflows are tombstones needed for exact
 identity, not disposable caches. Active projection and acknowledgment growth are
-bounded independently of that required history.
+bounded independently of that required history. There is no existing automatic
+workflow-journal pruning route to claim as protection. Retention therefore has
+an additional hard stop: at most256 workflow rows for the entire listener store,
+and at most256KiB serialized JSON per row (64MiB of workflow payload in total,
+separate from existing canonical journals/SQLite overhead). Declaration reserves
+32KiB within its document for future step/checkpoint metadata. Capacity refusal
+is explicit as `workflow_capacity_reached`; exact retained retries and current
+workflow progression remain usable. Terminal/expired rows and originals are not
+automatically erased to create space. Further new workflow admission at capacity
+requires a separately authorized compatible journal archival/retirement route;
+until such a route exists, admission stops at the hard bound.
 
 All workflow results stay internal under the existing canonical audience rules.
 An attention envelope is evidence, never a human instruction, automatic publication

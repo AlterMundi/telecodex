@@ -125,7 +125,7 @@ pub(super) async fn tool(
                     milestone: step.milestone,
                 });
             }
-            store.interaction_workflow_declare(
+            let declared = store.interaction_workflow_declare(
                 human,
                 key,
                 &request.thread_id,
@@ -137,7 +137,13 @@ pub(super) async fn tool(
                     steps,
                 },
                 closed,
-            )
+            );
+            match declared {
+                Err(error) if error.to_string() == crate::store::WORKFLOW_CAPACITY_ERROR => Ok(
+                    json!({"kind":"workflow_capacity_reached","admitted":false,"max_retained_workflows":256,"max_document_bytes":262144,"recovery":"Retained history was preserved. Continue or inspect existing workflows; additional workflow admission requires an explicitly authorized compatible journal archival/retirement route. No automatic deletion or replay."}),
+                ),
+                other => other,
+            }
         }
         "workflow_question" => {
             let args: Question = serde_json::from_value(arguments)?;

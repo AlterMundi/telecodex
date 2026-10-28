@@ -40,6 +40,7 @@ pub use matrix::{MatrixAuthor, MatrixReturn, MatrixSubmission};
 mod routing;
 mod session_requests;
 mod workflows;
+pub(crate) use workflows::WORKFLOW_CAPACITY_ERROR;
 pub use workflows::{WorkflowPlan, WorkflowStep};
 mod stopping;
 mod voice;

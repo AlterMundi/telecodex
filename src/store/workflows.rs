@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+const MAX_RETAINED_WORKFLOWS: i64 = 256;
+const MAX_WORKFLOW_DOCUMENT_BYTES: usize = 256 * 1024;
+pub(crate) const WORKFLOW_CAPACITY_ERROR: &str = "Workflow journal capacity reached; retain existing history and finish or inspect current workflows";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowStep {
@@ -60,10 +64,18 @@ fn load_on(conn: &Connection, human: i64, entry: SessionKey, id: &str) -> Result
     let raw:String=conn.query_row("SELECT doc FROM interaction_workflows WHERE id=?1 AND human_id=?2 AND entry_chat=?3 AND entry_topic=?4",params![id,human,entry.chat_id,entry.thread_id],|r|r.get(0))?;
     Ok(serde_json::from_str(&raw)?)
 }
+fn document(w: &Workflow) -> Result<String> {
+    let raw = serde_json::to_string(w)?;
+    if raw.len() > MAX_WORKFLOW_DOCUMENT_BYTES {
+        bail!("Workflow document bound exceeded; no state was changed");
+    }
+    Ok(raw)
+}
 fn save_on(conn: &Connection, w: &Workflow) -> Result<()> {
+    let raw = document(w)?;
     conn.execute(
         "UPDATE interaction_workflows SET phase=?2,doc=?3 WHERE id=?1",
-        params![w.id, w.phase, serde_json::to_string(w)?],
+        params![w.id, w.phase, raw],
     )?;
     Ok(())
 }
@@ -116,9 +128,9 @@ fn result_on(conn: &Connection, w: &Workflow, index: usize) -> Result<Option<(Va
     let (current, correction) = super::routing::delivery_freshness(conn, &d)?;
     let owner_current =
         owner_on(conn, w.human, w.plan.steps[index].owner).is_ok_and(|(_, n)| n == native);
-    let mut source = json!({"id":result,"delivery":d.id,"native_thread":native,"native_turn":turn,"item":item,"source_session":i.target_session,"instruction":i.id,"covered":d.covered,"completed":d.completed,"current":current && owner_current,"correction_pending":correction});
+    let mut source = json!({"id":result,"delivery":d.id,"native_thread":native,"native_turn":turn,"item":item,"source_session":i.target_session,"instruction":i.id,"completed":d.completed,"current":current && owner_current,"correction_pending":correction});
     // The revision fences the immutable canonical body and current source/coverage.
-    source["revision"] = json!(digest(&json!([source, d.body]))?);
+    source["revision"] = json!(digest(&json!([source, d.covered, d.body]))?);
     Ok(Some((source, d)))
 }
 fn completed(source: &Value) -> bool {
@@ -341,6 +353,13 @@ impl Store {
         if selected {
             bail!("Original already has a dispatch or creation plan");
         }
+        let retained: i64 =
+            tx.query_row("SELECT count(*) FROM interaction_workflows", [], |r| {
+                r.get(0)
+            })?;
+        if retained >= MAX_RETAINED_WORKFLOWS {
+            bail!(WORKFLOW_CAPACITY_ERROR);
+        }
         let expiry = chrono::DateTime::parse_from_rfc3339(&plan.expires_at)?;
         if expiry <= Utc::now() || expiry > Utc::now() + Duration::days(7) {
             bail!("Workflow lifetime must be finite and at most seven days");
@@ -370,16 +389,15 @@ impl Store {
         if !live_on(&tx, &w)? || closed.is_cancelled() {
             bail!("Workflow authority is not current");
         }
+        let raw = document(&w)?;
+        // Reserve room for the four bounded admission references, offer slots,
+        // later-original supersession reference and final integration checkpoint.
+        if raw.len() > MAX_WORKFLOW_DOCUMENT_BYTES - 32 * 1024 {
+            bail!("Workflow original exceeds the reserved journal document bound");
+        }
         tx.execute(
             "INSERT INTO interaction_workflows VALUES(?1,?2,?3,?4,?5,'active',?6)",
-            params![
-                id,
-                human,
-                entry.chat_id,
-                entry.thread_id,
-                source_key,
-                serde_json::to_string(&w)?
-            ],
+            params![id, human, entry.chat_id, entry.thread_id, source_key, raw],
         )?;
         let view = view_on(&tx, &w)?;
         tx.commit()?;
@@ -660,7 +678,9 @@ impl Store {
             bail!("Supersession requires observed later human input");
         }
         w.phase = "superseded".into();
-        w.supersession = Some(json!({"input_ref":input_ref,"source":source}));
+        w.supersession = Some(
+            json!({"input_ref":input_ref,"source_revision":digest(&source)?,"source_channel":source.channel,"source_event":source.event_id}),
+        );
         save_on(&tx, &w)?;
         // Only queued, definitely unsent inputs are held. Native accepted and
         // uncertain operations remain untouched and visible in the same journal.
@@ -773,7 +793,7 @@ impl Store {
         let text: String = d.body.chars().skip(offset).take(4000).collect();
         let end = offset + text.chars().count();
         Ok(
-            json!({"schema":"telecodex.workflow-result-part/v1","source":source,"text":text,"offset":offset,"next_offset":if end<length{Some(end)}else{None},"internal_evidence":true,"publication_grant":false}),
+            json!({"schema":"telecodex.workflow-result-part/v1","source":source,"covered":d.covered,"text":text,"offset":offset,"next_offset":if end<length{Some(end)}else{None},"internal_evidence":true,"publication_grant":false}),
         )
     }
 }
@@ -1162,6 +1182,71 @@ mod tests {
             0
         );
     }
+    #[test]
+    fn historical_rows_and_documents_are_bounded_without_erasing_identity_or_effects() {
+        let (_f, s, e, plan) = setup();
+        let v = declare(&s, &e, plan.clone());
+        let id = v["id"].as_str().unwrap();
+        {
+            let mut conn = s.conn.lock().unwrap();
+            let tx = conn.transaction().unwrap();
+            let w = load_on(&tx, 100, e.key, id).unwrap();
+            let mut oversized = w.clone();
+            oversized.source.text = "x".repeat(MAX_WORKFLOW_DOCUMENT_BYTES);
+            assert!(save_on(&tx, &oversized).is_err());
+            assert_eq!(load_on(&tx, 100, e.key, id).unwrap().source, w.source);
+            // Retained historical rows, not active work, exhaust the bound.
+            for index in 1..MAX_RETAINED_WORKFLOWS {
+                let mut old = w.clone();
+                old.id = format!("historical-{index}");
+                old.phase = "completed".into();
+                tx.execute(
+                    "INSERT INTO interaction_workflows VALUES(?1,100,100,1,?2,'completed',?3)",
+                    params![
+                        old.id,
+                        format!("historical-source-{index}"),
+                        document(&old).unwrap()
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        let later = original(&s, &e, "Another independently selected workflow");
+        let mut next = plan.clone();
+        next.input_ref = later;
+        let error = s
+            .interaction_workflow_declare(
+                100,
+                e.key,
+                "native-1",
+                "conversation",
+                next,
+                &CancellationToken::new(),
+            )
+            .unwrap_err();
+        assert_eq!(error.to_string(), WORKFLOW_CAPACITY_ERROR);
+        // Capacity does not disable an exact retained retry or current progress.
+        assert_eq!(declare(&s, &e, plan), v);
+        assert!(advance(&s, &e, &v).is_some());
+        let conn = s.conn.lock().unwrap();
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM interaction_workflows", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            MAX_RETAINED_WORKFLOWS
+        );
+        assert!(
+            conn.query_row(
+                "SELECT sum(length(CAST(doc AS BLOB))) FROM interaction_workflows",
+                [],
+                |r| r.get::<_, usize>(0)
+            )
+            .unwrap()
+                <= MAX_RETAINED_WORKFLOWS as usize * MAX_WORKFLOW_DOCUMENT_BYTES
+        );
+    }
+
     #[test]
     fn committed_result_advances_only_the_current_predeclared_successor_once() {
         let (_f, s, e, plan) = setup();
