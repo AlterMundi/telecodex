@@ -32,6 +32,30 @@ The initial loop alternates capture, durable input and spoken response. It is
 Foreground response latency, real echo/noise/device acceptance and meaningful
 internal-result/question offers remain required by the full roadmap.
 
+## Continuous capture source under construction
+
+`StreamingVoice.openCapture(media)` separates the foreground PCM graph from an
+individual ASR socket. An explicitly owned source can feed successive recorders
+through `captureSource`; the previous provider may finish while the next recorder
+already receives PCM. Ordinary recording still owns and closes its own graph.
+No configuration enables continuous avatar listening through this primitive yet.
+
+Worklet boundary acknowledgments flush complete PCM samples without resetting
+the resampler or disconnecting the microphone. Each recorder accepts samples
+only between its exact begin/end acknowledgments and translates absolute activity
+offsets to its own original. Provider failure keeps the same local WAV fallback;
+closing a shared graph preserves each accumulated fragment as unconfirmed rather
+than pretending that its final flush succeeded. Compressed-original captions do
+not accept this splitting path.
+
+The source has no PCM history, at most three consumers, and a five-minute wall
+and sample limit. A future foreground coordinator must remain subscribed across
+utterance boundaries, own the bounded pre-speech ring and unresolved originals,
+and close the source on exit/hidden/auth loss. Without that coordinator, samples
+between recorders have no original owner. This seam therefore does **not** prove
+continuous listening, automatic barge-in, echo rejection or device acceptance.
+The current alternating avatar trial remains unchanged until that integration.
+
 ## Why combine speech activity with turn analysis
 
 [Pipecat Smart Turn](https://github.com/pipecat-ai/smart-turn) analyzes audio

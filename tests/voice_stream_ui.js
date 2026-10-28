@@ -42,6 +42,24 @@ function boot(fail){
   const run=step=>{const w=worklet(rate);for(let i=0;i<rate;i+=step){const size=Math.min(step,rate-i),block=Float32Array.from({length:size},(_,j)=>Math.sin((i+j)*2*Math.PI*230/rate));assert.equal(w.processor.process([[block]]),true);}w.processor.port.onmessage({data:'finish'});assert.equal(w.processor.process([[new Float32Array(128)]]),false);assert(w.messages.at(-1).finished);return Buffer.concat(w.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm)));};
   const small=run(128),large=run(1177);assert.equal(small.length,32000);assert(small.equals(large),`Resampling must not jump at ${rate}Hz chunk boundaries`);
  }
+ // A segment boundary flushes the resampler without stopping or resetting it.
+ for(const rate of [16000,44100,48000]){
+  const w=worklet(rate),reference=worklet(rate);let before=0;
+  for(let i=0;i<rate;i+=128){
+   const block=Float32Array.from({length:Math.min(128,rate-i)},(_,j)=>Math.sin((i+j)*2*Math.PI*230/rate));
+   w.processor.process([[block]]);reference.processor.process([[block]]);
+   if(i>rate/3&&!before){
+    w.processor.port.onmessage({data:{boundary:'first:end'}});
+    const mark=w.messages.at(-1);assert.equal(mark.boundary,'first:end');before=mark.totalBytes;
+    assert.equal(before,Buffer.concat(w.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm))).length);
+   }
+  }
+  w.processor.port.onmessage({data:{boundary:'second:end'}});reference.processor.port.onmessage({data:'finish'});
+  assert(w.processor.active,'A boundary must leave the microphone graph running');
+  assert.equal(w.messages.at(-1).totalBytes,32000);assert(before>0&&before<32000);
+  assert(Buffer.concat(w.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm))).equals(Buffer.concat(reference.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm)))));
+  const count=w.messages.length;w.processor.port.onmessage({data:{boundary:'bad token'}});assert.equal(w.messages.length,count);
+ }
  const clamp=worklet(16000);clamp.processor.process([[Float32Array.of(-2,-1,0,1,2)]]);clamp.processor.port.onmessage({data:'finish'});assert.deepEqual([...new Int16Array(clamp.messages[0].pcm)],[-32767,-32767,0,32767,32767]);
  const canonical=boot(),samples=pcm(0,-32767,15000,32767);
  const wav=Buffer.from(await canonical.window.StreamingVoice.wav([samples]).arrayBuffer());
@@ -69,6 +87,45 @@ function boot(fail){
  ds.message({type:'turn_detection_unavailable'});assert.equal(detectorFailures,1);
  dw.emit({pcm:new ArrayBuffer(3200)});dw.emit({activityBytes:3400,totalBytes:6400});ds.message(endpoint(4,6400));assert.equal(endpoints,1,'Failed analysis never resumes automatically');
  continuous.discard();ds.message(endpoint(5,6400));assert.equal(endpoints,1);
+ // Two independent ASR finalizations share one still-running PCM graph.
+ // A permanent coordinator tap sees the between-turn samples too; it owns
+ // bounded pre-speech retention rather than either individual utterance.
+ const shared=boot(),source=await shared.window.StreamingVoice.openCapture({kind:'synthetic-media'}),observed=[];
+ const untap=source.subscribe(value=>observed.push(value));
+ const first=await shared.create(undefined,{captureSource:source}),secondId='20000000-0000-4000-8000-000000000002';
+ const second=await shared.create(undefined,{captureSource:source,id:secondId}),clips=[];
+ first.addEventListener('dataavailable',e=>clips.push(['first',e.data]));second.addEventListener('dataavailable',e=>clips.push(['second',e.data]));
+ const sw=shared.worklets[0];assert.equal(shared.contexts.length,1);assert.equal(shared.sockets.length,2);
+ await assert.rejects(shared.create(undefined,{captureSource:source}));assert.equal(shared.sockets.pop().readyState,3,'A rejected excess consumer closes only its own socket');
+ assert(!source.closed);
+ for(const socket of shared.sockets){socket.open();socket.message({type:'ready'});}
+ first.start();sw.emit({boundary:uuid+':begin',totalBytes:100});sw.emit({pcm:samples,totalBytes:108});
+ first.stop();sw.emit({pcm:pcm(200),totalBytes:110});sw.emit({boundary:uuid+':end',totalBytes:110});
+ assert.deepEqual(JSON.parse(shared.sockets[0].sent.at(-1)),{type:'finish'});
+ assert.equal(shared.sockets[1].sent.length,1,'Another utterance boundary cannot finish an unstarted provider');
+ assert(!observed.at(-1).finished,'Consumers cannot mutate the shared source event');
+ sw.emit({pcm:pcm(300),totalBytes:112}); // Retained by the coordinator, not appended to the stopped original.
+ second.start();sw.emit({boundary:secondId+':begin',totalBytes:112});sw.emit({pcm:pcm(400),totalBytes:114});
+ shared.sockets[0].message({type:'prepared',id:uuid,text:'first'});assert(!shared.contexts[0].closed);
+ second.stop();sw.emit({boundary:secondId+':end',totalBytes:114});shared.sockets[1].message({type:'prepared',id:secondId,text:'second'});
+ assert.equal(clips.length,2);assert.equal(clips[0][1].size,44+10);assert.equal(clips[1][1].size,44+2);
+ assert.deepEqual([...new Int16Array((await clips[1][1].arrayBuffer()).slice(44))],[400]);
+ assert.equal(observed.filter(v=>v.pcm).length,4);assert(!shared.contexts[0].closed);assert.equal(shared.contexts[0].resumed,true);
+ assert(sw.controls.some(v=>v.boundary===uuid+':end'));assert(!sw.controls.includes('finish'));
+ untap();source.close();source.close();assert(shared.contexts[0].closed);assert(source.closed);
+ await assert.rejects(shared.create({},{captureSource:source}));
+ for(const why of ['explicit-close','wall-limit','sample-limit']){
+  const bounded=boot(),graph=await bounded.window.StreamingVoice.openCapture({kind:'synthetic-media'});
+  const r=await bounded.create(undefined,{captureSource:graph});r.start();const w=bounded.worklets[0];
+  w.emit({boundary:uuid+':begin',totalBytes:0});w.emit({pcm:samples,totalBytes:samples.byteLength});
+  if(why==='explicit-close')graph.close();
+  if(why==='wall-limit')bounded.timers.find(t=>t.ms===300000&&!t.cleared).fn();
+  if(why==='sample-limit')w.emit({pcm:pcm(999),totalBytes:300*32000+2});
+  assert(graph.closed);assert.equal(bounded.events.length,2);assert.equal(r.captureStop,why==='explicit-close'?'capture_closed':'session_limit');
+  assert.equal(bounded.events[0].data.size,44+samples.byteLength,'Session exit retains the accumulated fragment, without claiming a final flush');
+  assert.equal(bounded.sockets.length,1);assert(!bounded.sockets[0].sent.some(v=>typeof v==='string'&&JSON.parse(v).type==='finish'));
+  w.emit({pcm:pcm(900)});assert.equal(bounded.events.length,2);
+ }
  const cancel=boot(),cancelRecorder=await cancel.create();cancelRecorder.start();cancel.sockets[0].open();cancel.sockets[0].message({type:'ready'});cancel.worklets[0].emit({pcm:samples});cancelRecorder.discard();assert.deepEqual(cancel.events.map(e=>e.type),['stop']);assert.deepEqual(JSON.parse(cancel.sockets[0].sent.at(-1)),{type:'discard'});assert(!cancel.sockets[0].sent.some(v=>typeof v==='string'&&JSON.parse(v).type==='finish'));
  for(const mode of ['disconnect','send-error','backpressure','unavailable','wrong-prepared-id']){
   const lost=boot(),device=await lost.create(),s=lost.sockets[0],w=lost.worklets[0];device.start();s.open();s.message({type:'ready'});
