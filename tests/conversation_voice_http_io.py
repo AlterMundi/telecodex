@@ -78,7 +78,11 @@ print(json.dumps({'text':item['text'],'final':True}))
         repeated=upload(data,original,stop='duration_limit')[1];assert repeated.status_code==200 and not repeated.json()['new_input']
         assert upload(audio(555),original)[1].status_code==400
         assert calls().count(digest)==1
-        assert upload(data,original)[1].status_code==400,'A retry cannot drop the duration-limit context'
+        # Native immutable-identity refusals use the existing unconfirmed-control
+        # HTTP response; inspect the retained original rather than replaying it.
+        assert upload(data,original)[1].status_code==503,'A retry cannot drop the duration-limit context'
+        assert status(original)['voice']['capture_stop']=='duration_limit'
+        assert calls().count(digest)==1
         later=str(uuid.uuid4());later_response=client.post('/api/interaction/inputs',json={'binding':binding,'id':later,'text':'Later correction: requirement17.'},headers=headers)
         assert later_response.status_code==200,later_response.text
         j.wait(lambda:status(later)['phase']=='accepted');assert len(j.packets)==1
