@@ -1300,13 +1300,29 @@ without mislabelling ordinary sources as workflows. Rollback must keep this
 compatible reader/writer and preserve the journal; disabling the flag does not
 revoke or erase retained outcomes.
 
-PR427/source4372cbdd, mergeb149a458, fullCI40743262608 passed and is selected
-on CompAII's local listener with `native_routed_returns=true`. The existing
-workflow policy remains enabled. Web422/ui5149ca483732, Core, voice configuration,
-two current native collectors and their goal identity/accounting were preserved;
-no native restart, new human input, global Stop or peer adoption is claimed.
-Current receiving/operator details live in the existing Shared Resources
-Interaction record. Rollback keeps the427-compatible writer with the flag false.
+Initial PR427/source4372cbdd activation (fullCI40743262608) is superseded by
+receiving-selected PR429/sourcec2c301ef, merge2713900e, fullCI40753163750.
+Its exact physical-turn collector replacement retains source publication fences;
+25 targeted and442 full local unit tests pass (one existing ignored), with strict
+clippy and full native/HTTP CI. CompAII keeps both native-return policies enabled.
+Web PR430/source8c7697f7, merge6c902d2b, applicableCI40757444581 is selected as
+**uic8496d676ec8** with exact local/public assets and health verified. It adds the
+bounded preparation intervals documented in interaction-streaming.md. Core,
+voice/model/configuration and two current native writers/goals/accounting were
+preserved; no native restart, human input replay, global Stop or peer adoption.
+
+Enabling these native-return flags also changes the web receiving-profile digest.
+Qualify all configured receiving constructors and their separate retained bindings
+before selecting a changed profile, even if the web code is unchanged. During this
+adoption, Alerts/Traffic rejected the exact old profile; same bot/human,
+endpoints/credentials and companion scope were verified, with only the two approved
+return flags differing. Fingerprint adoption preserved all4126 delivery attempts/
+receipts, menu selected/pending state and Traffic incidents/outbox. Never clear
+journals, weaken identity checks or recreate device grants to make startup pass.
+Shared-auth/browser/device and physical acceptance remain separate. The existing
+Shared Resources Interaction record owns receiving details and remaining gaps.
+Rollback retains the fixed429-compatible writer with new native admissions off,
+all later journals/receipts and prior web; older writers can lose collector fences.
 
 The synthetic active-result / idle-question / idle-result real-wrapper journey,
 known-unsent recovery, loaded-policy observation and default-off/no-backfill
