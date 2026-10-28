@@ -118,8 +118,24 @@ class Returning(WorkflowJourney):
         self.broadcast(self.web_thread, 'turn/completed', {'turn': {'id': turn, 'status': 'completed'}})
 
 
-def qualify(binary):
-    j = Returning(binary)
+class Recovering(Returning):
+    def __init__(self, binary):
+        self.fail_resume = False
+        self.failed_resumes = 0
+        super().__init__(binary)
+
+    def handle_extra_rpc(self, message, send):
+        if (self.fail_resume and message.get('method') == 'thread/resume'
+                and message.get('params', {}).get('threadId') == self.web_thread):
+            self.failed_resumes += 1
+            send({'id': message['id'], 'error': {
+                'code': -32000, 'message': 'Synthetic unavailable metadata before native input'}})
+            return True
+        return super().handle_extra_rpc(message, send)
+
+
+def qualify(binary, recovery=False):
+    j = Recovering(binary) if recovery else Returning(binary)
     try:
         j.start()
         for topic in (7, 8, 1):
@@ -150,8 +166,16 @@ def qualify(binary):
         j.wait(lambda: len(j.internal_packets) == 1)
         j.wait(lambda: j.row('SELECT busy FROM sessions WHERE thread_id=1') == [(0,)])
         j.wait(lambda: j.instructions(8) and j.instructions(8)[0][1] == 'accepted')
+        if recovery:
+            j.fail_resume = True
         j.answer_worker(8, 'Selected receiving verification.')
-        j.wait(lambda: len(j.internal_packets) == 2)
+        if recovery:
+            j.wait(lambda: j.row("SELECT count(*) FROM interaction_workflows,json_each(doc,'$.native_returns') r WHERE json_extract(r.value,'$.phase')='retained_unsent'") == [(1,)])
+            retained = json.loads(j.row('SELECT doc FROM interaction_workflows')[0][0])['native_returns'][-1]
+            assert retained['attempts'] == 1 and retained['retry_after'] is not None
+            assert len(j.internal_packets) == 1 and j.failed_resumes > 0
+            j.fail_resume = False
+        j.wait(lambda: len(j.internal_packets) == 2, seconds=35 if recovery else 15)
         j.wait(lambda: j.row('SELECT busy FROM sessions WHERE thread_id=1') == [(0,)])
         page = j.read('presentation', 'list', '0', '0')['result']
         native = [item for item in page['items'] if item['kind'] == 'integrator_answer'
@@ -166,6 +190,11 @@ def qualify(binary):
         view = json.loads(j.row('SELECT doc FROM interaction_workflows')[0][0])
         assert view['phase'] == 'completed'
         assert len(view['native_returns']) == 2 and all(r['phase'] == 'accepted' for r in view['native_returns'])
+        if recovery:
+            assert view['native_returns'][-1]['id'] == retained['id']
+            assert view['native_returns'][-1]['attempts'] == 2
+            assert view['native_returns'][-1]['envelope'] == retained['envelope']
+            print('PASS known-unsent metadata failure recovered once by existing heartbeat with same intent/source, no repeated worker or human original')
         assert len(j.worker_packets['native-topic-7']) == len(j.worker_packets['native-topic-8']) == 1
         j.idle()
         print('PASS active internal turn/start + idle callback-only turn, actual controller source reads/offer acknowledgment, retained ACKs, same Conversation publication and no fabricated human/Telegram ingress; synthetic native boundary, zero models')
@@ -274,4 +303,5 @@ def qualify_completion_race(binary):
 if __name__ == '__main__':
     executable = str(Path(sys.argv[1]).resolve())
     qualify(executable)
+    qualify(executable, recovery=True)
     qualify_completion_race(executable)
