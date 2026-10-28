@@ -53,7 +53,11 @@ Voice capture freezes observed question versions before permission/streaming.
 `capture_questions` is an untrusted narrowing limit, intersected with the native
 owned question snapshot; it cannot add scope or become an answer. Keep it frozen
 through exact-original retry/recovery. Questions first observed later require a
-later original or explicit controls. See docs/interaction-streaming.md.
+later original or explicit controls. In explicit continuous mode, ASR arming is
+passive preparation: freeze the particular utterance's observed question versions
+at its first local acoustic marker, before confirmed speech can acquire the floor.
+If that marker is unavailable, retain the earlier arm-time snapshot. Never widen
+it at finalization, Send, retry or recovery. See docs/interaction-streaming.md.
 
 
 ## Pending navigation — human correction, 2026-10-27

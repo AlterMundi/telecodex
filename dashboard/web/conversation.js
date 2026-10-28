@@ -58,7 +58,7 @@ window.Conversation = (() => {
       }catch(error){if(fileDownloads.get(file.id)===controller && fileCredential()===credential){fileStatus.set(file.id,error.name==="AbortError"?"Download stopped. You can try again.":error.message||"File unavailable.");if(error.status===401)failed(error);}}
       finally{clearTimeout(deadline);if(fileDownloads.get(file.id)===controller)fileDownloads.delete(file.id);refreshFiles();}
     }
-    let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext,voiceMode,conversationOnly=false,voiceModePrevious;
+    let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext,voiceMode,conversationOnly=false,voiceModePrevious,voiceSession,continuousEnabled=false;
     // Reuse the same presence renderer in the fixed header, freeing conversation space.
     if(standalone){
       const presence=$("#conversation-companion"),identity=$("header .identity"),tools=$("header .header-tools"),beacon=$("#conversation-sound-toggle");
@@ -172,7 +172,7 @@ window.Conversation = (() => {
     }
     const attachedFiles = readOnly ? undefined : window.FileInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onTiming:(id,stage)=>timing?.mark(id,stage),onInput:(value,version)=>{voiceMode?.update({sent:true});inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getPlayback:()=>playbackContext(true),getCaptureQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,getFiles:()=>attachedFiles?.capture(),onFilesSent:refs=>attachedFiles?.consumed(refs),getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing,pending:detail?.pending,message:detail?.message,remaining:detail?.remaining});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onTiming:(id,stage)=>timing?.mark(id,stage),onInput:(value,version)=>{voiceSession?.release(value.id);voiceMode?.update({sent:true});inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getPlayback:()=>playbackContext(true),getCaptureQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,getFiles:()=>attachedFiles?.capture(),onFilesSent:refs=>attachedFiles?.consumed(refs),getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=voiceMode?.active&&voiceModePrevious?.continuous?!!voiceSession?.floor:value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing,pending:detail?.pending,message:detail?.message,remaining:detail?.remaining});if(!captureBusy){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram,onLocalDiscard:id=>voiceSession?.release(id)});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -1386,7 +1386,8 @@ window.Conversation = (() => {
       refreshFiles();
       await goalControls?.observe(value.goal_controls);
       microphone?.configure(value.can_speak,value.can_stream_transcribe,value.streaming_transcription_mode);
-      voiceMode?.configure(value.can_converse===true);
+      continuousEnabled=value.can_converse_continuous===true;
+      voiceMode?.configure(value.can_converse===true,continuousEnabled);
       setCsrf(value.csrf);
       canListen = !readOnly && value.can_listen;canStreamSpeech=canListen && !!value.can_stream_speech;
       canSpeakLive=canListen && value.can_speak_live_response===true;
@@ -1791,16 +1792,29 @@ window.Conversation = (() => {
     telegram?.BackButton?.onClick?.(() => setMode(false));
     if(standalone){$("#conversation-back").hidden=true;$("#conversation-telegram-older").hidden=true;}
     if(readOnly){document.body.classList.toggle("monitor-mode",true);$("#conversation-sent").open=true;}
+    if(standalone&&!readOnly&&microphone)voiceSession=window.ContinuousConversation?.create({
+      headers,getBinding:()=>binding,getQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,
+      getPlayback:()=>playbackContext(true),retain:original=>microphone.retainContinuous(original),commit:original=>microphone.commitContinuous(original),
+      onInterrupt:beginVoiceCapture,onCaption:text=>voiceMode?.update({caption:text}),onTiming:(id,stage)=>timing?.mark(id,stage),
+      onReview:originals=>{void microphone.reviewContinuous(originals);},
+      onState:value=>{
+        if(!voiceModePrevious?.continuous)return;
+        captureBusy=value.floor;presentState({capture:value.floor?'recording':value.starting?'permission':'idle'});
+        voiceMode?.update({continuousState:value});if(!captureBusy)drainVoice();
+      }
+    });
     if(standalone && !readOnly)voiceMode=window.ConversationVoiceMode?.mount({
-      portrait:$("#conversation-companion pre"),canEnter:()=>!!microphone && !microphone.ownsSend() && !captureBusy,
-      canStart:()=>!!microphone && !microphone.ownsSend() && !captureBusy && !voiceBusy && !speechWait,
+      portrait:$("#conversation-companion pre"),canEnter:()=>!!microphone && !microphone.ownsSend() && !captureBusy && (!continuousEnabled||!!voiceSession&&microphone.canStartContinuous()),
+      canStart:()=>continuousEnabled?!!voiceSession&&!voiceSession.active&&microphone.canStartContinuous():!!microphone && !microphone.ownsSend() && !captureBusy && !voiceBusy && !speechWait,
       onEnter:()=>{
-        voiceModePrevious={enabled:voiceEnabled,suspended:voiceSuspended};
+        voiceModePrevious={enabled:voiceEnabled,suspended:voiceSuspended,continuous:continuousEnabled};
+        if(continuousEnabled)microphone.continuousOwner(true);
         conversationOnly=true;stop();audioFilterChanged();enableVoice();sound?.update({conversationOnly:true});
       },
-      onSpeak:()=>microphone?.startConversation(),
+      onSpeak:()=>voiceModePrevious?.continuous?voiceSession?.start():microphone?.startConversation(),
       onLeave:()=>{
-        microphone?.hold();conversationOnly=false;sound?.update({conversationOnly:false});
+        if(voiceModePrevious?.continuous){voiceSession?.hold();microphone.continuousOwner(false);void microphone.reviewContinuous(voiceSession?.originals||[]);captureBusy=false;}
+        else microphone?.hold();conversationOnly=false;sound?.update({conversationOnly:false});
         if(voiceModePrevious?.enabled){voiceSuspended=voiceModePrevious.suspended;voiceStatus();}
         else disableVoice();
         voiceModePrevious=undefined;audioFilterChanged();companion?.update({});

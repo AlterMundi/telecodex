@@ -60,11 +60,51 @@ function boot(fail){
   assert(Buffer.concat(w.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm))).equals(Buffer.concat(reference.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm)))));
   const count=w.messages.length;w.processor.port.onmessage({data:{boundary:'bad token'}});assert.equal(w.messages.length,count);
  }
+ const capped=worklet(16000);capped.processor.total=300*16000-1;
+ assert.equal(capped.processor.process([[Float32Array.of(.1,.2)]]),false);
+ assert.equal(capped.processor.total,300*16000);assert.equal(capped.messages.at(-1).captureError,'session_limit');
+ assert.equal(capped.processor.process([[new Float32Array(128)]]),false,'The audio thread enforces the cap without a main-thread timer');
  const clamp=worklet(16000);clamp.processor.process([[Float32Array.of(-2,-1,0,1,2)]]);clamp.processor.port.onmessage({data:'finish'});assert.deepEqual([...new Int16Array(clamp.messages[0].pcm)],[-32767,-32767,0,32767,32767]);
  const canonical=boot(),samples=pcm(0,-32767,15000,32767);
  const wav=Buffer.from(await canonical.window.StreamingVoice.wav([samples]).arrayBuffer());
  const expected=execFileSync('python3',['-c',"import sys,io,wave; o=io.BytesIO(); w=wave.open(o,'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(sys.stdin.buffer.read()); w.close(); sys.stdout.buffer.write(o.getvalue())"],{input:Buffer.from(samples)});
  assert(wav.equals(expected),'Browser WAV bytes must equal the server/native preparation identity');
+ // Foreground activity stays separate from ASR, media capture and admission.
+ const activity=boot(),activityValues=[];let activityFailures=0;
+ const opening=activity.window.StreamingVoice.openActivity({headers:()=>({'X-Dashboard-CSRF':'csrf'}),binding,id:uuid,onActivity:v=>activityValues.push(v),onUnavailable:()=>activityFailures++});
+ const as=activity.sockets[0];as.open();assert.equal(as.url,'wss://example.invalid/interaction/api/interaction/voice/activity');
+ assert.deepEqual(JSON.parse(as.sent[0]),{id:uuid,binding,csrf:'csrf'});
+ as.message({type:'ready',id:uuid,analysis_only:true});const analysis=await opening;
+ assert.equal(activity.contexts.length,0,'Analysis transport cannot request or open a microphone');
+ const snapshot=(offset,generation=1)=>({schema:'telecodex.turn-activity/v1',type:'activity',generation,audio_bytes:offset,speech_seen:true,speaking:false,
+   onset:{generation,audio_bytes:offset},endpoint:{generation,audio_bytes:offset,probability:.9,authority:'analysis_only'}});
+ assert(analysis.feed(new ArrayBuffer(3200)));as.message({type:'turn_activity',id:uuid,activity:snapshot(3200)});
+ assert.equal(activityValues.length,1);assert(analysis.boundary({generation:1,audio_bytes:3200}));assert(!analysis.boundary({generation:1,audio_bytes:3200}));
+ assert.deepEqual(JSON.parse(as.sent.at(-1)),{boundary:{generation:1,audio_bytes:3200}});
+ as.message({type:'boundary',id:uuid,activity:{schema:'telecodex.turn-activity/v1',type:'boundary',generation:1,audio_bytes:3200}});
+ assert(analysis.feed(new ArrayBuffer(3200)));as.message({type:'turn_activity',id:uuid,activity:snapshot(6400,2)});assert.equal(activityValues.length,2);
+ assert.equal(activity.sockets.length,1);assert.equal(activity.events.length,0,'Activity never admits a recording');
+ analysis.close();analysis.close();as.message({type:'turn_activity',id:uuid,activity:snapshot(6400,2)});
+ assert.equal(activityValues.length,2);assert.equal(activityFailures,0);
+ for(const failure of ['backpressure','send','bad-event','unavailable','limit']){
+  const unit=boot();let failed=0;const opening=unit.window.StreamingVoice.openActivity({headers:()=>({}),binding,id:uuid,onUnavailable:()=>failed++});
+  const s=unit.sockets[0];s.open();s.message({type:'ready',id:uuid,analysis_only:true});const a=await opening;
+  if(failure==='backpressure'){s.bufferedAmount=300000;assert(!a.feed(samples));}
+  if(failure==='send'){s.failSend=true;assert(!a.feed(samples));}
+  if(failure==='bad-event')s.message({type:'turn_activity',id:uuid,activity:snapshot(9999)});
+  if(failure==='unavailable')s.message({type:'unavailable'});
+  if(failure==='limit')unit.timers.find(t=>t.ms===300000&&!t.cleared).fn();
+  assert(a.closed);assert.equal(failed,1);assert.equal(unit.sockets.length,1,'No automatic analyzer reconnect');
+ }
+ for(const failure of ['abort','timeout','wrong-id']){
+  const unit=boot(),abort=new AbortController();
+  const opening=unit.window.StreamingVoice.openActivity({headers:()=>({}),binding,id:uuid,signal:abort.signal});
+  const s=unit.sockets[0];s.open();
+  if(failure==='abort')abort.abort();
+  if(failure==='timeout')unit.timers.find(t=>t.ms===35000&&!t.cleared).fn();
+  if(failure==='wrong-id')s.message({type:'ready',id:'another',analysis_only:true});
+  await assert.rejects(opening);assert.equal(s.readyState,3);assert.equal(unit.contexts.length,0);
+ }
  const f=boot(),recorder=await f.create();assert(f.window.StreamingVoice.supported());recorder.start();const socket=f.sockets[0],node=f.worklets[0];socket.open();
  assert.equal(socket.url,'wss://example.invalid/interaction/api/interaction/voice/live');assert(!socket.url.includes('synthetic-session'));
  assert.deepEqual(JSON.parse(socket.sent[0]),{id:uuid,binding,csrf:'synthetic-csrf',authorization:'Bearer synthetic-session'});
@@ -114,6 +154,16 @@ function boot(fail){
  assert(sw.controls.some(v=>v.boundary===uuid+':end'));assert(!sw.controls.includes('finish'));
  untap();source.close();source.close();assert(shared.contexts[0].closed);assert(source.closed);
  await assert.rejects(shared.create({},{captureSource:source}));
+ const prefixed=boot(),prefixGraph=await prefixed.window.StreamingVoice.openCapture({kind:'synthetic-media'}),cuts=[];
+ const prefixRecorder=await prefixed.create(undefined,{captureSource:prefixGraph,initialPCM:end=>{assert.equal(end,4);return [pcm(111,222)];},onFlushed:end=>cuts.push(end)});
+ prefixRecorder.start();const ps=prefixed.sockets[0],pw=prefixed.worklets[0];ps.open();ps.message({type:'ready'});
+ pw.emit({boundary:uuid+':begin',totalBytes:4});pw.emit({pcm:pcm(333),totalBytes:6});prefixRecorder.stop();pw.emit({boundary:uuid+':end',totalBytes:6});
+ assert.deepEqual(cuts,[6]);prefixGraph.close();
+ assert.equal(prefixed.events.length,0,'A flushed old ASR must survive closure of the microphone graph');
+ ps.message({type:'prepared',id:uuid,text:'Exact prefixed words'});
+ assert.equal(prefixRecorder.captureStop,undefined);assert.equal(prefixRecorder.preparedText,'Exact prefixed words');
+ const prefixBytes=await prefixed.events[0].data.arrayBuffer();assert.deepEqual([...new Int16Array(prefixBytes.slice(44))],[111,222,333]);
+ assert.equal(prefixed.events.length,2);
  for(const why of ['explicit-close','wall-limit','sample-limit']){
   const bounded=boot(),graph=await bounded.window.StreamingVoice.openCapture({kind:'synthetic-media'});
   const r=await bounded.create(undefined,{captureSource:graph});r.start();const w=bounded.worklets[0];

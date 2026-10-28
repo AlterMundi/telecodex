@@ -14,7 +14,8 @@ class CaptureTurn(unittest.TestCase):
         value = object.__new__(Activity)
         value.pending = bytearray(); value.tail = bytearray()
         value.bytes = value.frames = value.generation = value.positive = value.quiet = value.analyses = 0
-        value.speaking = value.speech_seen = False; value.scored_generation = 0
+        value.speaking = value.speech_seen = False; value.scored_generation = value.confirmed_generation = 0
+        value.max_bytes=120*32000;value.max_analyses=30;value.endpoints=[]
         self.probability = 0
         value._probability = lambda _: self.probability
         self.scored = []
@@ -53,7 +54,7 @@ class CaptureTurn(unittest.TestCase):
             with self.assertRaises(ValueError):value.feed(data)
         value.bytes=120*32000
         with self.assertRaises(ValueError):value.feed(b'\0'*1024)
-        value.bytes=0;value.speech_seen=True;value.generation=100;value.analyses=30
+        value.bytes=0;value.speech_seen=True;value.generation=value.confirmed_generation=100;value.analyses=30
         with self.assertRaises(TurnEndUnavailable):value.feed(b'\0'*1024)
 
     def test_startup_backfill_defers_scoring_until_the_current_tail(self):
@@ -65,6 +66,43 @@ class CaptureTurn(unittest.TestCase):
         self.assertEqual(result['endpoint']['audio_bytes'],12288)
         self.assertEqual(len(self.scored),1)
         with self.assertRaises(ValueError):value.feed(b'\0'*1024,analyze='yes')
+
+    def test_new_voice_generation_needs_its_own_speech_confirmation(self):
+        value=self.analyzer();self.probability=.8
+        onset=value.feed(b'\0'*3072)['onset']
+        self.assertEqual(onset,{'generation':1,'audio_bytes':3072})
+        self.probability=0;value.feed(b'\0'*8192)
+        self.probability=.8
+        short=value.feed(b'\0'*1024)
+        self.assertNotIn('onset',short)
+        self.probability=0
+        self.assertNotIn('endpoint',value.feed(b'\0'*8192))
+        self.assertEqual(len(self.scored),1,'A prior real voice cannot authorize scoring later short noise')
+
+    def test_foreground_boundary_keeps_later_audio_and_warm_state(self):
+        value=self.analyzer();self.probability=.8;value.feed(b'\0'*3072)
+        self.probability=0;endpoint=value.feed(b'\0'*8192)['endpoint']
+        value.feed(b'\1\0'*512)
+        state=(value.frames,value.bytes,value.generation,value.speech_seen)
+        before=bytes(value.tail)
+        self.assertEqual(value.boundary(endpoint['generation'],endpoint['audio_bytes'])['type'],'boundary')
+        self.assertEqual(bytes(value.tail),b'\1\0'*512)
+        self.assertEqual((value.frames,value.bytes,value.generation,value.speech_seen),state)
+        self.assertNotEqual(bytes(value.tail),before)
+        with self.assertRaises(ValueError):value.boundary(endpoint['generation'],endpoint['audio_bytes'])
+        with self.assertRaises(ValueError):value.boundary(True,endpoint['audio_bytes'])
+        self.assertEqual(len(value.tail),1024)
+
+    def test_two_pending_boundaries_retire_only_the_acknowledged_prefix(self):
+        value=self.analyzer();self.probability=.8;value.feed(b'\0'*3072)
+        self.probability=0;first=value.feed(b'\0'*8192)['endpoint']
+        self.probability=.8;value.feed(b'\1\0'*1536)
+        self.probability=0;second=value.feed(b'\0'*8192)['endpoint']
+        before=bytes(value.tail);offset=first['audio_bytes']
+        value.boundary(first['generation'],offset)
+        self.assertEqual(bytes(value.tail),before[offset:])
+        value.boundary(second['generation'],second['audio_bytes'])
+        self.assertEqual(bytes(value.tail),b'');self.assertEqual(value.endpoints,[])
 
     def test_wrong_model_is_rejected_before_optional_imports(self):
         with tempfile.TemporaryDirectory() as root:

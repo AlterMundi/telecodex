@@ -122,6 +122,30 @@ function boot(live=false,recovery){
  await afterReload.click();await until(()=>afterReload.received.length===1);
  assert.equal(afterReload.uploads[0].headers['X-Input-Id'],retained.id);assert.equal(afterReload.uploads[0].body,retained.blob);
  assert.equal(storage.values.size,0,'Only a matching receipt retires local recovery');
+ // The continuous owner uses the ordinary original writer and bounded store.
+ const continuousStore=memoryRecovery(),continuous=boot(true,continuousStore);
+ await until(()=>continuous.ui.canStartContinuous());continuous.ui.continuousOwner(true);
+ const second=await continuous.ui.retainContinuous({id:crypto.randomUUID(),binding:'original-binding',mime:'audio/wav',blob:new Blob(['second'],{type:'audio/wav'}),capture_started:2000,preparedText:'Second'});
+ const first=await continuous.ui.retainContinuous({id:crypto.randomUUID(),binding:'original-binding',mime:'audio/wav',blob:new Blob(['first'],{type:'audio/wav'}),capture_started:1000,preparedText:'First',captureQuestions:{['a'.repeat(32)]:'b'.repeat(64)},playback:mediaHint});
+ const bundle=continuousStore.values.get('pending');assert.equal(bundle.schema,'telecodex.voice-recovery/v2');assert.deepEqual(Array.from(bundle.items,v=>v.id),[first.id,second.id]);
+ await assert.rejects(continuous.ui.retainContinuous({id:crypto.randomUUID(),binding:'original-binding',mime:'audio/wav',blob:new Blob(['third'])}));
+ assert.equal(continuousStore.values.get('pending').items.length,2,'Capacity refusal cannot mutate either retained original');
+ await assert.rejects(continuous.ui.retainContinuous({...first,blob:new Blob(['changed'])}));
+ assert.equal(continuousStore.values.get('pending').items[0].audio_sha256,first.audio_sha256);
+ const before=await continuous.ui.commitContinuous(first);assert(before.confirmed);assert.equal(before.value.id,first.id);
+ assert.equal(continuous.uploads[0].headers['X-Input-Id'],first.id);assert.deepEqual(JSON.parse(continuous.uploads[0].headers['X-Capture-Questions']),first.captureQuestions);
+ assert.equal(continuous.uploads[0].headers['X-Playback-Context'],JSON.stringify(mediaHint));
+ assert.equal(continuousStore.values.get('pending').id,second.id,'One receipt leaves the other exact original in the legacy single-item shape');
+ continuous.ui.continuousOwner(false);await until(()=>continuous.state().startsWith('An unfinished recording was recovered'));
+ assert.equal(continuous.uploads.length,1,'Leaving or restoring never retries a retained original');
+ await continuous.click();await until(()=>continuous.received.length===2);assert.equal(continuous.uploads[1].headers['X-Input-Id'],second.id);assert.equal(continuousStore.values.size,0);
+
+ const discardStore=memoryRecovery();discardStore.values.set('pending',{schema:'telecodex.voice-recovery/v2',items:[first,second]});
+ const queueReview=boot(false,discardStore);await until(()=>queueReview.state().startsWith('An unfinished recording was recovered'));
+ queueReview.cancel();await until(()=>queueReview.state().startsWith('An unfinished recording was recovered'));
+ await queueReview.click();await until(()=>queueReview.received.length===1);
+ assert.equal(queueReview.uploads[0].headers['X-Input-Id'],second.id,'Discard exposes the next retained original without reload');
+ assert.equal(queueReview.mediaRequests(),0);assert.equal(discardStore.values.size,0);
  const discarded=boot();discarded.mode('before');await discarded.click();discarded.click();await until(()=>discarded.state().startsWith('Recording unconfirmed'));
  discarded.confirmation(false);discarded.cancel();assert.equal(discarded.nodes.get('#conversation-voice-check').hidden,false);
  discarded.confirmation(true);discarded.cancel();assert.equal(discarded.ui.ownsSend(),false);assert.equal(discarded.button()['aria-label'],'Record a voice message');

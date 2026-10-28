@@ -19,7 +19,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     return setTimeout(fn,ms);
   };
   const cancelTimeout=id=>{if(gaps.has(id))gaps.delete(id);else clearTimeout(id);};
-  let capture,intersection,pageFailure;const replyTexts=new Map(),partReads=[],replyHolds=new Map();
+  let capture,intersection,pageFailure,continuousHooks,continuousMode,continuousSession;const continuousCalls=[];const replyTexts=new Map(),partReads=[],replyHolds=new Map();
   function element() {
     return {
       children: [], dataset: {}, handlers: {}, classList: {toggle() {}},
@@ -146,7 +146,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", response_draft:options.responseDraft, can_listen:true,can_reply_updates:true,can_speak_live_response:options.liveSpeech===true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
+    return {binding:"fixture", csrf:"synthetic",can_converse:options.continuous===true,can_converse_continuous:options.continuous===true, response_draft:options.responseDraft, can_listen:true,can_reply_updates:true,can_speak_live_response:options.liveSpeech===true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
@@ -177,7 +177,11 @@ function boot(readOnly=false,standalone=false,options={}) {
   });
   vm.runInContext(fs.readFileSync("dashboard/web/requests.js", "utf8"), context);
   vm.runInContext(fs.readFileSync("dashboard/web/microphone.js", "utf8"), context);
-  if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.()};}};
+  if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.(),canStartContinuous:()=>true,continuousOwner:v=>continuousCalls.push(['owner',v]),retainContinuous:v=>{continuousCalls.push(['retain',v]);return v;},commitContinuous:v=>{continuousCalls.push(['commit',v]);return v;},reviewContinuous:v=>continuousCalls.push(['review',v]),hold:()=>continuousCalls.push(['ordinary-hold']),startConversation:()=>continuousCalls.push(['ordinary-start'])};}};
+  if(options.continuous){
+    context.window.ContinuousConversation={create(hooks){continuousHooks=hooks;return continuousSession={active:false,floor:false,originals:[],start(){this.active=true;continuousCalls.push(['start']);hooks.onState({active:true,starting:false,floor:false,pending:false});},hold(){this.active=false;continuousCalls.push(['hold']);},release:id=>continuousCalls.push(['release',id])};}};
+    context.window.ConversationVoiceMode={mount(hooks){let enabled=false,direct=false;return continuousMode={active:false,updates:[],configure(value,next){if(this.active&&(!value||direct!==next))this.close();enabled=value;direct=next;},update:v=>continuousMode.updates.push(v),open(){if(!enabled||!hooks.canEnter())return;hooks.onEnter();this.active=true;hooks.onSpeak();},close(){if(!this.active)return;this.active=false;hooks.onLeave();}};}};
+  }
   if(options.progressive)context.window.SpeechStream={available:()=>true,open(_response,signal){
     const value={url:'blob:fixture-stream',signal,done:options.streamDone || Promise.resolve({complete:true,blob:new Blob(['verified encoded sample'],{type:'audio/mpeg'})}),onDecoderError(fn){this.decoderError=fn;},position:seconds=>options.wordPosition?.(seconds,Number(_response.headers.get("x-presentation-offset"))),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
   }};
@@ -198,6 +202,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   }
   ui.authenticated();
   return {ui, nodes, requests, originals,replyTexts,partReads,humanTasks,streamedTransports,
+    continuous:()=>({hooks:continuousHooks,mode:continuousMode,session:continuousSession,calls:continuousCalls}),microphoneState:(value,detail)=>capture.onActivity(value,detail),
     rangeGeometry(fn){context.document.createRange=fn;},
     reducedMotion(value){context.window.matchMedia=()=>({matches:value});},
     holdReplyText(id){let release,started;const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});replyHolds.set(id,{promise,started});return {entered,release};},
@@ -439,6 +444,20 @@ function boot(readOnly=false,standalone=false,options={}) {
   await follow.ui.refresh();
   assert.equal(live.scrollTop,live.scrollHeight,'The committed transcript cannot silently leave following mode');
   const until=async check=>{for(let n=0;n<100;n++){if(check())return;await new Promise(resolve=>setTimeout(resolve,5));}throw Error("Voice transition did not finish");};
+  const directOptions={capture:true,continuous:true,playback:true,immediateHash:true};
+  const direct=boot(false,true,directOptions);direct.audio();await direct.ui.refresh();
+  const bridge=direct.continuous();direct.nodes.get('#conversation-message').value='Keep this ordinary draft';bridge.mode.open();
+  assert(bridge.session.active);assert(bridge.calls.some(v=>v[0]==='owner'&&v[1]===true));assert(!bridge.calls.some(v=>v[0]==='ordinary-start'));
+  direct.microphoneState(true,{phase:'idle',uploading:true,pending:false});
+  direct.addReplies(1);await direct.ui.refresh();const directPlayer=direct.nodes.get('#conversation-audio');await until(()=>!directPlayer.paused);
+  assert(direct.audioCalls.length>0,'Armed continuous capture and an old upload cannot block ordinary Conversation speech');
+  bridge.hooks.onInterrupt();bridge.session.floor=true;bridge.hooks.onState({active:true,starting:false,floor:true,pending:false});
+  assert(directPlayer.paused,'Actual playback pauses on the confirmed speech-onset callback');assert.equal(direct.nativePosts.length,0,'Barge-in cannot cancel or answer native work');
+  const bridgeOriginal={id:'source-bound-original'};assert.equal(bridge.hooks.retain(bridgeOriginal),bridgeOriginal);assert.equal(bridge.hooks.commit(bridgeOriginal),bridgeOriginal);
+  directOptions.continuous=false;await direct.ui.refresh();assert(!bridge.mode.active);assert(bridge.calls.some(v=>v[0]==='hold'));
+  assert(!bridge.calls.some(v=>v[0]==='ordinary-hold'),'A configuration change closes the previously selected continuous owner');
+  assert.equal(direct.nodes.get('#conversation-message').value,'Keep this ordinary draft');direct.ui.stop();
+
   for(const pendingQuestion of [false,true]){
     const options={liveSpeech:true,immediateHash:true};
     const ready=boot(false,true,options);ready.addReplies(-8);ready.audio();await ready.ui.refresh();
@@ -739,7 +758,7 @@ function boot(readOnly=false,standalone=false,options={}) {
 
   const incremental=boot(false,true,{clock:true,incremental:true});incremental.audio();incremental.replyTexts.set('native:9','A sentence with Unicode 🙂. '.repeat(40));await incremental.ui.refresh();
   incremental.nodes.get('#conversation-voice-replies').handlers.click();incremental.addReplies(1);await incremental.ui.refresh();
-  const early=incremental.nodes.get('#conversation-audio');await until(()=>incremental.audioCalls.length===2&&!early.paused);
+  const early=incremental.nodes.get('#conversation-audio');await until(()=>incremental.audioCalls.length===2&&!early.paused).catch(error=>{throw Error(JSON.stringify({stage:'initial_incremental_playback',calls:incremental.audioCalls,state:incremental.nodes.get('#conversation-audio-state').textContent,paused:early.paused,muted:early.muted}));});
   assert.deepEqual(incremental.audioCalls.map(x=>x.offset),[0,120],'Exactly one future segment prepares during current playback');
   incremental.ui.pause();early.beforeNodes[0].handlers.click();await until(()=>!early.paused&&!early.muted);assert.equal(incremental.audioCalls.length,2,'Resume reuses the owned future attempt');
   early.ended=true;const continuing=early.handlers.ended();incremental.clock.fire(180);await continuing;await until(()=>incremental.audioCalls.length===3&&!early.paused).catch(e=>{throw Error(JSON.stringify({calls:incremental.audioCalls,state:incremental.nodes.get('#conversation-state').textContent,audioState:incremental.nodes.get('#conversation-audio-state').textContent,paused:early.paused,muted:early.muted}));});

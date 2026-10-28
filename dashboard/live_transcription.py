@@ -19,7 +19,7 @@ from starlette.websockets import WebSocketDisconnect
 from .private_state import private_directory, read_json, write_json
 from .transcription import TranscriptionStream, TranscriptionUnavailable
 from .turn_detection import Detector, DetectionUnavailable, analyze_capture, command as detection_command
-from scripts.speech_render import lock
+from scripts.speech_render import lock, RenderError
 
 
 def wav_bytes(pcm):
@@ -85,6 +85,47 @@ def install(app, config, provider, authorize, origins):
     detector_command = detection_command(selected)
     root = private_directory(selected['cache_root'])
     active = set()
+    analysis_active = set()
+    prepared_writes = asyncio.Semaphore(1)
+
+    async def persist_prepared(*args):
+        # A client cancellation cannot release this writer while its filesystem
+        # thread is still running. No accumulating blocked writes under I/O load.
+        await asyncio.wait_for(prepared_writes.acquire(), 2)
+        job = asyncio.create_task(asyncio.to_thread(save_prepared, *args))
+        def done(task):
+            prepared_writes.release()
+            if not task.cancelled():
+                task.exception()
+        job.add_done_callback(done)
+        return await asyncio.wait_for(asyncio.shield(job), 3)
+
+    async def bind_voice(socket, meta):
+        headers = list(socket.scope['headers'])
+        if 'authorization' in meta:
+            if (not isinstance(meta['authorization'], str) or len(meta['authorization']) > 128
+                    or socket.headers.getlist('authorization')):
+                raise ValueError('One explicit session credential required')
+            headers.append((b'authorization', meta['authorization'].encode('ascii')))
+        request = Request({**socket.scope, 'type': 'http', 'method': 'POST',
+            'scheme': 'https' if socket.url.scheme == 'wss' else 'http', 'headers': headers})
+        session = await authorize(request)
+        if not secrets.compare_digest(meta['csrf'], session['csrf']):
+            raise HTTPException(403, 'Action token missing')
+        if not getattr(provider, 'receiver', {}).get('voice'):
+            raise ValueError('Voice input unavailable')
+        async def actor():
+            current = await authorize(request)
+            if current['human'] != session['human']:
+                raise HTTPException(403, 'Conversation audience changed')
+        async def recheck():
+            await actor()
+            value = await asyncio.to_thread(provider.presentation, f'input list {2**63-1} after')
+            if value['binding'] != meta['binding']:
+                raise ValueError('Conversation binding changed')
+        await recheck()
+        return session, recheck, actor
+
 
     @app.websocket('/api/interaction/voice/live')
     async def voice_live(socket: WebSocket):
@@ -119,28 +160,8 @@ def install(app, config, provider, authorize, origins):
                     raise ValueError('Conversational analysis unavailable')
                 provider.input_id(meta['id'])
                 diagnostic['capture_id'] = meta['id']
-                headers = list(socket.scope['headers'])
-                if 'authorization' in meta:
-                    if (not isinstance(meta['authorization'],str) or len(meta['authorization'])>128
-                            or socket.headers.getlist('authorization')):
-                        raise ValueError('One explicit session credential required')
-                    headers.append((b'authorization',meta['authorization'].encode('ascii')))
-                request = Request({**socket.scope, 'type':'http', 'method':'POST',
-                    'scheme':'https' if socket.url.scheme=='wss' else 'http', 'headers':headers})
-                session = await authorize(request)
-                if not secrets.compare_digest(meta['csrf'],session['csrf']):
-                    raise HTTPException(403,'Action token missing')
-                if not getattr(provider,'receiver',{}).get('voice'):
-                    raise ValueError('Voice input unavailable')
-                async def recheck():
-                    current = await authorize(request)
-                    if current['human'] != session['human']:
-                        raise HTTPException(403,'Conversation audience changed')
-                    value = await asyncio.to_thread(provider.presentation, f'input list {2**63-1} after')
-                    if value['binding'] != meta['binding']:
-                        raise ValueError('Conversation binding changed')
-                await recheck()
-                owner = session['human']
+                session, recheck, _actor = await bind_voice(socket, meta)
+                owner = (session['human'], meta['id'])
                 if owner in active or len(active) >= 2:
                     owner = None
                     raise ValueError('Voice preparation capacity occupied')
@@ -209,7 +230,7 @@ def install(app, config, provider, authorize, origins):
                             diagnostic['stage'] = 'final_authorization'
                             await recheck()
                             diagnostic['stage'] = 'save_prepared'
-                            value = await asyncio.to_thread(save_prepared,root,meta['id'],meta['binding'],bytes(pcm),stream.result())
+                            value = await persist_prepared(root,meta['id'],meta['binding'],bytes(pcm),stream.result())
                             diagnostic['prepared_saved'] = True
                             await send({'type':'prepared','id':meta['id'],
                                 'source_sha256':value['source_sha256'],'text':value['text']})
@@ -268,7 +289,7 @@ def install(app, config, provider, authorize, origins):
                         await reader
                         break
         except (HTTPException, ValueError, OSError, UnicodeError, TranscriptionUnavailable,
-                WebSocketDisconnect, TimeoutError) as error:
+                WebSocketDisconnect, TimeoutError, RenderError) as error:
             diagnostic['error_type'] = type(error).__name__
             with suppress(Exception):
                 await send({'type':'unavailable','message':'Live transcription unavailable. Your recording has not been submitted.'})
@@ -311,4 +332,100 @@ def install(app, config, provider, authorize, origins):
                 with suppress(Exception):await socket.close()
             finally:
                 if owner is not None:active.discard(owner)
+    @app.websocket('/api/interaction/voice/activity')
+    async def foreground_activity(socket: WebSocket):
+        """One explicit warm foreground analyzer; no ASR, originals or work."""
+        worker = reader = incoming = None
+        owner = None
+        sending = asyncio.Lock()
+        async def send(value):
+            async with sending:
+                await socket.send_json(value)
+        if socket.headers.get('origin') not in origins:
+            await socket.close(code=1008)
+            return
+        await socket.accept()
+        try:
+            async with asyncio.timeout(305):
+                raw = await asyncio.wait_for(socket.receive_text(), 5)
+                if len(raw.encode()) > 8192:
+                    raise ValueError('Foreground metadata exceeds bound')
+                meta = json.loads(raw)
+                if (not detector_command or mode != 'prepared' or not isinstance(meta, dict)
+                        or set(meta) - {'id', 'binding', 'csrf', 'authorization'}
+                        or not all(isinstance(meta.get(k), str) for k in ('id', 'binding', 'csrf'))
+                        or not re.fullmatch('[a-f0-9]{64}', meta['binding'])):
+                    raise ValueError('One explicit foreground voice binding required')
+                provider.input_id(meta['id'])
+                session, recheck, actor = await bind_voice(socket, meta)
+                owner = session['human']
+                if owner in analysis_active or len(analysis_active) >= 2:
+                    owner = None
+                    raise ValueError('Foreground analysis capacity occupied')
+                analysis_active.add(owner)
+                worker = await Detector.open(detector_command, continuous=True)
+                await recheck()
+                await send({'type': 'ready', 'id': meta['id'], 'analysis_only': True})
+                async def receive():
+                    while True:
+                        value = await worker.receive()
+                        if value.get('type') not in ('activity', 'boundary'):
+                            raise DetectionUnavailable('Unexpected foreground analysis response')
+                        await actor()
+                        await send({'type': 'turn_activity' if value['type'] == 'activity' else 'boundary',
+                                    'id': meta['id'], 'activity': value})
+                reader = asyncio.create_task(receive())
+                checked = time.monotonic()
+                total = 0
+                while True:
+                    incoming = asyncio.create_task(socket.receive())
+                    done, _ = await asyncio.wait((incoming, reader), return_when=asyncio.FIRST_COMPLETED)
+                    if reader in done:
+                        incoming.cancel()
+                        await reader
+                    message = await incoming
+                    if message['type'] == 'websocket.disconnect':
+                        break
+                    await actor()
+                    if time.monotonic() - checked >= 15:
+                        await recheck()
+                        checked = time.monotonic()
+                    if message.get('bytes') is not None:
+                        pcm = message['bytes']
+                        if not pcm or len(pcm) % 2 or len(pcm) > 32000 or total + len(pcm) > 300 * 32000:
+                            raise ValueError('Foreground PCM exceeds session bounds')
+                        total += len(pcm)
+                        await worker.feed(pcm)
+                    else:
+                        raw = message.get('text', '')
+                        if len(raw.encode()) > 256:
+                            raise ValueError('Foreground control exceeds bound')
+                        value = json.loads(raw)
+                        if value == {'type': 'close'}:
+                            break
+                        if not isinstance(value, dict) or set(value) != {'boundary'}:
+                            raise ValueError('Unknown foreground control')
+                        await worker.boundary(value['boundary'])
+        except (HTTPException, ValueError, OSError, UnicodeError, DetectionUnavailable,
+                WebSocketDisconnect, TimeoutError):
+            with suppress(Exception):
+                await send({'type': 'unavailable', 'message': 'Voice activity unavailable. No recording was submitted.'})
+        finally:
+            try:
+                for task in (reader, incoming):
+                    if task is not None:
+                        task.cancel()
+                if worker is not None:
+                    closing = asyncio.create_task(worker.close())
+                    closing.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+                    await asyncio.shield(closing)
+                for task in (reader, incoming):
+                    if task is not None:
+                        with suppress(asyncio.CancelledError, Exception):
+                            await task
+                with suppress(Exception):
+                    await socket.close()
+            finally:
+                if owner is not None:
+                    analysis_active.discard(owner)
     return True

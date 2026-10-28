@@ -22,7 +22,7 @@ SCHEMA = 'telecodex.turn-activity/v1'
 
 class Activity:
     """One capture's recurrent state; at most120s PCM and thirty turn scores."""
-    def __init__(self, vad_path, turn_path):
+    def __init__(self, vad_path, turn_path, *, continuous=False):
         with Path(vad_path).open('rb') as source:
             model = source.read(VAD_BYTES + 1)
         if len(model) != VAD_BYTES or hashlib.sha256(model).hexdigest() != VAD_SHA256:
@@ -43,7 +43,10 @@ class Activity:
         self.tail = bytearray()
         self.bytes = self.frames = self.generation = self.positive = self.quiet = self.analyses = 0
         self.speaking = self.speech_seen = False
-        self.scored_generation = 0
+        self.scored_generation = self.confirmed_generation = 0
+        self.max_bytes = (300 if continuous else 120) * 32000
+        self.max_analyses = 90 if continuous else 30
+        self.endpoints = []
 
     def _probability(self, frame):
         np = self._np
@@ -59,12 +62,13 @@ class Activity:
     def feed(self, data, *, analyze=True):
         if type(analyze) is not bool:
             raise ValueError("Analysis selection must be boolean")
-        if not isinstance(data, bytes) or not data or len(data) % 2 or len(data) > 32000 or self.bytes + len(data) > 120 * 32000:
+        if not isinstance(data, bytes) or not data or len(data) % 2 or len(data) > 32000 or self.bytes + len(data) > self.max_bytes:
             raise ValueError('PCM chunk outside capture bounds')
         self.bytes += len(data)
         self.pending.extend(data)
         self.tail.extend(data)
         del self.tail[:-256000]
+        onset = None
         while len(self.pending) >= 1024:
             frame = bytes(self.pending[:1024]);del self.pending[:1024]
             self.frames += 1
@@ -76,6 +80,9 @@ class Activity:
                 self.quiet = 0
                 if self.positive >= 3:
                     self.speech_seen = True
+                    if self.confirmed_generation != self.generation:
+                        self.confirmed_generation = self.generation
+                        onset = {'generation': self.generation, 'audio_bytes': self.frames * 1024}
             else:
                 self.positive = 0
                 self.quiet += 1
@@ -83,8 +90,10 @@ class Activity:
                     self.speaking = False
         result = {'schema': SCHEMA, 'type': 'activity', 'generation': self.generation,
                   'speaking': self.speaking, 'speech_seen': self.speech_seen, 'audio_bytes': self.bytes}
-        if analyze and self.speech_seen and not self.speaking and self.generation != self.scored_generation:
-            if self.analyses >= 30:
+        if onset is not None:
+            result['onset'] = onset
+        if analyze and self.confirmed_generation == self.generation and self.speech_seen and not self.speaking and self.generation != self.scored_generation:
+            if self.analyses >= self.max_analyses:
                 raise TurnEndUnavailable('Turn-analysis capture budget reached')
             self.scored_generation = self.generation
             self.analyses += 1
@@ -92,20 +101,35 @@ class Activity:
             if score['candidate_complete']:
                 result['endpoint'] = {'generation': self.generation, 'audio_bytes': self.bytes,
                                       'probability': score['probability'], 'authority': 'analysis_only'}
+                self.endpoints.append((self.generation, self.bytes))
+                del self.endpoints[:-2]
         return result
+
+
+    def boundary(self, generation, audio_bytes):
+        """Retire scored history, retaining any later PCM and warm VAD state."""
+        if (type(generation) is not int or type(audio_bytes) is not int
+                or (generation, audio_bytes) not in self.endpoints):
+            raise ValueError('Only the exact emitted endpoint can retire history')
+        start = self.bytes - len(self.tail)
+        del self.tail[:max(0, audio_bytes - start)]
+        self.endpoints = [(g, b) for g, b in self.endpoints if b > audio_bytes]
+        return {'schema': SCHEMA, 'type': 'boundary',
+                'generation': generation, 'audio_bytes': audio_bytes}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--vad-model', type=Path, required=True)
     parser.add_argument('--turn-model', type=Path, required=True)
+    parser.add_argument('--continuous', action='store_true', help='One explicit foreground session, at most five minutes')
     args = parser.parse_args()
     # This owns only the optional analysis child, never native conversations.
-    resource.setrlimit(resource.RLIMIT_CPU, (60, 65))
-    signal.alarm(145)
+    resource.setrlimit(resource.RLIMIT_CPU, (150, 155) if args.continuous else (60, 65))
+    signal.alarm(305 if args.continuous else 145)
     try:
-        analyzer = Activity(args.vad_model, args.turn_model)
-        print(json.dumps({'schema': SCHEMA, 'type': 'ready', 'vad_sha256': VAD_SHA256, 'turn_sha256': MODEL_SHA256}), flush=True)
+        analyzer = Activity(args.vad_model, args.turn_model, continuous=args.continuous)
+        print(json.dumps({'schema': SCHEMA, 'type': 'ready', 'vad_sha256': VAD_SHA256, 'turn_sha256': MODEL_SHA256, **({'continuous': True} if args.continuous else {})}), flush=True)
         while True:
             raw = sys.stdin.buffer.readline(45001)
             if not raw:
@@ -113,6 +137,12 @@ def main():
             if len(raw) > 45000:
                 raise ValueError('Analysis command exceeds bound')
             value = json.loads(raw)
+            if args.continuous and isinstance(value, dict) and set(value) == {'boundary'}:
+                boundary = value['boundary']
+                if not isinstance(boundary, dict) or set(boundary) != {'generation', 'audio_bytes'}:
+                    raise ValueError('Expected one exact history boundary')
+                print(json.dumps(analyzer.boundary(**boundary)), flush=True)
+                continue
             if (not isinstance(value, dict) or set(value) not in ({'pcm'}, {'pcm', 'defer'})
                     or not isinstance(value['pcm'], str) or type(value.get('defer', False)) is not bool):
                 raise ValueError('Expected one PCM command')
