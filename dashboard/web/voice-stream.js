@@ -233,7 +233,9 @@ window.StreamingVoice=(()=>{
         flushed=true;clearTimeout(timer);ending=true;pump();
         // Keep the complete local WAV as ordinary file-ASR fallback. Never
         // create an original instruction on this preparation socket.
-        timer=setTimeout(complete,5000);
+        // Actual Gemini confirmation can approach five seconds. Keep the exact
+        // flushed original for a bounded ten-second wait before review.
+        timer=setTimeout(complete,10000);
         if(shared)onFlushed(data.totalBytes);
         if(socket.readyState===WebSocket.CLOSED)complete();
       }
