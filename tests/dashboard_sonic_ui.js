@@ -38,6 +38,10 @@ const frame=(sources)=>({schema:'telecodex.sonic-state/v1',observed_at:1000,conf
   assert.equal(sound.state(source(1,{execution:'idle',goal_state:'paused'}),1000000),'passive');
   for(const extra of [{fresh:false},{waiting_for_human:null},{goal_state:'unknown'},{observed_at:1030}])assert.equal(sound.state(source(1,extra),1000000),'unknown');
   assert.equal(sound.state(source(1),1000000,21000),'unknown');
+  const quota={...frame([]),weekly_quota:{state:'observed',available_percent:42.5,observed_at:1000,resets_at:1000+2*86400+3600}};
+  assert(sound.weeklyQuota(quota).includes('43% available · renews in 2d 1h 0m'));
+  assert.equal(sound.weeklyQuota(quota,21000),'Weekly quota unavailable.');
+  assert.equal(sound.weeklyQuota({...quota,weekly_quota:{...quota.weekly_quota,available_percent:101}}),'Weekly quota unavailable.');
   const status=sound.sessionStatus(frame([source(1,{work_started_at:875})]),0);
   assert(status[0].text.includes("2m 5s"));
   assert(sound.sessionStatus(frame([source(1,{work_started_at:875})]),1000)[0].text.includes("2m 6s"));

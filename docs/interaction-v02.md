@@ -549,3 +549,18 @@ requirement, not this precise inspector's acceptance.
 Human-facing update cards keep Listen and Reply to this update. They do not
 open the inspector through an Inspect shortcut; detailed originals and routing
 remain available through the explicit header Under the hood control.
+
+
+Inspector refinements: session status and the existing Codex weekly-remaining
+percentage/reset countdown appear first. Weekly quota reuses the collector's
+account-rate-limit observation through its private, database-bound health record;
+no additional provider poll is installed. Missing, stale, replaced or invalid
+quota stays unavailable. Session original messages are collapsed by default.
+
+The message/update routing-map icon opens the existing graph at that exact
+source node, preserving real declared edges without inventing a nearest-input
+connection. Pointer dragging pans the graph; ordinary clicks still select
+evidence. Back to message, graph close or inspector close restores the invoking
+message focus and reading position. This is navigation only, never dispatch or
+proof of incorporation. The plain Inspect update answer-list shortcut remains
+removed.

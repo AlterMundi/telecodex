@@ -1377,7 +1377,7 @@ def run(args):
                     for key, entry in publisher.snapshot().items():
                         if key not in known:
                             publisher.retire(key, entry)
-                atomic_json(state / 'health.json', {'updated_at': time.time(), 'connected': True,
+                atomic_json(state / 'health.json', {'source': inventory_source(bridge), 'updated_at': time.time(), 'connected': True,
                             'topics': len(observations), 'active': sum(x['working'] for x in observations),
                             'topic_activity': {'observed_at': inventory['observed_at'],
                                                'counts': inventory['counts']},

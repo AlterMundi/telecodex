@@ -49,7 +49,7 @@ window.RoutingGraph = (() => {
     const section=document.querySelector("#routing-graph");if(!section)return;
     const viewport=document.querySelector("#routing-graph-viewport"),surface=document.querySelector("#routing-graph-surface");
     const live=document.querySelector("#routing-graph-live"),state=document.querySelector("#routing-graph-state");
-    const model=new Timeline();let following=true,rendered=-1;
+    const model=new Timeline();let following=true,rendered=-1,selected;
     const pendingInputs=new Map(),pendingTraces=new Map(),pendingSources=new Map();
     const column=330,row=280,width=292,height=248;
     section.hidden=false;
@@ -57,6 +57,21 @@ window.RoutingGraph = (() => {
     function pause(){following=false;live.hidden=false;state.textContent="Browsing history · Return to live to follow new interactions.";}
     for(const event of ["wheel","pointerdown","touchstart"])viewport.addEventListener(event,pause,{passive:true});
     viewport.addEventListener("keydown",event=>{if(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","PageUp","PageDown"].includes(event.key))pause();});
+    let drag,suppressClick=false;
+    viewport.addEventListener("pointerdown",event=>{
+      if(event.pointerType!=="mouse" || event.button!==0)return;
+      drag={id:event.pointerId,x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop,moved:false};suppressClick=false;
+    });
+    viewport.addEventListener("pointermove",event=>{
+      if(!drag || drag.id!==event.pointerId)return;
+      const x=event.clientX-drag.x,y=event.clientY-drag.y;
+      if(!drag.moved && Math.hypot(x,y)<5)return;
+      drag.moved=true;pause();viewport.setPointerCapture?.(drag.id);event.preventDefault();
+      viewport.scrollLeft=drag.left-x;viewport.scrollTop=drag.top-y;
+    });
+    function endDrag(event){if(drag?.id!==event.pointerId)return;suppressClick=drag.moved;try{viewport.releasePointerCapture?.(drag.id);}catch{}drag=undefined;}
+    viewport.addEventListener("pointerup",endDrag);viewport.addEventListener("pointercancel",endDrag);
+    viewport.addEventListener("click",event=>{if(suppressClick){suppressClick=false;event.preventDefault();event.stopPropagation();}},true);
     let scrollFrame;
     viewport.addEventListener("scroll",()=>{if(scrollFrame)return;scrollFrame=requestAnimationFrame(()=>{scrollFrame=undefined;render(false);});});
     window.addEventListener("resize",()=>render(false));
@@ -89,7 +104,7 @@ window.RoutingGraph = (() => {
       }
       const items=[svg];
       for(const value of visible) {
-        const card=element("button",undefined,"routing-node routing-"+value.kind);card.type="button";card.dataset.nodeId=value.id;card.title=value.text;
+        const card=element("button",undefined,"routing-node routing-"+value.kind);card.type="button";card.dataset.nodeId=value.id;card.title=value.text;if(value.id===selected){card.dataset.selected="true";card.setAttribute("aria-current","true");}
         card.style.left=(value.index*column+20)+"px";card.style.top=(lanes.indexOf(value.lane)*row+24)+"px";
         card.append(element("span",value.title,"routing-node-title"),element("span",value.text,"routing-node-text"),element("span",value.status,"routing-node-status"));
         card.setAttribute("aria-label",value.title+". "+value.status+". Inspect retained evidence");
@@ -109,9 +124,16 @@ window.RoutingGraph = (() => {
       pendingInputs.clear();pendingTraces.clear();pendingSources.clear();
       if(model.version!==rendered)render(true);
     }
-    function reset(){model.reset();pendingInputs.clear();pendingTraces.clear();pendingSources.clear();following=true;live.hidden=true;rendered=-1;viewport.scrollLeft=viewport.scrollTop=0;render();}
+    function reset(){selected=undefined;drag=undefined;suppressClick=false;model.reset();pendingInputs.clear();pendingTraces.clear();pendingSources.clear();following=true;live.hidden=true;rendered=-1;viewport.scrollLeft=viewport.scrollTop=0;render();}
+    function focus(id){
+      flush();const value=model.nodes.get(id);if(!value)return false;
+      selected=id;pause();const lanes=[...model.lanes.keys()];
+      viewport.scrollLeft=Math.max(0,value.index*column+20-(viewport.clientWidth-width)/2);
+      viewport.scrollTop=Math.max(0,lanes.indexOf(value.lane)*row+24-(viewport.clientHeight-height)/2);
+      render(false);viewport.focus({preventScroll:true});return true;
+    }
     render();
-    return {input:value=>pendingInputs.set(value.id,value),trace:value=>pendingTraces.set(value.id,value),result:value=>pendingSources.set(value.id,value),flush,reset};
+    return {focus,input:value=>pendingInputs.set(value.id,value),trace:value=>pendingTraces.set(value.id,value),result:value=>pendingSources.set(value.id,value),flush,reset};
   }
   return {Timeline,mount,preview};
 })();

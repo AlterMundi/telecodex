@@ -119,6 +119,15 @@ topic_id=8
         self.assertEqual(self.client.get('/api/interaction/sonic',headers=self.owner).status_code,503)
         self.assertIsNone(self.provider.native)
 
+    def test_weekly_quota_reuses_bound_fresh_status_observer_without_native_calls(self):
+        health={'source':self.observation['source'],'updated_at':time.time(),'connected':True,'weekly_available':42.5,'weekly_resets_at':time.time()+172800}
+        path=self.state/'health.json';atomic_json(path,health)
+        quota=self.provider.sonic_activity()['weekly_quota'];self.assertEqual(quota['available_percent'],42.5);self.assertEqual(quota['state'],'observed')
+        for change in ({'source':'retired'},{'updated_at':time.time()-21},{'weekly_available':101},{'weekly_available':True},{'connected':False}):
+            atomic_json(path,{**health,**change});self.assertEqual(self.provider.sonic_activity()['weekly_quota']['state'],'unavailable')
+        path.chmod(0o644);self.assertEqual(self.provider.sonic_activity()['weekly_quota']['state'],'unavailable')
+        self.assertIsNone(self.provider.native)
+
     def test_dynamic_membership_comes_from_canonical_registry_not_static_config(self):
         with closing(sqlite3.connect(self.db)) as db:
             db.execute("INSERT INTO sessions VALUES(4,100,9,100,'discovered',0,'Discovered')")

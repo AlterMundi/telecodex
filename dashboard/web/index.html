@@ -133,7 +133,7 @@
         <details id="conversation-diagnostics">
         <summary>Under the hood <span aria-hidden="true">+</span></summary>
         <div class="conversation-diagnostics-content">
-        <section aria-labelledby="conversation-session-status-title"><h2 id="conversation-session-status-title">Session status</h2><p id="conversation-session-status-note" class="note">Waiting for an observation.</p><ol id="conversation-session-status" class="session-status-list"></ol></section>
+        <section aria-labelledby="conversation-session-status-title"><h2 id="conversation-session-status-title">Session status</h2><p id="conversation-weekly-quota" class="note">Weekly quota unavailable.</p><p id="conversation-session-status-note" class="note">Waiting for an observation.</p><ol id="conversation-session-status" class="session-status-list"></ol></section>
         <details id="conversation-timing"><summary>Browser voice timing</summary><p class="note">Only this page, up to eight recordings. Playback starts are browser events, not proof of intelligible sound or correction uptake. Reload or Clear removes these timings.</p><button id="conversation-timing-clear" type="button">Clear timings</button><p id="conversation-timing-pause" class="note"></p><ol id="conversation-timing-records"></ol></details>
         <details id="conversation-sound"><summary>Session sound <span id="conversation-sound-status" role="status">Off</span></summary>
           <p id="conversation-sound-vocabulary" class="note"></p>
@@ -142,7 +142,7 @@
         </details>
         <details id="conversation-flow" hidden><summary>Routing monitor</summary>
         <section id="routing-graph" hidden aria-label="Live conversation routing graph">
-          <div class="conversation-tools"><h2>Conversation flow</h2><button id="routing-graph-live" type="button" hidden>Return to live →</button></div>
+          <div class="conversation-tools"><h2>Conversation flow</h2><button id="routing-graph-live" type="button" hidden>Return to live →</button><button id="routing-graph-return" type="button" hidden>Back to message</button></div>
           <p id="routing-graph-state" class="note" role="status"></p>
           <p class="note">Select a step for saved text and routing evidence. Reply links require declared input coverage; other replies stay unlinked.</p>
           <div id="routing-graph-viewport" tabindex="0" role="region" aria-label="Routing history. Scroll horizontally through interactions; select a step to inspect its retained evidence."><div id="routing-graph-surface"></div></div>
@@ -151,7 +151,7 @@
         <details id="conversation-sent"><summary>Routing monitor · your inputs and destinations</summary><p class="note">Open a message to inspect its original text, destination and forwarded input. Refreshing this monitor never resends work.</p><p id="conversation-telegram-state" class="note" role="status"></p><div id="conversation-inputs"></div><button id="conversation-inputs-older" type="button" hidden>Earlier app/device inputs</button><button id="conversation-telegram-older" type="button" hidden>Earlier Telegram inputs</button></details>
         <div id="conversation-replies" tabindex="-1">
           <section aria-labelledby="conversation-answers-title"><h2 id="conversation-answers-title">Conversation replies</h2><div id="conversation-answers"></div></section>
-          <section aria-labelledby="conversation-results-title"><h2 id="conversation-results-title">Session activity · original messages</h2><div id="conversation-results"></div></section>
+          <details id="conversation-session-originals"><summary>Session activity · original messages</summary><div id="conversation-results"></div></details>
           <button id="conversation-older" type="button" hidden>Earlier replies</button>
         </div>
         </div>
