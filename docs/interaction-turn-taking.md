@@ -395,3 +395,20 @@ reproduced client defect is covered with late-caption, renewed-activity and
 expired-window cases; an observed browser stall is consistent with it, but that
 browser did not retain every analyzer verdict needed to prove its individual
 timing cause.
+
+
+## Useful internal-return speech
+
+The native return context asks for an exact source read before reporting its
+contents, followed by one concise final attributed answer. Source lookup belongs
+in tool activity; a separate spoken lookup announcement or repeated offer adds
+no result and delays useful speech. A human correction arriving during that
+native turn is incorporated into the same answer. This is response guidance,
+not an extra model pass, content classifier, hearing receipt or new authority.
+
+When a retained human original steers a return turn, its final answer can be
+bound to that human original rather than carry `native_returns`. Qualify the
+canonical current answer, its accepted original/native turn and actual source
+read/report receipts together. Do not discard that valid answer merely because
+a return-only presentation annotation is absent. Keep digital playback completion
+separate from generating or requesting its audio.
