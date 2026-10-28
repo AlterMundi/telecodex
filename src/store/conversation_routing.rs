@@ -34,7 +34,12 @@ impl ConversationReply {
             .or_else(|| self.source.strip_prefix("input:"))
             .or_else(|| self.source.strip_prefix("matrix:"))
             .is_some_and(|id| Uuid::parse_str(id).is_ok_and(|uuid| uuid.to_string() == id));
-        if !(question || delivery)
+        let native = self.context_only
+            && self.source.strip_prefix("native:").is_some_and(|id| {
+                id.parse::<i64>()
+                    .is_ok_and(|n| n > 0 && id == n.to_string())
+            });
+        if !(question || delivery || native)
             || self.revision.len() != 64
             || !self
                 .revision
@@ -597,6 +602,55 @@ impl Store {
 mod tests {
     use super::*;
     use crate::interaction::{InputReference, InteractionConfig, RequestRelation};
+    #[test]
+    fn integrator_message_reference_is_compact_context_without_a_worker_target() {
+        let (_file, store, profile, binding) = setup();
+        let reference = ConversationReply {
+            source: "native:42".into(),
+            revision: "a".repeat(64),
+            context_only: true,
+        };
+        assert!(reference.validate_context().is_ok());
+        let id = capture(
+            &store,
+            &profile,
+            &binding,
+            "About that earlier answer",
+            Some(reference.clone()),
+        );
+        let original = store
+            .conversation_input_read(100, profile.entry(), &id)
+            .unwrap();
+        assert_eq!(original.reply, Some(reference.clone()));
+        assert!(original.focus.is_none());
+        let rendered = original.rendered();
+        assert!(rendered.contains("native:42"));
+        assert!(rendered.contains("conversation_part"));
+        assert_eq!(original.text, "About that earlier answer");
+        for source in [
+            "native:0",
+            "native:01",
+            "native:-1",
+            "native:9223372036854775808",
+        ] {
+            assert!(
+                ConversationReply {
+                    source: source.into(),
+                    ..reference.clone()
+                }
+                .validate_context()
+                .is_err()
+            );
+        }
+        assert!(
+            ConversationReply {
+                context_only: false,
+                ..reference
+            }
+            .validate_context()
+            .is_err()
+        );
+    }
     fn setup() -> (tempfile::NamedTempFile, Store, InteractionConfig, String) {
         let file = tempfile::NamedTempFile::new().unwrap();
         let defaults = super::super::tests::defaults();
