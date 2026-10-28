@@ -115,6 +115,55 @@ class LiveTranscription(unittest.TestCase):
         self.assertEqual(Stream.opened[0].selected_provider,'gemini')
         self.assertEqual(self.provider.calls,[])
 
+    def select_streaming_fallback(self):
+        self.client.__exit__(None,None,None)
+        selected=self.config['streaming_transcription'];selected['provider']='gemini'
+        selected['fallback']={'provider':'qwen','endpoint':'wss://fallback.test/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus','credential_file':str(self.root/'qwen-key')}
+        self.client=TestClient(create_app(self.config,self.provider,lambda raw,bot:int(raw)),base_url='https://example.test');self.client.__enter__()
+        self.client.post('/api/session',json={'init_data':'100'},headers={'origin':'https://example.test'})
+        self.client.cookies.set('telecodex_dashboard',self.client.cookies.get('telecodex_dashboard'),path='/')
+        self.csrf=self.client.get('/api/state').json()['csrf']
+
+    def test_unavailable_gemini_open_selects_qwen_before_any_audio(self):
+        self.select_streaming_fallback();attempts=[]
+        class UnavailableOpen(Stream):
+            def __init__(self,*args,**kwargs):
+                attempts.append(kwargs['provider'])
+                if kwargs['provider']=='gemini':raise TranscriptionUnavailable('Synthetic unavailable open')
+                super().__init__(*args,**kwargs)
+        with patch('dashboard.live_transcription.TranscriptionStream',UnavailableOpen),self.open() as ws:
+            ws.send_json(self.meta());self.assertEqual(ws.receive_json()['type'],'ready')
+            ws.send_bytes(b'\0\0'*1600);self.assertEqual(ws.receive_json()['type'],'partial')
+            ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'prepared')
+        self.assertEqual(attempts,['gemini','qwen'])
+        value=json.loads((self.root/'prepared'/f'{self.ident}.json').read_text())
+        self.assertEqual(value['model'],'qwen-audio-3.0-realtime-plus')
+        self.assertEqual(value['audio_millis'],100);self.assertEqual(self.provider.calls,[])
+
+    def test_failed_gemini_setup_closes_it_before_selecting_qwen(self):
+        self.select_streaming_fallback()
+        class FailedSetup(Stream):
+            def receive(self):
+                if self.selected_provider=='gemini':raise TranscriptionUnavailable('Synthetic unavailable setup')
+                return super().receive()
+        with patch('dashboard.live_transcription.TranscriptionStream',FailedSetup),self.open() as ws:
+            ws.send_json(self.meta());self.assertEqual(ws.receive_json()['type'],'ready')
+            ws.send_bytes(b'\0\0');ws.receive_json();ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'prepared')
+        self.assertEqual([v.selected_provider for v in Stream.opened],['gemini','qwen'])
+        self.assertTrue(Stream.opened[0].closed);self.assertEqual(Stream.opened[0].pcm,b'')
+
+    def test_no_stream_provider_replay_after_readiness_or_audio(self):
+        self.select_streaming_fallback()
+        class FailedAudio(Stream):
+            def append(self,pcm):
+                super().append(pcm);raise TranscriptionUnavailable('Synthetic uncertain audio send')
+        with patch('dashboard.live_transcription.TranscriptionStream',FailedAudio),self.open() as ws:
+            ws.send_json(self.meta());self.assertEqual(ws.receive_json()['type'],'ready')
+            ws.send_bytes(b'\0\0');self.assertEqual(ws.receive_json()['type'],'unavailable')
+        self.assertEqual([v.selected_provider for v in Stream.opened],['gemini'])
+        self.assertFalse(list((self.root/'prepared').glob('*.json')))
+        self.assertEqual(self.provider.calls,[])
+
     def test_caption_mode_never_prepares_canonical_text(self):
         self.client.__exit__(None,None,None)
         self.config['streaming_transcription']['mode']='captions'

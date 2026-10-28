@@ -66,11 +66,20 @@ def install(app, config, provider, authorize, origins):
     mode=selected.get('mode','prepared')
     if (mode not in ('prepared','captions')
             or selected.get('provider','qwen') not in ('qwen','gemini')
-            or set(selected)-{'enabled','endpoint','credential_file','cache_root','mode','provider'}
+            or set(selected)-{'enabled','endpoint','credential_file','cache_root','mode','provider','fallback'}
             or not {'enabled','endpoint','credential_file','cache_root'}<=set(selected)
             or any(not isinstance(selected[k], str) for k in ('endpoint','credential_file','cache_root'))
             or not all(Path(selected[k]).is_absolute() for k in ('credential_file','cache_root'))):
         raise ValueError('Explicit private streaming-transcription binding required')
+    fallback=selected.get('fallback')
+    if fallback is not None and (selected.get('provider')!='gemini'
+            or not isinstance(fallback,dict) or set(fallback)!={'provider','endpoint','credential_file'}
+            or fallback.get('provider')!='qwen'
+            or not isinstance(fallback.get('endpoint'),str)
+            or not isinstance(fallback.get('credential_file'),str)
+            or not Path(fallback['credential_file']).is_absolute()):
+        raise ValueError('Select one explicit Qwen fallback for Gemini streaming')
+    candidates=[selected]+([fallback] if fallback is not None else [])
     root = private_directory(selected['cache_root'])
     active = set()
 
@@ -124,21 +133,48 @@ def install(app, config, provider, authorize, origins):
                     owner = None
                     raise ValueError('Voice preparation capacity occupied')
                 active.add(owner)
-                def open_provider():
-                    value = TranscriptionStream(selected['endpoint'],Path(selected['credential_file']),
-                                                provider=selected.get('provider','qwen'))
-                    with opening_lock:
-                        if not abandoned.is_set():
-                            opened.append(value)
-                            return value
-                    value.close()
-                    raise TranscriptionUnavailable('Capture closed during connection setup')
+                candidate_index=0
+                def open_provider(start=0):
+                    nonlocal candidate_index
+                    for index in range(start,len(candidates)):
+                        if abandoned.is_set():raise TranscriptionUnavailable('Capture closed during connection setup')
+                        choice=candidates[index]
+                        try:
+                            value=TranscriptionStream(choice['endpoint'],Path(choice['credential_file']),
+                                                      provider=choice.get('provider','qwen'))
+                        except (OSError,ValueError,TranscriptionUnavailable):
+                            if index+1==len(candidates):raise
+                            continue
+                        with opening_lock:
+                            if not abandoned.is_set():
+                                candidate_index=index;opened.append(value)
+                                return value
+                        value.close()
+                        raise TranscriptionUnavailable('Capture closed during connection setup')
+                    raise TranscriptionUnavailable('No configured streaming provider')
                 stream = await asyncio.to_thread(open_provider)
                 pcm = bytearray()
                 ready, finished = asyncio.Event(), asyncio.Event()
                 async def receive_provider():
+                    nonlocal stream
+                    opening_deadline=time.monotonic()+8
                     while True:
-                        event = await asyncio.to_thread(stream.receive)
+                        try:
+                            if not ready.is_set() and time.monotonic()>=opening_deadline:
+                                raise TranscriptionUnavailable('Streaming readiness unavailable')
+                            event = await asyncio.to_thread(stream.receive)
+                        except (OSError,ValueError,TranscriptionUnavailable):
+                            # No PCM can be accepted before ready. Once advertised,
+                            # never replay this capture into another paid stream.
+                            if ready.is_set() or candidate_index+1>=len(candidates):raise
+                            await recheck()
+                            old=stream
+                            await asyncio.to_thread(old.close)
+                            with opening_lock:
+                                if old in opened:opened.remove(old)
+                            stream=await asyncio.to_thread(open_provider,candidate_index+1)
+                            opening_deadline=time.monotonic()+8
+                            continue
                         if event['type']=='ready': ready.set()
                         if event['type'] in ('ready','partial'):
                             await recheck()

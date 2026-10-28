@@ -669,6 +669,22 @@ function boot(readOnly=false,standalone=false,options={}) {
   paced.clock.fire(1200);await until(()=>paced.audioCalls.length===3&&!pacedPlayer.paused);
   assert.equal(paced.audioCalls[2].source,'native:10');paced.ui.stop();
 
+  // Skip drops every remaining segment of one message, preserving queue order.
+  const skipping=boot(false,true,{clock:true,incremental:true});skipping.audio();
+  skipping.replyTexts.set('native:9','Long sentence. '.repeat(150));await skipping.ui.refresh();
+  skipping.nodes.get('#conversation-voice-replies').handlers.click();skipping.addReplies(3);await skipping.ui.refresh();
+  const skipPlayer=skipping.nodes.get('#conversation-audio');
+  await until(()=>skipping.audioCalls.length===2&&!skipPlayer.paused&&!skipPlayer.muted);
+  const skipCard=skipping.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:9');
+  const skipButton=skipCard.children[3].children[1];assert.equal(skipButton.textContent,'Skip');
+  await skipButton.handlers.click();await until(()=>skipping.audioCalls.some(call=>call.source==='native:10')&&!skipPlayer.paused);
+  assert.equal(skipping.audioCalls.filter(call=>call.source==='native:9').length,2,'Already prepared continuation is cancelled rather than played or retried');
+  assert.equal(skipButton.textContent,'Resume audio','Skip preserves the actual heard cursor for a later explicit resume');
+  await skipping.ui.refresh();skipPlayer.ended=true;await skipPlayer.handlers.ended();skipping.clock.fire(450);
+  await until(()=>skipping.audioCalls.some(call=>call.source==='native:11'));
+  assert.deepEqual([...new Set(skipping.audioCalls.map(call=>call.source))],['native:9','native:10','native:11']);
+  assert.equal(skipping.nativePosts.length,0,'Skipping audio does not answer or change native work');skipping.ui.stop();
+
   const incremental=boot(false,true,{clock:true,incremental:true});incremental.audio();incremental.replyTexts.set('native:9','A sentence with Unicode 🙂. '.repeat(40));await incremental.ui.refresh();
   incremental.nodes.get('#conversation-voice-replies').handlers.click();incremental.addReplies(1);await incremental.ui.refresh();
   const early=incremental.nodes.get('#conversation-audio');await until(()=>incremental.audioCalls.length===2&&!early.paused);
@@ -815,7 +831,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const scrolls=[];lane.contains=card=>lane.children.includes(card);lane.getBoundingClientRect=()=>({top:100});lane.scrollTop=0;
   lane.scrollTo=value=>{scrolls.push(value);lane.scrollTop=value.top;};
   const spokenCard=n=>lane.children.find(card=>card.dataset.sourceId===`native:${n}`);
-  const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>['Listen','Resume audio'].includes(child.textContent));
+  const listenButton=card=>card.children.flatMap(child=>child.children||[]).find(child=>['Listen','Resume audio','Skip'].includes(child.textContent));
   const buffering=boot(false,true,{incremental:true,progressive:true});buffering.audio();await buffering.ui.refresh();
   const heldBuffer=buffering.holdReplyText('native:8');
   const bufferingCard=buffering.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:8');
@@ -831,7 +847,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   await listenButton(spokenCard(8)).handlers.click();followSwitch.handlers.change();
   assert.equal(scrolls.length,0,'Voice off preserves the reader position even with Follow enabled');
   followed.nodes.get('#conversation-voice-replies').handlers.click();
-  followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,0,'Follow off never moves the chat');
+  followed.ui.pause();followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,0,'Follow off never moves the chat');
   followSwitch.checked=true;followSwitch.handlers.change();assert.equal(scrolls.length,1);assert.equal(scrolls[0].top,200,'Follow targets the verified spoken answer within the timeline');
   await listenButton(spokenCard(7)).handlers.click();assert.equal(scrolls.length,2,'A new answer follows its own source');
   followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,2,'Disabling Follow preserves the reader position');
@@ -893,7 +909,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(updatesFollow.audioCalls.at(-1).source,'native:8','Progress Listen selects the exact retained update');
   assert.equal(updateScrolls,1,'Follow targets the visible Update from card for the exact spoken source');
   const updateAttempts=updatesFollow.audioCalls.length;await updateListen.handlers.click();
-  assert.equal(updatesFollow.audioCalls.length,updateAttempts,'Listening to an already loaded update reuses its verified player');updatesFollow.ui.stop();
+  assert.equal(updatesFollow.audioCalls.length,updateAttempts,'Skip cancels this update without repeating synthesis');assert.equal(updateListen.textContent,'Resume audio');updatesFollow.ui.stop();
   const readonlyUpdate=boot(true,true);readonlyUpdate.overrideSource(8,{kind:'worker_progress',target:{chat_id:100,thread_id:77},label:'Alpha'});await readonlyUpdate.ui.refresh();
   const readonlyProgress=readonlyUpdate.nodes.get('#conversation-timeline').children.find(card=>card.dataset.sourceId==='native:8');
   const readonlyListen=readonlyProgress.children.find(child=>child.textContent==='Listen');assert(readonlyListen.hidden);await readonlyListen.handlers.click();assert.equal(readonlyUpdate.audioCalls.length,0);
