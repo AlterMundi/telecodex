@@ -121,7 +121,7 @@ function boot(fail){
   if(why==='explicit-close')graph.close();
   if(why==='wall-limit')bounded.timers.find(t=>t.ms===300000&&!t.cleared).fn();
   if(why==='sample-limit')w.emit({pcm:pcm(999),totalBytes:300*32000+2});
-  assert(graph.closed);assert.equal(bounded.events.length,2);assert.equal(r.captureStop,why==='explicit-close'?'capture_closed':'session_limit');
+  assert(graph.closed);assert.equal(bounded.events.length,2);assert.equal(r.captureStop,'audio_flush_unconfirmed','Reuse the existing native limited-original contract');assert.equal(r.captureError,why==='explicit-close'?'capture_closed':'session_limit');
   assert.equal(bounded.events[0].data.size,44+samples.byteLength,'Session exit retains the accumulated fragment, without claiming a final flush');
   assert.equal(bounded.sockets.length,1);assert(!bounded.sockets[0].sent.some(v=>typeof v==='string'&&JSON.parse(v).type==='finish'));
   w.emit({pcm:pcm(900)});assert.equal(bounded.events.length,2);
