@@ -474,3 +474,42 @@ not an established diagnosis of the human's particular Android interruption.
 Physical testing must still cover two separate replies while another app is
 foreground and after screen lock. For full OS-managed background playback beyond
 web lifecycle guarantees, the native-mobile roadmap remains the owning track.
+
+
+### Listen to session progress
+
+Visible Update from cards expose Listen alongside Inspect update, reusing the
+original card's source/revision, saved position and verified player. They do not
+create a second speech path or choose a reply destination. An already loaded
+update resumes without another synthesis attempt. The same capture, capability
+and read-only checks apply as for final replies. This addresses the previously
+missing control on the coalesced progress card; it does not add Reply-to-session
+or claim a new receiving deployment.
+
+### Session audio Solo and reset
+
+Session update and result headings expose Mute, Solo (S), and, while a filter is
+active, Hear all sessions. Solo clears prior explicit mutes; several selected
+solos form the audible session selection. Removing the last solo restores all
+sessions without reviving old mutes. Hear all sessions clears both sets. These
+filters affect automatic worker updates only: direct conversation and pending
+questions retain their existing attention handling, and explicit Listen remains
+available. Filtering stops excluded automatic playback without pausing global
+Voice or native work. Returning a session to the mix never replays silent history.
+
+Preferences are local to the conversation binding, capped at 256 mute and 256
+solo identities in one versioned local-storage document (32 KiB read limit). The
+previous mute-only format is read when the new document is absent and retired on
+the next filter change. No transcript, labels, or audio backlog is persisted.
+
+### Screenshot version and human identity
+
+The standalone header has a compact multicolor `ui` identifier above presence.
+Its twelve hexadecimal characters identify the HTML/JavaScript/CSS bundle
+selected when that page loaded, not a later server deployment or a native daemon
+version. The full SHA-256 is retained in its title. Compute it from original
+index.html followed by each versioned asset name, a NUL separator and its bytes
+in shell order; exact deployed source can reproduce it without a Git checkout.
+It contains no actor, host, private state or credentials. A new deployment does
+not rewrite the identifier in an already open page. The authenticated human name
+uses the secondary palette role, separate from the human label and daimon accent.

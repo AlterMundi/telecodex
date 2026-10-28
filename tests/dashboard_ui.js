@@ -121,7 +121,8 @@ const hung = (options) => new Promise((resolve, reject) => {
   assert.equal(shared.requests[0].route,'api/interaction/access');
   assert.equal(shared.requests[0].options.credentials,'same-origin');
   assert.equal(shared.nodes.get('#feedback').children.length,0);
-  assert.equal(shared.nodes.get('#conversation-account').textContent,'human: Human');
+  assert.deepEqual(shared.nodes.get('#conversation-account').children.map(c=>c.textContent),['human: ','Human']);
+  assert.equal(shared.nodes.get('#conversation-account').children[1].className,'human-name');
   assert.equal(shared.nodes.get('#conversation-account').hidden,false);
   assert.equal(shared.saved.size,0,'Shared auth must not copy its session into JS storage');
   assert.equal(shared.signIns(),0,'A remembered session reconnects without another login');

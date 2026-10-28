@@ -218,62 +218,95 @@ window.Conversation = (() => {
     const cards = new Map(),progressCards=new Map(),settledProgress=new Map();
     // Device-local audio attention, scoped to this conversation binding. No
     // transcript, labels, native work state or playback backlog is persisted.
-    const mutedSessions=new Set();let muteBinding;
+    const mutedSessions=new Set(),soloSessions=new Set();let muteBinding;
     function sessionKey(source){
       const target=source.target;
       if(!["worker_progress","worker_result"].includes(source.kind) || !target
         || !Number.isSafeInteger(target.chat_id) || target.thread_id!=null && !Number.isSafeInteger(target.thread_id))return;
       return JSON.stringify([target.chat_id,target.thread_id??null]);
     }
-    const sessionMuted=source=>mutedSessions.has(sessionKey(source));
-    function loadSessionMutes(){
-      if(muteBinding===binding)return;muteBinding=binding;mutedSessions.clear();
-      try{
-        const raw=window.localStorage?.getItem("interaction-session-mutes:"+binding);
-        if(!raw || raw.length>32768)return;
-        const saved=JSON.parse(raw);if(!Array.isArray(saved)||saved.length>256)return;
-        for(const key of saved){
-          if(typeof key!=="string" || key.length>64)continue;
-          const pair=JSON.parse(key);
+    const sessionMuted=source=>{const key=sessionKey(source);return !!key&&(mutedSessions.has(key)||soloSessions.size>0&&!soloSessions.has(key));};
+    function restoreSessionKeys(saved,target){
+      if(!Array.isArray(saved)||saved.length>256)return;
+      for(const key of saved){
+        if(typeof key!=="string" || key.length>64)continue;
+        try{const pair=JSON.parse(key);
           if(Array.isArray(pair)&&pair.length===2&&Number.isSafeInteger(pair[0])&&(pair[1]===null||Number.isSafeInteger(pair[1]))
-            &&JSON.stringify(pair)===key)mutedSessions.add(key);
+            &&JSON.stringify(pair)===key)target.add(key);
+        }catch{}
+      }
+    }
+    function loadSessionMutes(){
+      if(muteBinding===binding)return;muteBinding=binding;mutedSessions.clear();soloSessions.clear();
+      try{
+        const raw=window.localStorage?.getItem("interaction-session-audio:"+binding);
+        if(raw){
+          if(raw.length>32768)return;
+          const saved=JSON.parse(raw);if(saved?.version!==1)return;
+          restoreSessionKeys(saved.muted,mutedSessions);restoreSessionKeys(saved.solo,soloSessions);
+        }else{
+          const legacy=window.localStorage?.getItem("interaction-session-mutes:"+binding);
+          if(legacy&&legacy.length<=32768)restoreSessionKeys(JSON.parse(legacy),mutedSessions);
         }
       }catch{}
     }
+    function audioFilterChanged(){
+      try{
+        window.localStorage?.setItem("interaction-session-audio:"+binding,JSON.stringify({version:1,muted:[...mutedSessions],solo:[...soloSessions]}));
+        window.localStorage?.removeItem?.("interaction-session-mutes:"+binding);
+      }catch{}
+      for(const other of [...cards.values(),...progressCards.values()])muteButtonState(other);
+      for(let n=voiceQueue.length-1;n>=0;n--)if(sessionMuted(voiceQueue[n]))removeQueued(n);
+      if(active?.queued && sessionMuted(active.source))stop("Automatic audio filtered for this session. Its updates remain visible.");
+      voiceStatus();Promise.resolve().then(drainVoice);
+    }
     function muteButtonState(card){
       if(!card.mute)return;
-      const muted=sessionMuted(card.muteSource),label=card.muteSource.label||"this session";
+      const key=sessionKey(card.muteSource),muted=mutedSessions.has(key),solo=soloSessions.has(key),label=card.muteSource.label||"this session";
       card.mute.setAttribute("aria-pressed",String(muted));
       card.mute.setAttribute("aria-label",`${muted?"Unmute":"Mute"} automatic audio updates from ${label}`);
       card.mute.title=card.mute.getAttribute?.("aria-label") || `${muted?"Unmute":"Mute"} automatic audio updates from ${label}`;
       card.mute.disabled=!muted&&mutedSessions.size>=256;
       if(card.mute.disabled)card.mute.title="Session mute limit reached. Unmute another session first.";
-      // Static vector paths avoid platform-specific emoji or missing glyphs.
       card.mute.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4Z"/>'+
         (muted?'<path d="m16 9 5 6m0-6-5 6"/>':'<path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/>')+'</svg>';
+      card.solo.setAttribute("aria-pressed",String(solo));
+      card.solo.setAttribute("aria-label",`${solo?"Remove solo from":"Solo"} automatic audio updates from ${label}`);
+      card.solo.title=card.solo.getAttribute?.("aria-label");
+      card.solo.disabled=!solo&&soloSessions.size>=256;
+      card.reset.hidden=mutedSessions.size===0&&soloSessions.size===0;
     }
     function sessionTitle(card,source,label){
       card.muteSource=source;
       const key=sessionKey(source);
       if(readOnly || !key){card.title.textContent=label;card.titleLabel=undefined;card.muteAttached=false;return;}
-      // Refresh the label without detaching a focused keyboard control.
+      // Refresh labels without detaching focused keyboard controls.
       if(!card.titleLabel){card.title.textContent="";card.titleLabel=node("span");card.title.append(card.titleLabel);}
       card.titleLabel.textContent=label;
       if(!card.mute){
+        card.audioControls=node("span",undefined,"session-audio-controls");
         card.mute=node("button",undefined,"session-audio-mute");card.mute.type="button";
         card.mute.addEventListener("click",()=>{
           const selected=sessionKey(card.muteSource);if(!selected)return;
           if(mutedSessions.has(selected))mutedSessions.delete(selected);
           else {if(mutedSessions.size>=256)return;mutedSessions.add(selected);}
-          try{window.localStorage?.setItem("interaction-session-mutes:"+binding,JSON.stringify([...mutedSessions]));}catch{}
-          for(const other of [...cards.values(),...progressCards.values()])muteButtonState(other);
-          for(let n=voiceQueue.length-1;n>=0;n--)if(sessionMuted(voiceQueue[n]))removeQueued(n);
-          if(active?.queued && sessionMuted(active.source))stop("Automatic audio muted for this session. Its updates remain visible.");
-          voiceStatus();Promise.resolve().then(drainVoice);
+          audioFilterChanged();
         });
+        card.solo=node("button","S","session-audio-solo");card.solo.type="button";
+        card.solo.addEventListener("click",()=>{
+          const selected=sessionKey(card.muteSource);if(!selected)return;
+          if(soloSessions.has(selected))soloSessions.delete(selected);
+          else {if(soloSessions.size>=256)return;soloSessions.add(selected);}
+          // Solo starts a fresh mix; previously muted tracks never reappear muted.
+          mutedSessions.clear();audioFilterChanged();
+        });
+        card.reset=node("button",undefined,"session-audio-reset");card.reset.type="button";
+        card.reset.setAttribute("aria-label","Hear all sessions: clear mute and solo");card.reset.title="Hear all sessions";
+        card.reset.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10a9 9 0 1 1 1 7M3 4v6h6"/></svg>';
+        card.reset.addEventListener("click",()=>{mutedSessions.clear();soloSessions.clear();audioFilterChanged();});
       }
       muteButtonState(card);
-      if(!card.muteAttached){card.title.append(card.mute);card.muteAttached=true;}
+      if(!card.muteAttached){card.audioControls.replaceChildren(card.mute,card.solo,card.reset);card.title.append(card.audioControls);card.muteAttached=true;}
     }
     function clearProgress(){for(const card of progressCards.values())card.box.remove();progressCards.clear();settledProgress.clear();}
     const replyText=body=>window.ConversationMarkdown?.source(body) ?? body.textContent;
@@ -288,9 +321,10 @@ window.Conversation = (() => {
       if(stamp<=(settledProgress.get(key)||0) || previous && previous.stamp>stamp)return;
       let card=previous;
       if(!card){
-        const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),inspect=node("button","Inspect update");
+        const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),inspect=node("button","Inspect update"),listen=node("button","Listen");
         const time=node("time",undefined,"message-time");
-        inspect.type="button";box.append(title,body,inspect,time);card={box,title,body,inspect,time};progressCards.set(key,card);
+        inspect.type="button";listen.type="button";listen.className="session-update-listen";inspect.className="session-update-inspect";box.append(title,body,listen,inspect,time);card={box,title,body,listen,inspect,time};progressCards.set(key,card);
+        listen.addEventListener("click",()=>{const original=cards.get(card.source);if(!original || original.source.revision!==card.revision || !canListen)return;return listenCard(original);});
         inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
       }
       const changed=card.source!==source.id || card.revision!==source.revision;
@@ -298,6 +332,7 @@ window.Conversation = (() => {
       card.box.dataset.sourceId=source.id;
       const original=cards.get(source.id);
       setReplyText(card.body,original?.expanded && original.source.revision===source.revision?replyText(original.body):source.preview);
+      card.listen.hidden=!canListen;card.listen.setAttribute("aria-label",`Listen to update from ${source.label}`);
       messageTime(card.time,source.observed_at);
       placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
       if(changed)textObserver?.unobserve(card.box);
@@ -1145,6 +1180,14 @@ window.Conversation = (() => {
       const query = new URLSearchParams({source:source.id, revision:source.revision, offset:String(offset)});
       return api(`interaction/part?${query}`);
     }
+    function listenCard(card) {
+      if(readOnly || captureBusy || card.listen.disabled)return;
+      const saved=speechPositions.get(card.source.id);
+      if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended && (!saved || saved.offset>=active.offset)){
+        voiceSuspended=false;voiceStatus();return startPlayback();
+      }
+      return listenTo(card.source,saved?.revision===card.source.revision?saved.offset:0);
+    }
     function upsert(source) {
       const followingLive=atTimelineEnd();
       let card = cards.get(source.id);
@@ -1168,14 +1211,7 @@ window.Conversation = (() => {
         cards.set(source.id, card);
         reply.addEventListener("click",()=>selectFocus({source:card.source.id,revision:card.source.revision,...(card.source.kind==="matrix_result"?{context_only:true}:{})},card.source.label||"this session"));
         read.addEventListener("click",()=>readCard(card));
-        listen.hidden=readOnly;listen.addEventListener("click", () => {
-          if(readOnly || captureBusy || listen.disabled)return;
-          const saved=speechPositions.get(card.source.id);
-          if(active?.source.id===card.source.id && active.source.revision===card.source.revision && blobUrl && !audio.ended && (!saved || saved.offset>=active.offset)){
-            voiceSuspended=false;voiceStatus();return startPlayback();
-          }
-          return listenTo(card.source,saved?.revision===card.source.revision?saved.offset:0);
-        });
+        listen.hidden=readOnly;listen.addEventListener("click",()=>listenCard(card));
       } else if (card.source.text_sha256 !== source.text_sha256) {
         setReplyText(card.body,source.preview);
         card.autoRevision=undefined;card.autoWanted=false;
