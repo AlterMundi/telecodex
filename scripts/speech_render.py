@@ -12,6 +12,7 @@ import base64
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import html
 import io
 import json
 import os
@@ -67,6 +68,14 @@ def spoken_markdown(text, language):
     if not result:
         raise RenderError('empty-spoken-text')
     return re.match(r'^\s*', text).group() + result + re.search(r'\s*$', text).group()
+
+
+def qwen_text(spoken, config):
+    """Use provider pause controls, never pronounce control text or user XML."""
+    if not config.get('ssml_breaks', False):
+        return spoken
+    escaped = html.escape(spoken, quote=True)
+    return '<speak>' + re.sub(r'\n+', '<break time="450ms"/>', escaped) + '</speak>'
 
 
 def canonical(value):
@@ -146,7 +155,7 @@ def route(path):
     value = json.loads(private_bytes(path, 16384))
     allowed = {'schema', 'provider', 'cache_root', 'env_file', 'voice', 'language',
                'endpoint', 'timeout_seconds', 'audio_retention_seconds', 'audio_cache_max_bytes',
-               'credential_file', 'model', 'instruction', 'rate', 'pitch'}
+               'credential_file', 'model', 'instruction', 'rate', 'pitch', 'ssml_breaks'}
     if (not isinstance(value, dict) or set(value) - allowed or value.get('schema') != SCHEMA
             or value.get('provider') not in ('nvidia-magpie', 'qwen-tts')
             or not isinstance(value.get('cache_root'), str)
@@ -161,12 +170,13 @@ def route(path):
         raise RenderError('invalid-speech-route')
     if value['provider'] == 'nvidia-magpie':
         if (not re.fullmatch(r'Magpie-Multilingual\.[A-Za-z0-9.-]{1,96}', value['voice'])
-                or set(value) & {'credential_file', 'model', 'instruction', 'rate', 'pitch'}):
+                or set(value) & {'credential_file', 'model', 'instruction', 'rate', 'pitch', 'ssml_breaks'}):
             raise RenderError('invalid-speech-route')
     elif (not isinstance(value.get('model'), str)
           or not re.fullmatch(r'qwen-[A-Za-z0-9_.-]{1,96}', value['model'])
           or not isinstance(value.get('instruction', ''), str)
           or len(value.get('instruction', '')) > 500
+          or type(value.get('ssml_breaks', False)) is not bool
           or any(type(value.get(k, 1.0)) not in (int, float)
                  or not 0.5 <= value.get(k, 1.0) <= 2 for k in ('rate', 'pitch'))):
         raise RenderError('invalid-speech-route')
@@ -366,7 +376,7 @@ def render(binding, request):
                 'provider': config['provider'], 'endpoint': config['endpoint'], 'fields': fields}
     if config['provider'] == 'qwen-tts':
         fields = {'model': config['model'], 'input': {
-            'text': spoken, 'voice': config['voice'], 'format': 'wav', 'sample_rate': 24000,
+            'text': qwen_text(spoken, config), 'voice': config['voice'], 'format': 'wav', 'sample_rate': 24000,
             'language_hints': [config['language'].split('-')[0]],
             'rate': config.get('rate', 1.0), 'pitch': config.get('pitch', 1.0),
             'instruction': config.get('instruction', '')}}
@@ -545,7 +555,7 @@ def stream_render(binding, request, emit):
         raise RenderError('streaming-provider-unavailable')
     spoken = spoken_markdown(request['text'], config['language'])
     fields = {'model': config['model'], 'input': {
-        'text': spoken, 'voice': config['voice'], 'format': 'mp3', 'sample_rate': 24000,
+        'text': qwen_text(spoken, config), 'voice': config['voice'], 'format': 'mp3', 'sample_rate': 24000,
         'language_hints': [config['language'].split('-')[0]], 'rate': config.get('rate', 1.0),
         'pitch': config.get('pitch', 1.0), 'instruction': config.get('instruction', '')}}
     if request.get('timing'):
