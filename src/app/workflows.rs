@@ -281,15 +281,46 @@ pub(super) fn attention(
             .workflow_native_reserve(human, cfg.entry())?
         {
             let id = selected.id.clone();
+            let attempt = selected.attempts;
             if deliver(&app, selected).await.is_err() {
                 // Reservation without any native boundary remains known unsent.
-                app.shared
-                    .store
-                    .workflow_native_outcome(&id, "retained_unsent", None)?;
+                app.shared.store.workflow_native_outcome_attempt(
+                    &id,
+                    attempt,
+                    "retained_unsent",
+                    None,
+                )?;
             }
         }
         Ok(())
     })
+}
+/// Continue retained known-unsent returns through the existing finite journal.
+/// No new callback sources, model polling, timer or parallel execution queue.
+pub(super) async fn recover_unsent(app: &App) -> Result<()> {
+    let Some(cfg) = app.shared.config.interaction.as_ref() else {
+        return Ok(());
+    };
+    if !cfg.native_workflow_returns || app.shared.shutdown.is_cancelled() {
+        return Ok(());
+    }
+    for selected in app
+        .shared
+        .store
+        .workflow_native_recover_unsent(cfg.human_id, cfg.entry())?
+    {
+        let id = selected.id.clone();
+        let attempt = selected.attempts;
+        if deliver(app, selected).await.is_err() {
+            app.shared.store.workflow_native_outcome_attempt(
+                &id,
+                attempt,
+                "retained_unsent",
+                None,
+            )?;
+        }
+    }
+    Ok(())
 }
 async fn deliver(app: &App, selected: crate::store::ReturnDispatch) -> Result<()> {
     let worker = app.worker_for(selected.entry).await?;
@@ -313,15 +344,18 @@ async fn deliver(app: &App, selected: crate::store::ReturnDispatch) -> Result<()
             observation: None,
             images: vec![],
             text: String::new(),
-            client_message_id: Some(format!("workflow-return:{id}")),
+            client_message_id: Some(format!("workflow-return:{id}@{}", selected.attempts)),
             goal: None,
             admission_check: Some(Arc::new(move || shared.store.workflow_native_validate(&id))),
             response: send,
         };
         if active.sender.send(packet).is_err() {
-            app.shared
-                .store
-                .workflow_native_outcome(&selected.id, "retained_unsent", None)?;
+            app.shared.store.workflow_native_outcome_attempt(
+                &selected.id,
+                selected.attempts,
+                "retained_unsent",
+                None,
+            )?;
             return Ok(());
         }
         let shared = app.shared.clone();
@@ -332,9 +366,12 @@ async fn deliver(app: &App, selected: crate::store::ReturnDispatch) -> Result<()
                 Ok(Ok(Err(crate::codex::CodexSteerError::Rejected(_)))) => ("rejected", None),
                 _ => ("uncertain", None),
             };
-            let _ = shared
-                .store
-                .workflow_native_outcome(&selected.id, phase, turn.as_deref());
+            let _ = shared.store.workflow_native_outcome_attempt(
+                &selected.id,
+                selected.attempts,
+                phase,
+                turn.as_deref(),
+            );
         });
     } else {
         worker
@@ -364,4 +401,14 @@ async fn deliver(app: &App, selected: crate::store::ReturnDispatch) -> Result<()
             .map_err(|_| anyhow!("Integrating worker unavailable"))?;
     }
     Ok(())
+}
+
+/// Internal correlation only; old in-flight packets belonged to attempt one.
+pub(super) fn return_attempt(client_id: &str) -> Option<(&str, u8)> {
+    let value = client_id.strip_prefix("workflow-return:")?;
+    let (id, attempt) = match value.rsplit_once('@') {
+        Some((id, attempt)) => (id, attempt.parse::<u8>().ok()?),
+        None => (value, 1),
+    };
+    (!id.is_empty() && (1..=3).contains(&attempt)).then_some((id, attempt))
 }

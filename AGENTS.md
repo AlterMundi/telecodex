@@ -124,3 +124,9 @@ claim. Keep the receiving feature off until actual wrapper qualification;
 foreground speech still requires Conversation surface adoption.
 Do not emulate that missing seam with fabricated human input, recursive helper
 chains, continuous model polling or an extra coordinator.
+
+Known-unsent workflow returns may resume through the existing maintenance heartbeat
+only with the adapter enabled and unchanged current source/authority. Keep the
+same intent ID, at most3 attempts (2/5-second delays), frozen attempt correlation
+and compatible-writer rollback. Never retry uncertain, submitting, rejected or
+acknowledged returns; never reuse an earlier local writer's publication grant.
