@@ -1245,7 +1245,7 @@ compatible operational rollback. Scoped withdrawal/expiry stops future
 admission without deleting checkpoints, accepted work or uncertain operations.
 
 
-### Ordinary routed native attention (development, #426)
+### Ordinary routed native attention (#426 / PR427)
 
 `interaction.native_routed_returns` defaults to false, independently of the
 qualified declared-workflow adapter. It extends that same native return transport
@@ -1272,12 +1272,23 @@ Callback source sets use `native-public-set` for ordinary/mixed sources and reta
 legacy workflow marker compatibility. Readers expose neutral `native_returns`
 without mislabelling ordinary sources as workflows. Rollback must keep this
 compatible reader/writer and preserve the journal; disabling the flag does not
-revoke or erase retained outcomes. Full wrapper and receiving qualification of
-this extension remain separate: the synthetic active-result / idle-question /
-idle-result wrapper journey, known-unsent recovery and default-off/no-backfill
-cases now pass against the CI-built source0880473 executable. Ordinary source restart/correction checks also pass, including default-off
-recovery, retained uncertainty, same-intent finite retries and stale-attempt
-fences. Final-tree CI continues. The presentation
-reports loaded `automatic_routed_native_return` separately from retained receipt
-phases. Receiving enablement and real-device acceptance remain pending; this is
-not a stage4 completion or hearing claim.
+revoke or erase retained outcomes.
+
+PR427/source4372cbdd, mergeb149a458, fullCI40743262608 passed and is selected
+on CompAII's local listener with `native_routed_returns=true`. The existing
+workflow policy remains enabled. Web422/ui5149ca483732, Core, voice configuration,
+two current native collectors and their goal identity/accounting were preserved;
+no native restart, new human input, global Stop or peer adoption is claimed.
+Current receiving/operator details live in the existing Shared Resources
+Interaction record. Rollback keeps the427-compatible writer with the flag false.
+
+The synthetic active-result / idle-question / idle-result real-wrapper journey,
+known-unsent recovery, loaded-policy observation and default-off/no-backfill
+cases passed in final-tree CI. Twenty-one targeted store tests include ordinary
+source restart/correction, retained uncertainty, same-intent finite retries and
+stale-attempt fences. Earlier actual Core/Sol internal toolOutput evidence is
+reused at the unchanged native boundary; no provider or production work was
+replayed. The presentation reports loaded `automatic_routed_native_return`
+separately from retained receipt phases. Full stages2/3/required4, foreground
+speech/coalescing and real-device acceptance remain unfinished; this is not a
+whole-stage completion or hearing claim.
