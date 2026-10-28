@@ -755,7 +755,7 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation header .identity { min-width:0; }
 .standalone-conversation header .identity > .resonance,.standalone-conversation header .identity > h1,.standalone-conversation header #provider { display:none; }
 .standalone-conversation header #conversation-companion { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:10px; width:100%; min-width:0; padding:0; border:0; border-radius:0; background:none; }
-.standalone-conversation header #conversation-companion pre { font-size:7px; line-height:1.05; white-space:pre; }
+.standalone-conversation header #conversation-companion pre { font-size:7px; line-height:9.5px; white-space:pre; }
 .standalone-conversation header #conversation-companion > div { min-width:0; }
 .standalone-conversation header .companion-name { font-size:14px; line-height:20px; letter-spacing:0; }
 .standalone-conversation header .companion-caption { font-size:14px; line-height:1.2; margin:4px 0; }
@@ -976,7 +976,7 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 .session-update-listen { margin-inline-end:12px; }
 .standalone-conversation #conversation-account .human-name { color:var(--secondary); }
 #client-build { display:none; }
-.standalone-conversation #client-build { display:block; position:absolute; inset-block-start:0; inset-inline-start:0; font:8px/12px ui-monospace,monospace; letter-spacing:.02em; color:var(--muted); margin:0; white-space:nowrap; pointer-events:none; }
+.standalone-conversation #client-build { display:block; font:9px/12px ui-monospace,monospace; letter-spacing:.02em; color:var(--muted); margin:0 0 4px; white-space:nowrap; }
 #client-build code { font:inherit; }
 #client-build code span:nth-child(4n+1) { color:var(--accent); }
 #client-build code span:nth-child(4n+2) { color:var(--secondary); }
