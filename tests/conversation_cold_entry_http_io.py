@@ -18,10 +18,11 @@ class ColdEntry(Requests):
         self.stop()
         with sqlite3.connect(self.root/'state.sqlite') as db:
             db.row_factory=sqlite3.Row
-            assert not db.execute('SELECT 1 FROM sessions WHERE thread_id=1').fetchone()
-            original=dict(db.execute('SELECT * FROM sessions WHERE thread_id=7').fetchone())
-            original.pop('id');original.update(thread_id=1,codex_thread_id=None,force_fresh_thread=1,busy=0,last_assistant_text=None,session_title='Cold conversation',session_prompt='Discuss with the human while work sessions continue. Use interaction_controller for original input and attributed routing.')
-            db.execute('INSERT INTO sessions('+','.join(original)+') VALUES('+','.join('?' for _ in original)+')',list(original.values()))
+            entry=db.execute('SELECT * FROM sessions WHERE thread_id=1').fetchone()
+            assert entry is not None and entry['codex_thread_id'] is None and entry['busy']==0
+            # Bootstrap creates owned metadata, not a native thread or model turn.
+            db.execute('UPDATE sessions SET force_fresh_thread=1,session_title=?,session_prompt=? WHERE thread_id=1',
+                ('Cold conversation','Discuss with the human while work sessions continue. Use interaction_controller for original input and attributed routing.'))
         script=self.root/'asr.py'
         script.write_text('''import hashlib,json,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]);digest=hashlib.sha256(pathlib.Path(sys.argv[-1]).read_bytes()).hexdigest()
