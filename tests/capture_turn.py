@@ -94,12 +94,36 @@ class CaptureAnalysisLifecycle(unittest.IsolatedAsyncioTestCase):
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):await task
         self.assertTrue(worker.closed)
-    async def test_lag_failure_closes_only_the_analysis_worker(self):
+    async def test_late_first_join_keeps_current_tail_and_absolute_endpoint_offsets(self):
+        worker=self.worker();pcm=bytearray(b'\0'*320000);changed=asyncio.Event();observed=[];complete=asyncio.Event()
+        async def open_worker():return worker
+        async def observe(value):
+            observed.append(value)
+            if value['audio_bytes']==len(pcm):complete.set()
+        task=asyncio.create_task(analyze_capture(open_worker,pcm,changed,observe))
+        await asyncio.wait_for(complete.wait(),1)
+        self.assertEqual(sum(n for n,_ in worker.feeds),256000)
+        self.assertEqual(bytes(pcm),b'\0'*320000)
+        await worker.queue.put({'type':'activity','audio_bytes':256000,
+            'endpoint':{'audio_bytes':256000,'generation':1}})
+        await asyncio.sleep(.01)
+        self.assertEqual(observed[-1]['endpoint']['audio_bytes'],320000)
+        pcm.extend(b'\0'*1024);changed.set();await asyncio.sleep(.01)
+        self.assertEqual(observed[-1]['audio_bytes'],321024)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):await task
+        self.assertTrue(worker.closed)
+    async def test_steady_state_lag_failure_closes_only_the_analysis_worker(self):
         worker=self.worker()
         async def open_worker():return worker
-        async def observe(_):self.fail('No metadata may escape rejected backlog')
+        current=asyncio.Event()
+        async def observe(_):current.set()
+        pcm=bytearray(b'\0'*1024);changed=asyncio.Event()
+        task=asyncio.create_task(analyze_capture(open_worker,pcm,changed,observe))
+        await asyncio.wait_for(current.wait(),1)
+        pcm.extend(b'\0'*256002);changed.set()
         with self.assertRaisesRegex(DetectionUnavailable,'fell behind'):
-            await analyze_capture(open_worker,bytearray(b'\0'*256002),asyncio.Event(),observe)
-        self.assertTrue(worker.closed);self.assertEqual(worker.feeds,[])
+            await task
+        self.assertTrue(worker.closed);self.assertEqual(worker.feeds,[(1024,False)])
 
 if __name__ == '__main__':unittest.main()
