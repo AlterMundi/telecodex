@@ -595,7 +595,7 @@ class Provider:
             raise ValueError('Select one retained original or worker result')
         if value.get('context_only') and not value['source'].startswith(('request:', 'delivery:', 'input:', 'matrix:', 'task:', 'native:')):
             raise ValueError('Context must refer to a reported conversation source')
-        if value['source'].startswith(('matrix:','task:','native:')) and not value.get('context_only'):
+        if value['source'].startswith(('matrix:','task:')) and not value.get('context_only'):
             raise ValueError('Matrix/task references are selected contextual evidence')
         ident=value['source'].split(':', 1)[1]
         if value['source'].startswith('native:'):
