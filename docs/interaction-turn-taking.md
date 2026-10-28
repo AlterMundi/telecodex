@@ -400,11 +400,13 @@ timing cause.
 ## Useful internal-return speech
 
 The native return context asks for an exact source read before reporting its
-contents, followed by one concise final attributed answer. Source lookup belongs
+contents, followed by one concise attributed offer. Source lookup belongs
 in tool activity; a separate spoken lookup announcement or repeated offer adds
 no result and delays useful speech. A human correction arriving during that
 native turn is incorporated into the same answer. This is response guidance,
-not an extra model pass, content classifier, hearing receipt or new authority.
+not an extra model pass, content classifier, hearing receipt or new authority. Incorporation is reported only after the offer was
+actually provided. A useful offer may be commentary before that acknowledgment;
+its content is not repeated merely to create a final-phase item.
 
 When a retained human original steers a return turn, its final answer can be
 bound to that human original rather than carry `native_returns`. Qualify the
