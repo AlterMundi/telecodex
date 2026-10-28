@@ -398,7 +398,9 @@ happening to be visible during refresh.
 The internal-session carousel should show one concise session/item line, rotate
 slowly, support horizontal drag and keyboard navigation, and open the selected
 current action. Pause rotation on hover/focus/drag, hidden state, an open detail
-and reduced motion. Retain a stable list entry. Reuse existing ledgers and native
+and reduced motion. Give the item text the available row width between the
+arrows and a compact numeric list control; omit visible “loaded pending” labels.
+Retain the list control’s accessible name. Reuse existing ledgers and native
 responders; reading never approves, completes, cancels or resends anything.
 Direct-topic ingress stays direct. Canonical For you scope must never be labelled
 all sessions: global attention needs its own owner-scoped read/navigation contract.
