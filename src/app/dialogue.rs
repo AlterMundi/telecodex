@@ -253,6 +253,11 @@ pub(super) fn tool_call(
     if request.tool == "interaction_controller" && request.arguments.to_string().len() <= 16000 {
         if let Ok(args) = serde_json::from_value::<ControllerArgs>(request.arguments.clone()) {
             request.tool = match args.operation.as_str() {
+                "workflow_question" | "workflow_supersede" | "workflow_declare"
+                | "workflow_status" | "workflow_advance" | "workflow_attention"
+                | "workflow_reported" | "workflow_finish" | "workflow_result" => {
+                    "interaction_workflow"
+                }
                 "capabilities" => "controller_capabilities",
                 "inputs" => "interaction_inputs",
                 "target_inputs" => "interaction_target_inputs",
@@ -284,7 +289,11 @@ pub(super) fn tool_call(
                 _ => "unsupported_controller_operation",
             }
             .into();
-            request.arguments = args.arguments;
+            request.arguments = if request.tool == "interaction_workflow" {
+                json!({"operation":args.operation,"arguments":args.arguments})
+            } else {
+                args.arguments
+            };
         }
     }
     if request.tool == "interaction_candidates" {
@@ -304,6 +313,7 @@ pub(super) fn tool_call(
                 capabilities["operations"]["playback_context"]=json!({"arguments":{"input_ref":"UUID of one original","offset":"optional canonical character offset; default frozen reported segment boundary"},"description":"On-demand frozen device playback report and at most1600 canonical source characters, using existing scoped presentation/question readers and exact revision. Follow source_part.next_offset only when relevant. Distinguishes not reported, current source, not current and unconfirmed; no model/provider call. Not proof of hearing, a word-aligned heard/unsaid split, an answer or authority to resume/repeat/cancel work."});
                 capabilities["operations"]["goal_inspect"]=json!({"arguments":{"selector":"one unambiguous enrolled label or stable tID"},"description":"Read selected goal definition/revision, native activity, receiver busy state and pending counts independently. Unknown capability is not no-goal or idle; blocked cause remains unknown unless other evidence establishes it. This operation does not resume, clear, interrupt, attach or launch work."});
                 super::goal_controls::capabilities(&mut capabilities);
+                super::workflows::capabilities(&mut capabilities,true);
                 super::interactions::task_capabilities(&mut capabilities);
                 capabilities["operations"]["companion_hint"]=super::presentation::companion_capability(&app)?;
                 super::matrix::capabilities(shared,&mut capabilities)?;
@@ -314,6 +324,10 @@ pub(super) fn tool_call(
             }
             if request.tool=="interaction_companion_hint" {
                 return super::presentation::companion_hint(&app,key,human,&request,request.arguments.clone(),&closed).await;
+            }
+            if request.tool=="interaction_workflow" {
+                let operation=request.arguments["operation"].as_str().context("Missing workflow operation")?;
+                return super::workflows::tool(&app,key,human,&request,operation,request.arguments["arguments"].clone(),&closed).await;
             }
             if request.tool=="interaction_conversation" {
                 let args:ConversationReadArgs=serde_json::from_value(request.arguments)?;

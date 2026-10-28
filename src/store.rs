@@ -39,6 +39,9 @@ mod merging;
 pub use matrix::{MatrixAuthor, MatrixReturn, MatrixSubmission};
 mod routing;
 mod session_requests;
+mod workflows;
+pub(crate) use workflows::WORKFLOW_CAPACITY_ERROR;
+pub use workflows::{WorkflowPlan, WorkflowStep};
 mod stopping;
 mod voice;
 pub use conversation_inputs::{
@@ -137,6 +140,7 @@ impl Store {
         store.init_interaction_creation()?;
         store.init_routing()?;
         store.init_session_requests()?;
+        store.init_workflows()?;
         store.init_delivery_audiences()?;
         store.init_nexus()?;
         store.init_merging()?;

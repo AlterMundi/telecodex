@@ -31,7 +31,7 @@ pub(super) fn read_on(
     read_scoped_on(conn, human, entry, id, false)
 }
 
-fn read_scoped_on(
+pub(super) fn read_scoped_on(
     conn: &Connection,
     human: i64,
     entry: SessionKey,

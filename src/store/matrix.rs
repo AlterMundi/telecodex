@@ -39,6 +39,7 @@ pub(super) fn unclaimed_on(
         },
         event,
     )?;
+    super::workflows::unclaimed_on(conn, human, channel, event, update)?;
     let held = selected_on(conn, human, channel, event, update)?.is_some();
     if held {
         bail!("Original input has an immutable Matrix destination");
