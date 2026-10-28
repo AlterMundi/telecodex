@@ -1,8 +1,10 @@
 "use strict";
 window.VoiceInput = (() => {
-  // One unfinished original per origin, bounded by the capture limit. Never
-  // evict an uncertain original to make room: confirmation or explicit discard
-  // retires it. Reload recovery does not upload or dispatch anything.
+  // Ordinary capture owns one unfinished original; explicit continuous mode can
+  // retain two, together <=20MiB, in the same recovery key. Never evict an
+  // uncertain original for capacity. Matching confirmation/explicit discard
+  // retires it. Reload only reads. Older clients retain the unknown two-item
+  // envelope rather than overwriting it; use this decoder to recover both.
   function recoveryStore() {
     if(!window.indexedDB)return;
     let opening;
@@ -24,26 +26,48 @@ window.VoiceInput = (() => {
         tx.oncomplete=()=>{clearTimeout(timer);resolve(result);};tx.onerror=tx.onabort=()=>{clearTimeout(timer);reject(Error('Local recording recovery unavailable'));};
       });
     }
+    function records(old){
+      if(!old)return [];
+      if(old.schema==='telecodex.voice-recovery/v2'){
+        if(!Array.isArray(old.items)||old.items.length!==2)throw Error('Recording recovery is malformed');
+        return [...old.items];
+      }
+      if(!old.id||!old.blob)throw Error('Unknown recording recovery format');
+      return [old];
+    }
+    function storeRecords(store,items){
+      if(!items.length)store.delete('pending');
+      else store.put(items.length===1?items[0]:{schema:'telecodex.voice-recovery/v2',items},'pending');
+    }
     return {
-      read:()=>operation('readonly',(_store,old)=>old),
-      put:value=>{
+      read:()=>operation('readonly',(_store,old)=>records(old)[0]),
+      list:()=>operation('readonly',(_store,old)=>records(old)),
+      put:(value,parallel=false)=>{
         const {blob,...meta}=value;
         if(!blob || blob.size>20*1024*1024 || new Blob([JSON.stringify(meta)]).size>65536)return Promise.reject(Error('Recording recovery limit reached'));
         return operation('readwrite',(store,old)=>{
-          if(old && (old.id!==value.id || old.audio_sha256!==value.audio_sha256))throw Error('Another unfinished recording is retained');
-          store.put(value,'pending');
+          const items=records(old),index=items.findIndex(v=>v.id===value.id);
+          if(index>=0){if(items[index].audio_sha256!==value.audio_sha256)throw Error('Recording identity changed');items[index]=value;}
+          else{
+            if(items.length>= (parallel?2:1)||items.some(v=>v.binding!==value.binding))throw Error('Another unfinished recording is retained');
+            items.push(value);
+          }
+          if(items.reduce((sum,v)=>sum+v.blob.size,0)>20*1024*1024)throw Error('Recording recovery limit reached');
+          items.sort((a,b)=>(a.capture_started||0)-(b.capture_started||0));
+          storeRecords(store,items);
         });
       },
-      remove:value=>operation('readwrite',(store,old)=>{if(old?.id===value.id && old.audio_sha256===value.audio_sha256)store.delete('pending');})
+      remove:value=>operation('readwrite',(store,old)=>storeRecords(store,records(old).filter(v=>v.id!==value.id||v.audio_sha256!==value.audio_sha256)))
     };
   }
-  function mount({api, headers, getBinding, onInput, onTiming=()=>{}, getReply=()=>undefined, getPlayback=()=>undefined, getCaptureQuestions=()=>undefined, getVisual=()=>undefined, getFiles=()=>undefined, onFilesSent=()=>{}, onVisualSent=()=>{}, pauseAudio, onActivity=()=>{}, unauthorized, telegram}) {
+
+  function mount({api, headers, getBinding, onInput, onTiming=()=>{}, getReply=()=>undefined, getPlayback=()=>undefined, getCaptureQuestions=()=>undefined, getVisual=()=>undefined, getFiles=()=>undefined, onFilesSent=()=>{}, onVisualSent=()=>{}, pauseAudio, onActivity=()=>{}, unauthorized, telegram, onLocalDiscard=()=>{}}) {
     const box=document.querySelector('#conversation-voice'), button=document.querySelector('#conversation-talk'),send=document.querySelector('#conversation-send');
     const discard=document.querySelector('#conversation-voice-discard'), check=document.querySelector('#conversation-voice-check');
     const state=document.querySelector('#conversation-voice-state'),save=document.querySelector('#conversation-voice-save'),review=document.querySelector('#conversation-recording-review');
     const remaining=document.querySelector('#conversation-voice-remaining');
     const RECORDING_MILLIS=120000,clock=()=>window.performance?.now?.()??Date.now();
-    const recovery=recoveryStore();let restoreBinding,restoring=false;
+    const recovery=recoveryStore();let restoreBinding,restoring=false,continuousOwned=false,recoveryFree=false,lastConfirmed;
     function notice(text,attention=false){state.removeAttribute?.('data-live-caption');state.setAttribute('aria-live','polite');state.textContent=text;state.setAttribute('data-attention',String(attention));}
     function caption(text){notice(text);state.setAttribute('data-live-caption','true');state.setAttribute('aria-live','off');state.scrollLeft=state.scrollWidth;}
     let available=false, liveAvailable=false, liveMode='prepared', generation=0, recorder, stream, parts=[], bytes=0, timer, pending, latestSaved, uploading=false, controller;
@@ -110,7 +134,7 @@ window.VoiceInput = (() => {
     async function restore(){
       const binding=getBinding(),owned=generation;restoreBinding=binding;restoring=true;controls();
       try {
-        const value=await recovery.read();
+        const value=await recovery.read();recoveryFree=!value;
         if(owned!==generation || binding!==getBinding() || phase!=='idle' || pending)return;
         if(value?.binding===binding && value.blob?.size>0 && value.blob.size<=20*1024*1024){
           pending={...value,uncertainSubmission:true,localRecovery:true};notice('An unfinished recording was recovered. '+(value.captureStop==='audio_flush_unconfirmed'?'The final audio buffer was not confirmed; its ending may be missing. ':value.captureStop==='duration_limit'?'It reached the duration limit; its ending may be incomplete. ':'')+'Check its status, retry the same recording, or save a copy. Nothing was resent.',true);
@@ -127,8 +151,9 @@ window.VoiceInput = (() => {
       if(JSON.stringify(fileValues(frozen.files))!==JSON.stringify(fileValues(value.files)))throw Error('Original files do not match this recording.');
       onTiming(frozen.id,'retained');
       latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256,phase:value.phase,preparedText:frozen.preparedText};
+      lastConfirmed=value;
       onInput(value,frozen.focusVersion);onVisualSent(frozen.visual);onFilesSent(frozen.files);pending=undefined;phase='idle';
-      try{await recovery?.remove(frozen);}catch{}
+      try{await recovery?.remove(frozen);if(recovery)recoveryFree=(await recovery.list()).length===0;}catch{recoveryFree=false;}
       notice(value.phase==='answered'?'Recording and automatic transcript saved; answer recorded for the selected question.':value.retired?'This saved recording is no longer eligible to start work.':
         value.phase==='retained_unsent'?'Recording saved; no work was submitted. You can keep writing.':
         value.phase==='preparation_unconfirmed'?'Recording saved; transcription unconfirmed. Nothing was resubmitted.':
@@ -136,6 +161,7 @@ window.VoiceInput = (() => {
         'Recording and automatic transcript saved. Work may continue.',value.retired || ['retained_unsent','preparation_unconfirmed'].includes(value.phase));
       if(value.phase==='preparing'&&frozen.preparedText)caption(frozen.preparedText);
       controls();
+      if(!continuousOwned&&recovery)void restore();
     }
     function observe(value,message) {
       if(!latestSaved || pending || phase!=='idle' || latestSaved.binding!==getBinding()
@@ -259,13 +285,44 @@ window.VoiceInput = (() => {
       if(phase==='permission'){cancelRecording('Voice mode closed before recording began.');return;}
       if(phase==='recording'){commit=false;phase='finalizing';onTiming(recorder.captureId,'ended');recorder.stop();stopTracks();controls();}
     }
+    async function retainContinuous(original){
+      if(!recovery||!original.blob?.size||original.blob.size>20*1024*1024)throw Error('Local recording recovery unavailable');
+      const digest=await window.crypto.subtle.digest('SHA-256',await original.blob.arrayBuffer());
+      const frozen={...original,audio_sha256:Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join(''),localRecovery:true};
+      await recovery.put(frozen,true);recoveryFree=false;return frozen;
+    }
+    async function commitContinuous(frozen){
+      if(frozen.binding!==getBinding()||uploading||pending&&pending.id!==frozen.id||['permission','recording','finalizing'].includes(phase))return {confirmed:false};
+      pending=frozen;phase='idle';lastConfirmed=undefined;
+      await upload();
+      return {confirmed:!pending&&lastConfirmed?.id===frozen.id,value:lastConfirmed};
+    }
+    async function reviewContinuous(originals){
+      if(continuousOwned||ownsSend())return;
+      const owned=generation,binding=getBinding(),selected=originals.find(v=>v.binding===binding);
+      if(!selected){if(recovery)void restore();return;}
+      let frozen=selected;
+      if(!frozen.audio_sha256){
+        try{frozen=await retainContinuous(frozen);}catch{
+          const digest=await window.crypto.subtle.digest('SHA-256',await frozen.blob.arrayBuffer());
+          frozen={...frozen,audio_sha256:Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join(''),localRecovery:false};
+        }
+      }
+      if(owned!==generation||binding!==getBinding()||ownsSend())return;
+      pending=frozen;phase='idle';notice('Voice recording kept for review. Check its status, send the same original, save a copy, or discard it.'+(!frozen.localRecovery?' Keep this page open.':''),true);controls();
+    }
+    function continuousOwner(value){
+      continuousOwned=value===true;
+      if(!continuousOwned&&!ownsSend()&&recovery)void restore();
+    }
     button.addEventListener('click',()=>ownsSend()?submit():start());
     send?.addEventListener('click',()=>{if(ownsSend())return submit();});
     discard.addEventListener('click',()=>{
       if(uploading)return;
       const frozen=pending,message=frozen?'Discard the local recording? An earlier submission may already be saved on the server. This does not cancel it. Save a copy first if you need the audio.':'Discard this voice recording? The recorded audio will be deleted without sending it. Choose Cancel to keep it.';
       if(window.confirm?.(message)){
-        pending=undefined;if(frozen)void recovery?.remove(frozen).catch(()=>{});
+        pending=undefined;if(frozen)void recovery?.remove(frozen).then(()=>{if(!continuousOwned&&!ownsSend())void restore();}).catch(()=>{});
+        if(frozen)onLocalDiscard(frozen.id);
         cancelRecording(frozen?'Local recording discarded. Existing server work was not cancelled.':'Recording discarded. Nothing was sent.');
       }
     });
@@ -284,7 +341,7 @@ window.VoiceInput = (() => {
     });
     document.addEventListener('visibilitychange',()=>{if(document.hidden)deactivate();});
     window.addEventListener('pagehide',deactivate);telegram?.onEvent?.('deactivated',deactivate);
-    controls();return {configure,reset,deactivate,observe,submit,ownsSend,hold,startConversation:()=>liveAvailable&&liveMode==='prepared'&&start(true),syncControls:syncSend};
+    controls();return {configure,reset,deactivate,observe,submit,ownsSend,hold,startConversation:()=>liveAvailable&&liveMode==='prepared'&&start(true),retainContinuous,commitContinuous,reviewContinuous,continuousOwner,canStartContinuous:()=>!!recovery&&recoveryFree&&available&&liveAvailable&&liveMode==='prepared'&&supported()&&!restoring&&!ownsSend(),syncControls:syncSend};
   }
   return {mount};
 })();

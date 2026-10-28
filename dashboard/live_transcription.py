@@ -19,7 +19,7 @@ from starlette.websockets import WebSocketDisconnect
 from .private_state import private_directory, read_json, write_json
 from .transcription import TranscriptionStream, TranscriptionUnavailable
 from .turn_detection import Detector, DetectionUnavailable, analyze_capture, command as detection_command
-from scripts.speech_render import lock
+from scripts.speech_render import lock, RenderError
 
 
 def wav_bytes(pcm):
@@ -86,6 +86,19 @@ def install(app, config, provider, authorize, origins):
     root = private_directory(selected['cache_root'])
     active = set()
     analysis_active = set()
+    prepared_writes = asyncio.Semaphore(1)
+
+    async def persist_prepared(*args):
+        # A client cancellation cannot release this writer while its filesystem
+        # thread is still running. No accumulating blocked writes under I/O load.
+        await asyncio.wait_for(prepared_writes.acquire(), 2)
+        job = asyncio.create_task(asyncio.to_thread(save_prepared, *args))
+        def done(task):
+            prepared_writes.release()
+            if not task.cancelled():
+                task.exception()
+        job.add_done_callback(done)
+        return await asyncio.wait_for(asyncio.shield(job), 3)
 
     async def bind_voice(socket, meta):
         headers = list(socket.scope['headers'])
@@ -217,7 +230,7 @@ def install(app, config, provider, authorize, origins):
                             diagnostic['stage'] = 'final_authorization'
                             await recheck()
                             diagnostic['stage'] = 'save_prepared'
-                            value = await asyncio.to_thread(save_prepared,root,meta['id'],meta['binding'],bytes(pcm),stream.result())
+                            value = await persist_prepared(root,meta['id'],meta['binding'],bytes(pcm),stream.result())
                             diagnostic['prepared_saved'] = True
                             await send({'type':'prepared','id':meta['id'],
                                 'source_sha256':value['source_sha256'],'text':value['text']})
@@ -276,7 +289,7 @@ def install(app, config, provider, authorize, origins):
                         await reader
                         break
         except (HTTPException, ValueError, OSError, UnicodeError, TranscriptionUnavailable,
-                WebSocketDisconnect, TimeoutError) as error:
+                WebSocketDisconnect, TimeoutError, RenderError) as error:
             diagnostic['error_type'] = type(error).__name__
             with suppress(Exception):
                 await send({'type':'unavailable','message':'Live transcription unavailable. Your recording has not been submitted.'})

@@ -17,7 +17,7 @@ function boot(){
    const value={options,pcm:[],closed:false,feed(pcm){this.pcm.push(pcm);return !this.closed;},boundary(v){this.boundaries.push(v);return true;},boundaries:[],close(){this.closed=true;},emit(v){options.onActivity(v);}};analyses.push(value);return value;
   },
   async openCapture(media){
-   const listeners=new Set(),s={media,bytes:0,closed:false,started:false,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},observe(){},start(){this.started=true;},close(){this.closed=true;for(const f of [...listeners])f({captureError:'capture_closed'});listeners.clear();},emit(n,value=1){const pcm=new ArrayBuffer(n);new Uint8Array(pcm).fill(value);this.bytes+=n;for(const f of [...listeners])f({pcm,totalBytes:this.bytes});}};sources.push(s);return s;
+   const listeners=new Set(),s={media,bytes:0,acoustic(activityBytes,totalBytes){for(const f of [...listeners])f({activityBytes,totalBytes});},closed:false,started:false,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},observe(){},start(){this.started=true;},close(){this.closed=true;for(const f of [...listeners])f({captureError:'capture_closed'});listeners.clear();},emit(n,value=1){const pcm=new ArrayBuffer(n);new Uint8Array(pcm).fill(value);this.bytes+=n;for(const f of [...listeners])f({pcm,totalBytes:this.bytes});}};sources.push(s);return s;
   },
   async create(_media,options){
    const events={},s=options.captureSource;
@@ -78,6 +78,12 @@ function boot(){
  reversed.recorders[1].complete('Segunda');await until(()=>reversed.retained.length===1);assert.equal(reversed.commits.length,0,'A later ASR final cannot pass the earlier unfinished original');
  reversed.recorders[0].complete('Primera');await until(()=>reversed.sent.length===2);
  assert.deepEqual(reversed.commits.map(v=>v.id),reversed.recorders.map(r=>r.options.id));
+
+ const scoped=boot();await scoped.session.start();scoped.questions({visibleBeforeSpeech:'v2'});scoped.sources[0].acoustic(640,640);
+ scoped.questions({arrivedLater:'v3'});scoped.sources[0].emit(3200);scoped.recorders[0].partial('Respuesta');scoped.activity(1,true,false);scoped.activity(1,false,true);
+ await until(()=>scoped.recorders.length===2);scoped.recorders[0].complete('Respuesta');await until(()=>scoped.sent.length===1);
+ assert.equal(JSON.stringify(scoped.retained[0].captureQuestions),JSON.stringify({visibleBeforeSpeech:'v2'}),'Passive ASR arming cannot predate a question heard before speech; later questions remain excluded');
+ scoped.sources[0].emit(10);scoped.session.hold();scoped.recorders[1].complete();await tick();
 
  const late=boot(),permission=late.permission(),starting=late.session.start();
  await until(()=>late.analyses.length===1);await tick();late.session.hold();assert(await late.session.start());

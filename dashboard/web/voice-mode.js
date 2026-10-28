@@ -14,7 +14,7 @@ window.ConversationVoiceMode=(()=>{
     const back=document.createElement('button');back.type='button';back.textContent='Back to conversation';
     const controls=document.createElement('div');controls.className='voice-mode-controls';controls.append(speak,back);
     dialog.append(heading,hint,stage,status,caption,controls);document.body.append(dialog);
-    let available=false,opened=false,marker,timer,rearm,waiting=false,heard=false,phase='idle',pending=false,playing=false,remaining,normal;
+    let available=false,opened=false,marker,timer,rearm,waiting=false,heard=false,phase='idle',pending=false,playing=false,remaining,normal,continuous=false,listening=false,preparing=false,directPending=false,directWorking=false;
     function entryState(){
       portrait.dataset.voiceEntry=String(available);
       if(!available){
@@ -34,7 +34,7 @@ window.ConversationVoiceMode=(()=>{
     function open(){
       if(opened || !available || document.hidden || !canEnter())return;
       if(onEnter()===false)return;
-      opened=true;waiting=false;heard=false;pending=false;phase='idle';playing=false;remaining=undefined;
+      opened=true;waiting=false;heard=false;pending=false;directPending=false;directWorking=false;listening=false;preparing=false;phase='idle';playing=false;remaining=undefined;
       entryState();
       marker=document.createComment('portrait return');portrait.before(marker);stage.append(portrait);
       document.body.classList.add('direct-voice-open');dialog.showModal();back.focus();
@@ -42,7 +42,7 @@ window.ConversationVoiceMode=(()=>{
     }
     function maybeRearm(){
       clearTimeout(rearm);
-      if(!opened || !heard || playing || pending || phase!=='idle')return;
+      if(continuous || !opened || !heard || playing || pending || phase!=='idle')return;
       rearm=setTimeout(()=>{if(opened && heard && !playing && phase==='idle' && !pending && canStart()){
         heard=false;waiting=false;speak.hidden=true;onSpeak();
       }},900);
@@ -50,11 +50,19 @@ window.ConversationVoiceMode=(()=>{
     function update(value){
       if(!opened)return;
       if(value.connected===false){close();return;}
+      if(value.continuousState){listening=value.continuousState.active;preparing=value.continuousState.starting;directPending=value.continuousState.pending;directWorking=value.continuousState.working;}
       if(Object.hasOwn(value,'capture'))phase=value.capture||'idle';
       if(Object.hasOwn(value,'pending'))pending=value.pending;
       if(Number.isInteger(value.remaining)&&value.remaining>=0&&value.remaining<=120)remaining=value.remaining;
       if(Object.hasOwn(value,'playback')){playing=value.playback==='playing'||value.playback==='preparing';if(playing)heard=true;}
       if(value.sent){waiting=true;heard=false;}
+      if(continuous){
+        status.textContent=preparing?'Preparing voice':directPending?'Recording needs review':directWorking?'Saving your voice':playing&&listening?'Speaking · listening':listening?'Listening':'Voice paused';
+        if(Object.hasOwn(value,'caption'))caption.textContent=value.caption;
+        if(directPending)caption.textContent='Return to the conversation to review your recordings.';
+        speak.hidden=preparing||listening||directPending;speak.disabled=directWorking||!canStart();speak.textContent='Start voice';
+        dialog.dataset.phase=phase==='recording'?'listening':playing?'speaking':'waiting';return;
+      }
       const recording=phase==='recording',working=phase==='permission'||phase==='finalizing'||value.uploading;
       status.textContent=recording?`Listening${remaining===undefined?'':` · ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')} left`}`:working?'Saving your voice':playing?'Speaking':pending||phase==='ready'?'Recording needs review':waiting?'Waiting for your reply':'Ready';
       caption.textContent=recording?(value.message||''):pending||phase==='ready'?'Return to the conversation to review your recording.':!waiting&&!playing?(value.message||''):'';
@@ -68,7 +76,9 @@ window.ConversationVoiceMode=(()=>{
     speak.addEventListener('click',()=>{if(opened&&canStart()){waiting=false;heard=false;speak.hidden=true;onSpeak();}});
     document.addEventListener('visibilitychange',()=>{if(document.hidden)close();});
     window.addEventListener('pagehide',close);
-    return {update,close,get active(){return opened;},configure(enabled){
+    return {update,close,get active(){return opened;},configure(enabled,direct=false){
+      if(opened&&continuous!==(direct===true))close();
+      continuous=direct===true;
       if(enabled!==true&&!available)return;
       if(enabled===true&&!available)normal=['role','tabindex','aria-hidden','aria-label','title'].map(name=>[name,portrait.getAttribute(name)]);
       available=enabled===true;entryState();

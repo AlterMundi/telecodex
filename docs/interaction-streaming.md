@@ -663,6 +663,17 @@ An empty object explicitly excludes all questions from automatic interpretation
 of that recording. Missing capability keeps the legacy voice contract. No extra
 read or provider operation delays capture. Captions still cannot submit work.
 
+In explicitly selected continuous avatar mode, microphone/ASR arming is passive
+preparation for a finite session. The particular utterance freezes its observed
+question versions on the first local acoustic marker, before confirmed speech
+can acquire the floor. Later acoustic activity, captions, Send, retry and recovery
+do not widen that snapshot. If the local marker is unavailable, keep the earlier
+arm-time snapshot. This permits a question presented while passively listening
+to be answered by the next actual utterance, while excluding questions first
+observed after that utterance starts. The acoustic marker is not the speech
+classifier or proof of hearing/intent, and the native intersection remains the
+authoritative limit. Normal push-to-talk keeps its pre-permission snapshot.
+
 This is an untrusted restriction, not a grant: native admission independently
 captures current owned question versions and intersects that set with the frozen
 limit. A supplied ID/version can never add an unrelated, unavailable or changed

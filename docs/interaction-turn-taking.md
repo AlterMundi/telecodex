@@ -27,8 +27,9 @@ Client sample offsets fence verdicts if newer acoustic activity arrives. This
 energy hint rejects stale decisions; it is not the speech classifier. Detection
 or stream failure returns the original to review rather than automatic admission.
 
-The initial loop alternates capture, durable input and spoken response. It is
-**not yet full duplex**: capture is not continuously armed during playback.
+With `continuous` absent or false, the initial trial alternates capture, durable
+input and spoken response. That fallback is **not full duplex**. The opt-in
+continuous owner described below keeps capture armed during playback.
 Foreground response latency, real echo/noise/device acceptance and meaningful
 internal-result/question offers remain required by the full roadmap.
 
@@ -38,7 +39,8 @@ internal-result/question offers remain required by the full roadmap.
 individual ASR socket. An explicitly owned source can feed successive recorders
 through `captureSource`; the previous provider may finish while the next recorder
 already receives PCM. Ordinary recording still owns and closes its own graph.
-No configuration enables continuous avatar listening through this primitive yet.
+The foreground owner below mounts this primitive only with explicit continuous
+avatar configuration.
 
 Worklet boundary acknowledgments flush complete PCM samples without resetting
 the resampler or disconnecting the microphone. Each recorder accepts samples
@@ -49,12 +51,11 @@ than pretending that its final flush succeeded. Compressed-original captions do
 not accept this splitting path.
 
 The source has no PCM history, at most three consumers, and a five-minute wall
-and sample limit. A future foreground coordinator must remain subscribed across
-utterance boundaries, own the bounded pre-speech ring and unresolved originals,
-and close the source on exit/hidden/auth loss. Without that coordinator, samples
-between recorders have no original owner. This seam therefore does **not** prove
-continuous listening, automatic barge-in, echo rejection or device acceptance.
-The current alternating avatar trial remains unchanged until that integration.
+and sample limit. The foreground coordinator remains subscribed across utterance boundaries, owns
+the bounded pre-speech ring and unresolved originals, and closes the source on
+exit/hidden/auth loss. The primitive alone does **not** prove continuous listening,
+automatic barge-in, echo rejection or device acceptance. The default alternating
+avatar trial remains available until continuous mode is explicitly selected.
 
 ## Continuous foreground owner in development
 
@@ -75,10 +76,16 @@ hidden state and binding/analysis loss retain originals for review. No provider
 or native request is replayed. Retention and commit are injected from the owning
 ordinary voice path, not a second input endpoint.
 
-The owner is implemented and tested but **not mounted by the avatar yet**.
-The ordinary client's durable recovery adapter must support both retained
-originals before mounting it. Existing normal Interaction and the alternating
-trial remain unchanged; no receiving continuous-voice acceptance is claimed.
+The avatar mounts this owner only when the existing optional turn-detection
+configuration also selects `continuous: true`. That selection defaults off. The
+ordinary voice writer retains/submits each exact original; there is no second
+input endpoint. Its existing recovery key can contain two originals, together
+at most20MiB, ordered by capture start. One matching receipt/discard removes only
+that original and exposes the next. A two-item `telecodex.voice-recovery/v2`
+envelope needs this reader; older clients retain it without overwriting, but
+cannot expose both recordings. Use a compatible client for recovery. Ordinary
+one-item storage keeps its prior shape. This is source implementation, not
+receiving activation or real continuous-voice acceptance.
 
 The authenticated `/api/interaction/voice/activity` connection loads the existing
 pinned CPU worker once for one foreground session. It reuses voice origin,
@@ -104,6 +111,15 @@ synthetic Spanish phrases, each with a speech onset, endpoint and exact boundary
 acknowledgment through that same connection. No ASR, TTS, microphone, original
 admission or native model ran. These are protocol/load observations, not human
 endpoint accuracy, barge-in silence, useful-response latency or phone acceptance.
+
+Two completed ASR streams can now race when retaining their transcript receipts.
+A paired-finalization test exposed contention on the existing nonblocking cache
+lock. One bounded writer slot now serializes those writes; queue admission waits
+at most2seconds and the client awaits at most3seconds. The slot remains held until
+the actual filesystem job finishes even if the HTTP/WebSocket waiter leaves.
+Another process's held cache lock remains a controlled unavailable outcome. No
+recognition, receipt identity or native input is replayed to resolve contention.
+The browser preserves the original and requires review on uncertainty.
 
 The browser worklet also enforces its five-minute sample ceiling on the audio
 thread; a frozen main-thread timer cannot accumulate unlimited PCM messages.
@@ -237,6 +253,7 @@ silence, an ASR partial, a timeout or a high score is permission to Send.
 ```json
 {
   "enabled": true,
+  "continuous": true,
   "command": [
     "/selected/voice-environment/bin/python",
     "/selected/release/scripts/capture_turn.py",
@@ -245,6 +262,11 @@ silence, an ASR partial, a timeout or a high score is permission to Send.
   ]
 }
 ```
+
+Omit `continuous` (or set it false) to keep the earlier alternating trial.
+The new flag only selects the explicitly opened avatar mode; it never starts
+capture on load or persists microphone opt-in. Remove this field before selecting
+an older strict configuration parser.
 
 Use prepared streaming ASR mode and a separately qualified ML interpreter with
 `scripts/requirements-turn.lock`; never add ML dependencies to another owning

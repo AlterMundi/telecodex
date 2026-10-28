@@ -16,7 +16,8 @@ def command(config):
     if selected.get('enabled') is not True:
         return None
     value = selected.get('command')
-    if (set(selected) != {'enabled', 'command'} or not isinstance(value, list)
+    if (not {'enabled', 'command'} <= set(selected) or set(selected) - {'enabled', 'command', 'continuous'}
+            or 'continuous' in selected and type(selected['continuous']) is not bool or not isinstance(value, list)
             or not 2 <= len(value) <= 16 or any(not isinstance(x, str) or not x or len(x) > 2048 for x in value)
             or not value[0].startswith('/') or config.get('mode', 'prepared') != 'prepared'):
         raise ValueError('Select one prepared-mode turn-analysis command')

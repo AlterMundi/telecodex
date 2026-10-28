@@ -233,6 +233,29 @@ class LiveTranscription(unittest.TestCase):
                     ws.send_bytes(b'\0\0');ws.receive_json();grants.revoke(enrolled['grant_id'])
                     ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'unavailable')
         self.assertFalse(any(value.finished for value in Stream.opened))
+    def test_two_completed_receipts_serialize_the_existing_cache_writer(self):
+        entered,release,second_entered=threading.Event(),threading.Event(),threading.Event();calls=[]
+        from dashboard.live_transcription import save_prepared as real_save
+        def held_save(*args):
+            calls.append(args[1])
+            if len(calls)==1:
+                entered.set()
+                if not release.wait(2):raise TimeoutError('Synthetic cache writer not released')
+            else:second_entered.set()
+            return real_save(*args)
+        other=str(uuid.uuid4())
+        with patch('dashboard.live_transcription.save_prepared',held_save):
+            try:
+                with self.open() as first,self.open() as second:
+                    first.send_json(self.meta());self.assertEqual(first.receive_json()['type'],'ready')
+                    second.send_json(self.meta(id=other));self.assertEqual(second.receive_json()['type'],'ready')
+                    for ws in (first,second):ws.send_bytes(b'\0'*3200);self.assertEqual(ws.receive_json()['type'],'partial')
+                    first.send_json({'type':'finish'});self.assertTrue(entered.wait(1))
+                    second.send_json({'type':'finish'});self.assertFalse(second_entered.wait(.05),'A second filesystem writer cannot bypass the held first writer')
+                    release.set();self.assertEqual(first.receive_json()['type'],'prepared');self.assertEqual(second.receive_json()['type'],'prepared')
+            finally:release.set()
+        self.assertEqual(calls,[self.ident,other]);self.assertEqual(self.provider.calls,[])
+
     def test_asr_ready_partial_and_final_do_not_wait_for_analysis_startup(self):
         entered,cancelled=threading.Event(),threading.Event()
         class SlowAnalysis:

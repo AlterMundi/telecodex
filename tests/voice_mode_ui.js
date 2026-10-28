@@ -36,4 +36,12 @@ f.portrait.events.keydown({key:'Enter',preventDefault(){}});assert(f.mode.active
 f.document.hidden=true;f.listeners.visibilitychange();assert(!f.mode.active);assert.equal(f.portrait.parent,f.header);
 f.document.hidden=false;f.portrait.events.click();f.timers.findLast(t=>t.ms===300000&&!t.cancelled).fn();assert(!f.mode.active,'Foreground opt-in has a five-minute stop path');
 f.mode.close();assert.equal(f.counts().leaves,3,'Repeated teardown is inert');
+const direct=boot();direct.mode.configure(true,true);direct.portrait.events.click();
+assert.equal(direct.counts().starts,1);
+direct.mode.update({continuousState:{active:true,starting:false,pending:false,working:false}});
+direct.mode.update({playback:'playing'});assert.equal(direct.nodes.find(n=>n.className==='voice-mode-state').textContent,'Speaking · listening');
+direct.mode.update({playback:undefined});assert(!direct.timers.some(t=>t.ms===900&&!t.cancelled),'Continuous mode never uses the alternating rearm timer');
+direct.mode.update({continuousState:{active:false,starting:false,pending:true,working:false}});direct.mode.update({pending:false,uploading:true,capture:'idle'});
+assert.equal(direct.nodes.find(n=>n.className==='voice-mode-state').textContent,'Recording needs review','An old ordinary upload cannot clear continuous recovery state');
+direct.mode.configure(true,false);assert(!direct.mode.active);assert.equal(direct.portrait.parent,direct.header);
 console.log('Fullscreen voice: avatar identity, explicit opt-in, response/rearm fences, review, Escape, hidden and bounded exit passed.');

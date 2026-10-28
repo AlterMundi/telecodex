@@ -6,12 +6,12 @@ window.ContinuousConversation=(()=>{
     let active=false,starting=false,stopping=false,epoch=0,binding,source,analysis,media,abort,timer,unsubscribe;
     let current,ring=[],bytes=0,samples=0,lastEnergy=0,verdict,floor=false,blockedAt=Infinity,order=0,dispatching=false;
     const slots=new Map();
-    function state(message){onState({active,starting,floor,pending:[...slots.values()].some(s=>s.review),message});}
+    function state(message){const pending=[...slots.values()].some(s=>s.review);onState({active,starting,floor,pending,working:!active&&slots.size>0&&!pending,message});}
     function stopTracks(){for(const track of media?.getTracks()||[])track.stop();media=undefined;}
     function closeGraph(){unsubscribe?.();unsubscribe=undefined;source?.close();source=undefined;}
     function review(){onReview([...slots.values()].filter(s=>s.original).map(s=>s.original));}
     function hold(message='Voice mode ended. Review your recordings before sending.'){
-      if(stopping)return;stopping=true;active=false;starting=false;floor=false;clearTimeout(timer);abort?.abort();analysis?.close();analysis=undefined;
+      if(stopping){state(message);review();return;}stopping=true;active=false;starting=false;floor=false;clearTimeout(timer);abort?.abort();analysis?.close();analysis=undefined;
       const slot=current;
       if(slot?.recorder?.state==='recording'){slot.review=true;slot.recorder.stop();}
       else if(!slot)closeGraph();
@@ -41,7 +41,7 @@ window.ContinuousConversation=(()=>{
       const slot=current;
       if(slot&&a.onset?.audio_bytes>slot.start){
         slot.generation=a.onset.generation;
-        if(!slot.speech){slot.speech=true;slot.playback=getPlayback();floor=true;onInterrupt();state('Listening');}
+        if(!slot.speech){slot.scopeFrozen=true;slot.speech=true;slot.playback=getPlayback();floor=true;onInterrupt();state('Listening');}
       }
       if(a.endpoint)verdict=a;else if(verdict&&a.generation!==verdict.generation)verdict=undefined;
       consider();
@@ -50,7 +50,7 @@ window.ContinuousConversation=(()=>{
       if(stopping&&current===slot){current=undefined;closeGraph();}
       if(!slot.blob){slots.delete(slot.id);if(!stopping)hold('No recording was confirmed. Nothing was sent.');return;}
       const r=slot.recorder;
-      const original={id:slot.id,binding,blob:slot.blob,mime:'audio/wav',preparedText:r.preparedText,
+      const original={id:slot.id,binding,capture_started:slot.started,blob:slot.blob,mime:'audio/wav',preparedText:r.preparedText,
         captureStop:r.captureStop,captureQuestions:slot.questions,playback:slot.playback};
       slot.original=original;
       // A failed stream or a view exit does not grant automatic file-ASR/input.
@@ -83,8 +83,8 @@ window.ContinuousConversation=(()=>{
       if(!active||stopping||owned!==epoch)return;
       if(slots.size>=2){hold('Two recordings are still pending. Review them before continuing.');return;}
       const questions=getQuestions();
-      const slot={id:window.crypto.randomUUID(),order:order++,start,questions:questions===undefined?undefined:JSON.parse(JSON.stringify(questions)),speech:false,words:false,send:false};
-      slots.set(slot.id,slot);current=slot;verdict=undefined;
+      const slot={id:window.crypto.randomUUID(),order:order++,started:Date.now(),start,questions:questions===undefined?undefined:JSON.parse(JSON.stringify(questions)),speech:false,words:false,send:false};
+      slots.set(slot.id,slot);current=slot;verdict=undefined;onCaption('');
       try{
         const recorder=await window.StreamingVoice.create(undefined,{headers,binding,id:slot.id,captureSource:source,
           initialPCM:end=>prefix(start,end),
@@ -116,7 +116,14 @@ window.ContinuousConversation=(()=>{
         unsubscribe=source.subscribe(value=>{
           if(owned!==epoch)return;
           if(value.captureError){hold('Voice capture ended. Your recordings are kept.');return;}
-          if(Number.isSafeInteger(value.activityBytes)&&Number.isSafeInteger(value.totalBytes)){lastEnergy=value.activityBytes;samples=value.totalBytes;}
+          if(Number.isSafeInteger(value.activityBytes)&&Number.isSafeInteger(value.totalBytes)){
+            lastEnergy=value.activityBytes;samples=value.totalBytes;
+            // Arming ASR is preparation, not a human utterance. Snapshot only
+            // at its first local acoustic marker; never widen it on later Send.
+            if(current&&!current.scopeFrozen&&lastEnergy>current.start){
+              const questions=getQuestions();current.questions=questions===undefined?undefined:JSON.parse(JSON.stringify(questions));current.scopeFrozen=true;
+            }
+          }
           if(!value.pcm||!active)return;
           const end=value.totalBytes;
           if(!Number.isSafeInteger(end)||end!==bytes+value.pcm.byteLength){hold('Capture continuity was interrupted. Your recordings are kept.');return;}
