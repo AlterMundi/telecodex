@@ -367,12 +367,11 @@ window.Conversation = (() => {
       if(stamp<=(settledProgress.get(key)||0) || previous && previous.stamp>stamp)return;
       let card=previous;
       if(!card){
-        const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),inspect=node("button","Inspect update"),listen=node("button","Listen");
+        const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),listen=node("button","Listen");
         const time=node("time",undefined,"message-time"),reply=node("button","Reply to this update");reply.type="button";reply.className="session-update-reply";
-        inspect.type="button";listen.type="button";listen.className="session-update-listen";inspect.className="session-update-inspect";box.append(title,body,listen,inspect,reply,time);card={box,title,body,listen,inspect,reply,time};progressCards.set(key,card);
+        listen.type="button";listen.className="session-update-listen";box.append(title,body,listen,reply,time);card={box,title,body,listen,reply,time};progressCards.set(key,card);
         reply.addEventListener("click",()=>{const original=cards.get(card.source);if(!original || original.source.revision!==card.revision || !canReplyUpdates || readOnly)return;selectFocus({source:card.source,revision:card.revision},original.source.label||"this session");});
         listen.addEventListener("click",()=>{const original=cards.get(card.source);if(!original || original.source.revision!==card.revision || !canListen)return;return listenCard(original);});
-        inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
       }
       const changed=card.source!==source.id || card.revision!==source.revision;
       card.source=source.id;card.revision=source.revision;card.stamp=stamp;sessionTitle(card,source,`Update from ${source.label}`);
@@ -1462,7 +1461,7 @@ window.Conversation = (() => {
         }
         if(!readOnly){await taskControls?.refresh();await internalControls?.refresh();}
         await refreshTelegram();
-        void sound?.refresh({observeOnly:standalone});
+        void sound?.refresh({observeOnly:standalone || $("#conversation-diagnostics").open});
         for(const card of inputs.values())if(card.trace.open)await readTrace(card);
         if(graph){
           const closed=[...inputs.values()].filter(card=>!card.trace.open);

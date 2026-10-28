@@ -120,12 +120,41 @@ window.ConversationSound = (() => {
         await owned.resume();if(context!==owned){owned.close().catch(()=>{});return false;}changed(owned.state==="running");return owned.state==="running";},
       render,stop,setVolume(value){volume=Math.max(0,Math.min(1,Number(value)||0));level();},setDucking,setQuiet(value){setDucking(value?0:1);}};
   }
+  function sessionStatus(frame,elapsed=0) {
+    if(frame?.schema!=="telecodex.sonic-state/v1" || !Array.isArray(frame.sources) || frame.sources.length>65 || !Number.isFinite(frame.observed_at))return [];
+    const at=frame.observed_at+Math.max(0,elapsed)/1000;
+    return frame.sources.map(source=>{
+      const fresh=frame.connected===true && source.fresh===true && Number.isFinite(source.observed_at) && at-source.observed_at>=0 && at-source.observed_at<=20;
+      const parts=[fresh ? source.execution==="working"?"Working":source.execution==="idle"?"Idle":"Work unavailable" : "Observation stale or unavailable"];
+      if(fresh){
+        if(source.execution==="working" && Number.isFinite(source.work_started_at) && source.work_started_at>=0 && source.work_started_at<=at){
+          const seconds=Math.floor(at-source.work_started_at);parts.push(seconds<60?`${seconds}s`:`${Math.floor(seconds/60)}m ${seconds%60}s`);
+        }
+        parts.push(source.goal_state==="absent"?"No goal":source.goal_state && source.goal_state!=="unknown"?`Goal · ${source.goal_state}`:"Goal unavailable");
+        if(source.tools_running===true)parts.push("Tools / subagents active");
+        if(source.pending===true || source.waiting_for_human===true)parts.push("Needs your attention");
+        if(source.error===true)parts.push("Error observed");
+      }
+      return {label:String(source.label||source.id||"Session").slice(0,128),text:parts.join(" · "),fresh};
+    });
+  }
   function mount({api,unauthorized=()=>{},getAuthority=()=>"",onState=()=>{},now=()=>performance.now()}={}) {
     const button=document.querySelector("#conversation-sound-toggle"),status=document.querySelector("#conversation-sound-status"),score=document.querySelector("#conversation-sound-score"),volume=document.querySelector("#conversation-sound-volume");
     if(!button || !status || !score || !volume)return;
     const feedback=document.querySelector("#conversation-sound-feedback"),controls=document.querySelector("#conversation-sound-controls");
     function setStatus(detail,brief=detail){status.textContent=detail;if(feedback){feedback.textContent=brief;feedback.hidden=detail==="Off";}if(controls)controls.hidden=!enabled;}
     let enabled=false,suspended=false,generation=0,authority,request,frame,vocabulary,catalog,received=0,requestElapsed=0,expiry,local={};
+    const statusList=document.querySelector("#conversation-session-status"),statusNote=document.querySelector("#conversation-session-status-note"),inspector=document.querySelector("#conversation-diagnostics");
+    let statusFrame,statusReceived=0,statusClock;
+    function drawStatus(){
+      clearTimeout(statusClock);
+      if(!statusList || !statusNote)return;
+      const rows=sessionStatus(statusFrame,Math.max(0,now()-statusReceived));
+      statusList.replaceChildren(...rows.map(source=>{const row=document.createElement("li"),label=document.createElement("strong"),detail=document.createElement("span");label.textContent=source.label;detail.textContent=source.text;row.append(label,detail);return row;}));
+      statusNote.textContent=rows.length?`${rows.filter(s=>s.fresh).length} / ${rows.length} current observations${statusFrame.truncated?" · additional sources unavailable":""}. Elapsed time is observed work duration, not estimated progress.`:"Session observations unavailable.";
+      if(inspector?.open && !document.hidden && rows.some(s=>s.fresh))statusClock=setTimeout(drawStatus,1000);
+    }
+    inspector?.addEventListener("toggle",drawStatus);
     const engine=renderer({changed(running){suspended=!running;if(enabled){button.textContent=running?"≈ Mute Beacon":"≈ Resume Beacon";if(!running)setStatus("Audio suspended · tap to resume");}}});
     const voiceLevel=()=>local.conversationOnly===true || ["permission","recording","finalizing"].includes(local.capture) || local.uploading===true ? 0 : ["playing","preparing"].includes(local.playback) ? 0.18 : 1;
     function disable(){enabled=false;authority=undefined;generation++;clearTimeout(expiry);request=undefined;frame=undefined;engine.stop();button.setAttribute("aria-pressed","false");button.textContent="≈ Beacon";setStatus("Off");score.replaceChildren();}
@@ -150,7 +179,7 @@ window.ConversationSound = (() => {
       const owned=generation,start=now(),scope=getAuthority(),pending={};request=pending;
       try {
         const value=await api("interaction/sonic");if(owned!==generation || scope!==getAuthority())return;
-        onState(value);if(!enabled)return;
+        statusFrame=value;statusReceived=now();drawStatus();onState(value);if(!enabled)return;
         if(authority!==getAuthority()){disable();return;}
         if(typeof value.vocabulary_json!=="string" || value.vocabulary_json.length>65536 || !/^[a-f0-9]{64}$/.test(value.vocabulary_sha256))throw Error("Sound vocabulary unavailable");
         const key=value.vocabulary_sha256+value.vocabulary_json;
@@ -159,7 +188,7 @@ window.ConversationSound = (() => {
           if([...new Uint8Array(digest)].map(n=>n.toString(16).padStart(2,"0")).join("")!==value.vocabulary_sha256)throw Error("Sound vocabulary changed");
           const selected=JSON.parse(value.vocabulary_json);if(!validate(selected))throw Error("Unsupported sound vocabulary");vocabulary=selected;catalog=key;}
         frame=value;received=now();requestElapsed=Math.max(0,received-start);draw();
-      }catch(error){if(owned!==generation)return;engine.stop();frame=undefined;setStatus(error.message||"Session state unavailable");if([401,403].includes(error.status)){disable();unauthorized(error);}}
+      }catch(error){if(owned!==generation)return;engine.stop();frame=undefined;setStatus(error.message||"Session state unavailable");if([401,403].includes(error.status)){statusFrame=undefined;drawStatus();disable();unauthorized(error);}}
       finally{if(request===pending)request=undefined;}
     }
     button.addEventListener("click",async()=>{
@@ -167,10 +196,10 @@ window.ConversationSound = (() => {
       try{if(!await engine.start() || owned!==generation)return;setStatus("Waiting for session state");await refresh();}catch(error){if(owned===generation){disable();setStatus(error.message);}}
     });
     volume.addEventListener("input",()=>engine.setVolume(Number(volume.value)));
-    document.addEventListener("visibilitychange",()=>{if(document.hidden)disable();});
-    window.addEventListener("pagehide",disable);
+    document.addEventListener("visibilitychange",()=>{if(document.hidden){clearTimeout(statusClock);disable();}else drawStatus();});
+    window.addEventListener("pagehide",()=>{clearTimeout(statusClock);disable();});
     window.addEventListener("offline",disable);
-    return {refresh,reset(){disable();local={};},disable,update(patch){local={...local,...patch};engine.setDucking(voiceLevel());if(enabled && frame)draw();}};
+    return {refresh,reset(){statusFrame=undefined;drawStatus();disable();local={};},disable,update(patch){local={...local,...patch};engine.setDucking(voiceLevel());if(enabled && frame)draw();}};
   }
-  return {state,components,validate,plan,renderer,mount};
+  return {state,components,validate,plan,renderer,mount,sessionStatus};
 })();

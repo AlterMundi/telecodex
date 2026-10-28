@@ -1002,3 +1002,8 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 .voice-caption-line #conversation-voice-state { flex:1; min-width:0; }
 #conversation-voice-remaining { flex:none; font-size:14px; line-height:20px; white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--muted); }
 #conversation-voice-remaining[data-near-limit="true"] { color:var(--warn); font-weight:600; }
+
+.session-status-list {padding-left:1.3rem;}
+.session-status-list li {margin-block:.6rem;overflow-wrap:anywhere;}
+.session-status-list strong,.session-status-list span {display:block;}
+.session-status-list span {font-size:.9em;color:var(--dm-text);opacity:.82;font-variant-numeric:tabular-nums;}

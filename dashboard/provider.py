@@ -265,6 +265,7 @@ class Provider:
                 items.append({'id':key,'label':label,'session':item.get('session'),
                     'observed_at':item.get('observed_at'),'fresh':item.get('fresh',False),
                     'execution':item.get('execution','unknown'),'goal_state':item.get('goal_state','unknown'),
+                    'work_started_at':item.get('work_started_at'),
                     'waiting_for_human':item.get('waiting_for_human'),
                     'tools_running':item.get('tools_running'),'error':item.get('error'),
                     'pending':bool(requests and requests['pending']) or item.get('waiting_for_human') is True})

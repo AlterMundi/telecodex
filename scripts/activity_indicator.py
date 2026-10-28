@@ -1073,6 +1073,9 @@ def topic_activity_inventory(database, snapshot, days=7, now=None):
                       'tools_running': observed.get('tools_running') if fresh and type(observed.get('tools_running')) is bool else None,
                       'error': observed.get('error') if fresh and type(observed.get('error')) is bool else None,
                       'fresh': fresh, 'observed_at': at if matched else None,
+                      'work_started_at': observed.get('work_started_at') if fresh and execution == 'working'
+                          and type(observed.get('work_started_at')) in (int,float)
+                          and math.isfinite(observed['work_started_at']) and 0 <= observed['work_started_at'] <= now else None,
                       'last_observed_conversation_at': last, 'recent_conversation': recent})
     return {'schema': 'telecodex.topic-activity/v1', 'observed_at': now,
             'connected': connected, 'activity_days': days, 'counts': counts,
@@ -1316,7 +1319,8 @@ def run(args):
                         'tools_running': bool(reader.calls or any(child.get('type') == 'active' for child in children)) if status.get('type') in ('active','idle','notLoaded') else None,
                         'error': status.get('type') == 'systemError' if status.get('type') in ('active','idle','notLoaded','systemError') else None,
                         'waiting_for_human': any(flag in status.get('activeFlags', []) for flag in ('waitingOnApproval','waitingOnUserInput')) if status.get('type') in ('active','idle','notLoaded') else None,
-                        'last_conversation_at': reader.last_conversation_at}
+                        'last_conversation_at': reader.last_conversation_at,
+                        'work_started_at': (command['started'] if command else timestamp(reader.started)) if work_active else None}
                     update = pending_update_line(args.pending_update_record, key, now)
                     report, active_text, text = combine_update_status(report, active_text, text, update)
                     pending = pending_requests(bridge,topic['chat_id'],topic['thread_id'],topic['creator_user_id'])
