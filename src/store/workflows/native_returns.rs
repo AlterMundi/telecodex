@@ -51,6 +51,36 @@ fn detached_on(conn: &Connection, w: &mut Workflow, index: usize) -> Result<()> 
     if native != w.native {
         return Ok(());
     }
+    // All receipts incorporated into one physical turn share one distinct
+    // observation, so its canonical output freezes the entire source set.
+    let receipt = &w.native_returns[index];
+    if let Some(submission) = receipt.local {
+        for id in bindings_on(conn, submission)? {
+            if id == receipt.id {
+                continue;
+            }
+            let (other, i) = match w.native_returns.iter().position(|r| r.id == id) {
+                Some(i) => (w.clone(), i),
+                None => selected_on(conn, &id)?,
+            };
+            let sibling = &other.native_returns[i];
+            if other.human != w.human
+                || other.entry != w.entry
+                || other.native != w.native
+                || sibling.native_turn != receipt.native_turn
+            {
+                continue;
+            }
+            if let Some(local) = sibling.collection_local {
+                let open: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM turns t JOIN native_collections n ON n.local_turn=t.id WHERE t.id=?1 AND t.status='observing' AND n.phase='open' AND n.anchor=?2)",params![local,receipt.native_turn],|r|r.get(0))?;
+                if open {
+                    bind_on(conn, local, &receipt.id)?;
+                    w.native_returns[index].collection_local = Some(local);
+                    return Ok(());
+                }
+            }
+        }
+    }
     let request = TurnRequest {
         session_key: w.entry,
         from_user_id: w.human,
@@ -489,10 +519,23 @@ pub(in crate::store) fn reconcile_on(conn: &Connection, local: i64, turns: &[Val
             .context(
                 "Exact terminal workflow return has no canonical final; reconciliation pending",
             )?;
+        // An unacknowledged sibling may have joined this same physical turn.
+        // Its persisted intent precedes native submission; wait for observation,
+        // never guess its target or replay it to discover the answer.
+        if let Some(submission) = r.local {
+            for sibling_id in bindings_on(conn, submission)? {
+                let (sibling_workflow, sibling_index) = selected_on(conn, &sibling_id)?;
+                let sibling = &sibling_workflow.native_returns[sibling_index];
+                anyhow::ensure!(
+                    !matches!(sibling.phase.as_str(), "submitting" | "uncertain")
+                        || sibling.native_turn.is_some(),
+                    "Workflow sibling native target uncertain; reconciliation pending"
+                );
+            }
+        }
         w.native_returns[index].phase = "accepted_reconciled".into();
         save_on(conn, &w)?;
         conn.execute("UPDATE turns SET status=?2,assistant_text=?3,completed_at=?4 WHERE id=?1 AND status IN ('observing','completed','failed','interrupted')",params![local,turn["status"].as_str(),final_item["text"].as_str(),now_string()])?;
-        return Ok(());
     }
     Ok(())
 }

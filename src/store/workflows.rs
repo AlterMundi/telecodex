@@ -1571,6 +1571,89 @@ mod tests {
         );
     }
     #[test]
+    fn detached_siblings_share_exact_collection_and_wait_for_unknown_target() {
+        let (_f, s, e, plan) = setup();
+        let v = declare(&s, &e, plan.clone());
+        let first = advance(&s, &e, &v).unwrap();
+        let worker = accept(&s, &first);
+        answer(
+            &s,
+            &first,
+            worker,
+            "first",
+            vec![first.id.clone()],
+            "First selected checkpoint",
+        );
+        let a = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        let mut next = plan;
+        next.request_id = "second-workflow".into();
+        next.input_ref = original(&s, &e, "Another finite selected human workflow");
+        let second_view = declare(&s, &e, next);
+        let second = advance(&s, &e, &second_view).unwrap();
+        let second_worker = accept(&s, &second);
+        answer(
+            &s,
+            &second,
+            second_worker,
+            "second",
+            vec![second.id.clone()],
+            "Second selected checkpoint",
+        );
+        let b = s.workflow_native_reserve(100, e.key).unwrap().remove(0);
+        let old = turn(&s, &e, "Actual human owner");
+        s.native_collection_started(old, "old-physical").unwrap();
+        for id in [&a.id, &b.id] {
+            s.workflow_native_link(id, old).unwrap();
+            s.workflow_native_submitting(id).unwrap();
+        }
+        s.workflow_native_outcome(&a.id, "accepted_uncollected", Some("shared-physical"))
+            .unwrap();
+        let selected = s.native_collection_next().unwrap().unwrap();
+        let final_turn = json!({"id":"shared-physical","status":"completed","items":[{"id":"shared-item","type":"agentMessage","phase":"final_answer","text":"Both current checkpoints"}]});
+        assert!(
+            s.native_collection_observed(&selected, std::slice::from_ref(&final_turn), false)
+                .is_err(),
+            "Unknown sibling target must not borrow the first source grant"
+        );
+        assert_eq!(
+            status(&s, &e, v["id"].as_str().unwrap())["native_returns"]["retained"][0]["phase"],
+            "accepted_uncollected"
+        );
+        s.workflow_native_outcome(&b.id, "accepted_uncollected", Some("shared-physical"))
+            .unwrap();
+        let second_receipt = status(&s, &e, second_view["id"].as_str().unwrap());
+        assert_eq!(
+            second_receipt["native_returns"]["retained"][0]["collection_local_turn"],
+            selected.local
+        );
+        s.native_collection_observed(&selected, &[final_turn], false)
+            .unwrap();
+        for view in [&v, &second_view] {
+            assert_eq!(
+                status(&s, &e, view["id"].as_str().unwrap())["native_returns"]["retained"][0]["phase"],
+                "accepted_reconciled"
+            );
+        }
+        let page = s.interaction_presentation_list(100, e.key, 0, 0).unwrap();
+        let report = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["preview"] == "Both current checkpoints")
+            .unwrap();
+        assert_eq!(report["workflow_returns"].as_array().unwrap().len(), 2);
+        assert_eq!(report["local_turn"], selected.local);
+        let conn = s.conn.lock().unwrap();
+        let anchor: String = conn
+            .query_row(
+                "SELECT anchor FROM native_collections WHERE local_turn=?1",
+                [old],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(anchor, "old-physical");
+    }
+    #[test]
     fn callback_publication_fences_every_accepted_source_in_its_frozen_set() {
         let (_f, s, e, plan) = setup();
         let v = declare(&s, &e, plan.clone());

@@ -1143,6 +1143,10 @@ creating another attention loop. It does not claim live dynamic-tool collection.
 An observed terminal canonical final is imported through the existing canonical
 journal and changes the transport receipt to `accepted_reconciled`. The original
 submission local ID, new collection local ID and exact native ACK remain distinct.
+Receipts from the same submission that ACK the same detached physical turn share
+one observation row and reconcile atomically. A sibling with an unresolved native
+target keeps terminal import pending; an ACK is never guessed from another receipt.
+The canonical report freezes every incorporated receipt's current source grant.
 The helper result still cannot complete overall integration.
 
 Observation uses the existing bounded native turn-history API. On an actual
