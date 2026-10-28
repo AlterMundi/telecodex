@@ -60,6 +60,10 @@ function boot(fail){
   assert(Buffer.concat(w.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm))).equals(Buffer.concat(reference.messages.filter(m=>m.pcm).map(m=>Buffer.from(m.pcm)))));
   const count=w.messages.length;w.processor.port.onmessage({data:{boundary:'bad token'}});assert.equal(w.messages.length,count);
  }
+ const capped=worklet(16000);capped.processor.total=300*16000-1;
+ assert.equal(capped.processor.process([[Float32Array.of(.1,.2)]]),false);
+ assert.equal(capped.processor.total,300*16000);assert.equal(capped.messages.at(-1).captureError,'session_limit');
+ assert.equal(capped.processor.process([[new Float32Array(128)]]),false,'The audio thread enforces the cap without a main-thread timer');
  const clamp=worklet(16000);clamp.processor.process([[Float32Array.of(-2,-1,0,1,2)]]);clamp.processor.port.onmessage({data:'finish'});assert.deepEqual([...new Int16Array(clamp.messages[0].pcm)],[-32767,-32767,0,32767,32767]);
  const canonical=boot(),samples=pcm(0,-32767,15000,32767);
  const wav=Buffer.from(await canonical.window.StreamingVoice.wav([samples]).arrayBuffer());
@@ -150,6 +154,16 @@ function boot(fail){
  assert(sw.controls.some(v=>v.boundary===uuid+':end'));assert(!sw.controls.includes('finish'));
  untap();source.close();source.close();assert(shared.contexts[0].closed);assert(source.closed);
  await assert.rejects(shared.create({},{captureSource:source}));
+ const prefixed=boot(),prefixGraph=await prefixed.window.StreamingVoice.openCapture({kind:'synthetic-media'}),cuts=[];
+ const prefixRecorder=await prefixed.create(undefined,{captureSource:prefixGraph,initialPCM:end=>{assert.equal(end,4);return [pcm(111,222)];},onFlushed:end=>cuts.push(end)});
+ prefixRecorder.start();const ps=prefixed.sockets[0],pw=prefixed.worklets[0];ps.open();ps.message({type:'ready'});
+ pw.emit({boundary:uuid+':begin',totalBytes:4});pw.emit({pcm:pcm(333),totalBytes:6});prefixRecorder.stop();pw.emit({boundary:uuid+':end',totalBytes:6});
+ assert.deepEqual(cuts,[6]);prefixGraph.close();
+ assert.equal(prefixed.events.length,0,'A flushed old ASR must survive closure of the microphone graph');
+ ps.message({type:'prepared',id:uuid,text:'Exact prefixed words'});
+ assert.equal(prefixRecorder.captureStop,undefined);assert.equal(prefixRecorder.preparedText,'Exact prefixed words');
+ const prefixBytes=await prefixed.events[0].data.arrayBuffer();assert.deepEqual([...new Int16Array(prefixBytes.slice(44))],[111,222,333]);
+ assert.equal(prefixed.events.length,2);
  for(const why of ['explicit-close','wall-limit','sample-limit']){
   const bounded=boot(),graph=await bounded.window.StreamingVoice.openCapture({kind:'synthetic-media'});
   const r=await bounded.create(undefined,{captureSource:graph});r.start();const w=bounded.worklets[0];
