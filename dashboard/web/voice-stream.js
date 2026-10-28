@@ -134,7 +134,7 @@ window.StreamingVoice=(()=>{
     try{unsubscribe=capture.subscribe(data=>{
       const message={data:{...data}};
       if(done||discarded)return;
-      if(data.captureError){if(canonicalRecorder){previewFailed();return;}recorder.captureStop=data.captureError;ending=true;complete();return;}
+      if(data.captureError){if(canonicalRecorder){previewFailed();return;}recorder.captureError=data.captureError;recorder.captureStop='audio_flush_unconfirmed';ending=true;complete();return;}
       if(shared&&data.boundary===id+':begin'){origin=data.totalBytes;collecting=true;return;}
       if(shared&&data.boundary===id+':end'){collecting=false;message.data.finished=true;}
       if(shared&&!collecting&&!message.data.finished)return;
