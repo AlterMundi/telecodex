@@ -1152,9 +1152,10 @@ workflow permits the final integrating answer from its retained final-result off
 human publication. Telegram requires its existing explicit projection selection;
 foreground audio still requires the human-selected Conversation surface/player.
 
-The idle-root native `toolOutput` seam has separate actual-native evidence. Mock
-boundary tests qualify the adapter contract; they do not qualify an active native
-queue or receiver installation. Keep `automatic_native_return:false` until the
+Idle-root and held-active native `toolOutput` seams have separate actual-native
+evidence of useful provider incorporation and retained internal history. These Core
+proofs do not qualify this adapter, its collector or receiver installation. Mock
+boundary tests qualify only the adapter contract. Keep `automatic_native_return:false` until the
 wrapper's useful provider return and retained internal history are observed at the
 actual supported native boundary, and retain any active-turn qualification gap.
 

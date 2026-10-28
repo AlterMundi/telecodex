@@ -1240,8 +1240,22 @@ mod tests {
                 "native-1",
                 "return-turn",
                 "draft",
-                "Selected milestone. ",
+                "",
                 true,
+                false
+            )
+            .unwrap()
+        );
+        assert!(
+            s.interaction_response_draft(
+                100,
+                e.key,
+                local,
+                "native-1",
+                "return-turn",
+                "draft",
+                "Selected milestone. ",
+                false,
                 false
             )
             .unwrap()
@@ -1260,10 +1274,8 @@ mod tests {
             "{:x}",
             Sha256::digest(format!("{binding}:{live}").as_bytes())
         );
-        assert!(
-            s.interaction_live_speech_part(100, e.key, &live, &revision, 0)
-                .is_ok()
-        );
+        s.interaction_live_speech_part(100, e.key, &live, &revision, 0)
+            .expect("Current accepted workflow draft prefix is readable");
         s.record_native_message(
             local,
             "native-1",
