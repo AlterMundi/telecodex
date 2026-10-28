@@ -326,6 +326,19 @@ function boot(readOnly=false,standalone=false,options={}) {
   automatic.overrideSource(8,{preview:'🙂🙂',text_characters:8,text_sha256:'new-emoji',revision:'emoji-revision'});automatic.replyTexts.set('native:8','🙂🙂abcdef');
   await automatic.ui.refresh();automatic.intersect('native:8');await new Promise(setImmediate);
   assert.equal(automatic.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8').children[2].textContent,'🙂🙂abcdef','truncation uses Unicode code points, not UTF-16 units');
+  const localProgress=boot(false,true,{autoText:true});
+  const completeLocalProgress='Queda establecido: seguimos con el trabajo. '.repeat(80)+'La última palabra permanece completa.';
+  localProgress.overrideSource(8,{kind:'integrator_progress',preview:completeLocalProgress.slice(0,240),text_characters:Array.from(completeLocalProgress).length});
+  localProgress.replyTexts.set('native:8',completeLocalProgress);
+  await localProgress.ui.refresh();localProgress.intersect('native:8');await new Promise(setImmediate);
+  const localProgressCard=localProgress.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');
+  assert.equal(localProgressCard.children[2].textContent,completeLocalProgress,
+               'Conversation progress must expand beyond its preview without a Read reply click');
+  assert.equal(localProgressCard.children[3].children[0].hidden,true);
+  const localReads=localProgress.partReads.length;assert(localReads>1);
+  await localProgress.ui.refresh();localProgress.intersect('native:8');await new Promise(setImmediate);
+  assert.equal(localProgress.partReads.length,localReads,'Completed local progress does not fetch its text again');
+  localProgress.ui.stop();
   const progressText=boot(false,true,{autoText:true});
   const completeProgress='This update must remain complete on phones as well as TVs. '.repeat(60);
   progressText.overrideSource(8,{kind:'worker_progress',target:{chat_id:100,thread_id:7},label:'Realtime',preview:completeProgress.slice(0,160),text_characters:completeProgress.length});
