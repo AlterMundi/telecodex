@@ -159,3 +159,14 @@ optional-ASR builds. Native source/test, compiler/dependency and relevant workfl
 changes retain their native checks. In particular timing_ui.js is exercised by
 the dashboard job. Reuse exact unchanged native source qualification when shipping
 a web-only delta; do not turn a filename containing voice into native evidence.
+
+
+Enabling native_workflow_returns/native_routed_returns changes the dashboard's
+receiving-profile fingerprint even when only the listener is being deployed.
+Before adoption, exercise every configured receiving constructor and reconcile
+Alerts/menu, Traffic and device bindings independently under the same verified
+actor/bot/credentials/scope. Preserve all attempts, receipts, incidents/outbox,
+menu selected/pending state and historical grants. Never clear a journal or
+silently re-enroll devices to bypass a mismatch. See docs/interaction-companion.md
+and the maintained Shared Resources Interaction receiving record. Loaded binary,
+health and served assets alone do not establish authenticated app continuity.
