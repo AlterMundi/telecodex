@@ -425,7 +425,7 @@ window.Conversation = (() => {
       for(const entry of entries){const card=cards.get(entry.target.dataset.sourceId);if(card){card.textVisible=entry.isIntersecting;if(card.textVisible)queueText(card);}}
     },{root:timeline,rootMargin:"200px"}):undefined;
     function autoTextEligible(card){return card && card.textVisible && cards.get(card.source.id)===card
-      && ["integrator_answer","worker_progress","worker_result","matrix_result"].includes(card.source.kind)
+      && ["integrator_answer","integrator_progress","worker_progress","worker_result","matrix_result"].includes(card.source.kind)
       && card.source.native_binding_current!==false && !card.source.correction_pending
       && Number.isSafeInteger(card.source.text_characters) && card.source.text_characters>Array.from(card.source.preview).length
       && !(card.expanded && card.offset===null) && card.autoRevision!==card.source.revision;}

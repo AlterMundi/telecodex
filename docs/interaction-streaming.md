@@ -1007,3 +1007,9 @@ for each actively locked renderer. An interrupted renderer's retained `intent`
 remains uncertain and cannot be replayed, but its released job lock proves that
 it can no longer consume an in-flight output reservation. Preserve its receipt;
 do not delete it or increase the cache limit to recover ordinary playback.
+
+Visible integrator progress messages use the same bounded canonical text readers
+as completed answers and worker updates. A list preview is only an initial
+placeholder, never the complete displayed reply. Keep both integrator kinds in
+automatic expansion; retain the existing visibility, source-revision and reader
+limits, and manual continuation for messages exceeding the automatic bound.
