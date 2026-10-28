@@ -182,10 +182,13 @@ are active, each120seconds, at most30turn scores, an eight-second PCM tail and
 one pending PCM frame. The child has60CPU seconds/145wall seconds and closes
 with the capture. Its pipe input/output, startup and write waits are bounded. Analysis startup runs
 beside ASR; it never gates recognition readiness, captions or final preparation.
-The analyzer catches up from the same capture PCM with at most eight seconds of
-backlog. Startup frames establish VAD history, but scoring is deferred until the
-current tail, so an old buffered pause cannot create an endpoint. Backlog overflow
-or worker failure disables analysis while keeping ASR and the original available.
+The analyzer's startup wait is bounded to15seconds alongside ASR. A late first
+join uses only the original's current eight-second tail, without discarding any
+original samples. Worker offsets are translated back to absolute original byte
+positions before reaching the client. Startup frames establish VAD history, but
+scoring is deferred until the current tail, so an old buffered pause cannot create
+an endpoint. Later backlog overflow or worker failure disables analysis while
+keeping ASR and the original available.
 Deploy the bridge and analysis worker from the same source revision: startup
 backfill uses the worker's optional `defer` command. A mismatched older worker
 fails analysis without switching or restarting the existing ASR capture.
@@ -226,3 +229,21 @@ This fixes an observed implementation gap: media-element errors previously had
 no queue-release/recovery handler. The reported Redmi failure's individual cause
 is still unconfirmed; successful Chromium decoding is not Android/hearing
 acceptance. See #409 for the retained investigation.
+
+
+## Cold analyzer join — 28 October 2026
+
+A single author-held-out natural Spanish clip was streamed through the actual
+Gemini preparation handler: captions and one exact-source prepared receipt
+completed, but analysis became unavailable. A separate exact CPU worker startup
+took9.227seconds under host load, beyond the previous8second ready deadline.
+That exposes a startup boundary mismatch; the first journey did not retain an
+individual worker error proving its precise cause. No native original was sent.
+
+The revised bounded first join was exercised with the same hashed public row220
+from the pinned Pipecat dataset, including a nine-second initial PCM history.
+Real Silero established speech and Smart Turn emitted probability0.9854 at the
+correct absolute original offset288000bytes. The worker closed and raw media
+was not retained. This CPU-only follow-up made no additional ASR request. The
+existing final transcript remains valid; this is not full-duplex, acoustic
+endpoint acceptance or a final-speech-to-audible-response latency result.

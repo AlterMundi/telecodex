@@ -31,7 +31,7 @@ class Detector:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=8192,
             start_new_session=True)
         try:
-            ready = await asyncio.wait_for(value.receive(), 8)
+            ready = await asyncio.wait_for(value.receive(), 15)
             if ready != {'schema': SCHEMA, 'type': 'ready', 'vad_sha256': VAD_SHA256, 'turn_sha256': MODEL_SHA256}:
                 raise DetectionUnavailable('Unexpected analysis worker')
             return value
@@ -81,22 +81,30 @@ class Detector:
 async def analyze_capture(open_worker, pcm, changed, on_activity):
     """Analyze this capture without blocking ASR; at most8s of analysis backlog.
 
-    Model startup runs beside recognition. The mutable original PCM belongs to
-    the existing capture event loop, never another thread or another capture.
-    Replayed startup frames establish VAD history, but only their current tail
-    may produce an endpoint. No extra audio buffer or model cache is retained.
+    Model startup runs beside recognition. A late first join analyzes only the
+    current eight-second tail, preserving absolute original sample offsets.
+    Later backlog overflow still disables analysis. The original PCM remains
+    untouched; no extra audio buffer or model cache is retained.
     """
     worker = reader = wake = None
     try:
         worker = await open_worker()
+        origin = max(0, len(pcm) - 256000)
+        origin += origin % 2  # Start on a complete PCM16 sample.
         async def receive():
             while True:
                 value = await worker.receive()
                 if value.get('type') != 'activity':
                     raise DetectionUnavailable('Unexpected analysis response')
+                # The worker starts its bounded tail at zero. Client fences
+                # always refer to the complete original, not that local tail.
+                value = {**value, 'audio_bytes': value['audio_bytes'] + origin}
+                if 'endpoint' in value:
+                    value['endpoint'] = {**value['endpoint'],
+                        'audio_bytes': value['endpoint']['audio_bytes'] + origin}
                 await on_activity(value)
         reader = asyncio.create_task(receive())
-        fed = 0
+        fed = origin
         initial = True
         while True:
             changed.clear()
