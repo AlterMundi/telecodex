@@ -1011,10 +1011,12 @@ The integrating controller exposes `workflow_declare`, `workflow_status`,
 `workflow_advance`, `workflow_attention`, `workflow_reported`, `workflow_result`,
 `workflow_question`, `workflow_supersede` and `workflow_finish`. This is a journal
 with explicit initial admission and event-driven predeclared successors. The
-experimental #410 native return adapter is disabled by default; the public contract
-still reports `automatic_native_return:false` pending wrapper qualification and
-receiving adoption. Spoken foreground offers and the full #303/#304 experience
-remain undelivered.
+experimental #410 native return adapter is disabled by default. The public
+`automatic_native_return` reports the loaded receiver configuration, not a
+qualification/completion claim. Each current attention envelope may expose its
+matching retained `native_return` ID, phase and native turn; this metadata does
+not change the source revision, reserve another callback or prove incorporation.
+Spoken foreground offers and the full #303/#304 experience remain undelivered.
 
 Declaration selects one accepted retained human `input_ref`, a stable
 `request_id`, an RFC3339 `expires_at` no more than seven days away, and one to four
@@ -1196,9 +1198,13 @@ foreground audio still requires the human-selected Conversation surface/player.
 Idle-root and held-active native `toolOutput` seams have separate actual-native
 evidence of useful provider incorporation and retained internal history. These Core
 proofs do not qualify this adapter, its collector or receiver installation. Mock
-boundary tests qualify only the adapter contract. Keep `automatic_native_return:false` until the
-wrapper's useful provider return and retained internal history are observed at the
-actual supported native boundary, and retain any active-turn qualification gap.
+boundary tests qualify only the adapter contract. Keep the receiving
+`interaction.native_workflow_returns` configuration off until the wrapper's useful
+provider return and retained internal history are observed at the actual supported
+native boundary, and retain any active-turn qualification gap. The configured
+policy must remain observable even during qualification; do not hard-code a false
+status to represent missing acceptance. A native ACK, delivery uncertainty,
+source integration and human hearing remain different observations.
 
 This source is not receiving deployment or live native qualification. Once a
 workflow has been declared, preserve `interaction_workflows`, all underlying

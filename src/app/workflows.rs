@@ -79,6 +79,21 @@ pub(super) fn capabilities(value: &mut Value, integrating: bool) {
     value["operations"]["workflow_finish"] = json!({"arguments":{"workflow":"workflow ID","revision":"exact workflow_status revision","checkpoint":"integrator's final checkpoint, max2000bytes"},"description":"Retain final integration only after every required step is currently completed with cumulative source coverage. No automatic publication."});
 }
 
+/// Observe the loaded receiver policy separately from retained delivery effects.
+pub(super) fn view(app: &App, human: i64, entry: SessionKey) -> Result<Value> {
+    let cfg = super::routing::profile(&app.shared)?;
+    let mut value = app
+        .shared
+        .store
+        .interaction_workflow_attention(human, entry)?;
+    value["automatic_native_return"] =
+        json!(cfg.human_id == human && cfg.entry() == entry && cfg.native_workflow_returns);
+    value["native_return_meaning"] = json!(
+        "Configured delivery policy and retained outcomes, not incorporation, completion or hearing. Unknown submission must not be replayed."
+    );
+    Ok(value)
+}
+
 pub(super) async fn tool(
     app: &App,
     key: SessionKey,
@@ -172,9 +187,7 @@ pub(super) async fn tool(
             let args: Selection = serde_json::from_value(arguments)?;
             store.interaction_workflow_status(human, key, &request.thread_id, &args.workflow)
         }
-        "workflow_attention" if arguments == json!({}) => {
-            store.interaction_workflow_attention(human, key)
-        }
+        "workflow_attention" if arguments == json!({}) => view(app, human, key),
         "workflow_advance" => {
             let args: Advance = serde_json::from_value(arguments)?;
             let instruction = store.interaction_workflow_advance(
@@ -196,7 +209,7 @@ pub(super) async fn tool(
                 );
             }
             Ok(
-                json!({"workflow":store.interaction_workflow_status(human,key,&request.thread_id,&args.workflow)?,"new_admission":outcome,"automatic_native_return":false,"meaning":"Retained workflow progression only. Native acceptance, result coverage, integration and human publication remain separate."}),
+                json!({"workflow":store.interaction_workflow_status(human,key,&request.thread_id,&args.workflow)?,"new_admission":outcome,"automatic_native_return":super::routing::profile(&app.shared)?.native_workflow_returns,"meaning":"Configured native return policy; retained workflow progression only. Native acceptance, result coverage, integration and human publication remain separate."}),
             )
         }
         "workflow_reported" => {

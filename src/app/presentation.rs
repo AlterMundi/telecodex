@@ -190,10 +190,7 @@ pub(super) fn owner_read(app: &App, human: i64, args: &str) -> Result<serde_json
             .shared
             .store
             .interaction_activity(human, cfg.entry(), &targets)?;
-        result["workflow_attention"] = app
-            .shared
-            .store
-            .interaction_workflow_attention(human, cfg.entry())?;
+        result["workflow_attention"] = super::workflows::view(app, human, cfg.entry())?;
         result["goal_controls"] = app.shared.store.goal_control_views(human, cfg.entry(), 0)?;
         result["goal_failure_evidence"] = serde_json::Value::Array(
             std::iter::once(cfg.entry()).chain(targets.iter().map(|(key,_)|*key)).map(|target| {
