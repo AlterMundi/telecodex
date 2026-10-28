@@ -36,4 +36,11 @@ f.portrait.events.keydown({key:'Enter',preventDefault(){}});assert(f.mode.active
 f.document.hidden=true;f.listeners.visibilitychange();assert(!f.mode.active);assert.equal(f.portrait.parent,f.header);
 f.document.hidden=false;f.portrait.events.click();f.timers.findLast(t=>t.ms===300000&&!t.cancelled).fn();assert(!f.mode.active,'Foreground opt-in has a five-minute stop path');
 f.mode.close();assert.equal(f.counts().leaves,3,'Repeated teardown is inert');
+const interrupted=boot();interrupted.mode.configure(true);interrupted.portrait.events.click();
+interrupted.mode.update({capture:'idle',playback:'playing'});
+const interruptButton=interrupted.nodes.find(n=>n.textContent==='Interrupt and speak');
+assert(interruptButton&&!interruptButton.hidden,'Speaking must not hide the explicit interruption control');
+interruptButton.events.click();assert.equal(interrupted.counts().starts,2,'Explicit interruption starts the existing capture path');
+interrupted.mode.update({capture:'permission'});assert(interruptButton.hidden,'Another permission/capture remains exclusive');
+interrupted.mode.close();assert.equal(interrupted.counts().leaves,1);
 console.log('Fullscreen voice: avatar identity, explicit opt-in, response/rearm fences, review, Escape, hidden and bounded exit passed.');

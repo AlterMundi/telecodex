@@ -1793,7 +1793,7 @@ window.Conversation = (() => {
     if(readOnly){document.body.classList.toggle("monitor-mode",true);$("#conversation-sent").open=true;}
     if(standalone && !readOnly)voiceMode=window.ConversationVoiceMode?.mount({
       portrait:$("#conversation-companion pre"),canEnter:()=>!!microphone && !microphone.ownsSend() && !captureBusy,
-      canStart:()=>!!microphone && !microphone.ownsSend() && !captureBusy && !voiceBusy && !speechWait,
+      canStart:(interrupt=false)=>!!microphone && !microphone.ownsSend() && !captureBusy && (interrupt || !voiceBusy && !speechWait),
       onEnter:()=>{
         voiceModePrevious={enabled:voiceEnabled,suspended:voiceSuspended};
         conversationOnly=true;stop();audioFilterChanged();enableVoice();sound?.update({conversationOnly:true});

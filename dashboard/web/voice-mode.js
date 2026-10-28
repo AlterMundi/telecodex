@@ -56,16 +56,17 @@ window.ConversationVoiceMode=(()=>{
       if(Object.hasOwn(value,'playback')){playing=value.playback==='playing'||value.playback==='preparing';if(playing)heard=true;}
       if(value.sent){waiting=true;heard=false;}
       const recording=phase==='recording',working=phase==='permission'||phase==='finalizing'||value.uploading;
-      status.textContent=recording?`Listening${remaining===undefined?'':` · ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')} left`}`:working?'Saving your voice':playing?'Speaking':pending||phase==='ready'?'Recording needs review':waiting?'Waiting for your reply':'Ready';
+      status.textContent=phase==='permission'?'Opening microphone…':recording?`Listening${remaining===undefined?'':` · ${Math.floor(remaining/60)}:${String(remaining%60).padStart(2,'0')} left`}`:working?'Saving your voice':playing?'Speaking':pending||phase==='ready'?'Recording needs review':waiting?'Waiting for your reply':'Ready';
       caption.textContent=recording?(value.message||''):pending||phase==='ready'?'Return to the conversation to review your recording.':!waiting&&!playing?(value.message||''):'';
-      speak.hidden=recording||working||pending||phase==='ready'||playing;
+      speak.hidden=recording||working||pending||phase==='ready';
+      speak.textContent=playing?'Interrupt and speak':'Speak again';
       dialog.dataset.phase=recording?'listening':playing?'speaking':'waiting';
       maybeRearm();
     }
     portrait.addEventListener('click',open);
     portrait.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open();}});
     back.addEventListener('click',close);dialog.addEventListener('cancel',event=>{event.preventDefault();close();});
-    speak.addEventListener('click',()=>{if(opened&&canStart()){waiting=false;heard=false;speak.hidden=true;onSpeak();}});
+    speak.addEventListener('click',()=>{if(opened&&canStart(true)){waiting=false;heard=false;speak.hidden=true;onSpeak();}});
     document.addEventListener('visibilitychange',()=>{if(document.hidden)close();});
     window.addEventListener('pagehide',close);
     return {update,close,get active(){return opened;},configure(enabled){

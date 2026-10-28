@@ -29,6 +29,13 @@ or stream failure returns the original to review rather than automatic admission
 
 The initial loop alternates capture, durable input and spoken response. It is
 **not yet full duplex**: capture is not continuously armed during playback.
+The avatar keeps an explicit “Interrupt and speak” control available during
+playback/preparation. It uses the existing immediate local pause and capture
+path, freezing the current playback reference before permission; it does not
+inherit a worker reply destination or cancel native work. Automatic rearming
+still waits for the response boundary. This is explicit interruption, not
+continuous listening or automatic acoustic barge-in.
+
 Foreground response latency, real echo/noise/device acceptance and meaningful
 internal-result/question offers remain required by the full roadmap.
 
