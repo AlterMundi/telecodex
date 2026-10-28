@@ -42,6 +42,21 @@ function boot(){
   questions:v=>questions=v,bind:v=>binding=v,permission:()=>{permission=deferred();return permission;},holdCommit:()=>{commitHold=deferred();return commitHold;}};
 }
 (async()=>{
+ const delayed=boot();await delayed.session.start();delayed.sources[0].emit(3200);delayed.activity(1,true,false);
+ delayed.activity(1,false,true);delayed.sources[0].emit(64000,0);
+ delayed.recorders[0].partial('Una frase completa que llegó después del silencio');
+ assert.equal(delayed.recorders[0].state,'inactive','Silent PCM cannot invalidate an exact endpoint while captions arrive late');
+ await until(()=>delayed.recorders.length===2);delayed.recorders[0].complete('Una frase completa');await until(()=>delayed.commits.length===1);
+ assert.equal(delayed.retained[0].blob.size,67200);assert.equal(delayed.analyses[0].boundaries.length,1);
+ delayed.session.hold();delayed.recorders[1].complete();await tick();
+ const renewed=boot();await renewed.session.start();renewed.sources[0].emit(3200);renewed.activity(1,true,false);renewed.activity(1,false,true);
+ renewed.sources[0].emit(64000,0);renewed.sources[0].acoustic(67200,67200);renewed.recorders[0].partial('La persona volvió a hablar');
+ assert.equal(renewed.recorders[0].state,'recording','New acoustic activity still fences an earlier endpoint');
+ renewed.session.hold();renewed.recorders[0].complete();await tick();assert.equal(renewed.commits.length,0);
+ const expired=boot();await expired.session.start();expired.sources[0].emit(3200);expired.activity(1,true,false);expired.activity(1,false,true);
+ for(let n=0;n<9;n++)expired.sources[0].emit(32000,0);expired.recorders[0].partial('La confirmación llegó demasiado tarde');
+ assert.equal(expired.session.active,false,'An endpoint outside the retained PCM window visibly stops for review');
+ expired.recorders[0].complete('Frase conservada');await tick();assert.equal(expired.commits.length,0);assert(expired.reviews.length);
  const f=boot();assert(await f.session.start());assert(f.session.active);assert.equal(f.medias.length,1);assert.equal(f.analyses.length,1);
  f.sources[0].emit(3200);f.recorders[0].partial('Una frase');assert.equal(f.interrupts(),0,'Captions cannot interrupt or admit work');
  f.activity(1,true,false);assert(f.session.floor);assert.equal(f.interrupts(),1);assert.equal(f.commits.length,0);

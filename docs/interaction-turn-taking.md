@@ -384,3 +384,14 @@ resolved boolean. Require the exact attributed response's digital playback and
 media completion before closing the view; an idle native worker or a received
 speech request cannot prove that playback. Retain partial evidence rather than
 repeating completed provider inputs to repair an early verifier exit.
+
+An exact analyzer endpoint can precede its streaming captions. Subsequent silence
+does not expire that endpoint after one second: later local acoustic activity or
+a changed VAD generation still invalidates it. The coordinator may consume the
+endpoint only while the next recorder's prefix fits the existing eight-second
+PCM ring. A later caption outside that window stops capture for explicit original
+review instead of silently waiting in Listening or sending automatically. This
+reproduced client defect is covered with late-caption, renewed-activity and
+expired-window cases; an observed browser stall is consistent with it, but that
+browser did not retain every analyzer verdict needed to prove its individual
+timing cause.

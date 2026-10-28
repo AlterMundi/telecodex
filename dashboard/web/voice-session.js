@@ -4,7 +4,7 @@ window.ContinuousConversation=(()=>{
   function create({headers,getBinding,getQuestions=()=>undefined,getPlayback=()=>undefined,
     retain,commit,onState=()=>{},onCaption=()=>{},onInterrupt=()=>{},onSent=()=>{},onReview=()=>{},onTiming=()=>{}}){
     let active=false,starting=false,stopping=false,epoch=0,binding,source,analysis,media,abort,timer,unsubscribe;
-    let current,ring=[],bytes=0,samples=0,lastEnergy=0,verdict,floor=false,blockedAt=Infinity,order=0,dispatching=false;
+    let current,ring=[],bytes=0,lastEnergy=0,verdict,floor=false,blockedAt=Infinity,order=0,dispatching=false;
     const slots=new Map();
     function state(message){const pending=[...slots.values()].some(s=>s.review);onState({active,starting,floor,pending,working:!active&&slots.size>0&&!pending,message});}
     function stopTracks(){for(const track of media?.getTracks()||[])track.stop();media=undefined;}
@@ -32,7 +32,11 @@ window.ContinuousConversation=(()=>{
       if(!active||stopping||!slot?.recorder||slot.recorder.state!=='recording'||!slot.words||!slot.speech||!a?.endpoint)return;
       const end=a.endpoint;
       if(end.generation!==slot.generation||a.speaking!==false||end.audio_bytes<=slot.start
-         ||end.audio_bytes>bytes||lastEnergy>end.audio_bytes||samples-end.audio_bytes>=32000)return;
+         ||end.audio_bytes>bytes||lastEnergy>end.audio_bytes)return;
+      // Captions can arrive after the analyzer's exact endpoint. Advancing
+      // silence is not renewed speech; the acoustic fence above still owns it.
+      // Keep the next recorder's prefix within the existing eight-second ring.
+      if(bytes-end.audio_bytes>256000){hold('Voice confirmation arrived too late. Review your recording before sending.');return;}
       if(!analysis?.boundary(end)){hold('Voice analysis lost its turn boundary. Your recordings are kept.');return;}
       slot.send=true;floor=false;verdict=undefined;onTiming(slot.id,'ended');slot.recorder.stop();if(!stopping)state('Finishing your phrase');
     }
@@ -104,7 +108,7 @@ window.ContinuousConversation=(()=>{
     }
     async function start(){
       if(active||starting||slots.size||document.hidden||!getBinding())return false;
-      const owned=++epoch;binding=getBinding();starting=true;stopping=false;bytes=samples=lastEnergy=0;ring=[];floor=false;blockedAt=Infinity;order=0;dispatching=false;
+      const owned=++epoch;binding=getBinding();starting=true;stopping=false;bytes=lastEnergy=0;ring=[];floor=false;blockedAt=Infinity;order=0;dispatching=false;
       abort=new AbortController();const ownAbort=abort;timer=setTimeout(()=>{if(owned===epoch)hold('Voice session reached five minutes. Your recordings are kept.');},300000);state('Preparing voice');
       try{
         const warmed=await window.StreamingVoice.openActivity({headers,binding,id:window.crypto.randomUUID(),signal:ownAbort.signal,
@@ -118,7 +122,7 @@ window.ContinuousConversation=(()=>{
           if(owned!==epoch)return;
           if(value.captureError){hold('Voice capture ended. Your recordings are kept.');return;}
           if(Number.isSafeInteger(value.activityBytes)&&Number.isSafeInteger(value.totalBytes)){
-            lastEnergy=value.activityBytes;samples=value.totalBytes;
+            lastEnergy=value.activityBytes;
             // Arming ASR is preparation, not a human utterance. Snapshot only
             // at its first local acoustic marker; never widen it on later Send.
             if(current&&!current.scopeFrozen&&lastEnergy>current.start){
@@ -128,7 +132,7 @@ window.ContinuousConversation=(()=>{
           if(!value.pcm||!active)return;
           const end=value.totalBytes;
           if(!Number.isSafeInteger(end)||end!==bytes+value.pcm.byteLength){hold('Capture continuity was interrupted. Your recordings are kept.');return;}
-          ring.push({start:bytes,end,pcm:value.pcm});bytes=end;samples=Math.max(samples,bytes);
+          ring.push({start:bytes,end,pcm:value.pcm});bytes=end;
           while(ring.length&&ring[0].end<=bytes-256000)ring.shift();
           if(!analysis.feed(value.pcm))hold('Voice analysis stopped. Your recordings are kept.');
         });
