@@ -158,6 +158,7 @@ mod tests {
                 ConversationVoice {
                     audio_sha256: "a".repeat(64),
                     mime: "audio/wav".into(),
+                    capture_stop: None,
                     transcription: None,
                 },
                 true,

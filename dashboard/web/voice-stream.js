@@ -81,7 +81,7 @@ window.StreamingVoice=(()=>{
         const pcm=input.byteLength>remaining?input.slice(0,remaining):input;
         if(pcm.byteLength){bytes+=pcm.byteLength;parts.push(pcm);pump();}
         if(canonicalRecorder&&parts.reduce((n,p)=>n+p.byteLength,0)>256*1024){ready=false;dispose();parts=[];}
-        if(bytes===120*32000)recorder.stop();
+        if(bytes===120*32000){recorder.captureStop='duration_limit';recorder.stop();}
       }
       if(message.data.finished){
         if(canonicalRecorder)return;

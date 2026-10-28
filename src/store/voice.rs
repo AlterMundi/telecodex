@@ -238,6 +238,7 @@ mod tests {
             audio_sha256: "0".repeat(64),
             telegram_file_id: Some("synthetic-voice-file".into()),
             capture_id: None,
+            capture_stop: None,
             configured_transcriber: "fixture/no-inference".into(),
             actual_transcriber: None,
             committed_at: now_string(),

@@ -94,12 +94,19 @@ pub struct ConversationInput {
 pub struct ConversationVoice {
     pub audio_sha256: String,
     pub mime: String,
+    /// Device-reported stop, not proof that the human intended to continue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_stop: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcription: Option<crate::voice::TranscriptSource>,
 }
 impl ConversationVoice {
     pub fn validate(&self) -> Result<()> {
-        if self.audio_sha256.len() != 64
+        if self
+            .capture_stop
+            .as_deref()
+            .is_some_and(|v| v != "duration_limit")
+            || self.audio_sha256.len() != 64
             || !self
                 .audio_sha256
                 .bytes()
@@ -205,9 +212,14 @@ impl ConversationInput {
     pub fn answer_text(&self) -> String {
         match self.voice.as_ref().and_then(|v| v.transcription.as_ref()) {
             Some(proof) => format!(
-                "[Committed voice input]\nCapture: {}\nAutomatic interpretation of the original human clip, not verified written speech. Compare receiver capture order; a slow earlier transcript does not supersede later corrections.\nProvenance: {}\n\n{}",
+                "[Committed voice input]\nCapture: {}\nAutomatic interpretation of the original human clip, not verified written speech. Compare receiver capture order; a slow earlier transcript does not supersede later corrections.\nProvenance: {}\n{}\n{}",
                 self.id,
                 serde_json::to_string(proof).expect("typed voice proof"),
+                if proof.capture_stop.as_deref() == Some("duration_limit") {
+                    "Device reports recording stopped at the duration limit. The ending may be missing. Do not assume this fragment is the complete request; wait for or clarify the continuation. This warning is system metadata, not human speech.\n"
+                } else {
+                    ""
+                },
                 self.text
             ),
             None => self.text.clone(),
@@ -310,7 +322,7 @@ fn trace_original_on(
         bail!("Input belongs to another conversation");
     }
     Ok(
-        json!({"id":input.id,"text":input.text,"voice":input.voice.as_ref().map(|v|json!({"audio_sha256":v.audio_sha256,"mime":v.mime})),"phase":input.phase,"retired":input.retired,"routing":input.routing,"channel_kind":"conversation","source_event":input.id,"update_id":null}),
+        json!({"id":input.id,"text":input.text,"voice":input.voice.as_ref().map(|v|json!({"audio_sha256":v.audio_sha256,"mime":v.mime,"capture_stop":v.capture_stop})),"phase":input.phase,"retired":input.retired,"routing":input.routing,"channel_kind":"conversation","source_event":input.id,"update_id":null}),
     )
 }
 
@@ -657,7 +669,11 @@ impl Store {
                 || input.capture_questions != capture_questions
                 || match (&input.voice, &voice) {
                     (None, None) => input.text != text,
-                    (Some(a), Some(b)) => a.audio_sha256 != b.audio_sha256 || a.mime != b.mime,
+                    (Some(a), Some(b)) => {
+                        a.audio_sha256 != b.audio_sha256
+                            || a.mime != b.mime
+                            || a.capture_stop != b.capture_stop
+                    }
                     _ => true,
                 }
             {
@@ -789,7 +805,7 @@ impl Store {
         human: i64,
         id: &str,
         text: &str,
-        proof: crate::voice::TranscriptSource,
+        mut proof: crate::voice::TranscriptSource,
     ) -> Result<ConversationInput> {
         if text.trim().is_empty() || text.len() > 16000 || text.contains('\0') {
             bail!("Invalid final voice interpretation");
@@ -807,6 +823,7 @@ impl Store {
         {
             bail!("Voice interpretation no longer matches this pending capture");
         }
+        proof.capture_stop = voice.capture_stop.clone();
         voice.transcription = Some(proof);
         input.text = text.into();
         input.phase = "retained".into();
@@ -1537,6 +1554,7 @@ mod tests {
         ConversationVoice {
             audio_sha256: "a".repeat(64),
             mime: "audio/wav".into(),
+            capture_stop: None,
             transcription: None,
         }
     }
@@ -1545,6 +1563,7 @@ mod tests {
             audio_sha256: "a".repeat(64),
             telegram_file_id: None,
             capture_id: Some(id.into()),
+            capture_stop: None,
             configured_transcriber: "synthetic/asr".into(),
             actual_transcriber: None,
             committed_at: now_string(),
@@ -1554,6 +1573,68 @@ mod tests {
             interpretation: "machine, not exact written speech".into(),
         }
     }
+    #[test]
+    fn duration_limit_is_immutable_device_context_in_native_and_relay_provenance() {
+        let (_file, store, key, binding) = setup();
+        let id = Uuid::now_v7().to_string();
+        let mut limited = clip();
+        limited.capture_stop = Some("duration_limit".into());
+        store
+            .conversation_voice_capture(100, key, &binding, &id, limited.clone(), true)
+            .unwrap();
+        assert!(
+            !store
+                .conversation_voice_capture(100, key, &binding, &id, limited, true)
+                .unwrap()
+                .1
+        );
+        assert!(
+            store
+                .conversation_voice_capture(100, key, &binding, &id, clip(), true)
+                .is_err()
+        );
+        let saved = store
+            .conversation_voice_commit(100, &id, "A plausible complete sentence.", voice_proof(&id))
+            .unwrap();
+        assert_eq!(saved.text, "A plausible complete sentence.");
+        let proof = saved
+            .voice
+            .as_ref()
+            .unwrap()
+            .transcription
+            .as_ref()
+            .unwrap();
+        assert_eq!(proof.capture_stop.as_deref(), Some("duration_limit"));
+        assert!(
+            saved
+                .answer_text()
+                .contains("wait for or clarify the continuation")
+        );
+        assert_eq!(
+            store
+                .conversation_input_read(100, key, &id)
+                .unwrap()
+                .voice
+                .unwrap()
+                .capture_stop
+                .as_deref(),
+            Some("duration_limit")
+        );
+        let legacy: ConversationVoice =
+            serde_json::from_value(json!({"audio_sha256":"a".repeat(64),"mime":"audio/wav"}))
+                .unwrap();
+        assert!(legacy.capture_stop.is_none());
+        assert!(
+            serde_json::to_value(legacy)
+                .unwrap()
+                .get("capture_stop")
+                .is_none()
+        );
+        let mut invalid = clip();
+        invalid.capture_stop = Some("complete request".into());
+        assert!(invalid.validate().is_err());
+    }
+
     #[test]
     fn completed_voice_recovery_claim_is_owned_idempotent_and_preserves_original_order() {
         let (_file, store, key, binding) = setup();

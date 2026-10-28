@@ -983,3 +983,8 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 #client-build code span:nth-child(4n) { color:var(--warn); }
 
 .session-audio-controls { display:inline-flex; vertical-align:middle; white-space:nowrap; }
+
+.voice-caption-line { display:flex; align-items:baseline; gap:8px; min-width:0; }
+.voice-caption-line #conversation-voice-state { flex:1; min-width:0; }
+#conversation-voice-remaining { flex:none; font-size:14px; line-height:20px; white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--muted); }
+#conversation-voice-remaining[data-near-limit="true"] { color:var(--warn); font-weight:600; }
