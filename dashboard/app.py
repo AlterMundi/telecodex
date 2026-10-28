@@ -283,9 +283,16 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                 body = body.replace('    <script src="assets/app.js" defer></script>',
                     '    <script src="/access-client.js" defer></script>\n    <script src="assets/app.js" defer></script>')
             body = body.replace('    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>\n', '')
-        for name in ('app.js', 'live.js', 'requests.js', 'microphone.js', 'visual.js', 'files.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'live-speech.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'attention.js', 'style.css'):
-            version = hashlib.sha256((public / name).read_bytes()).hexdigest()[:16]
+        client_build = hashlib.sha256((public / 'index.html').read_bytes())
+        for name in ('app.js', 'live.js', 'requests.js', 'voice-stream.js', 'microphone.js', 'visual.js', 'files.js', 'routing_graph.js', 'companion.js', 'sonic.js', 'speech-stream.js', 'live-speech.js', 'markdown-it.min.js', 'markdown.js', 'conversation.js', 'attention.js', 'style.css'):
+            asset = (public / name).read_bytes()
+            client_build.update(name.encode() + b'\0' + asset)
+            version = hashlib.sha256(asset).hexdigest()[:16]
             body = body.replace('assets/'+name+'"', 'assets/'+name+'?v='+version+'"')
+        build_id = client_build.hexdigest()
+        build_label = ''.join('<span>'+digit+'</span>' for digit in build_id[:12])
+        body = body.replace('<div id="client-build" hidden></div>',
+            '<div id="client-build" title="Client bundle '+build_id+'" aria-label="Client version '+build_id[:12]+'">ui <code>'+build_label+'</code></div>')
         standalone_entry = (request.query_params.get('view') == 'conversation'
                             and request.query_params.get('client') == 'standalone')
         if standalone_entry:

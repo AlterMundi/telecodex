@@ -711,7 +711,8 @@ const conversationView = window.Conversation?.mount({
       if(!response.ok)throw Object.assign(Error('Sign in to continue'),{status:response.status});
       const access=await response.json();
       csrf=access.csrf;sharedConversationConnected=true;authenticated=true;
-      $('#conversation-account').textContent='human: '+access.label;$('#conversation-account').hidden=false;
+      const humanName=el('span',access.label);humanName.className='human-name';
+      $('#conversation-account').replaceChildren(el('span','human: '),humanName);$('#conversation-account').hidden=false;
       feedback.replaceChildren();
       conversationView?.authenticated();await refresh(true);schedule();
     }catch(error){

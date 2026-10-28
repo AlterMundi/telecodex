@@ -432,9 +432,9 @@ main > #conversation { display:flex;flex:1;flex-direction:column;min-height:0; }
 #conversation-replies h2 { font-size:16px;color:var(--muted);margin:16px 0 8px; }
 .reply { margin-bottom:var(--dm-gap,12px);padding:var(--dm-gap,14px);border:1px solid var(--line);border-radius:var(--dm-radius,12px);background:var(--panel);overflow-wrap:anywhere; }
 .reply h3 { font-size:17px; }
-.session-audio-mute { display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;width:44px;height:44px;padding:10px;margin-inline-start:6px;border:0;border-radius:50%;background:transparent;color:inherit; }
-.session-audio-mute svg { display:block;width:22px;height:22px;pointer-events:none; }
-.session-audio-mute[aria-pressed="true"] { color:var(--accent);background:var(--panel);outline:1px solid currentColor; }
+.session-audio-mute, .session-audio-solo, .session-audio-reset { display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;width:44px;height:44px;padding:10px;margin-inline-start:6px;border:0;border-radius:50%;background:transparent;color:inherit; }
+.session-audio-mute svg, .session-audio-reset svg { display:block;width:22px;height:22px;pointer-events:none; }
+.session-audio-mute[aria-pressed="true"], .session-audio-solo[aria-pressed="true"] { color:var(--accent);background:var(--panel);outline:1px solid currentColor; }
 .reply-status { font-size:14px;color:var(--muted); }
 .reply[data-pending="true"] { border-inline-start:3px solid var(--warn); }
 .reply-text { white-space:pre-wrap;font-size:16px;line-height:1.55; }
@@ -971,3 +971,15 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 
 /* Recovery actions share the recording review, preserving the composer dock. */
 #conversation-recording-review { justify-content:flex-end; flex-wrap:wrap; gap:6px; margin:6px 0; }
+
+.session-update-listen { margin-inline-end:12px; }
+.standalone-conversation #conversation-account .human-name { color:var(--secondary); }
+#client-build { display:none; }
+.standalone-conversation #client-build { display:block; flex-shrink:0; align-self:flex-end; font:11px/16px ui-monospace,monospace; letter-spacing:.1em; color:var(--muted); margin-bottom:2px; }
+#client-build code { font:inherit; }
+#client-build code span:nth-child(4n+1) { color:var(--accent); }
+#client-build code span:nth-child(4n+2) { color:var(--secondary); }
+#client-build code span:nth-child(4n+3) { color:var(--good); }
+#client-build code span:nth-child(4n) { color:var(--warn); }
+
+.session-audio-controls { display:inline-flex; vertical-align:middle; white-space:nowrap; }

@@ -498,6 +498,8 @@ class DashboardAppearance(unittest.TestCase):
                     'appearance_origin':'https://home.example.test'}
             with TestClient(create_app(config,Receiver(),lambda *_:100),base_url='https://example.test') as client:
                 response=client.get('/')
+                self.assertRegex(response.text, r'id="client-build" title="Client bundle [a-f0-9]{64}" aria-label="Client version [a-f0-9]{12}"')
+                self.assertNotIn('id="client-build" hidden', response.text)
                 self.assertIn('data-home-style',response.text)
                 self.assertIn('https://home.example.test/style.css?surface=sessions',response.text)
                 self.assertIn('https://home.example.test/home-style.js',response.text)
