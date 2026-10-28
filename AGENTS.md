@@ -151,3 +151,11 @@ Use `attention_source` for bounded source reads and `attention_reported` only
 for actual incorporation. Neither operation answers a question, approves work,
 proves hearing or completes the human task. See docs/interaction.md for the
 current development/qualification state and compatible-writer rollback.
+
+
+CI scope follows the owning implementation: browser voice/timing and Python
+preparation retain the always-run dashboard/speech suites, not unchanged Rust
+optional-ASR builds. Native source/test, compiler/dependency and relevant workflow
+changes retain their native checks. In particular timing_ui.js is exercised by
+the dashboard job. Reuse exact unchanged native source qualification when shipping
+a web-only delta; do not turn a filename containing voice into native evidence.
