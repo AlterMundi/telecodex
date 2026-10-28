@@ -1001,3 +1001,9 @@ exact current revision, current binding and owned destination before admission.
 Do not force `context_only` onto an explicit worker reply: that changes routing.
 A rejected upload must not be mistaken for a failed Gemini transcript. Retain the
 exact recording and prepared receipt while inspecting the original admission.
+
+Speech capacity counts retained audio bytes and the maximum output reservation
+for each actively locked renderer. An interrupted renderer's retained `intent`
+remains uncertain and cannot be replayed, but its released job lock proves that
+it can no longer consume an in-flight output reservation. Preserve its receipt;
+do not delete it or increase the cache limit to recover ordinary playback.
