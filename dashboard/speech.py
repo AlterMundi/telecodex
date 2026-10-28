@@ -48,7 +48,7 @@ def speech_request(source, language="en-US"):
         label = source.get('label')
         if not isinstance(label,str) or not label.strip():
             raise SpeechUnavailable('Selected work source has no audible label')
-        label = label.strip().lstrip('#').strip()
+        label = label.strip().lstrip('#').strip().rstrip('.:;').rstrip()
         if not label:
             raise SpeechUnavailable('Selected work source has no audible label')
         introduction = 'Novedades desde' if language.split('-')[0] == 'es' else 'Update from'

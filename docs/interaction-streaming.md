@@ -495,11 +495,22 @@ is not attributed solely to that prefix; a retained calm-voice sample's ASR draf
 did not reproduce “dot”/“punto”, which does not invalidate the intermittent report.
 The exact reported app text contains ordinary sentence punctuation, not those words.
 
-The selected Qwen style instruction now explicitly treats ordinary sentence
-punctuation as silent pauses, preserves literal commands and version numbers, and
-never asks for punctuation names. This is a provider-guidance mitigation, not a
-verified cure for the intermittent paragraph report. No blanket punctuation
-stripping, old-audio regeneration or native conversation change is applied.
+The later human report confirms that the paragraph-only mitigation did not
+resolve the heading problem. Qwen routes may opt into `ssml_breaks: true` only
+with a model/voice documented to support SSML. The renderer escapes all source
+XML before wrapping it in `<speak>` and emits a provider `<break time="450ms"/>`
+for paragraph/line boundaries. Source-authored tags stay literal text; they cannot
+create pauses or external-sound controls. Trailing punctuation on the generated
+session label is removed from the introduction; canonical text and offsets stay
+unchanged. The actual serialized SSML is included in synthesis identity, so old
+plain-text cache entries do not masquerade as the new audio.
+
+The selected voice instruction uses positive delivery guidance rather than
+mentioning punctuation names. The optional SSML path preserves the default for
+other routes; voice/model/credentials remain receiving-selected. Verify provider
+acceptance and listening separately from payload tests. References:
+[Qwen SSML](https://docs.qwencloud.com/developer-guides/speech/ssml) and
+[voice feature support](https://docs.qwencloud.com/developer-guides/speech/voice-list/qwen-audio-tts).
 
 ## Stable pre-realtime receiving checkpoint — 2026-10-27
 

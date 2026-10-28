@@ -135,6 +135,32 @@ class Render(unittest.TestCase):
         self.assertEqual(speech.spoken_markdown('Use C#; see #123 and `#Realtime`.', 'en-US'),
                          'Use C#; see #123 and #Realtime.')
 
+    def test_qwen_ssml_breaks_are_structured_and_escape_source_markup(self):
+        import xml.etree.ElementTree as ET
+        self.qwen_route();self.config['ssml_breaks']=True
+        self.binding.write_text(json.dumps(self.config))
+        original='Novedades desde Realtime\n\nUse `git status` & keep <break time="9s"/> literal.'
+        expected='<speak>Novedades desde Realtime<break time="450ms"/>Use git status &amp; keep &lt;break time=&quot;9s&quot;/&gt; literal.</speak>'
+        self.content_type='application/json';url='https://synthetic.oss-cn-beijing.aliyuncs.com/synthetic.wav'
+        self.data=json.dumps({'output':{'audio':{'url':url}}}).encode()
+        audio=io.BytesIO()
+        with wave.open(audio,'wb') as output:
+            output.setparams((1,2,24000,0,'NONE','not compressed'));output.writeframes(b'\x01\x00'*2400)
+        original_fetch=speech.fetch
+        def fetch(request, timeout, **kwargs):
+            return audio.getvalue() if request.full_url==url else original_fetch(request,timeout,**kwargs)
+        with mock.patch.object(speech,'fetch',side_effect=fetch):
+            result=self.render({**self.request,'text':original})
+        self.assertEqual(json.loads(self.calls[-1][2])['input']['text'],expected)
+        tree=ET.fromstring(expected);self.assertEqual(len(tree.findall('break')),1)
+        self.assertEqual(result['text_sha256'],hashlib.sha256(original.encode()).hexdigest())
+        self.content_type='text/event-stream';self.data=self.stream_data();frames=[]
+        speech.stream_render(self.binding,{**self.request,'text':original},frames.append)
+        self.assertEqual(json.loads(self.calls[-1][2])['input']['text'],expected)
+        self.assertEqual(frames[-1]['type'],'end')
+        self.config['ssml_breaks']='true';self.binding.write_text(json.dumps(self.config))
+        with self.assertRaises(speech.RenderError):speech.route(self.binding)
+
     def test_streamed_markdown_uses_label_not_url_and_retains_source_hash(self):
         self.qwen_route();self.content_type='text/event-stream';self.data=self.stream_data();frames=[]
         original='Read **Real Time** and [the source](https://example.org/).'
