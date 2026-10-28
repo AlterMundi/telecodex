@@ -1,10 +1,12 @@
 """Speech-gated, bounded turn analysis; no models, provider or native input."""
 import sys
+import asyncio
 from pathlib import Path
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.capture_turn import Activity, TurnEndUnavailable
+from dashboard.turn_detection import analyze_capture, DetectionUnavailable
 
 
 class CaptureTurn(unittest.TestCase):
@@ -54,9 +56,50 @@ class CaptureTurn(unittest.TestCase):
         value.bytes=0;value.speech_seen=True;value.generation=100;value.analyses=30
         with self.assertRaises(TurnEndUnavailable):value.feed(b'\0'*1024)
 
+    def test_startup_backfill_defers_scoring_until_the_current_tail(self):
+        value=self.analyzer();self.probability=.8;value.feed(b'\0'*3072,analyze=False)
+        self.probability=0
+        self.assertNotIn('endpoint',value.feed(b'\0'*8192,analyze=False))
+        self.assertEqual(self.scored,[])
+        result=value.feed(b'\0'*1024)
+        self.assertEqual(result['endpoint']['audio_bytes'],12288)
+        self.assertEqual(len(self.scored),1)
+        with self.assertRaises(ValueError):value.feed(b'\0'*1024,analyze='yes')
+
     def test_wrong_model_is_rejected_before_optional_imports(self):
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/'wrong.onnx';path.write_bytes(b'wrong')
             with self.assertRaises(ValueError):Activity(path,path)
+
+class CaptureAnalysisLifecycle(unittest.IsolatedAsyncioTestCase):
+    def worker(self):
+        class Worker:
+            def __init__(self):self.feeds=[];self.closed=False;self.queue=asyncio.Queue()
+            async def feed(self,pcm,*,defer=False):
+                self.feeds.append((len(pcm),defer));await self.queue.put({'type':'activity','audio_bytes':sum(n for n,_ in self.feeds)})
+            async def receive(self):return await self.queue.get()
+            async def close(self):self.closed=True
+        return Worker()
+    async def test_late_open_backfills_once_without_obsolete_endpoint_scores(self):
+        worker=self.worker();pcm=bytearray(b'\0'*64000);changed=asyncio.Event();observed=[];complete=asyncio.Event()
+        async def open_worker():return worker
+        async def observe(value):
+            observed.append(value)
+            if value['audio_bytes']==64000:complete.set()
+        task=asyncio.create_task(analyze_capture(open_worker,pcm,changed,observe))
+        await asyncio.wait_for(complete.wait(),1)
+        self.assertEqual(worker.feeds,[(32000,True),(32000,False)])
+        pcm.extend(b'\0'*1024);changed.set();await asyncio.sleep(.01)
+        self.assertEqual(worker.feeds[-1],(1024,False))
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):await task
+        self.assertTrue(worker.closed)
+    async def test_lag_failure_closes_only_the_analysis_worker(self):
+        worker=self.worker()
+        async def open_worker():return worker
+        async def observe(_):self.fail('No metadata may escape rejected backlog')
+        with self.assertRaisesRegex(DetectionUnavailable,'fell behind'):
+            await analyze_capture(open_worker,bytearray(b'\0'*256002),asyncio.Event(),observe)
+        self.assertTrue(worker.closed);self.assertEqual(worker.feeds,[])
 
 if __name__ == '__main__':unittest.main()

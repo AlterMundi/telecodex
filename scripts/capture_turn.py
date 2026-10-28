@@ -56,7 +56,9 @@ class Activity:
             raise ValueError('Invalid speech probability')
         return probability
 
-    def feed(self, data):
+    def feed(self, data, *, analyze=True):
+        if type(analyze) is not bool:
+            raise ValueError("Analysis selection must be boolean")
         if not isinstance(data, bytes) or not data or len(data) % 2 or len(data) > 32000 or self.bytes + len(data) > 120 * 32000:
             raise ValueError('PCM chunk outside capture bounds')
         self.bytes += len(data)
@@ -81,7 +83,7 @@ class Activity:
                     self.speaking = False
         result = {'schema': SCHEMA, 'type': 'activity', 'generation': self.generation,
                   'speaking': self.speaking, 'speech_seen': self.speech_seen, 'audio_bytes': self.bytes}
-        if self.speech_seen and not self.speaking and self.generation != self.scored_generation:
+        if analyze and self.speech_seen and not self.speaking and self.generation != self.scored_generation:
             if self.analyses >= 30:
                 raise TurnEndUnavailable('Turn-analysis capture budget reached')
             self.scored_generation = self.generation
@@ -111,10 +113,11 @@ def main():
             if len(raw) > 45000:
                 raise ValueError('Analysis command exceeds bound')
             value = json.loads(raw)
-            if not isinstance(value, dict) or set(value) != {'pcm'} or not isinstance(value['pcm'], str):
+            if (not isinstance(value, dict) or set(value) not in ({'pcm'}, {'pcm', 'defer'})
+                    or not isinstance(value['pcm'], str) or type(value.get('defer', False)) is not bool):
                 raise ValueError('Expected one PCM command')
             data = base64.b64decode(value['pcm'], validate=True)
-            print(json.dumps(analyzer.feed(data)), flush=True)
+            print(json.dumps(analyzer.feed(data, analyze=not value.get('defer', False))), flush=True)
     except (ValueError, OSError, TurnEndUnavailable, ImportError):
         print(json.dumps({'schema': SCHEMA, 'type': 'unavailable'}), flush=True)
         return 1
