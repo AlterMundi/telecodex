@@ -141,6 +141,7 @@ class DashboardHTTP(unittest.TestCase):
     def test_origin_body_bounds_no_path_override_and_public_shell(self):
         self.assertEqual(self.client.get('/').status_code,200)
         self.assertEqual(self.client.get('/assets/app.js').status_code,200)
+        self.assertEqual(self.client.get('/assets/voice-mode.js').status_code,200)
         self.assertEqual(self.client.get('/assets/space-grotesk-latin.woff2').status_code,200)
         self.assertIn('SIL',self.client.get('/assets/OFL.txt').text)
         self.assertEqual(self.client.get('/assets/app.py').status_code,404)

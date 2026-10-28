@@ -127,7 +127,7 @@ window.ConversationSound = (() => {
     function setStatus(detail,brief=detail){status.textContent=detail;if(feedback){feedback.textContent=brief;feedback.hidden=detail==="Off";}if(controls)controls.hidden=!enabled;}
     let enabled=false,suspended=false,generation=0,authority,request,frame,vocabulary,catalog,received=0,requestElapsed=0,expiry,local={};
     const engine=renderer({changed(running){suspended=!running;if(enabled){button.textContent=running?"≈ Mute Beacon":"≈ Resume Beacon";if(!running)setStatus("Audio suspended · tap to resume");}}});
-    const voiceLevel=()=>["permission","recording","finalizing"].includes(local.capture) || local.uploading===true ? 0 : ["playing","preparing"].includes(local.playback) ? 0.18 : 1;
+    const voiceLevel=()=>local.conversationOnly===true || ["permission","recording","finalizing"].includes(local.capture) || local.uploading===true ? 0 : ["playing","preparing"].includes(local.playback) ? 0.18 : 1;
     function disable(){enabled=false;authority=undefined;generation++;clearTimeout(expiry);request=undefined;frame=undefined;engine.stop();button.setAttribute("aria-pressed","false");button.textContent="≈ Beacon";setStatus("Off");score.replaceChildren();}
     function draw(){
       if(!enabled || !frame || !vocabulary)return;

@@ -9,7 +9,7 @@ window.StreamingVoice=(()=>{
     return new Blob([header,...parts],{type:'audio/wav'});
   }
   const supported=()=>!!(window.AudioWorkletNode&&(window.AudioContext||window.webkitAudioContext)&&window.WebSocket);
-  async function create(media,{headers,binding,id,onPartial=()=>{},canonicalRecorder}){
+  async function create(media,{headers,binding,id,onPartial=()=>{},canonicalRecorder,turnDetection=false,onEndpoint=()=>{},onDetectionUnavailable=()=>{}}){
     const Context=window.AudioContext||window.webkitAudioContext,context=new Context();
     let worklet;
     try{await context.audioWorklet.addModule('assets/voice-pcm.js');worklet=new AudioWorkletNode(context,'interaction-pcm');}
@@ -25,6 +25,7 @@ window.StreamingVoice=(()=>{
       await context.close();throw error;
     }
     let ready=false,parts=[],sent=0,bytes=0,ending=false,discarded=false,done=false,timer,finishSent=false,disposed=false,flushed=false;
+    let lastEnergy=0,totalSamplesBytes=0,lastEndpoint=0,detectorFailed=false,recognized=false,verdict;
     const events=new EventTarget(),recorder={state:'inactive',mimeType:canonicalRecorder?.mimeType||'audio/wav',addEventListener:(...args)=>events.addEventListener(...args)};
     function event(type,data){const e=new Event(type);if(data!==undefined)Object.defineProperty(e,'data',{value:data});events.dispatchEvent(e);}
     function dispose(){if(disposed)return;disposed=true;clearTimeout(timer);source.disconnect();filter.disconnect();worklet.disconnect();mute.disconnect();context.close().catch(()=>{});socket.close();}
@@ -54,16 +55,30 @@ window.StreamingVoice=(()=>{
       if(done)return;
       try{
         const values=headers(),authorization=values.Authorization||values.authorization;
-        socket.send(JSON.stringify({id,binding,...(canonicalRecorder?{mode:'captions'}:{}),csrf:values['X-Dashboard-CSRF']||values['x-dashboard-csrf'],...(authorization?{authorization}:{})}));
+        socket.send(JSON.stringify({id,binding,...(canonicalRecorder?{mode:'captions'}:{}),...(turnDetection?{turn_detection:true}:{}),csrf:values['X-Dashboard-CSRF']||values['x-dashboard-csrf'],...(authorization?{authorization}:{})}));
       }catch{ready=false;socket.close();}
     };
+    function considerEndpoint(){
+      if(!recognized||!verdict||detectorFailed||ending||discarded||done||recorder.state!=='recording')return;
+      const activity=verdict,endpoint=activity.endpoint;
+          if(endpoint && activity.speech_seen===true && activity.speaking===false
+            && endpoint.authority==='analysis_only' && Number.isSafeInteger(endpoint.generation) && endpoint.generation>lastEndpoint
+            && endpoint.generation===activity.generation && Number.isSafeInteger(endpoint.audio_bytes) && endpoint.audio_bytes>0
+            && endpoint.audio_bytes===activity.audio_bytes && endpoint.audio_bytes<=bytes && endpoint.audio_bytes<=totalSamplesBytes
+            && lastEnergy<=endpoint.audio_bytes && totalSamplesBytes-endpoint.audio_bytes<32000
+            && Number.isFinite(endpoint.probability)&&endpoint.probability>=.5&&endpoint.probability<=1){
+            lastEndpoint=endpoint.generation;onEndpoint();
+          }
+    }
     socket.onmessage=event=>{
       if(discarded||done)return;
       try{
         if(typeof event.data!=='string'||event.data.length>65536)throw Error('Invalid caption event');
         const value=JSON.parse(event.data);
         if(value.type==='ready'){ready=true;pump();}
-        else if(value.type==='partial'&&typeof value.text==='string')onPartial(value.text);
+        else if(value.type==='partial'&&typeof value.text==='string'){recognized=!!value.text.trim();onPartial(value.text);considerEndpoint();}
+        else if(value.type==='turn_detection_unavailable'){detectorFailed=true;onDetectionUnavailable();}
+        else if(value.type==='turn_activity'&&turnDetection&&value.id===id){verdict=value.activity;considerEndpoint();}
         else if(value.type==='prepared'){
           if(canonicalRecorder)throw Error('Live captions cannot confirm the original');
           if(value.id!==id||!ending||!finishSent||typeof value.text!=='string')throw Error('Unexpected prepared recording');
@@ -72,10 +87,17 @@ window.StreamingVoice=(()=>{
         }else if(value.type==='unavailable'){ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}
       }catch{ready=false;socket.close();if(ending&&!canonicalRecorder)complete();}
     };
-    const unavailable=()=>{ready=false;if(canonicalRecorder){parts=[];dispose();}else if(ending&&!canonicalRecorder)complete();};
+    const unavailable=()=>{
+      ready=false;
+      if(turnDetection&&!detectorFailed&&!ending&&!discarded&&!done){detectorFailed=true;onDetectionUnavailable();}
+      if(canonicalRecorder){parts=[];dispose();}else if(ending&&!canonicalRecorder)complete();
+    };
     socket.onclose=unavailable;socket.onerror=unavailable;
     worklet.port.onmessage=message=>{
       if(done||discarded)return;
+      if(Number.isSafeInteger(message.data.activityBytes)&&Number.isSafeInteger(message.data.totalBytes)){
+        lastEnergy=message.data.activityBytes;totalSamplesBytes=message.data.totalBytes;
+      }
       if(message.data.pcm){
         if(canonicalRecorder&&disposed)return;
         const input=message.data.pcm,remaining=120*32000-bytes;
@@ -99,6 +121,7 @@ window.StreamingVoice=(()=>{
     }
     recorder.start=(timeslice)=>{
       recorder.state='recording';canonicalRecorder?.start(timeslice);if(disposed)return;
+      if(turnDetection)worklet.port.postMessage('observe');
       try{
         source.connect(filter);filter.connect(worklet);worklet.connect(mute);mute.connect(context.destination);
         context.resume().catch(previewFailed);

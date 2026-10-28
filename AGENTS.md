@@ -79,3 +79,14 @@ existing checkpoints and inspect actual recipient acceptance. A bounded
 `session_request` consultation does not transfer the original request or its
 return responsibility; do not mark unfinished work complete to simulate transfer.
 See docs/interaction-routing-ownership.md for the verified gap and qualification.
+
+## Dedicated voice mode — human correction, 2026-10-28
+
+Continuous voice is an avatar-entered fullscreen local Conversation view. It
+preserves the ordinary composer and its draft/reply/files, temporarily silences
+internal tracks without overwriting Mute/Solo, and leaves recoverable unfinished
+recordings on exit. Meaningful internal results/questions need bounded,
+revision-aware spoken offers through existing events; progress is not completion.
+Do not replace the normal app or inject all observer history into every turn.
+See docs/interaction-roadmap.md and docs/interaction-turn-taking.md for actual
+implementation status; configuration alone is not receiving qualification.

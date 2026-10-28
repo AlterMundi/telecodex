@@ -108,7 +108,7 @@ window.ConversationCompanion = (() => {
       const d=pack.defaults.app;
       // Fit actual available width using this client's rendered monospace glyph.
       let columns=d.columns;
-      const width=box.getBoundingClientRect?.().width;
+      const width=(face.parentElement?.classList?.contains("voice-mode-portrait")?face.parentElement:box).getBoundingClientRect?.().width;
       if(width && window.getComputedStyle){
         const style=window.getComputedStyle(face), context=document.createElement("canvas").getContext?.("2d");
         if(context){context.font=style.font;const glyph=context.measureText("M").width;
@@ -161,8 +161,13 @@ window.ConversationCompanion = (() => {
       const selected=pack?selection(expression):undefined,frames=selected||framesFor(expression);
       ambient(expression,frames);
       const art=frames.frames[frameExpression===expression?Math.min(frameIndex,frames.frames.length-1):ambientIndex%frames.frames.length];
-      if(selected){face.setAttribute("aria-hidden","false");face.setAttribute("role","img");face.setAttribute("aria-label",selected.entry.alt);face.title=pack.authorship;face.dataset.fallback=String(!!selected.fallback);}
-      else {face.setAttribute("aria-hidden","true");face.setAttribute("aria-label","Companion portrait");face.dataset.fallback="false";}
+      face.dataset.fallback=String(!!selected?.fallback);
+      // The voice view owns entry/button semantics while enabled. Animation must
+      // not hide that keyboard control or replace its accessible action label.
+      if(face.dataset.voiceEntry!=="true"){
+        if(selected){face.setAttribute("aria-hidden","false");face.setAttribute("role","img");face.setAttribute("aria-label",selected.entry.alt);face.title=pack.authorship;}
+        else {face.setAttribute("aria-hidden","true");face.setAttribute("aria-label","Companion portrait");}
+      }
       paint(face,art,!pack);
       box.dataset.pose=expression;
       const caption=!state.connected?(state.connected===false?"Let’s reconnect.":"Ready when you are."):state.question?"Your turn, whenever you’re ready.":

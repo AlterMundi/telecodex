@@ -916,6 +916,12 @@ fn packet(shared: &AppShared, i: &Instruction, preparing_local: Option<i64>) -> 
         })
         .collect::<Vec<_>>();
     let mut context = String::new();
+    if original["selection"]["reply"]["source"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("native:"))
+    {
+        context.push_str("\nThe human selected a reply to the exact earlier message identified by selection.reply in provenance. That selection already chose this receiving session. If needed, inspect conversation_part with that source and revision, reading only the relevant bounded part; do not copy the whole message or substitute another update. A message reference is not task completion or permission to repeat earlier actions.\n");
+    }
     if !later.is_empty() {
         context.push_str(&format!(
             "\nLater inputs at this destination (source data; preserve applicable corrections):\n{}\n",

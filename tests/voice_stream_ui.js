@@ -34,7 +34,7 @@ function boot(fail){
  const window={AudioWorkletNode:Worklet,AudioContext:Context,WebSocket:Socket,location:{href:'https://example.invalid/interaction/'}};
  vm.runInNewContext(fs.readFileSync('dashboard/web/voice-stream.js','utf8'),{window,AudioWorkletNode:Worklet,WebSocket:Socket,URL,Blob,EventTarget,Event,ArrayBuffer,DataView,setTimeout:(fn,ms)=>{const t={fn,ms};timers.push(t);return t;},clearTimeout:t=>{if(t)t.cleared=true;}});
  const captions=[],events=[];
- return {window,contexts,sockets,worklets,timers,captions,events,async create(canonicalRecorder){const recorder=await window.StreamingVoice.create({kind:'synthetic-media'},{id:uuid,binding,canonicalRecorder,headers:()=>({'X-Dashboard-CSRF':'synthetic-csrf',Authorization:'Bearer synthetic-session'}),onPartial:value=>captions.push(value)});recorder.addEventListener('dataavailable',e=>events.push({type:'data',data:e.data}));recorder.addEventListener('stop',()=>events.push({type:'stop'}));return recorder;}};
+ return {window,contexts,sockets,worklets,timers,captions,events,async create(canonicalRecorder,options={}){const recorder=await window.StreamingVoice.create({kind:'synthetic-media'},{id:uuid,binding,canonicalRecorder,headers:()=>({'X-Dashboard-CSRF':'synthetic-csrf',Authorization:'Bearer synthetic-session'}),onPartial:value=>captions.push(value),...options});recorder.addEventListener('dataavailable',e=>events.push({type:'data',data:e.data}));recorder.addEventListener('stop',()=>events.push({type:'stop'}));return recorder;}};
 }
 (async()=>{
  // Resampling counts and cross-block continuity at common mobile capture rates.
@@ -56,6 +56,19 @@ function boot(fail){
  recorder.stop();assert.deepEqual(node.controls,['finish']);assert.equal(f.events.length,0,'Wait for final worklet PCM before admission');node.emit({pcm:pcm(100)});node.emit({finished:true});assert.deepEqual(JSON.parse(socket.sent.at(-1)),{type:'finish'});assert.equal(f.events.length,0,'Preparation final is separate from original submission');
  socket.message({type:'prepared',id:uuid,text:'Final recognized words'});assert.equal(recorder.preparedText,'Final recognized words');assert.deepEqual(f.events.map(e=>e.type),['data','stop']);const captured=Buffer.from(await f.events[0].data.arrayBuffer());assert.equal(captured.length,44+samples.byteLength+2);assert.equal(f.contexts[0].mute.gain.value,0);assert(f.contexts[0].closed);assert.equal(socket.readyState,3);
  node.emit({finished:true});socket.message({type:'prepared',id:uuid});assert.equal(f.events.length,2,'A late event must not create a second recording');
+ const direct=boot();let endpoints=0,detectorFailures=0;
+ const continuous=await direct.create(undefined,{turnDetection:true,onEndpoint:()=>endpoints++,onDetectionUnavailable:()=>detectorFailures++});
+ continuous.start();const ds=direct.sockets[0],dw=direct.worklets[0];ds.open();ds.message({type:'ready'});
+ assert.equal(JSON.parse(ds.sent[0]).turn_detection,true);assert.deepEqual(dw.controls,['observe']);
+ dw.emit({activityBytes:640,totalBytes:3200});dw.emit({pcm:new ArrayBuffer(3200)});
+ const endpoint=(generation,offset=3200)=>({type:'turn_activity',id:uuid,activity:{generation,speaking:false,speech_seen:true,audio_bytes:offset,endpoint:{generation,audio_bytes:offset,probability:.9,authority:'analysis_only'}}});
+ ds.message(endpoint(1));assert.equal(endpoints,0,'Wait for recognition without losing a still-current verdict');
+ ds.message({type:'partial',text:'Una frase terminada'});assert.equal(endpoints,1);ds.message(endpoint(1));assert.equal(endpoints,1,'Duplicate verdict is inert');
+ dw.emit({activityBytes:3400,totalBytes:3840});ds.message(endpoint(2));assert.equal(endpoints,1,'Speech after the scored PCM fences a late verdict');
+ ds.message({...endpoint(3),id:'other-capture'});assert.equal(endpoints,1);
+ ds.message({type:'turn_detection_unavailable'});assert.equal(detectorFailures,1);
+ dw.emit({pcm:new ArrayBuffer(3200)});dw.emit({activityBytes:3400,totalBytes:6400});ds.message(endpoint(4,6400));assert.equal(endpoints,1,'Failed analysis never resumes automatically');
+ continuous.discard();ds.message(endpoint(5,6400));assert.equal(endpoints,1);
  const cancel=boot(),cancelRecorder=await cancel.create();cancelRecorder.start();cancel.sockets[0].open();cancel.sockets[0].message({type:'ready'});cancel.worklets[0].emit({pcm:samples});cancelRecorder.discard();assert.deepEqual(cancel.events.map(e=>e.type),['stop']);assert.deepEqual(JSON.parse(cancel.sockets[0].sent.at(-1)),{type:'discard'});assert(!cancel.sockets[0].sent.some(v=>typeof v==='string'&&JSON.parse(v).type==='finish'));
  for(const mode of ['disconnect','send-error','backpressure','unavailable','wrong-prepared-id']){
   const lost=boot(),device=await lost.create(),s=lost.sockets[0],w=lost.worklets[0];device.start();s.open();s.message({type:'ready'});

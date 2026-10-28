@@ -145,7 +145,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       .filter(n => direction === "after" ? n > cursor : !cursor || n < cursor);
     if (direction === "before") numbers.reverse();
     const selected = numbers.slice(0, 8);
-    return {binding:"fixture", csrf:"synthetic", response_draft:options.responseDraft, can_listen:true,can_speak_live_response:options.liveSpeech===true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
+    return {binding:"fixture", csrf:"synthetic", response_draft:options.responseDraft, can_listen:true,can_reply_updates:true,can_speak_live_response:options.liveSpeech===true,can_report_playback:options.playback===true,can_report_word_position:options.wordTiming===true,can_stream_speech:options.progressive===true,can_download_files:options.fileAccess===true,artifacts:options.artifacts,presentation_profile:presentationProfile,
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
@@ -368,9 +368,19 @@ function boot(readOnly=false,standalone=false,options={}) {
   const compact=workerTimeline.children.filter(c=>c.dataset.timelineKey?.startsWith('session-update:'));
   assert.equal(compact.length,1,'parallel session updates must coalesce by actual target, not title');
   assert.equal(compact[0].children[1].textContent,'The newer useful update');
-  workers.addReplies(1);workers.overrideSource(9,{kind:"worker_result",label:"Alpha",target:{chat_id:100,thread_id:7},preview:"The useful final answer"});
+  const replyUpdate=compact[0].children.find(button=>button.textContent==='Reply to this update');
+  assert(replyUpdate&&!replyUpdate.hidden);replyUpdate.handlers.click();
+  workers.addReplies(1);workers.overrideSource(9,{kind:'worker_progress',label:'Alpha',target:{chat_id:100,thread_id:7},preview:'A later update while the human is replying'});
   await workers.ui.refresh();
-  assert(workerTimeline.children.some(c=>c.dataset.timelineKey==='native:9'),'the only useful final answer must stay in the main chat');
+  workers.nodes.get('#conversation-message').value='About this exact progress update';
+  await workers.nodes.get('#conversation-compose').handlers.submit({preventDefault(){}});
+  const progressReply=[...workers.originals.values()].at(-1);
+  assert.deepEqual(JSON.parse(JSON.stringify(progressReply.reply)),{source:'native:8',revision:'revision-8'});
+  assert.equal(progressReply.text,'About this exact progress update');
+
+  workers.addReplies(1);workers.overrideSource(10,{kind:"worker_result",label:"Alpha",target:{chat_id:100,thread_id:7},preview:"The useful final answer"});
+  await workers.ui.refresh();
+  assert(workerTimeline.children.some(c=>c.dataset.timelineKey==='native:10'),'the only useful final answer must stay in the main chat');
   assert.equal(compact[0].removed,true,'a returned answer settles an earlier progress preview');
   const stream=single.nodes.get('#conversation-timeline');
   assert.deepEqual(stream.children.filter(c=>c.dataset.timelineKey).map(c=>c.dataset.timelineKey),['native:1','native:2','native:3','native:4','input:between','native:5','native:6','native:7','native:8']);

@@ -7,16 +7,30 @@ The [full roadmap](interaction-roadmap.md) remains the delivery objective.
 
 ## Current boundary
 
-`scripts/turn_end.py` implements bounded, optional Smart Turn v3.2 CPU scoring.
-It is not loaded by the app and does not enable automatic capture, endpointing,
-Send, routing or native work. Its result is explicitly `analysis_only` and
-`candidate_complete`. Existing streaming recognition, explicit Send, Sol6.1 /
-openai / medium and Qwen TTS remain selected.
+`scripts/turn_end.py` provides optional Smart Turn v3.2 CPU scoring.
+The application now has an opt-in capture-analysis bridge and an avatar-entered
+fullscreen voice trial. Default/manual interaction remains unchanged. This is
+source implementation, not evidence of receiving activation or full duplex.
+Sol6.1 / openai / medium, Gemini prepared streaming recognition and Qwen TTS
+remain selected. No new foreground model is selected.
 
-This is a qualified component for continuous conversation, not a substitute for
-that product. The next integration must connect real speech activity, current
-capture identity, recovery and user-selected conversational mode. A classifier
-probability alone is never an instruction to dispatch an original.
+The voice view uses the same PCM, final-flush confirmation, UUID/hash, prepared
+transcript and one-original upload/recovery path. It does not inherit a worker
+reply selection, selected image or attached draft files. Leaving or hiding it
+keeps captured audio for explicit review; it never retries an uncertain upload.
+A temporary Conversation-only audio mix also silences Beacon without overwriting
+the ordinary mix. Keyboard exit and the prior avatar/draft are preserved.
+
+Silero establishes speech before Smart Turn scores a pause. A current endpoint
+and nonempty recognition can finalize only the explicitly selected trial.
+Client sample offsets fence verdicts if newer acoustic activity arrives. This
+energy hint rejects stale decisions; it is not the speech classifier. Detection
+or stream failure returns the original to review rather than automatic admission.
+
+The initial loop alternates capture, durable input and spoken response. It is
+**not yet full duplex**: capture is not continuously armed during playback.
+Foreground response latency, real echo/noise/device acceptance and meaningful
+internal-result/question offers remain required by the full roadmap.
 
 ## Why combine speech activity with turn analysis
 
@@ -137,3 +151,52 @@ silence, an ASR partial, a timeout or a high score is permission to Send.
    worker returns, then actual device/hearing. Keep end-of-turn delay, ASR final,
    useful native response, TTS/playback and acoustic silence separate. The
    responsive foreground/background work in#303 remains required.
+
+## Optional receiving configuration and limits
+
+`streaming_transcription.turn_detection` is disabled unless explicitly configured:
+
+```json
+{
+  "enabled": true,
+  "command": [
+    "/selected/voice-environment/bin/python",
+    "/selected/release/scripts/capture_turn.py",
+    "--vad-model", "/selected/models/silero_vad_16k_op15.onnx",
+    "--turn-model", "/selected/models/smart-turn-v3.2-cpu.onnx"
+  ]
+}
+```
+
+Use prepared streaming ASR mode and a separately qualified ML interpreter with
+`scripts/requirements-turn.lock`; never add ML dependencies to another owning
+application's web environment. There is no runtime model download. Silero's
+MIT license is retained at `docs/silero-vad-LICENSE.txt`; selected upstream
+revision is `066409f3d9db45a30d21dfcbf9147826ffdd7052`, model size1,289,603bytes,
+SHA256 `7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49`.
+Both models load only their verified bytes and use one CPU inference thread.
+
+The authenticated existing capture socket explicitly requests analysis; normal
+captures do not create an analysis process. At most two actor-scoped captures
+are active, each120seconds, at most30turn scores, an eight-second PCM tail and
+one pending PCM frame. The child has60CPU seconds/145wall seconds and closes
+with the capture. Its pipe input/output, startup and write waits are bounded.
+No ML inference, model weights or raw audio are retained in the web process.
+Fullscreen microphone opt-in expires after five minutes and is not persisted.
+Raw original recovery and existing ASR/TTS retention remain separately owned.
+
+One real pinned-model child qualified ready/PCM/close with a silent100ms chunk:
+startup4.346s and chunk plus close365ms under concurrent host load. These are
+not utterance-to-response measurements. Cold startup per capture remains a
+latency limitation; do not claim the sub-second product target from inference
+speed or activate ordinary captures to hide that cost. The real model emitted
+no speech/endpoint for silence, and the child exited0. Browser qualification at
+390/1040px covered actual portrait/fullscreen modules, Escape/keyboard exit,
+no overflow and draft/portrait preservation, with synthetic capture callbacks.
+It did not use a microphone, provider or native model.
+
+Configure only after the selected worker path/models and existing ASR have been
+qualified together. Disable the optional config to retain ordinary Push-to-talk
+and Send. After native update replies have been accepted, rollback must retain
+a reader supporting those compact native references; do not reinterpret or replay
+an original to make an older binary accept it.

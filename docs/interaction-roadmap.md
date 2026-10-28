@@ -51,6 +51,27 @@ do not create a competing plan in a new conversation.
 Stages2/3/4 are being developed together where they depend on each other. Stages5–7
 remain the visible horizon, not hidden prerequisites or completed features.
 
+## Dedicated voice view and attention — human selection, 28 October 2026
+
+Tap the existing avatar to enter a fullscreen avatar view dedicated to direct
+voice with the local integrating Conversation. Preserve the normal timeline,
+composer, explicit Send, draft, files and reply destination for return. Voice
+mode must not inherit a focused worker reply or consume attached draft files.
+Its temporary Conversation-only mix must not overwrite ordinary Mute/Solo.
+Keep capture opt-in foreground-only, bounded and recoverable on exit/failure.
+
+Conversation-only audio also needs awareness of meaningful internal returns.
+Reuse already received, revisioned result/question events, not continuous model
+polling. Intermediate progress is not an announcement trigger. Distinguish a
+session's final message from completion of its whole task; retain corrections,
+stale/current state and actual question ownership. Coalesce and deduplicate brief
+spoken offers such as “There is a result from X; would you like to hear it?”
+without reading the whole result or interrupting the human's speech. Make the
+selected offer reference available on demand to the foreground conversation,
+so a reply can resolve its subject without copying every session's history.
+An offer never answers, approves or cancels a pending question. This attention
+work remains part of #303/#304; a fullscreen shell alone does not complete it.
+
 ## Evidence and research used for architecture selection
 
 The updated Collective Research speech frontier and integrating-conversation
@@ -106,9 +127,9 @@ Progress and remaining gaps belong here and in the linked issues. Complete this 
 
 The [CPU turn-taking candidate](interaction-turn-taking.md) records the pinned
 Smart Turn v3.2 runner, measured resource/timing bounds and contrasting synthetic
-versus author-held-out Spanish results. It is not app endpointing or automatic
-Send. Integrating explicit conversational mode, real VAD, generation-fenced
-decisions and recovery remains required alongside responsive foreground work.
+versus author-held-out Spanish results. Optional avatar-mode source now connects real VAD, capture-generation fences
+and the existing original recovery path. Receiving activation, full duplex,
+foreground responsiveness and internal-result/question offers remain unfinished.
 
 ## Delivery tasks
 

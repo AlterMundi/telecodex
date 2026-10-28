@@ -47,7 +47,7 @@ window.VoiceInput = (() => {
     function notice(text,attention=false){state.removeAttribute?.('data-live-caption');state.setAttribute('aria-live','polite');state.textContent=text;state.setAttribute('data-attention',String(attention));}
     function caption(text){notice(text);state.setAttribute('data-live-caption','true');state.setAttribute('aria-live','off');state.scrollLeft=state.scrollWidth;}
     let available=false, liveAvailable=false, liveMode='prepared', generation=0, recorder, stream, parts=[], bytes=0, timer, pending, latestSaved, uploading=false, controller;
-    let phase='idle', commit=false, readySelection,recordingStarted,countdownTimer;
+    let phase='idle', commit=false, readySelection,recordingStarted,countdownTimer,conversationCapture=false;
     function countdown(){
       clearTimeout(countdownTimer);
       if(remaining){remaining.hidden=phase!=='recording';if(remaining.hidden)return;
@@ -55,6 +55,7 @@ window.VoiceInput = (() => {
         remaining.textContent=`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')} left`;
         remaining.setAttribute('aria-label',`${seconds} seconds of recording remaining`);
         remaining.setAttribute('data-near-limit',String(seconds<=15));
+        if(conversationCapture)onActivity(true,{phase,uploading,pending:!!pending,message:state.textContent,remaining:seconds});
       }
       if(phase==='recording')countdownTimer=setTimeout(countdown,1000);
     }
@@ -82,7 +83,7 @@ window.VoiceInput = (() => {
       if(save){save.hidden=!pending;save.disabled=uploading;}if(review)review.hidden=!pending;
       discard.textContent='×';discard.setAttribute('aria-label',pending?'Discard local recording':'Discard recording');discard.title=pending?'Discard local recording':'Discard recording';
       check.hidden=!pending; check.disabled=uploading;
-      onActivity(uploading || ['permission','recording','ready','finalizing'].includes(phase) || latestSaved?.phase==='preparing', {phase,uploading,transcribing:latestSaved?.phase==='preparing'});
+      onActivity(uploading || ['permission','recording','ready','finalizing'].includes(phase) || latestSaved?.phase==='preparing', {phase,uploading,pending:!!pending,message:state.textContent,transcribing:latestSaved?.phase==='preparing'});
     }
     function stopTracks() {if(stream)for(const track of stream.getTracks())track.stop();stream=undefined;clearTimeout(timer);clearTimeout(countdownTimer);}
     function cancelRecording(message='Recording discarded. Nothing was sent.') {
@@ -95,6 +96,7 @@ window.VoiceInput = (() => {
       cancelRecording('');available=false;controls();
     }
     function deactivate() {
+      if(conversationCapture && ['permission','recording'].includes(phase)){hold();controller?.abort();return;}
       if(['permission','recording','ready','finalizing'].includes(phase))cancelRecording('Recording ended while this view was inactive. Nothing was sent.');
       controller?.abort();
     }
@@ -180,7 +182,7 @@ window.VoiceInput = (() => {
         if(owned!==generation || binding!==getBinding())return;
         const audio_sha256=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
         const needsReview=!commit || captureStop==='audio_flush_unconfirmed' && !selection?.captureReviewed;
-        pending={captureStop:captureStop||(needsReview?'duration_limit':undefined),id:selection?.captureId||window.crypto.randomUUID(),binding,audio_sha256,mime,blob,preparedText,reply:selection?.reference,focusVersion:selection?.version,visual:selection?.visual,files:selection?.files,playback:selection?.playback,captureQuestions:selection?.captureQuestions};
+        pending={captureStop,id:selection?.captureId||window.crypto.randomUUID(),binding,audio_sha256,mime,blob,preparedText,reply:selection?.reference,focusVersion:selection?.version,visual:selection?.visual,files:selection?.files,playback:selection?.playback,captureQuestions:selection?.captureQuestions};
         try{if(recovery){await recovery.put(pending);pending.localRecovery=true;}}catch{pending.localRecovery=false;}
         if(owned!==generation || binding!==getBinding())return;
         if(needsReview){
@@ -188,23 +190,25 @@ window.VoiceInput = (() => {
           readySelection={binding,selection:{...selection,captureId:pending.id,captureStop:pending.captureStop,preparedText,captureReviewed:true}};
           notice((captureStop==='audio_flush_unconfirmed'
             ?'The final audio buffer was not confirmed. The ending may be missing. Send this fragment or discard it.'
-            :'Recording stopped at 2:00. The ending may be incomplete. Send this part or discard it.')
+            :captureStop==='duration_limit'?'Recording stopped at 2:00. The ending may be incomplete. Send this part or discard it.'
+            :'Voice mode ended. Review this recording before sending it, or discard it.')
             +(!pending.localRecovery?' Keep this page open or save an audio copy before leaving.':''),true);
           controls();return;
         }
         phase='idle';await upload();
       } catch(_) {if(owned===generation)cancelRecording('Recording could not be finalized. Nothing was sent.');}
     }
-    async function start() {
-      if(!available || !getBinding() || !supported() || restoring || document.hidden)return;
-      const owned=++generation,binding=getBinding(),captureQuestions=getCaptureQuestions(),selection={...getReply(),playback:getPlayback(),...(captureQuestions!==undefined?{captureQuestions:JSON.parse(JSON.stringify(captureQuestions))}:{})};latestSaved=undefined;phase='permission';commit=false;parts=[];bytes=0;
+    async function start(conversational=false) {
+      if(!available || !getBinding() || !supported() || restoring || ownsSend() || document.hidden)return false;
+      conversationCapture=conversational;
+      const owned=++generation,binding=getBinding(),captureQuestions=getCaptureQuestions(),selection={...(conversational?{}:getReply()),playback:conversational?undefined:getPlayback(),...(captureQuestions!==undefined?{captureQuestions:JSON.parse(JSON.stringify(captureQuestions))}:{})};latestSaved=undefined;phase='permission';commit=false;parts=[];bytes=0;
       notice('Allow microphone access to begin.');pauseAudio();controls();
       try {
         let selectedVisual;
-        try {const candidate=getVisual();selectedVisual=candidate?.then?await candidate:candidate;}
+        try {const candidate=conversational?undefined:getVisual();selectedVisual=candidate?.then?await candidate:candidate;}
         catch(_){if(owned===generation)cancelRecording('Selected image unavailable. Choose another image or remove it before recording.');return;}
         if(owned!==generation||binding!==getBinding()||document.hidden)return;
-        const fileCandidate=getFiles();const selectedFiles=fileCandidate?.then?await fileCandidate:fileCandidate;
+        const fileCandidate=conversational?undefined:getFiles();const selectedFiles=fileCandidate?.then?await fileCandidate:fileCandidate;
         if(owned!==generation||binding!==getBinding()||document.hidden)return;
         const frozenSelection={...selection,visual:selectedVisual,files:selectedFiles,captureId:window.crypto.randomUUID()};
         onTiming(frozenSelection.captureId,'requested');
@@ -215,7 +219,11 @@ window.VoiceInput = (() => {
         const fallbackMime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4','audio/webm'].find(value=>window.MediaRecorder.isTypeSupported(value));
         const canonical=liveMode==='captions'&&fallbackMime?new window.MediaRecorder(media,{mimeType:fallbackMime,audioBitsPerSecond:64000}):undefined;
         if((liveMode!=='captions'||canonical)&&liveAvailable&&window.StreamingVoice?.supported()){
-          try{current=await window.StreamingVoice.create(media,{headers,binding,canonicalRecorder:canonical,id:frozenSelection.captureId,onPartial:text=>{if(owned===generation&&phase==='recording'){onTiming(frozenSelection.captureId,'partial');caption(text||'Listening…');}}});}catch{}
+          let words=false;
+          try{current=await window.StreamingVoice.create(media,{headers,binding,canonicalRecorder:canonical,id:frozenSelection.captureId,
+            turnDetection:conversational,onEndpoint:()=>{if(conversationCapture&&owned===generation&&phase==='recording'&&words)submit();},
+            onDetectionUnavailable:()=>{if(conversational&&owned===generation){conversationCapture=false;hold();}},
+            onPartial:text=>{if(owned===generation&&phase==='recording'){words=!!text.trim();onTiming(frozenSelection.captureId,'partial');caption(text||'Listening…');}}});}catch{}
         }
         if(owned!==generation||binding!==getBinding()||document.hidden){current?.discard?.();for(const track of media.getTracks())track.stop();return;}
         current=current||canonical;
@@ -246,6 +254,11 @@ window.VoiceInput = (() => {
       else if(phase==='ready'){commit=true;return finish(generation,readySelection.binding,parts[0].type,readySelection.selection);}
       else if(pending)return upload();
     }
+    function hold(){
+      conversationCapture=false;
+      if(phase==='permission'){cancelRecording('Voice mode closed before recording began.');return;}
+      if(phase==='recording'){commit=false;phase='finalizing';onTiming(recorder.captureId,'ended');recorder.stop();stopTracks();controls();}
+    }
     button.addEventListener('click',()=>ownsSend()?submit():start());
     send?.addEventListener('click',()=>{if(ownsSend())return submit();});
     discard.addEventListener('click',()=>{
@@ -271,7 +284,7 @@ window.VoiceInput = (() => {
     });
     document.addEventListener('visibilitychange',()=>{if(document.hidden)deactivate();});
     window.addEventListener('pagehide',deactivate);telegram?.onEvent?.('deactivated',deactivate);
-    controls();return {configure,reset,deactivate,observe,submit,ownsSend,syncControls:syncSend};
+    controls();return {configure,reset,deactivate,observe,submit,ownsSend,hold,startConversation:()=>liveAvailable&&liveMode==='prepared'&&start(true),syncControls:syncSend};
   }
   return {mount};
 })();

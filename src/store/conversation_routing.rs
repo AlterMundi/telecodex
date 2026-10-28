@@ -182,10 +182,28 @@ pub(super) fn reply_on(
     }
     let source = super::presentation::source_on(conn, human, entry, &reply.source)?
         .context("Reply source unavailable")?;
-    if source["kind"] != "worker_result"
-        || (!reply.context_only && source["revision"] != reply.revision)
+    if !matches!(
+        source["kind"].as_str(),
+        Some("worker_result" | "worker_progress")
+    ) || (!reply.context_only && source["revision"] != reply.revision)
     {
         bail!("Select the current worker result");
+    }
+    if reply.source.starts_with("native:") {
+        if source["native_binding_current"] != true {
+            bail!("Selected work session changed");
+        }
+        let target: SessionKey = serde_json::from_value(source["target"].clone())?;
+        let (session,native):(i64,Option<String>)=conn.query_row(
+            "SELECT s.id,s.codex_thread_id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1 AND s.force_fresh_thread=0",
+            params![target.chat_id,target.thread_id,human],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        return Ok(ConversationFocus {
+            target,
+            session,
+            native,
+            retired: false,
+            requests: vec![],
+        });
     }
     let request = source["request_id"]
         .as_str()
@@ -433,11 +451,10 @@ impl Store {
             bail!("Only scoped /interrupt is supported after a selector");
         }
         let target_session:i64=tx.query_row("SELECT s.id FROM sessions s JOIN users u ON u.tg_user_id=s.creator_user_id WHERE s.chat_id=?1 AND s.thread_id=?2 AND s.creator_user_id=?3 AND u.allowed=1",params![target.chat_id,target.thread_id,human],|r|r.get(0))?;
-        let inherited = input
-            .focus
-            .as_ref()
-            .filter(|f| f.target == target && !f.requests.is_empty());
-        if let Some(focus) = inherited {
+        let selected_focus = input.focus.as_ref().filter(|f| {
+            f.target == target && !input.reply.as_ref().is_some_and(|r| r.context_only)
+        });
+        if let Some(focus) = selected_focus {
             let (native, fresh): (Option<String>, bool) = tx.query_row(
                 "SELECT codex_thread_id,force_fresh_thread FROM sessions WHERE id=?1",
                 [target_session],
@@ -454,6 +471,7 @@ impl Store {
                 bail!("Selected work session changed during input preparation");
             }
         }
+        let inherited = selected_focus.filter(|f| !f.requests.is_empty());
         if body == "/interrupt" {
             input.phase = "interruption".into();
             input.routing = Some(ConversationRouting {

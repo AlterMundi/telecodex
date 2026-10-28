@@ -871,6 +871,18 @@ rather than injecting it as new human speech. Native worker progress snapshots
 its web source at first observation. Duplicate native observations retain that
 original scope, and old progress without a recorded web source is not imported.
 
+Compact worker updates offer **Reply to this update** when the receiving native
+backend advertises `can_reply_updates`. The selection freezes that source ID and
+revision even when a later update replaces the preview. Native worker progress
+and final messages resolve through the same owned presentation source; direct
+work that never selected this web entry remains unavailable. The backend fences
+source revision, target ownership and current native binding, including changes
+during ASR preparation. The original text remains unchanged; the existing relay
+`selection.reply` provenance carries the compact reference. The receiving session
+can read only the needed exact-revision part with `conversation_part`. A reply to
+an update is neither completion of the previous task nor a request for workers
+to arbitrate its destination.
+
 For an interruption or reference to spoken text, `playback_context` reads only the
 selected original's frozen device report and a bounded exact-revision source
 window on demand. See [interrupted-source inspection](interaction-speech.md#on-demand-interrupted-source-inspection).

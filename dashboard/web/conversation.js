@@ -58,7 +58,7 @@ window.Conversation = (() => {
       }catch(error){if(fileDownloads.get(file.id)===controller && fileCredential()===credential){fileStatus.set(file.id,error.name==="AbortError"?"Download stopped. You can try again.":error.message||"File unavailable.");if(error.status===401)failed(error);}}
       finally{clearTimeout(deadline);if(fileDownloads.get(file.id)===controller)fileDownloads.delete(file.id);refreshFiles();}
     }
-    let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext;
+    let voiceEnabled=false,voiceSuspended=false,captureBusy=false,voiceBusy=false,voiceContext,voiceMode,conversationOnly=false,voiceModePrevious;
     // Reuse the same presence renderer in the fixed header, freeing conversation space.
     if(standalone){
       const presence=$("#conversation-companion"),identity=$("header .identity"),tools=$("header .header-tools"),beacon=$("#conversation-sound-toggle");
@@ -92,7 +92,7 @@ window.Conversation = (() => {
       }
     }
     const sound=window.ConversationSound?.mount({api,unauthorized:failed,getAuthority:fileCredential,onState:value=>companion?.sonic?.(value)});
-    const presentState=patch=>{companion?.update(patch);sound?.update(patch);};
+    const presentState=patch=>{companion?.update(patch);sound?.update(patch);voiceMode?.update(patch);};
     if(standalone){
       const inspector=$("#conversation-diagnostics"),inspectButton=$("#conversation-inspect");
       inspector.open=false;inspectButton.hidden=false;
@@ -171,7 +171,7 @@ window.Conversation = (() => {
     }
     const attachedFiles = readOnly ? undefined : window.FileInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
     const visual = readOnly ? undefined : window.VisualInput?.mount({headers,getBinding:()=>binding,unauthorized:failed});
-    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onTiming:(id,stage)=>timing?.mark(id,stage),onInput:(value,version)=>{inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getPlayback:()=>playbackContext(true),getCaptureQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,getFiles:()=>attachedFiles?.capture(),onFilesSent:refs=>attachedFiles?.consumed(refs),getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
+    const microphone = readOnly ? undefined : window.VoiceInput?.mount({api,headers,getBinding:()=>binding,onTiming:(id,stage)=>timing?.mark(id,stage),onInput:(value,version)=>{voiceMode?.update({sent:true});inputCard(value);if(timeline)timeline.scrollTop=timeline.scrollHeight;if(version===focusVersion)clearFocus();},getReply:()=>{const reference=replyFocus?.reference||voiceContext;return reference&&({reference,version:focusVersion});},getPlayback:()=>playbackContext(true),getCaptureQuestions:()=>canLimitCaptureQuestions?requestControls.captureQuestions():undefined,getFiles:()=>attachedFiles?.capture(),onFilesSent:refs=>attachedFiles?.consumed(refs),getVisual:()=>visual?.captureForVoice?visual.captureForVoice():visual?.capture(),onVisualSent:reference=>visual?.consumed(reference),pauseAudio:beginVoiceCapture,onActivity:(value,detail)=>{captureBusy=value;presentState({capture:detail?.phase,uploading:detail?.uploading,transcribing:detail?.transcribing,pending:detail?.pending,message:detail?.message,remaining:detail?.remaining});if(!value){if(voiceEnabled && active?.interrupted)toggle.disabled=!blobUrl;drainVoice();}},unauthorized:failed,telegram});
     const graph = readOnly || standalone ? window.RoutingGraph?.mount({inspect:selection=>{
       const card=selection.input?inputs.get(selection.input):cards.get(selection.source);
       if(!card)return;
@@ -224,7 +224,7 @@ window.Conversation = (() => {
     const cards = new Map(),progressCards=new Map(),settledProgress=new Map();
     // Device-local audio attention, scoped to this conversation binding. No
     // transcript, labels, native work state or playback backlog is persisted.
-    const mutedSessions=new Set(),soloSessions=new Set();let muteBinding;
+    const mutedSessions=new Set(),soloSessions=new Set();let muteBinding,canReplyUpdates=false;
     function sessionKey(source){
       if(["integrator_answer","integrator_progress","integrator_live"].includes(source.kind) || source.kind==="native_question" && source.audio_track==="conversation")return "conversation";
       const target=source.target;
@@ -232,7 +232,7 @@ window.Conversation = (() => {
         || !Number.isSafeInteger(target.chat_id) || target.thread_id!=null && !Number.isSafeInteger(target.thread_id))return;
       return JSON.stringify([target.chat_id,target.thread_id??null]);
     }
-    const sessionMuted=source=>{const key=sessionKey(source);return key?mutedSessions.has(key)||soloSessions.size>0&&!soloSessions.has(key):soloSessions.size>0;};
+    const sessionMuted=source=>{const key=sessionKey(source);if(conversationOnly)return key!=="conversation";return key?mutedSessions.has(key)||soloSessions.size>0&&!soloSessions.has(key):soloSessions.size>0;};
     function restoreSessionKeys(saved,target){
       if(!Array.isArray(saved)||saved.length>256)return;
       for(const key of saved){
@@ -331,8 +331,9 @@ window.Conversation = (() => {
       let card=previous;
       if(!card){
         const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),inspect=node("button","Inspect update"),listen=node("button","Listen");
-        const time=node("time",undefined,"message-time");
-        inspect.type="button";listen.type="button";listen.className="session-update-listen";inspect.className="session-update-inspect";box.append(title,body,listen,inspect,time);card={box,title,body,listen,inspect,time};progressCards.set(key,card);
+        const time=node("time",undefined,"message-time"),reply=node("button","Reply to this update");reply.type="button";reply.className="session-update-reply";
+        inspect.type="button";listen.type="button";listen.className="session-update-listen";inspect.className="session-update-inspect";box.append(title,body,listen,inspect,reply,time);card={box,title,body,listen,inspect,reply,time};progressCards.set(key,card);
+        reply.addEventListener("click",()=>{const original=cards.get(card.source);if(!original || original.source.revision!==card.revision || !canReplyUpdates || readOnly)return;selectFocus({source:card.source,revision:card.revision},original.source.label||"this session");});
         listen.addEventListener("click",()=>{const original=cards.get(card.source);if(!original || original.source.revision!==card.revision || !canListen)return;return listenCard(original);});
         inspect.addEventListener("click",()=>{const original=cards.get(card.source);if(!original)return;$("#conversation-diagnostics").open=true;original.box.scrollIntoView?.({block:"nearest"});});
       }
@@ -342,6 +343,7 @@ window.Conversation = (() => {
       const original=cards.get(source.id);
       setReplyText(card.body,original?.expanded && original.source.revision===source.revision?replyText(original.body):source.preview);
       card.listen.hidden=!canListen;card.listen.setAttribute("aria-label",`Listen to update from ${source.label}`);
+      card.reply.hidden=readOnly||!canReplyUpdates;
       messageTime(card.time,source.observed_at);
       placeInTimeline(card.box,`session-update:${key}`,source.observed_at);
       if(changed)textObserver?.unobserve(card.box);
@@ -477,7 +479,7 @@ window.Conversation = (() => {
         routing:[...inputs.values()].some(c=>["requested","queued","submitting","steering"].includes(c.value.routing?.phase))});
     }
     function resetInputs() {
-      showResponseDraft();
+      voiceMode?.close();showResponseDraft();
       companion?.reset();sound?.reset();goalControls?.reset();presentationProfile=undefined;
       disableVoice();graph?.reset();graphCursor=0;timeline?.replaceChildren();
       inputGeneration++; inputs.clear(); inputCursor = 0; inputNewest = 0; inputBinding = undefined;
@@ -1303,7 +1305,7 @@ window.Conversation = (() => {
       }
       companion?.configure?.(value.expression_pack,value.expression_pack_sha256);
       companion?.observe(value.activity);
-      binding = value.binding;timing?.bind(binding);loadPositions();loadSessionMutes();canReportPlayback=value.can_report_playback===true;canReportWordPosition=value.can_report_word_position===true;canLimitCaptureQuestions=value.can_limit_capture_questions===true;
+      binding = value.binding;timing?.bind(binding);loadPositions();loadSessionMutes();canReportPlayback=value.can_report_playback===true;canReportWordPosition=value.can_report_word_position===true;canLimitCaptureQuestions=value.can_limit_capture_questions===true;canReplyUpdates=value.can_reply_updates===true;
       canFiles=!readOnly && value.can_download_files===true;
       if(!canFiles)clearFiles();
       else if(value.artifacts?.state==="unavailable")filesConnected=false;
@@ -1311,6 +1313,7 @@ window.Conversation = (() => {
       refreshFiles();
       await goalControls?.observe(value.goal_controls);
       microphone?.configure(value.can_speak,value.can_stream_transcribe,value.streaming_transcription_mode);
+      voiceMode?.configure(value.can_converse===true);
       setCsrf(value.csrf);
       canListen = !readOnly && value.can_listen;canStreamSpeech=canListen && !!value.can_stream_speech;
       canSpeakLive=canListen && value.can_speak_live_response===true;
@@ -1681,6 +1684,21 @@ window.Conversation = (() => {
     telegram?.BackButton?.onClick?.(() => setMode(false));
     if(standalone){$("#conversation-back").hidden=true;$("#conversation-telegram-older").hidden=true;}
     if(readOnly){document.body.classList.toggle("monitor-mode",true);$("#conversation-sent").open=true;}
+    if(standalone && !readOnly)voiceMode=window.ConversationVoiceMode?.mount({
+      portrait:$("#conversation-companion pre"),canEnter:()=>!!microphone && !microphone.ownsSend() && !captureBusy,
+      canStart:()=>!!microphone && !microphone.ownsSend() && !captureBusy && !voiceBusy && !speechWait,
+      onEnter:()=>{
+        voiceModePrevious={enabled:voiceEnabled,suspended:voiceSuspended};
+        conversationOnly=true;stop();audioFilterChanged();enableVoice();sound?.update({conversationOnly:true});
+      },
+      onSpeak:()=>microphone?.startConversation(),
+      onLeave:()=>{
+        microphone?.hold();conversationOnly=false;sound?.update({conversationOnly:false});
+        if(voiceModePrevious?.enabled){voiceSuspended=voiceModePrevious.suspended;voiceStatus();}
+        else disableVoice();
+        voiceModePrevious=undefined;audioFilterChanged();companion?.update({});
+      }
+    });
     setMode(initialMode(), true, false);
     return {refresh, pause, stop:()=>{sound?.disable();disableVoice();},
       unauthenticated() { ready=false; failed({status:401,message:document.documentElement.dataset.sharedAuth==='true'?"Sign in again to reconnect.":"Open your conversation access file to reconnect."}); },

@@ -1,5 +1,6 @@
 """Authenticated WebSocket preparation, exact audio receipt and no dispatch."""
 import hashlib
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -63,7 +64,8 @@ class LiveTranscription(unittest.TestCase):
         self.config={'state_dir':str(self.root/'state'),'origin':'https://example.test','bot_id':123,
                      'companion':{'enabled':True,'grants_dir':str(self.root/'grants')},
                      'streaming_transcription':{'enabled':True,'endpoint':'wss://provider.test/api-ws/v1/realtime?model=qwen-audio-3.0-realtime-plus',
-                     'credential_file':str(self.root/'key'),'cache_root':str(self.root/'prepared')}}
+                     'credential_file':str(self.root/'key'),'cache_root':str(self.root/'prepared'),
+                     'turn_detection':{'enabled':True,'command':['/fixture/python','capture-turn']}}}
         self.patch=patch('dashboard.live_transcription.TranscriptionStream',Stream);self.patch.start()
         # The constant belongs to the adapter contract, including in synthetic peers.
         Stream.max_audio_bytes=120*32000;Stream.opened=[]
@@ -167,6 +169,7 @@ class LiveTranscription(unittest.TestCase):
     def test_caption_mode_never_prepares_canonical_text(self):
         self.client.__exit__(None,None,None)
         self.config['streaming_transcription']['mode']='captions'
+        self.config['streaming_transcription'].pop('turn_detection',None)
         self.client=TestClient(create_app(self.config,self.provider,lambda raw,bot:int(raw)),base_url='https://example.test');self.client.__enter__()
         response=self.client.post('/api/session',json={'init_data':'100'},headers={'origin':'https://example.test'})
         self.client.cookies.set('telecodex_dashboard',self.client.cookies.get('telecodex_dashboard'),path='/');self.csrf=self.client.get('/api/state').json()['csrf']
@@ -310,6 +313,64 @@ class LiveTranscription(unittest.TestCase):
         finally:
             server.should_exit=True;thread.join(4);listener.close()
             self.assertFalse(thread.is_alive(),'Finite fixture server must stop after its socket closes')
+        self.assertEqual(self.provider.calls,[])
+
+    def test_optional_detection_shares_pcm_without_admitting_input(self):
+        class Analysis:
+            instance=None
+            @classmethod
+            async def open(cls,_):
+                cls.instance=cls();cls.instance.queue=asyncio.Queue();cls.instance.pcm=b'';cls.instance.closed=False
+                return cls.instance
+            async def feed(self,data):
+                self.pcm+=data
+                await self.queue.put({'schema':'telecodex.turn-activity/v1','type':'activity','generation':1,'speaking':False,
+                    'speech_seen':True,'audio_bytes':len(self.pcm),'endpoint':{'generation':1,'audio_bytes':len(self.pcm),
+                    'probability':.9,'authority':'analysis_only'}})
+            async def receive(self):return await self.queue.get()
+            async def close(self):self.closed=True
+        pcm=b'\0\0'*1600
+        with patch('dashboard.live_transcription.Detector',Analysis):
+            with self.open() as ws:
+                ws.send_json(self.meta(turn_detection=True));self.assertEqual(ws.receive_json()['type'],'ready')
+                ws.send_bytes(pcm);events=[ws.receive_json(),ws.receive_json()]
+                self.assertEqual({v['type'] for v in events},{'partial','turn_activity'})
+                self.assertEqual(next(v for v in events if v['type']=='turn_activity')['id'],self.ident)
+                self.assertEqual(self.provider.calls,[]);self.assertEqual(Analysis.instance.pcm,pcm)
+                ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'prepared')
+            self.assertTrue(Analysis.instance.closed)
+        self.assertEqual(self.provider.calls,[])
+
+    def test_detector_failure_keeps_existing_asr_and_original_boundary(self):
+        from dashboard.turn_detection import DetectionUnavailable
+        class Unavailable:
+            @classmethod
+            async def open(cls,_):raise DetectionUnavailable('Fixture analysis failure')
+        with patch('dashboard.live_transcription.Detector',Unavailable):
+            with self.open() as ws:
+                ws.send_json(self.meta(turn_detection=True));self.assertEqual(ws.receive_json()['type'],'turn_detection_unavailable')
+                self.assertEqual(ws.receive_json()['type'],'ready')
+                ws.send_bytes(b'\0\0'*1600);self.assertEqual(ws.receive_json()['type'],'partial')
+                ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'prepared')
+        self.assertEqual(self.provider.calls,[])
+
+    def test_analysis_pipe_failure_does_not_close_recognition(self):
+        from dashboard.turn_detection import DetectionUnavailable
+        class BrokenPipe:
+            instance=None
+            @classmethod
+            async def open(cls,_):cls.instance=cls();cls.instance.closed=False;return cls.instance
+            async def receive(self):await asyncio.Future()
+            async def feed(self,_):raise DetectionUnavailable('Fixture pipe failure')
+            async def close(self):self.closed=True
+        with patch('dashboard.live_transcription.Detector',BrokenPipe):
+            with self.open() as ws:
+                ws.send_json(self.meta(turn_detection=True));self.assertEqual(ws.receive_json()['type'],'ready')
+                ws.send_bytes(b'\0\0'*1600)
+                self.assertEqual({ws.receive_json()['type'],ws.receive_json()['type']},{'partial','turn_detection_unavailable'})
+                ws.send_bytes(b'\0\0'*1600);self.assertEqual(ws.receive_json()['type'],'partial')
+                ws.send_json({'type':'finish'});self.assertEqual(ws.receive_json()['type'],'prepared')
+            self.assertTrue(BrokenPipe.instance.closed)
         self.assertEqual(self.provider.calls,[])
 
     def test_explicit_credential_does_not_downgrade_to_cookie(self):
