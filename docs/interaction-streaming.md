@@ -975,3 +975,15 @@ pause duration covers the recording handler applying pause/mute, not acoustic
 silence. First intelligible physical sound, noise/echo and real-device acceptance
 remain separate. Do not add server durations to this browser clock or present
 these diagnostics as a provider benchmark or subsecond speech guarantee.
+
+## Receiving preparation diagnostics
+
+An unfinished prepared-mode stream with accepted audio emits one metadata-only
+`voice_preparation_closed` journal line: capture UUID, last stage, accepted byte
+count, finish-received/prepared-saved flags and exception class when present.
+No exception message, provider event, speech, audio or credential is logged.
+Intentional discard and successful preparation do not emit failure warnings.
+This uses existing bounded system-journal retention, not another capture store,
+retry worker or model invocation. Locate finish/final/save failure from that
+line before selecting a repair; partial captions do not establish a final receipt.
+Do not replay a retained original to manufacture the missing observation.
