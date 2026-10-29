@@ -153,11 +153,15 @@ class Render(unittest.TestCase):
         with mock.patch.object(speech,'fetch',side_effect=fetch):
             result=self.render({**self.request,'text':original})
         self.assertEqual(json.loads(self.calls[-1][2])['input']['text'],expected)
+        self.assertIs(json.loads(self.calls[-1][2])['input'].get('enable_ssml'),True,
+                      'Provider must parse our escaped SSML instead of treating it as plain text')
         tree=ET.fromstring(expected);self.assertEqual(len(tree.findall('break')),1)
         self.assertEqual(result['text_sha256'],hashlib.sha256(original.encode()).hexdigest())
         self.content_type='text/event-stream';self.data=self.stream_data();frames=[]
         speech.stream_render(self.binding,{**self.request,'text':original},frames.append)
         self.assertEqual(json.loads(self.calls[-1][2])['input']['text'],expected)
+        self.assertIs(json.loads(self.calls[-1][2])['input'].get('enable_ssml'),True,
+                      'Provider must parse our escaped SSML instead of treating it as plain text')
         self.assertEqual(frames[-1]['type'],'end')
         self.config['ssml_breaks']='true';self.binding.write_text(json.dumps(self.config))
         with self.assertRaises(speech.RenderError):speech.route(self.binding)

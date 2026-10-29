@@ -510,6 +510,23 @@ session label is removed from the introduction; canonical text and offsets stay
 unchanged. The actual serialized SSML is included in synthesis identity, so old
 plain-text cache entries do not masquerade as the new audio.
 
+The HTTP request must also set `input.enable_ssml: true` when `ssml_breaks`
+is enabled. Sending XML alone does not activate SSML per the provider's HTTP
+contract. Both finite and SSE synthesis include this flag in their request/cache
+identity. Plain-text routes remain unchanged. On29October, inspection of one
+retained17.232-second output found diagnostic English/nonsense where the exact
+source and provider timing metadata were Spanish. The missing activation flag
+was independently reproduced in a payload test and corrected; its causal role
+in that particular audio remains unproven (#446). The current official voice list
+marks longanlufeng as Chinese/English, while the receiving app selects Spanish.
+That documented mismatch is a second compatibility concern, not proof of this
+specific failure or permission to change the human-selected voice/model. See
+[voice language support](https://help.aliyun.com/en/model-studio/qwen-audio-tts-voice-list).
+ Retain the implicated original
+and never describe timing/source hashes as proof of semantic speech fidelity.
+See [Qwen HTTP SSML activation](https://help.aliyun.com/en/model-studio/qwen-audio-tts-http-api)
+and [SSML limitations](https://help.aliyun.com/en/model-studio/ssml-latex-user-guide).
+
 The selected voice instruction uses positive delivery guidance rather than
 mentioning punctuation names. The optional SSML path preserves the default for
 other routes; voice/model/credentials remain receiving-selected. Verify provider
