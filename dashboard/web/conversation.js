@@ -139,7 +139,7 @@ window.Conversation = (() => {
     }:undefined);let canSpeakLive=false;
     let pendingNavigation,internalNavigation,internalControls;
     const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:(...args)=>{pendingNavigation?.close(false);return selectFocus(...args);},onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,makeCopy:read=>copyButton(()=>copyParts(read)),onSource:offerVoice});
-    const taskControls=window.HumanTaskControls?.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,canReply:()=>!readOnly,onReply:task=>{
+    const taskControls=window.HumanTaskControls?.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,canReply:()=>!readOnly,makeCopy:read=>copyButton(()=>copyParts(read)),onReply:task=>{
       if(readOnly || posting || draft.value.trim())return false;
       pendingNavigation?.close(false);voiceContext=undefined;selectFocus({source:`task:${task.id}`,revision:task.revision,context_only:true},`${task.label} · ${task.title}`);return true;
     }});

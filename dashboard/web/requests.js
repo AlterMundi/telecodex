@@ -123,12 +123,12 @@ window.RequestControls = (() => {
       if(typeof makeCopy==="function"){
         let copySelection;
         actions.append(makeCopy(async offset=>{
-          if(offset===0)copySelection={revision:(card.view||card.meta)?.revision,binding:getBinding(),generation};
+          if(offset===0)copySelection={revision:(card.meta||card.view)?.revision,binding:getBinding(),generation};
           const frozen=copySelection;
-          if(!frozen?.revision || !owns(card,frozen.generation) || getBinding()!==frozen.binding)throw Error("Request changed. Try again.");
+          if(!frozen?.revision || !owns(card,frozen.generation) || getBinding()!==frozen.binding || (card.meta||card.view)?.revision!==frozen.revision)throw Error("Request changed. Try again.");
           const query=new URLSearchParams({offset:String(offset),revision:frozen.revision});
           const value=await api(`interaction/requests/${card.id}?${query}`);
-          if(!owns(card,frozen.generation)||getBinding()!==frozen.binding)throw Error("Request changed. Try again.");
+          if(!owns(card,frozen.generation)||getBinding()!==frozen.binding||(card.meta||card.view)?.revision!==frozen.revision)throw Error("Request changed. Try again.");
           selected(value,card,frozen.revision);
           return {text:value.body,offset:value.offset,next_offset:value.next_offset};
         }));
@@ -405,7 +405,7 @@ window.GoalControls = (() => {
 // Durable actions share the request ledger, not native question responders.
 // Reply only drafts ordinary human text; Send remains the admission boundary.
 window.HumanTaskControls = (() => {
-  function mount({api,getBinding,setCsrf=()=>{},unauthorized=()=>{},onReply,canReply=()=>true,prefix="conversation",maxCards=200}) {
+  function mount({api,getBinding,setCsrf=()=>{},unauthorized=()=>{},onReply,canReply=()=>true,makeCopy,prefix="conversation",maxCards=200}) {
     const section=document.querySelector(`#${prefix}-tasks`),container=document.querySelector(`#${prefix}-task-cards`);
     const state=document.querySelector(`#${prefix}-task-state`),more=document.querySelector(`#${prefix}-tasks-more`);
     if(!section||!container||!state||!more)return;
@@ -488,6 +488,19 @@ window.HumanTaskControls = (() => {
       const read=el('button','Read action'),reply=el('button','Reply in conversation'),dismiss=el('button','Dismiss');read.type=reply.type=dismiss.type='button';
       box.append(title,status,preview,body,links,read,reply,dismiss,note);container.append(box);
       const card={id:v.id,box,title,status,preview,body,links,note,read,reply,dismiss,complete:false,loading:false};cards.set(v.id,card);
+      if(typeof makeCopy==='function'){
+        let copySelection;
+        box.append(makeCopy(async offset=>{
+          if(offset===0)copySelection={revision:card.view?.revision,binding:getBinding(),generation};
+          const frozen=copySelection;
+          if(!frozen?.revision || !owns(card,frozen.generation)||getBinding()!==frozen.binding||card.view?.revision!==frozen.revision)throw Error('Action changed. Try again.');
+          const query=new URLSearchParams({offset:String(offset),revision:frozen.revision});
+          const value=await api(`interaction/tasks/${card.id}?${query}`);
+          if(!owns(card,frozen.generation)||getBinding()!==frozen.binding||value.binding!==frozen.binding||value.id!==card.id||value.revision!==frozen.revision||card.view?.revision!==frozen.revision)throw Error('Action changed. Try again.');
+          return {text:value.body,offset:value.offset,next_offset:value.next_offset};
+        }));
+      }
+
       read.addEventListener('click',()=>{if(card.complete&&box.dataset.expanded==='true'){box.dataset.expanded='false';body.hidden=links.hidden=true;preview.hidden=false;read.textContent='Read action';return;}return detail(card,card.offset!==undefined&&card.offset!==null);});
       dismiss.addEventListener('click',()=>dismissTask(card));
       reply.addEventListener('click',()=>{

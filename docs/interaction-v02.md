@@ -568,7 +568,7 @@ removed.
 
 ## Copy conversation text
 
-Every ordinary human message, assistant reply, session update and native question
+Every ordinary human message, assistant reply, session update, For you action and native question
 has an explicit Copy action beside its existing actions. It copies the message
 body from the source, preserving text/Markdown, Unicode and line breaks rather
 than labels, controls or an excerpt. A complete loaded body is reused; otherwise
