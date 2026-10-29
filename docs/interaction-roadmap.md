@@ -95,13 +95,18 @@ From the human-accepted functional app, deliver genuinely continuous voice and a
 
 Baseline: immutable `interaction-functional-sol-2026-10-26`, web/scripts source2917d8ee and native source6eff7b4. Preserve the earlier baseline tag. Prepared streaming ASR now uses Gemini with exact-original reuse; Groq final-file ASR remains the fallback and Qwen API supplies TTS (PR341). Revisable live captions and progressive spoken output are receiving-enabled. Complete continuous voice/full duplex and measured responsiveness remain unfinished. Parent: AlterMundi/daimon-matrix#313; Project14; previous integrated milestone: #208. PR300/#263 ordered-image support is now receiving-deployed with native sourced6667ba8 and web source884f884. It remains outside the earlier immutable tagged baseline.
 
-Human clarification, 2026-10-28: continuous realtime dialogue is the local
-**Conversation** track only, equivalent to Solo Conversation. Internal-session
-progress, results and questions remain visible and their jobs keep running, but
-do not enter that dialogue automatically. The integrator may discuss them when
-the human asks, and explicit Listen remains available. Continuous mode must not
-silently blend the ordinary multi-session audio queue into the foreground. This
-is a delivery requirement, not a claim that full continuous mode is installed.
+Human clarifications, 2026-10-28: continuous realtime dialogue uses the local
+**Conversation** track only, equivalent to Solo Conversation. Direct internal
+tracks remain muted while their progress, results and questions stay visible and
+their jobs continue. Meaningful results and missing decisions must still reach
+the human through an attributed offer in the integrating Conversation, including
+when internal audio is muted. Use the existing bounded, revision-aware native
+return journal and selected reporting policy; ordinary progress does not require
+another model rewrite, and no model polling or second task queue is implied.
+The integrator retains progression and final-return responsibility until the
+required successor work finishes. Explicit Listen remains available. Never blend
+the raw multi-session audio queue into the local voice dialogue. Receiving source
+and digital qualification do not establish complete device/hearing acceptance.
 
 ## Architecture and execution sequence
 1. **Inspect and measure the existing path.** Reuse current PWA/shared auth, fetch-SSE events, player, ingress journal, observer, native session routing and results. Record actual capture/final-speech, partial/final ASR, commit, first useful model text, first playable sound and interruption-to-silence times on the same journey. Existing accepted behavior needs no generic repeat test. Consult the updated Collective Research speech frontier and prior native WebRTC/Talker-Reasoner evidence. That evidence is not a provider benchmark or a production entitlement.
