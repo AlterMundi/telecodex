@@ -18,7 +18,7 @@ import static org.junit.Assert.*;
 public class MicrophoneCaptureTest {
     public static final class Receipt {
         final CountDownLatch done = new CountDownLatch(1);
-        volatile String result;
+        volatile String result, permission;
         @JavascriptInterface public void finish(String value) { result = value; done.countDown(); }
     }
 
@@ -54,16 +54,37 @@ public class MicrophoneCaptureTest {
             scenario.onActivity(activity -> {
                 WebView web = view.get(); web.stopLoading(); web.getSettings().setBlockNetworkLoads(true);
                 web.addJavascriptInterface(receipt, "CaptureReceipt");
-                web.loadDataWithBaseURL("https://capture.invalid/interaction/", "<!doctype html><script>" +
+                android.webkit.WebChromeClient permissionOwner = web.getWebChromeClient();
+                web.setWebChromeClient(new android.webkit.WebChromeClient() {
+                    @Override public void onPermissionRequest(android.webkit.PermissionRequest request) {
+                        receipt.permission = "page=" + web.getUrl() + ", origin=" + request.getOrigin();
+                        permissionOwner.onPermissionRequest(request);
+                    }
+                });
+                String html = "<!doctype html><script>" +
                     "(async()=>{let stream;try{stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});" +
                     "const recorder=new MediaRecorder(stream);let bytes=0;recorder.ondataavailable=e=>bytes+=e.data.size;" +
                     "recorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());CaptureReceipt.finish(bytes>0?'recorded':'empty');};" +
                     "recorder.start();setTimeout(()=>recorder.stop(),350);" +
                     "}catch(e){stream?.getTracks().forEach(t=>t.stop());CaptureReceipt.finish(e.name+': '+e.message);}})();" +
-                    "</script>", "text/html", "UTF-8", null);
+                    "</script>";
+                android.webkit.WebViewClient navigationOwner = web.getWebViewClient();
+                web.setWebViewClient(new android.webkit.WebViewClient() {
+                    @Override public void onPageStarted(WebView page, String url, android.graphics.Bitmap icon) {
+                        navigationOwner.onPageStarted(page, url, icon);
+                    }
+                    @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView page, android.webkit.WebResourceRequest request) {
+                        String body = request.getUrl().toString().equals("https://capture.invalid/interaction/") ? html : "";
+                        return new android.webkit.WebResourceResponse("text/html", "UTF-8",
+                            new java.io.ByteArrayInputStream(body.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+                    }
+                });
+                // Use a real HTTPS navigation: loadDataWithBaseURL has different navigation/history semantics.
+                web.loadUrl("https://capture.invalid/interaction/");
             });
             assertTrue("Capture completed: " + receipt.result, receipt.done.await(15, TimeUnit.SECONDS));
-            assertEquals("Actual WebView capture", "recorded", receipt.result);
+            assertNotNull("Actual host permission callback", receipt.permission);
+            assertEquals("Actual WebView capture; " + receipt.permission, "recorded", receipt.result);
         } finally {
             if (preferences.get() != null) {
                 if (previous.get() == null) preferences.get().edit().remove("home").commit();
