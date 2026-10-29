@@ -1,7 +1,7 @@
 "use strict";
 /* Loaded only by the Android host, on its exact selected HTTPS main origin. */
 window.NativeSpeechAudio=(()=>{
-  const bridge=window.DaimonAudio,outputs=new Map(),streams=new Set();
+  const bridge=window.DaimonAudio,outputs=new Map(),streams=new Set(),encodedStreams=new Map();
   let serial=0,captureEpoch=0;
   if(!bridge?.postMessage)return;
   const send=value=>bridge.postMessage(JSON.stringify(value));
@@ -18,10 +18,40 @@ window.NativeSpeechAudio=(()=>{
     stream.getTracks().forEach(track=>track.addEventListener("ended",()=>{if(stream.getTracks().every(t=>t.readyState==="ended"))streams.delete(stream);},{once:true}));
     return stream;
   };
+  function openStream(){
+    if(encodedStreams.size>=3)throw Error("Native speech preparation bound reached");
+    const url="native-speech:"+(++serial);
+    let queue=[],bytes=0,sequence=0,owner,terminal,closed=false;
+    const chunk=(id,part)=>send({command:"stream_chunk",id,...part});
+    const stream={url,
+      append(raw,sha256){
+        if(closed || terminal || !raw.length || raw.length>32768 || bytes+raw.length>8*1024*1024 || !/^[a-f0-9]{64}$/.test(sha256))throw Error("Invalid native stream chunk");
+        const part={sequence:sequence++,data:btoa(String.fromCharCode(...raw)),sha256};bytes+=raw.length;
+        if(owner)chunk(owner,part);else queue.push(part);
+      },
+      finish(value){
+        if(closed || terminal || !bytes || value.audio_bytes!==bytes || !/^[a-f0-9]{64}$/.test(value.audio_sha256))throw Error("Incomplete native speech stream");
+        terminal={bytes,sha256:value.audio_sha256};
+        if(owner)send({command:"stream_end",id:owner,...terminal});
+      },
+      attach(id){
+        if(closed || owner)throw Error("Native speech source already selected");
+        owner=id;send({command:"stream_begin",id});
+        for(const part of queue)chunk(id,part);queue=[];
+        if(terminal)send({command:"stream_end",id,...terminal});
+      },
+      cancel(){
+        if(closed)return;closed=true;
+        if(owner)send({command:"stop",id:owner});
+        queue=[];owner=undefined;encodedStreams.delete(url);
+      }
+    };
+    encodedStreams.set(url,stream);return stream;
+  }
   function mount(element){
     if(element.dataset.nativeAudio)return element;
-    element.dataset.nativeAudio="buffered-v1";
-    let source="",loadedSource="",id,muted=true,paused=true,ended=false,position=0,duration=NaN,loading,playingAttempt;
+    element.dataset.nativeAudio="progressive-v2";
+    let source="",loadedSource="",id,muted=true,paused=true,ended=false,position=0,duration=NaN,loading,playingAttempt,selectedStream;
     const waiters=new Map();
     function fail(error){for(const waiter of waiters.values()){clearTimeout(waiter.timer);waiter.reject(error);}waiters.clear();}
     const wait=type=>new Promise((resolve,reject)=>{
@@ -43,6 +73,7 @@ window.NativeSpeechAudio=(()=>{
     }
     function reset(){
       command("stop");outputs.delete(id);id=undefined;loadedSource="";loading=undefined;playingAttempt=undefined;
+      selectedStream?.cancel();selectedStream=undefined;
       paused=true;ended=false;position=0;duration=NaN;fail(Error("Native audio source changed"));
     }
     async function load(){
@@ -51,6 +82,13 @@ window.NativeSpeechAudio=(()=>{
       const selected=source;
       const owned=id="speech_"+(++serial);outputs.set(owned,{receive,reset});
       loading=(async()=>{
+        const candidate=encodedStreams.get(selected);
+        if(candidate){
+          selectedStream=candidate;
+          const ready=wait("loaded");candidate.attach(owned);await ready;
+          if(id!==owned)throw Error("Native audio source changed");
+          loadedSource=selected;return;
+        }
         if(!selected.startsWith("blob:"))throw Error("Native audio requires verified in-page bytes");
         const response=await fetch(selected),bytes=new Uint8Array(await response.arrayBuffer());
         if(id!==owned || source!==selected)throw Error("Native audio source changed");
@@ -79,7 +117,7 @@ window.NativeSpeechAudio=(()=>{
       const attempt=(async()=>{
         await load();
         if(source!==selected || muted)throw Error("Native playback interrupted");
-        const playing=wait("playing");command("seek",{millis:Math.round(position*1000)});command("volume",{value:1});command("play");await playing;
+        const playing=wait("playing");if(position>0)command("seek",{millis:Math.round(position*1000)});command("volume",{value:1});command("play");await playing;
       })();
       playingAttempt=attempt;
       return attempt.finally(()=>{if(playingAttempt===attempt)playingAttempt=undefined;});
@@ -100,7 +138,8 @@ window.NativeSpeechAudio=(()=>{
     captureEpoch++;
     window.dispatchEvent(new Event("pagehide"));
     for(const output of [...outputs.values()])output.reset();
+    for(const stream of [...encodedStreams.values()])stream.cancel();
     for(const stream of streams)for(const track of stream.getTracks())track.stop();streams.clear();
   }
-  return {mount,background,progressive:false};
+  return {mount,background,openStream,progressive:true};
 })();

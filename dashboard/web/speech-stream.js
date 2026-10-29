@@ -1,18 +1,20 @@
 "use strict";
 /* Progressive encoded speech through the existing media element; no capture. */
 window.SpeechStream=(()=>{
-  const available=()=>!!window.MediaSource?.isTypeSupported?.("audio/mpeg");
+  const nativeAvailable=()=>window.NativeSpeechAudio?.progressive===true && typeof window.NativeSpeechAudio.openStream==="function";
+  const available=()=>nativeAvailable() || !!window.MediaSource?.isTypeSupported?.("audio/mpeg");
   const digest=async bytes=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))].map(n=>n.toString(16).padStart(2,"0")).join("");
   function open(response,signal){
     if(!available())throw Error("Progressive audio unavailable");
-    const media=new window.MediaSource(),url=URL.createObjectURL(media),reader=response.body.getReader();
+    const native=nativeAvailable()?window.NativeSpeechAudio.openStream():undefined;
+    const media=native?undefined:new window.MediaSource(),url=native?.url||URL.createObjectURL(media),reader=response.body.getReader();
     let buffer,queue=[],all=[],bytes=0,sequence=0,complete=false,closed=false,failure,handler,decoderError,decoderHandler,verifiedBlob,words,alignmentOffset;
     const timer=setTimeout(()=>fail(Error("Speech stream deadline exceeded")),145000);
     function cancel(){
       if(closed)return;closed=true;clearTimeout(timer);signal?.removeEventListener("abort",cancel);
       Promise.resolve(reader.cancel()).catch(()=>{});queue=[];all=[];
       try{if(buffer?.updating)buffer.abort();}catch{}
-      URL.revokeObjectURL(url);
+      if(native)native.cancel();else URL.revokeObjectURL(url);
     }
     function fail(error){if(closed)return;failure=error;cancel();handler?.(error);}
     function decoderFail(error){
@@ -22,13 +24,13 @@ window.SpeechStream=(()=>{
       decoderHandler?.(error);
     }
     function pump(){
-      if(closed || decoderError || !buffer || buffer.updating || media.readyState!=="open")return;
+      if(native || closed || decoderError || !buffer || buffer.updating || media.readyState!=="open")return;
       try{
         if(queue.length)buffer.appendBuffer(queue.shift());
         else if(complete)media.endOfStream();
       }catch(error){decoderFail(error);}
     }
-    media.addEventListener("sourceopen",()=>{
+    media?.addEventListener("sourceopen",()=>{
       if(closed)return;
       try{buffer=media.addSourceBuffer("audio/mpeg");buffer.addEventListener("updateend",pump);buffer.addEventListener("error",()=>decoderFail(Error("Audio decoding failed")));pump();}
       catch(error){decoderFail(error);}
@@ -47,7 +49,9 @@ window.SpeechStream=(()=>{
           if(!raw.length || raw.length>32768 || await digest(raw)!==value.sha256)throw Error("Audio chunk integrity failed");
           if(closed)return;
           bytes+=raw.length;if(bytes>8*1024*1024)throw Error("Audio stream exceeds playback bound");
-          sequence++;all.push(raw);if(!decoderError)queue.push(raw);pump();
+          sequence++;all.push(raw);
+          if(native)native.append(raw,value.sha256);else if(!decoderError)queue.push(raw);
+          pump();
         }else if(value.type==="end"){
           const merged=new Uint8Array(bytes);let offset=0;for(const part of all){merged.set(part,offset);offset+=part.length;}
           if(!bytes || value.audio_bytes!==bytes || await digest(merged)!==value.audio_sha256)throw Error("Incomplete audio stream");
@@ -63,6 +67,7 @@ window.SpeechStream=(()=>{
             if(valid){words=candidate;alignmentOffset=value.alignment.offset;}
           }
           verifiedBlob=new Blob([merged],{type:"audio/mpeg"});
+          if(native)native.finish(value);
           complete=true;all=[];clearTimeout(timer);pump();
         }else throw Error("Speech outcome retained; no automatic retry");
       }
