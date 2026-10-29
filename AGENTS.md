@@ -1,6 +1,12 @@
 # Interaction development boundaries
 
 Interaction is an independent application: web now, native/badge clients later.
+Human selection, 2026-10-29: Android APK with native audio is now the next client
+delivery focus, retaining unfinished v0.3 work. Source is `clients/android`;
+read `docs/interaction-native-clients.md` for the current foreground pilot,
+same shared login, native bridge/byte/focus boundaries, signing/build retention
+and remaining progressive/background/Beacon/iOS work. Telegram is optional.
+Do not equate packaged WebView, CI APK or bridge tests with phone acceptance.
 Telegram is an optional session projection, never the application shell or a
 required launch path. A child should be able to use only this app. Current UI
 and Beacon sound delivery is owned by #213/#221 and docs/interaction-v02.md:
