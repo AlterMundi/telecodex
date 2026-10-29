@@ -849,6 +849,17 @@ scheduling evidence, not a measured device or provider latency improvement.
 An interrupted final upload retains the exact capture ID, audio digest, bytes and
 selected context. Checking status is read-only; explicit retry uses that same
 original, while a local discard does not cancel already saved server work.
+After a lost upload response, the visible page automatically checks that same
+original through the existing read-only status API. It makes at most four
+automatic reads, scheduled after1/3/10/30 seconds; the normal API request deadline
+still applies. Online/foreground events can bring the next check forward without
+resetting that budget. Hidden/offline pages start no check, and reset/auth loss,
+binding change or a matching receipt prevents later reconciliation. Manual Check
+delivery remains available after the automatic budget ends. These reads never
+upload audio, run ASR, start native work or reopen a microphone. Confirming an
+already accepted message restores the ordinary composer and recording control.
+An unknown or mismatched outcome keeps the original; it is never treated as
+permission to resend or discard it.
 The shared recording-review controls keep Check, retry, Save audio and explicit
 local discard reachable, including when capture is unconfirmed. The composer
 buttons remain contained at narrow widths; pending text is separate from playback.
