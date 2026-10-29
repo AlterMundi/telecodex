@@ -85,11 +85,19 @@ def qualify(binary):
         journey.wait(lambda:journey.row('SELECT phase FROM conversation_inputs WHERE id=?',(original['id'],))==[('accepted',)])
         assert len(journey.packets)==1 and journey.packets[0][0]=='turn/start'
         assert text in journey.packets[0][1]['input'][0]['text']
+        local_turn=journey.row('SELECT local_turn FROM conversation_inputs WHERE id=?',(original['id'],))[0][0]
+        assert isinstance(local_turn,int) and local_turn>0
+        status=journey.read('input','status',original['id'])['result']
+        assert status.get('local_turn')==local_turn,'Accepted input status omitted its canonical native turn'
+        history=journey.read('input','list','0')['result']['items']
+        listed=next(item for item in history if item['id']==original['id'])
+        assert listed.get('local_turn')==local_turn,'Input history omitted its canonical native turn'
         correction,_=journey.submit(binding,'A later correction must enter this running native turn.')
         journey.wait(lambda:journey.row('SELECT phase FROM conversation_inputs WHERE id=?',(correction['id'],))==[('accepted',)])
         assert len(journey.packets)==2 and journey.packets[1][0]=='turn/steer'
         repeated=journey.read('input','submit',json.dumps(correction))['result']
         assert not repeated['new_input'] and repeated['phase']=='accepted'
+        assert repeated.get('local_turn')==local_turn,'Same-turn correction lost its native correlation'
         forged={**correction,'text':'Replacement of the retained original'}
         assert not journey.read('input','submit',json.dumps(forged),ok=False)['ok']
         assert len(journey.packets)==2
@@ -103,6 +111,7 @@ def qualify(binary):
         send({'id':ident,'result':{'turnId':turn}})
         journey.wait(lambda:journey.row('SELECT phase FROM conversation_inputs WHERE id=?',(uncertain['id'],))==[('accepted',)])
         assert len(journey.packets)==3,'Late acknowledgment caused another submission'
+        assert journey.read('input','status',uncertain['id'])['result'].get('local_turn')==local_turn,'Late acknowledgment did not expose the retained turn'
         assert journey.row('SELECT count(*) FROM incoming_updates')==initial_journal,'Browser input fabricated a Telegram update'
         journey.finish(journey.web_thread,journey.web_turn)
         journey.idle()
