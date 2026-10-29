@@ -10,8 +10,6 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.webkit.CookieManager;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
@@ -44,7 +42,6 @@ public final class MainActivity extends ComponentActivity {
     private boolean foreground;
     private PermissionRequest microphone;
     private ValueCallback<Uri[]> chooser;
-    private final Handler handler = new Handler(Looper.getMainLooper());
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);

@@ -67,6 +67,8 @@ public class BackgroundSpeechTest {
                     command(service, id, "play", new JSONObject());
                     assertTrue("Background native focus/play: " + error.get(), played.await(5, TimeUnit.SECONDS));
                     if (reply == 1) {
+                        command(service, "background_synthetic_0", "stop", new JSONObject());
+                        assertEquals("Late old-source stop cannot change current notification", "Pause", notifications.getActiveNotifications()[0].getNotification().actions[0].title.toString());
                         notifications.getActiveNotifications()[0].getNotification().actions[0].actionIntent.send();
                         assertTrue("Notification pause returns to canonical web control", pause.await(5, TimeUnit.SECONDS));
                         // Simulate only that canonical controller's accepted resume.

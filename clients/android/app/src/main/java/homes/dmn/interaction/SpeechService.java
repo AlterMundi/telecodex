@@ -1,5 +1,6 @@
 package homes.dmn.interaction;
 
+import android.annotation.SuppressLint;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -112,6 +113,10 @@ public final class SpeechService extends Service {
         if (action.equals("stop")) shutdown();
         control(action);
     }
+    // Every notification here is MediaStyle with this service's real MediaSession.
+    // Android exempts media-session notifications from POST_NOTIFICATIONS:
+    // https://developer.android.com/develop/ui/compose/notifications/notification-permission#exemptions
+    @SuppressLint("NotificationPermission")
     private void updateState() {
         if (media == null) return;
         int state = playing ? PlaybackState.STATE_PLAYING : paused ? PlaybackState.STATE_PAUSED : PlaybackState.STATE_STOPPED;

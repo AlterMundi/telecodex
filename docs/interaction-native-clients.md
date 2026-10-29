@@ -79,6 +79,9 @@ without a second server reader or source store. Android/browser power policy and
 real-device late-result behavior still need qualification; do not promise survival
 of OS process destruction or automatic listening after restart.
 
+MediaStyle notifications carry the real native MediaSession and use Android’s
+[media-session notification exemption](https://developer.android.com/develop/ui/compose/notifications/notification-permission#exemptions), not a general notification permission. The scoped lint annotation covers only that notification publisher; the fresh-emulator service test exercises it without requesting POST_NOTIFICATIONS.
+
 Notification/headset Play/Pause/Audio off return to the canonical web controls;
 Pause silences native output immediately before that reconciliation. The browser
 MediaSession is not installed beside this native session. Noisy-route changes
