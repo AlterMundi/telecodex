@@ -84,7 +84,7 @@ verified-buffer tests and retains that artifact for7days. Debug APKs used only
 by the decoder emulator expire after1day; compact decoder evidence after7days.
 The emulator job has a15-minute limit,2virtual cores/1536MiB RAM,10GiB initial
 runner headroom, bounded SDK/boot/test commands and a trap that stops its own
-emulator. SDK/AVD state is ephemeral to that hosted job. Build success is not
+emulator. AVD creation and emulator lookup use the same explicit task-owned Android user/AVD directories; the AVD index must exist before launch. The trap removes that directory after stopping its emulator. SDK state is ephemeral to that hosted job. Build success is not
 signing, receiving selection or installation.
 
 Sign the exact qualified release with the receiving operator's retained private

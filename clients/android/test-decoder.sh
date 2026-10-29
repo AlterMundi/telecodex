@@ -2,11 +2,15 @@
 set -euo pipefail
 mkdir -p decoder-evidence
 decoder_emulator_pid=''
+decoder_user_home=$(mktemp -d "${RUNNER_TEMP:-/tmp}/interaction-decoder.XXXXXX")
+decoder_avd_home="$decoder_user_home/avd"
+mkdir -p "$decoder_avd_home"
 cleanup() {
   if [ -n "$decoder_emulator_pid" ]; then
     kill "$decoder_emulator_pid" 2>/dev/null || true
     wait "$decoder_emulator_pid" 2>/dev/null || true
   fi
+  rm -rf -- "$decoder_user_home"
   for log in decoder-evidence/*.log; do
     [ -f "$log" ] || continue
     tail -c 524288 "$log" >"$log.bounded"
@@ -16,9 +20,10 @@ cleanup() {
 trap cleanup EXIT
 test "$(df --output=avail -k . | tail -1)" -gt 10000000
 timeout 600s "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'system-images;android-35;google_apis;x86_64' >decoder-evidence/sdk.log 2>&1
-echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd --name interaction-decoder --package 'system-images;android-35;google_apis;x86_64' --force
+echo no | env ANDROID_USER_HOME="$decoder_user_home" ANDROID_AVD_HOME="$decoder_avd_home" "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd --name interaction-decoder --path "$decoder_avd_home/interaction-decoder.avd" --package 'system-images;android-35;google_apis;x86_64' --force
+test -f "$decoder_avd_home/interaction-decoder.ini"
 sudo chmod a+rw /dev/kvm
-"$ANDROID_HOME/emulator/emulator" -avd interaction-decoder -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 1536 -cores 2 -no-snapshot -camera-back none -camera-front none >decoder-evidence/emulator.log 2>&1 &
+env ANDROID_USER_HOME="$decoder_user_home" ANDROID_AVD_HOME="$decoder_avd_home" "$ANDROID_HOME/emulator/emulator" -avd interaction-decoder -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 1536 -cores 2 -no-snapshot -camera-back none -camera-front none >decoder-evidence/emulator.log 2>&1 &
 decoder_emulator_pid=$!
 decoder_adb="$ANDROID_HOME/platform-tools/adb"
 test -x "$decoder_adb"
