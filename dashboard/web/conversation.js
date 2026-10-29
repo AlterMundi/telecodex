@@ -762,6 +762,13 @@ window.Conversation = (() => {
             (!["answered","matrix_requested"].includes(card.value.phase) || value.phase===card.value.phase)) {
           if (!card.value.phase && draft.value === card.value.text) draft.value = "";
           card.value.phase = value.phase;
+          // Adopt only a first committed voice body for this exact recording;
+          // a late read cannot replace already observed text or another capture.
+          if(card.value.voice&&!card.value.text&&!card.value.preview&&value.voice?.transcription?.capture_id===value.id&&value.voice.audio_sha256===card.value.voice.audio_sha256){
+            if(typeof value.text==="string"&&value.text)card.value.text=value.text;
+            else if(typeof value.preview==="string"&&value.preview)card.value.preview=value.preview;
+            card.value.voice={...card.value.voice,...value.voice};
+          }
         }
         if(value.routing && (!card.value.routing || (value.routing.phase==="accepted" && card.value.routing.instruction===value.routing.instruction))){
           card.value.routing=value.routing;card.value.phase=value.phase;
