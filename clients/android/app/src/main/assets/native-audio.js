@@ -2,14 +2,16 @@
 /* Loaded only by the Android host, on its exact selected HTTPS main origin. */
 window.NativeSpeechAudio=(()=>{
   const bridge=window.DaimonAudio,outputs=new Map(),streams=new Set();
-  let serial=0;
+  let serial=0,captureEpoch=0;
   if(!bridge?.postMessage)return;
   const send=value=>bridge.postMessage(JSON.stringify(value));
   bridge.onmessage=event=>{try{const value=JSON.parse(event.data);outputs.get(value.id)?.receive(value);}catch{}};
   send({command:"hello"});
   const devices=navigator.mediaDevices,original=devices?.getUserMedia?.bind(devices);
   if(original)devices.getUserMedia=async constraints=>{
-    const stream=await original(constraints);streams.add(stream);
+    const epoch=captureEpoch,stream=await original(constraints);
+    if(epoch!==captureEpoch){for(const track of stream.getTracks())track.stop();throw new DOMException("Capture interrupted by app lifecycle","AbortError");}
+    streams.add(stream);
     stream.getTracks().forEach(track=>track.addEventListener("ended",()=>{if(stream.getTracks().every(t=>t.readyState==="ended"))streams.delete(stream);},{once:true}));
     return stream;
   };
@@ -92,6 +94,7 @@ window.NativeSpeechAudio=(()=>{
     return element;
   }
   function background(){
+    captureEpoch++;
     window.dispatchEvent(new Event("pagehide"));
     for(const output of [...outputs.values()])output.reset();
     for(const stream of streams)for(const track of stream.getTracks())track.stop();streams.clear();
