@@ -9,6 +9,9 @@ window.NativeSpeechAudio=(()=>{
   send({command:"hello"});
   const devices=navigator.mediaDevices,original=devices?.getUserMedia?.bind(devices);
   if(original)devices.getUserMedia=async constraints=>{
+    // Explicit track.stop() does not dispatch ended. Drop finished captures
+    // before another recording so the foreground registry cannot accumulate.
+    for(const previous of streams)if(previous.getTracks().every(track=>track.readyState==="ended"))streams.delete(previous);
     const epoch=captureEpoch,stream=await original(constraints);
     if(epoch!==captureEpoch){for(const track of stream.getTracks())track.stop();throw new DOMException("Capture interrupted by app lifecycle","AbortError");}
     streams.add(stream);
