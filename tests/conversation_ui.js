@@ -1324,6 +1324,12 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(fixture.nodes.get("#conversation-player").hidden, false,
     "Failure of A must not hide B's player");
   assert.equal(fixture.nodes.get("#conversation-audio-state").textContent, "Preparing audio…");
+  const statusButton=fixture.nodes.get("#conversation-audio-state"),statusHint=fixture.nodes.get("#conversation-audio-hint");
+  assert.equal(statusButton.dataset.audioState,"preparing");
+  const beforeExplain=fixture.audioCalls.length;
+  statusButton.handlers.click();assert.equal(statusHint.hidden,false);assert.equal(statusHint.textContent,"Preparing audio…");
+  assert.equal(fixture.audioCalls.length,beforeExplain,"Explaining a status must not request or play audio");
+  statusButton.handlers.click();assert.equal(statusHint.hidden,true);
   fixture.ui.stop();
   // Shipped playback completion selects a question only after current-source validation.
   const spoken=boot();spoken.nativeRequest();spoken.audio(true);await spoken.ui.refresh();

@@ -127,7 +127,8 @@
         <section id="conversation-player" aria-label="Reply audio">
           <div class="conversation-tools"><strong id="conversation-playing">Audio</strong><button id="conversation-voice-replies" class="voice-output-toggle" type="button" data-voice-state="off" aria-pressed="false" aria-label="Enable spoken replies" title="Enable spoken replies"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 9h4l5-4v14l-5-4H3z"/><path class="voice-waves" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="voice-muted" d="m17 10 4 4m0-4-4 4"/><path class="voice-paused" d="M17 9v6m4-6v6"/></svg></button></div>
           <audio id="conversation-audio" controls preload="none"></audio>
-          <p id="conversation-audio-state" role="status" aria-live="polite"></p>
+          <button id="conversation-audio-state" type="button" aria-live="polite" aria-expanded="false" aria-controls="conversation-audio-hint"></button>
+          <p id="conversation-audio-hint" role="status" hidden></p>
           <label id="conversation-follow-control" hidden><input id="conversation-follow" type="checkbox"> Follow</label>
         </section>
         </div>
