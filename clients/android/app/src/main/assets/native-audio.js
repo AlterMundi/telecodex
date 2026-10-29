@@ -31,7 +31,7 @@ window.NativeSpeechAudio=(()=>{
     function command(command,extra={}){if(id)send({command,id,...extra});}
     function receive(value){
       if(value.id!==id)return;
-      if(Number.isFinite(value.position))position=value.position;
+      if(value.type!=="loaded" && Number.isFinite(value.position))position=value.position;
       if(Number.isFinite(value.duration))duration=value.duration;
       if(value.type==="error"){paused=true;fail(Error("Android audio unavailable"));element.dispatchEvent(new Event("error"));return;}
       if(value.type==="playing"){paused=false;ended=false;}

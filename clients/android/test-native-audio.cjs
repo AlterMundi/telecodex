@@ -6,7 +6,7 @@ async function fixture(capture){
   const commands=[],window=new EventTarget(),tracks=[{stopped:false,readyState:"live",addEventListener(){},stop(){this.stopped=true;}}];
   const bridge={postMessage(text){
     const value=JSON.parse(text);commands.push(value);
-    if(value.command==="ready")queueMicrotask(()=>bridge.onmessage({data:JSON.stringify({id:value.id,type:"loaded",duration:2})}));
+    if(value.command==="ready")queueMicrotask(()=>bridge.onmessage({data:JSON.stringify({id:value.id,type:"loaded",position:0,duration:2})}));
     if(value.command==="play")queueMicrotask(()=>bridge.onmessage({data:JSON.stringify({id:value.id,type:"playing",position:0,duration:2})}));
   }};
   window.DaimonAudio=bridge;
@@ -19,7 +19,8 @@ async function fixture(capture){
 (async()=>{
   const f=await fixture();f.audio.src="blob:verified";
   await f.audio.play();assert(!f.commands.some(v=>v.command==="begin"),"Muted canonical validation never acquires native output");
-  f.audio.muted=false;await Promise.all([f.audio.play(),f.audio.play()]);
+  f.audio.currentTime=1;f.audio.muted=false;await Promise.all([f.audio.play(),f.audio.play()]);
+  assert.equal(f.commands.find(v=>v.command==="seek").millis,1000,"Decoder readiness must not overwrite the requested resume position");
   assert.equal(f.commands.filter(v=>v.command==="begin").length,1);
   assert.equal(f.commands.filter(v=>v.command==="play").length,1);
   assert.equal(f.audio.paused,false);assert.equal(f.audio.duration,2);
