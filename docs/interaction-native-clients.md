@@ -42,6 +42,13 @@ the missing prerequisite; the phone's exact underlying exception is unobserved.
 Upgrade with the same package/signing key and higher versionCode; retain login
 and app data. Do not clear data or reinstall to repair this permission.
 
+The ordinary audio dock uses one speaker enable/off control and one shared slot
+for Play/Pause or a state icon. Follow is the only visible text, beneath them;
+removing the track/status paragraphs reduces the dock to92px and returns36px
+to the composer. Tapping a state icon explains its current meaning without
+playing or requesting audio. The explanation closes on state change, another
+tap, Escape or after8seconds; keyboard/screen-reader labels retain full meaning.
+
 The pilot's speech driver reuses the canonical web player's source validation
 and complete, integrity-checked response bytes. Only after source validation
 unmutes that exact segment does it transfer bounded bytes to the native decoder.

@@ -1041,7 +1041,21 @@ window.Conversation = (() => {
       $("#conversation-player").hidden=false;
       voiceStatus();
     }
-    const audioState = (text) => { $("#conversation-audio-state").textContent = text;playerStatus(); };
+    const audioIndicator=$("#conversation-audio-state"),audioHint=$("#conversation-audio-hint");let audioHintTimer;
+    const closeAudioHint=()=>{clearTimeout(audioHintTimer);audioHint.hidden=true;audioIndicator.setAttribute("aria-expanded","false");};
+    audioIndicator.addEventListener("click",()=>{
+      const reveal=audioHint.hidden;closeAudioHint();
+      if(reveal){audioHint.textContent=audioIndicator.textContent;audioHint.hidden=false;audioIndicator.setAttribute("aria-expanded","true");audioHintTimer=setTimeout(closeAudioHint,8000);}
+    });
+    window.addEventListener("keydown",event=>{if(event.key==="Escape")closeAudioHint();});
+    const audioState = (text) => {
+      closeAudioHint();audioIndicator.textContent=text;audioIndicator.title=text;audioIndicator.setAttribute("aria-label",text);
+      audioIndicator.dataset.audioState=text==="Audio off"?"off":text.startsWith("Waiting")||text.startsWith("A short pause")?"waiting":
+        text.startsWith("Preparing")?"preparing":text.startsWith("Listening")?"listening":text.startsWith("Recovering")?"recovering":
+        text.startsWith("End of")?"done":text.startsWith("Question finished")?"question":text.startsWith("Connection unavailable")?"offline":
+        text.startsWith("Playing")?"playing":text.startsWith("Paused")||text.startsWith("Audio ready")?"paused":"warning";
+      playerStatus();
+    };
     audioState("Audio off");
     const initialMode = () => readOnly || new URL(location.href).searchParams.get("view") === "conversation"
       || new URLSearchParams(telegram?.initData || "").get("start_param") === "conversation";
