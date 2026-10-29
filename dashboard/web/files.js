@@ -34,6 +34,10 @@ window.FileInput=(()=>{
     const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer())),x=>x.toString(16).padStart(2,'0')).join('');
     if(hash!==ref.sha256)throw Error('Original file verification failed. Nothing was saved.');
     if(binding!==getBinding()||credential!==JSON.stringify(headers()))throw Error('Conversation access changed. Nothing was saved.');
+    if(window.NativeFiles?.save){
+     if(!await window.NativeFiles.save(blob,ref.name,ref.sha256))throw Error('Save cancelled. The original remains available.');
+     return;
+    }
     const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=ref.name;link.hidden=true;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
    }finally{clearTimeout(deadline);}
   }

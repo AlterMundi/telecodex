@@ -101,9 +101,37 @@ mechanics, not the complete WebView/provider late-result path or phone acceptanc
 Native JS tests separately keep the player on background while closing capture,
 route media controls, and retain later-source selection. The candidate is not
 received merely because those checks pass. Native Beacon synthesis, filters,
-mixing, output-route changes and iOS are not implemented. Native file export/
-download is also unfinished: existing browser Blob downloads need an explicit
-native save/share bridge before sole-client acceptance. Never label a shell,
+mixing, output-route changes and iOS are not implemented. Native0.4 adds an export candidate to the existing artifact, original-file and
+local recording Save buttons. Web source/revision/length/hash/authorization checks
+remain before export. The native bridge accepts only in-page Blob bytes, never a
+page URL, path, credential or destination URI. Each operation has a fresh random
+identity and one acknowledged32KiB chunk at a time. Android independently checks
+sequence/length/SHA-256 before opening ACTION_CREATE_DOCUMENT. The person chooses
+one new destination; there is no broad storage permission, directory grant,
+automatic open/share, file upload, transcription or message dispatch.
+
+One private cache stage is allowed, maximum256MiB (matching existing artifact
+limits), with32MiB free-space reserve. A single worker with a four-command queue
+avoids writing on the UI thread. The ten-minute lifetime includes transfer and
+picker; cancellation/deadline is checked between provider I/O calls. Arbitrary
+provider calls can block; do not claim a hard kernel I/O deadline. Navigation,
+non-picker backgrounding and Activity destruction cancel. Picker backgrounding
+is expected and keeps only its verified stage. Completion/cancellation/failure
+removes that cache file; a crash orphan is cleaned at the next launch or save,
+and remains bounded to one stage while the app is stopped. Server originals,
+protected Bitácora audio and recoverable local recording originals are unchanged.
+No new durable media archive or automatic save retry.
+
+Only a successful close of the selected provider output reports Saved. Picker
+cancel reports not saved and keeps the original. Failed/uncertain writes are not
+retried; deletion of the newly-created partial document is best effort, and the
+UI warns it may be incomplete. No URI is accepted from page JSON or retained as
+an ongoing grant. Existing browsers/older APKs keep Blob-download behavior.
+Native JS/JVM tests exercise chunk/identity/verification/cancellation; the scoped
+Android test writes and reads back real ContentResolver bytes against a fixed
+synthetic test-only provider. It does not prove the real system picker UI, cloud
+storage, phone acceptance or sole-client completion. That provider is absent from
+the release APK; debug/test APKs remain CI-only, expiring after one day. Never label a shell,
 compiled APK or synthetic bridge test as completed stages2/3/required4.
 
 ## Build, delivery and operator path

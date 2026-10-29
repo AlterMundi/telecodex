@@ -53,6 +53,10 @@ window.Conversation = (() => {
         const hash=[...new Uint8Array(await crypto.subtle.digest("SHA-256",await blob.arrayBuffer()))].map(value=>value.toString(16).padStart(2,"0")).join("");
         if(hash!==file.sha256)throw Error("File verification failed. Nothing was saved.");
         if(controller.signal.aborted || fileDownloads.get(file.id)!==controller || !canFiles || fileCredential()!==credential || files.has(file.id) && files.get(file.id).sha256!==file.sha256)return;
+        if(window.NativeFiles?.save){
+          const saved=await window.NativeFiles.save(blob,file.name,file.sha256);
+          fileStatus.set(file.id,saved?"Saved":"Save cancelled. Original remains available.");return;
+        }
         const url=URL.createObjectURL(blob),link=node("a");link.href=url;link.download=file.name;link.hidden=true;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
         fileStatus.set(file.id,"Download ready");
       }catch(error){if(fileDownloads.get(file.id)===controller && fileCredential()===credential){fileStatus.set(file.id,error.name==="AbortError"?"Download stopped. You can try again.":error.message||"File unavailable.");if(error.status===401)failed(error);}}

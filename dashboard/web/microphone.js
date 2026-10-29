@@ -348,10 +348,14 @@ window.VoiceInput = (() => {
         cancelRecording(frozen?'Local recording discarded. Existing server work was not cancelled.':'Recording discarded. Nothing was sent.');
       }
     });
-    save?.addEventListener('click',()=>{
+    save?.addEventListener('click',async()=>{
       if(!pending || uploading || !window.URL?.createObjectURL)return;
-      const frozen=pending,url=window.URL.createObjectURL(frozen.blob),link=document.createElement('a');
-      link.href=url;link.download=`recording-${frozen.id}.${frozen.mime.includes('wav')?'wav':frozen.mime.includes('mp4')?'m4a':frozen.mime.includes('ogg')?'ogg':'webm'}`;
+      const frozen=pending,name=`recording-${frozen.id}.${frozen.mime.includes('wav')?'wav':frozen.mime.includes('mp4')?'m4a':frozen.mime.includes('ogg')?'ogg':'webm'}`;
+      if(window.NativeFiles?.save){
+        try {const saved=await window.NativeFiles.save(frozen.blob,name);if(pending===frozen)notice(saved?'Recording copy saved. The original is kept; nothing was resent.':'Save cancelled. The recording is kept; nothing was sent.',true);}
+        catch(error){if(pending===frozen)notice(error.message||'Could not save a copy. The recording is kept.',true);}return;
+      }
+      const url=window.URL.createObjectURL(frozen.blob),link=document.createElement('a');link.href=url;link.download=name;
       document.body.append(link);link.click();link.remove();setTimeout(()=>window.URL.revokeObjectURL(url),10000);
       notice('Recording copy offered for download. Check its saved status or retry the same original; nothing was resent.',true);
     });

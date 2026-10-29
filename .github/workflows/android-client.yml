@@ -1,10 +1,10 @@
 name: Android client pilot
 on:
   pull_request:
-    paths: ['clients/android/**', 'dashboard/web/conversation.js', 'dashboard/web/speech-stream.js', '.github/workflows/android-client.yml']
+    paths: ['clients/android/**', 'dashboard/web/conversation.js', 'dashboard/web/speech-stream.js', 'dashboard/web/files.js', 'dashboard/web/microphone.js', '.github/workflows/android-client.yml']
   push:
     branches: [master]
-    paths: ['clients/android/**', 'dashboard/web/conversation.js', 'dashboard/web/speech-stream.js', '.github/workflows/android-client.yml']
+    paths: ['clients/android/**', 'dashboard/web/conversation.js', 'dashboard/web/speech-stream.js', 'dashboard/web/files.js', 'dashboard/web/microphone.js', '.github/workflows/android-client.yml']
 permissions:
   contents: read
 concurrency:
@@ -22,6 +22,7 @@ jobs:
           java-version: '17'
       - run: node clients/android/test-native-audio.cjs
       - run: node clients/android/test-progressive-audio.cjs
+      - run: node clients/android/test-native-files.cjs
       - name: Verify Gradle wrapper
         run: echo '81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f  clients/android/gradle/wrapper/gradle-wrapper.jar' | sha256sum --check
       - name: Build and lint the independent client
