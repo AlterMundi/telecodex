@@ -1,0 +1,31 @@
+name: Android client pilot
+on:
+  pull_request:
+    paths: ['clients/android/**', 'dashboard/web/conversation.js', '.github/workflows/android-client.yml']
+  push:
+    branches: [master]
+    paths: ['clients/android/**', 'dashboard/web/conversation.js', '.github/workflows/android-client.yml']
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: node clients/android/test-native-audio.cjs
+      - name: Verify Gradle wrapper
+        run: echo '81a82aaea5abcc8ff68b3dfcb58b3c3c429378efd98e7433460610fecd7ae45f  clients/android/gradle/wrapper/gradle-wrapper.jar' | sha256sum --check
+      - name: Build and lint the independent client
+        working-directory: clients/android
+        run: ./gradlew --no-daemon :app:assembleRelease :app:lintRelease
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: interaction-android-unsigned
+          path: clients/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 7
+          if-no-files-found: error

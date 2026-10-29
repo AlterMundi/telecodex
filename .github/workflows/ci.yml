@@ -32,7 +32,7 @@ jobs:
               files = ['Cargo.toml']
           else:
               files = subprocess.check_output(['git','diff','--name-only',base,os.environ['HEAD_SHA']], text=True).splitlines()
-          common = any(p in {'Cargo.toml','Cargo.lock','build.rs'} or not p.startswith(('src/','tests/','activity/','dashboard/','docs/','.github/')) and p not in {'README.md','AGENTS.md','LICENSE','.gitignore','config.example.toml','scripts/bot_traffic.py','scripts/routing_eval.py','scripts/speech_render.py','scripts/requirements-speech.lock','scripts/interaction_asr.py','scripts/turn_end.py','scripts/capture_turn.py','scripts/requirements-turn.lock','scripts/matrix_execution.py','scripts/activity_indicator.py'} for p in files)
+          common = any(p in {'Cargo.toml','Cargo.lock','build.rs'} or not p.startswith(('src/','tests/','activity/','dashboard/','docs/','.github/','clients/android/')) and p not in {'README.md','AGENTS.md','LICENSE','.gitignore','config.example.toml','scripts/bot_traffic.py','scripts/routing_eval.py','scripts/speech_render.py','scripts/requirements-speech.lock','scripts/interaction_asr.py','scripts/turn_end.py','scripts/capture_turn.py','scripts/requirements-turn.lock','scripts/matrix_execution.py','scripts/activity_indicator.py'} for p in files)
           def workflow_job(source, name):
               marker = '  ' + name + ':\n'
               if marker not in source:

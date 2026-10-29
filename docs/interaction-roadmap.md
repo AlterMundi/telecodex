@@ -7,6 +7,14 @@ parallel-work attention coordination as one coherent delivery.
 
 ## Navigation and current selection
 
+Human selection, 2026-10-29: the next delivery focus also includes an independent
+Android APK with native audio ownership, usable as the sole client of a hosted
+daimon. Reuse the web conversation and shared login; Telegram stays optional.
+The [native client plan](interaction-native-clients.md) defines the foreground
+pilot, native audio/focus, progressive/background follow-up, future Beacon
+mixing/filters and iOS equivalent. This explicitly selects the necessary part
+of stage6 now; it does not complete or discard unfinished stages2/3/required4.
+
 | Scope | Plan | Execution |
 | --- | --- | --- |
 | Full product vision | This document and [Matrix parent #313](https://github.com/AlterMundi/daimon-matrix/issues/313) | [Project14](https://github.com/orgs/AlterMundi/projects/14) |
@@ -40,7 +48,10 @@ do not create a competing plan in a new conversation.
    permissions and useful context across devices and authorized embodiments,
    including cross-body work. Cross-body Weave/sync implementation belongs to
    the Matrix workstream; this goal does not duplicate it.
-6. **Situated embodiments.** Native mobile, physical/Bluetooth badge, selected
+6. **Situated embodiments.** Android native-audio pilot is now selected under the
+   [native client plan](interaction-native-clients.md); iOS audio parity, native
+   mixing/filter work and receiving acceptance remain unfinished. Native mobile,
+   physical/Bluetooth badge, selected
    camera/visual and gesture interaction, appropriate local audio handling.
    Existing selected images do not mean continuous camera/video is enabled.
 7. **Full individual and collective daimon experience.** Evolving per-being
@@ -48,8 +59,9 @@ do not create a competing plan in a new conversation.
    multi-human/tribe collaboration and accessible profiles. Preserve distinct
    identities, audiences and authority while expanding the experience.
 
-Stages2/3/4 are being developed together where they depend on each other. Stages5–7
-remain the visible horizon, not hidden prerequisites or completed features.
+Stages2/3/4 are being developed together where they depend on each other. The
+selected Android part of stage6 proceeds with them; other stages5–7 remain the
+visible horizon, not hidden prerequisites or completed features.
 
 ## Dedicated voice view and attention — human selection, 28 October 2026
 

@@ -914,7 +914,8 @@ window.Conversation = (() => {
       finally { button.disabled = false; }
     });
 
-    const audio = $("#conversation-audio");
+    const audioElement = $("#conversation-audio");
+    const audio = standalone && window.NativeSpeechAudio?.mount(audioElement) || audioElement;
     audio.controls = false;
     audio.hidden = true;
     const toggle = node("button", "Play audio");
@@ -1668,7 +1669,7 @@ window.Conversation = (() => {
       const deadline=setTimeout(()=>controller.abort(),145000);
       try{
         const response = await fetch("api/interaction/audio", {method:"POST",credentials:"same-origin",
-          headers:headers(),signal:controller.signal,body:JSON.stringify({source:source.id,revision:source.revision,offset,...(canStreamSpeech && source.kind!=="native_question" && window.SpeechStream?.available()?{stream:true}:{})})});
+          headers:headers(),signal:controller.signal,body:JSON.stringify({source:source.id,revision:source.revision,offset,...(canStreamSpeech && window.NativeSpeechAudio?.progressive!==false && source.kind!=="native_question" && window.SpeechStream?.available()?{stream:true}:{})})});
         if (!response.ok) {
           const value = await response.json();
           const error = new Error(value.detail || "Audio unavailable. Continue reading or refresh.");
@@ -1764,6 +1765,7 @@ window.Conversation = (() => {
       } finally { if (requestAbort === controller) requestAbort = undefined;playerStatus(); }
     }
     audio.addEventListener("error",()=>{void audioDecodeFailed();});
+    audio.addEventListener("nativefocusloss",()=>pause("audio-focus"));
     audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort){playLabel("Play audio");playerStatus();presentState({playback:undefined});}});
     audio.addEventListener("timeupdate",()=>followPlayback());
     audio.addEventListener("playing",()=>{
