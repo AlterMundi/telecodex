@@ -390,6 +390,8 @@ def render_plan(binding, request):
             'language_hints': [config['language'].split('-')[0]],
             'rate': config.get('rate', 1.0), 'pitch': config.get('pitch', 1.0),
             'instruction': config.get('instruction', '')}}
+        if config.get('ssml_breaks',False):
+            fields['input']['enable_ssml'] = True
         identity['fields'] = fields
     if spoken != request['text']:
         identity['source_text_sha256'] = sha(request['text'].encode())
@@ -573,6 +575,8 @@ def stream_render(binding, request, emit):
         'text': qwen_text(spoken, config), 'voice': config['voice'], 'format': 'mp3', 'sample_rate': 24000,
         'language_hints': [config['language'].split('-')[0]], 'rate': config.get('rate', 1.0),
         'pitch': config.get('pitch', 1.0), 'instruction': config.get('instruction', '')}}
+    if config.get('ssml_breaks',False):
+        fields['input']['enable_ssml'] = True
     if request.get('timing'):
         fields['input']['word_timestamp_enabled'] = True
     # Timing is optional metadata for the same audio request, never a reason to
