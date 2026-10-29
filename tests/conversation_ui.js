@@ -1330,6 +1330,10 @@ function boot(readOnly=false,standalone=false,options={}) {
   statusButton.handlers.click();assert.equal(statusHint.hidden,false);assert.equal(statusHint.textContent,"Preparing audio…");
   assert.equal(fixture.audioCalls.length,beforeExplain,"Explaining a status must not request or play audio");
   statusButton.handlers.click();assert.equal(statusHint.hidden,true);
+  let prevented=false;statusButton.handlers.contextmenu({preventDefault(){prevented=true;}});
+  assert(prevented);assert.equal(statusHint.hidden,false);
+  assert.equal(fixture.audioCalls.length,beforeExplain,"Long-press explanation must not request audio");
+  fixture.event('keydown',{key:'Escape'});assert.equal(statusHint.hidden,true);
   fixture.ui.stop();
   // Shipped playback completion selects a question only after current-source validation.
   const spoken=boot();spoken.nativeRequest();spoken.audio(true);await spoken.ui.refresh();
