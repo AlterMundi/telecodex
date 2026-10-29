@@ -801,7 +801,7 @@ pub(super) async fn inspect(
         .strip_prefix("/self#")
         .or_else(|| args.selector.strip_prefix('#'))
         .unwrap_or(&args.selector);
-    let targets = resolve_goal_target(cfg, selector);
+    let targets = resolve_goal_target(&cfg, selector);
     if targets.len() != 1 {
         return Ok(
             json!({"kind":"clarification_required","selector":args.selector,"candidates":targets,"read_only":true}),

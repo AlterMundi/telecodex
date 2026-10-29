@@ -126,7 +126,7 @@ pub(super) async fn tool(
                     .store
                     .goal_delegation_allows_actor(human, key, &request.thread_id)?;
             let targets = if integrator && !delegated {
-                super::goals::resolve_goal_target(super::routing::profile(&app.shared)?, selector)
+                super::goals::resolve_goal_target(&super::routing::profile(&app.shared)?, selector)
             } else {
                 app.shared
                     .store
