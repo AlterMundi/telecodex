@@ -21,13 +21,13 @@ window.NativeSpeechAudio=(()=>{
   function openStream(){
     if(encodedStreams.size>=3)throw Error("Native speech preparation bound reached");
     const url="native-speech:"+(++serial);
-    let queue=[],bytes=0,sequence=0,owner,terminal,closed=false;
+    let queue=[],bytes=0,sequence=0,owner,terminal,closed=false,decoderFailed=false;
     const chunk=(id,part)=>send({command:"stream_chunk",id,...part});
     const stream={url,
       append(raw,sha256){
         if(closed || terminal || !raw.length || raw.length>32768 || bytes+raw.length>8*1024*1024 || !/^[a-f0-9]{64}$/.test(sha256))throw Error("Invalid native stream chunk");
         const part={sequence:sequence++,data:btoa(String.fromCharCode(...raw)),sha256};bytes+=raw.length;
-        if(owner)chunk(owner,part);else queue.push(part);
+        if(owner)chunk(owner,part);else if(!decoderFailed)queue.push(part);
       },
       finish(value){
         if(closed || terminal || !bytes || value.audio_bytes!==bytes || !/^[a-f0-9]{64}$/.test(value.audio_sha256))throw Error("Incomplete native speech stream");
@@ -35,10 +35,15 @@ window.NativeSpeechAudio=(()=>{
         if(owner)send({command:"stream_end",id:owner,...terminal});
       },
       attach(id){
-        if(closed || owner)throw Error("Native speech source already selected");
+        if(closed || owner || decoderFailed)throw Error("Native speech source already selected");
         owner=id;send({command:"stream_begin",id});
         for(const part of queue)chunk(id,part);queue=[];
         if(terminal)send({command:"stream_end",id,...terminal});
+      },
+      detach(){
+        // A decoder can reject an incomplete source while the verified HTTP
+        // transport is still useful. Drop native ownership, not that transport.
+        decoderFailed=true;if(owner)send({command:"stop",id:owner});owner=undefined;queue=[];
       },
       cancel(){
         if(closed)return;closed=true;
@@ -63,7 +68,7 @@ window.NativeSpeechAudio=(()=>{
       if(value.id!==id)return;
       if(value.type!=="loaded" && Number.isFinite(value.position))position=value.position;
       if(Number.isFinite(value.duration))duration=value.duration;
-      if(value.type==="error"){paused=true;fail(Error("Android audio unavailable"));element.dispatchEvent(new Event("error"));return;}
+      if(value.type==="error"){paused=true;selectedStream?.detach();fail(Error("Android audio unavailable"));element.dispatchEvent(new Event("error"));return;}
       if(value.type==="playing"){paused=false;ended=false;}
       if(value.type==="ended"){paused=true;ended=true;}
       if(["pause","focuslost"].includes(value.type))paused=true;
@@ -71,9 +76,9 @@ window.NativeSpeechAudio=(()=>{
       if(waiter){clearTimeout(waiter.timer);waiters.delete(value.type);waiter.resolve();}
       if(value.type!=="loaded")element.dispatchEvent(new Event(value.type==="focuslost"?"nativefocusloss":value.type));
     }
-    function reset(){
+    function reset(preserveStream=false){
       command("stop");outputs.delete(id);id=undefined;loadedSource="";loading=undefined;playingAttempt=undefined;
-      selectedStream?.cancel();selectedStream=undefined;
+      if(preserveStream)selectedStream?.detach();else selectedStream?.cancel();selectedStream=undefined;
       paused=true;ended=false;position=0;duration=NaN;fail(Error("Native audio source changed"));
     }
     async function load(){
@@ -105,7 +110,7 @@ window.NativeSpeechAudio=(()=>{
         if(id!==owned)throw Error("Native audio source changed");
         loadedSource=selected;
       })();
-      try{await loading;}catch(error){if(id===owned)reset();throw error;}
+      try{await loading;}catch(error){if(id===owned)reset(true);throw error;}
       finally{if(id===owned)loading=undefined;}
     }
     element.play=()=>{

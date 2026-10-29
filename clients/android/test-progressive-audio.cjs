@@ -3,12 +3,12 @@ const assert=require("node:assert/strict"),vm=require("node:vm"),fs=require("nod
 const hash=bytes=>createHash("sha256").update(bytes).digest("hex");
 const turn=()=>new Promise(resolve=>setTimeout(resolve,10));
 async function until(test){for(let n=0;n<100;n++){if(test())return;await turn();}throw Error("Synthetic bridge did not advance");}
-function fixture(){
+function fixture(autoLoaded=true){
   const window=new EventTarget(),commands=[];
   const emit=(id,type,position=0)=>window.DaimonAudio.onmessage({data:JSON.stringify({id,type,position})});
   const loaded=new Set();
   window.DaimonAudio={postMessage(text){const value=JSON.parse(text);commands.push(value);
-    if(value.command==="stream_chunk" && !loaded.has(value.id)){loaded.add(value.id);queueMicrotask(()=>emit(value.id,"loaded"));}
+    if(autoLoaded && value.command==="stream_chunk" && !loaded.has(value.id)){loaded.add(value.id);queueMicrotask(()=>emit(value.id,"loaded"));}
     if(value.command==="ready")queueMicrotask(()=>emit(value.id,"loaded"));
     if(value.command==="play")queueMicrotask(()=>emit(value.id,"playing"));
   }};
@@ -28,6 +28,27 @@ function fixture(){
 }
 const frame=(sequence,bytes)=>({type:"audio",sequence,data:Buffer.from(bytes).toString("base64"),sha256:hash(bytes)});
 (async()=>{
+  // Decoder failure while the transport is still producing must not cancel
+  // the verified bytes needed by the existing complete-Blob fallback.
+  const recovery=fixture(false);
+  try{
+    const live=recovery.stream(),prefix=Buffer.from([1,2]),tail=Buffer.from([3]);
+    live.write(frame(0,prefix));await turn();
+    recovery.audio.src=live.output.url;recovery.audio.muted=false;
+    const failedPlay=recovery.audio.play().then(()=>false,()=>true);
+    await until(()=>recovery.commands.some(v=>v.command==="stream_begin"));
+    const id=recovery.commands.find(v=>v.command==="stream_begin").id;
+    recovery.emit(id,"error");assert(await failedPlay);
+    live.write(frame(1,tail));const all=Buffer.concat([prefix,tail]);
+    live.write({type:"end",audio_bytes:all.length,audio_sha256:hash(all)});live.close();
+    const saved=await live.output.done;
+    assert(saved.complete,"Decoder failure must preserve the in-flight verified transport");
+    assert.equal(saved.blob.size,all.length);assert(!live.cancelled());
+    assert.equal(recovery.commands.filter(v=>v.command==="stream_chunk").length,1,"Failed decoder receives no later blocks");
+    const url=URL.createObjectURL(saved.blob);live.output.cancel();recovery.audio.src=url;
+    await recovery.audio.play();URL.revokeObjectURL(url);
+    assert.equal(recovery.commands.filter(v=>v.command==="begin").length,1,"Recovery reuses complete bytes");
+  }finally{recovery.close();recovery.audio.removeAttribute("src");}
   const f=fixture();
   try{
     assert(f.window.SpeechStream.available(),"Native progressive path does not require MediaSource");

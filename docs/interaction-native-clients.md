@@ -56,7 +56,7 @@ At most3 prepared/active stream descriptors,8MiB per source,32KiB blocks,30s
 missing-data/readiness bounds and145s stream lifetime reuse the existing transport
 limits. Encoded prefetch data stays in memory. Cancel/stop/background closes the
 source and wakes decoder I/O before releasing the player. Decode recovery uses
-the existing completed verified Blob, never a second provider request.
+the existing completed verified Blob, never a second provider request. If native decoding fails before transport completion, detach only the decoder and retain the bounded verified transport until that Blob is available; failure must not cancel its own recovery bytes.
 
 Android0.1 remains on the complete-byte path when the web reader is updated;
 ordinary browsers keep their existing MediaSource path. The candidate is not
