@@ -123,7 +123,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       rows.sort((a,b)=>direction==="after"?a.sequence-b.sequence:b.sequence-a.sequence);
       const selected=rows.slice(0,8);
       const snapshot={binding:"fixture",csrf:"synthetic",routing_choices:[{selector:"t7",label:"Alpha"},{selector:"t8",label:"Beta"}],items:selected.map(v=>({...v})),cursor:selected.at(-1)?.sequence||0,newest:Math.max(0,...selected.map(v=>v.sequence)),more:rows.length>8};
-      if (heldInputs) {const held=heldInputs;heldInputs=undefined;held.started();await held.promise;}
+      if (heldInputs && (!heldInputs.direction || heldInputs.direction===direction)) {const held=heldInputs;heldInputs=undefined;held.started();await held.promise;}
       return snapshot;
     }
     if (url.pathname.endsWith("/part")) {
@@ -250,10 +250,10 @@ function boot(readOnly=false,standalone=false,options={}) {
       const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});
       heldRequests={promise,started};return {entered,release};
     },
-    holdInputs() {
+    holdInputs(direction) {
       let release, started;
       const entered=new Promise(yes=>{started=yes;}), promise=new Promise(yes=>{release=yes;});
-      heldInputs={promise,started};return {entered,release};
+      heldInputs={promise,started,direction};return {entered,release};
     },
     posting() {return !!heldPost?.started;},
     holdPost() {let release; const promise = new Promise(yes=>{release=yes;}); heldPost={promise}; return release;},
@@ -1502,6 +1502,15 @@ function boot(readOnly=false,standalone=false,options={}) {
     await until(()=>confirming.nodes.get('#conversation-inputs').children[0].children[0].textContent.includes('Already committed transcript'));
     assert.equal(confirming.nativePosts.length,0,'Confirmation refresh must not submit native work');
   } finally {slowQuestions.release();await slowRefresh;}
+  const lateConfirm=boot();
+  lateConfirm.originals.set('late-confirm',{id:'late-confirm',sequence:1,text:'',phase:'preparing',voice:{audio_sha256:'late'}});
+  await lateConfirm.ui.refresh();
+  const lateQuestions=lateConfirm.holdRequests(),lateRefresh=lateConfirm.ui.refresh();await lateQuestions.entered;
+  const lateStatus=lateConfirm.holdStatus();await lateConfirm.ui.refresh();await lateStatus.entered;
+  const oldInput=lateConfirm.holdInputs("before");lateQuestions.release();await oldInput.entered;
+  lateConfirm.originals.set('late-confirm',{id:'late-confirm',sequence:1,text:'Confirmed while a newer snapshot was stale',phase:'accepted',voice:{audio_sha256:'late',transcription:{capture_id:'late-confirm'}}});
+  oldInput.release();await lateRefresh;lateStatus.release();
+  await until(()=>lateConfirm.nodes.get('#conversation-inputs').children[0].children[0].textContent.includes('Confirmed while a newer snapshot was stale'));
   const boundedOptions={confirmNow:Date.now()},boundedConfirm=boot(false,false,boundedOptions);
   boundedConfirm.originals.set('still-preparing',{id:'still-preparing',sequence:1,text:'',phase:'preparing',voice:{audio_sha256:'bounded'}});
   await boundedConfirm.ui.refresh();

@@ -769,6 +769,9 @@ window.Conversation = (() => {
         }
         card.value.retired = !!card.value.retired || !!value.retired;
         if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
+        // A later-completing status read can carry the first committed transcript,
+        // even when a newer-started history request sampled the pending state.
+        card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
         card.status.textContent = phaseText(card.value);
         microphone?.observe(card.value,phaseText(card.value));
       taskControls?.observeInput?.(card.value);
