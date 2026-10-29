@@ -7,7 +7,7 @@ const vm = require("node:vm");
 function boot(readOnly=false,standalone=false,options={}) {
   const optionsForFixture=options;const streamedTransports=[];
   const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
-  const copied=[],recoveryPosts=[],mediaActions=new Map();const mediaSession={setActionHandler:(name,fn)=>mediaActions.set(name,fn)};
+  const copied=[],recoveryPosts=[],statusReads=[],mediaActions=new Map();const mediaSession={setActionHandler:(name,fn)=>mediaActions.set(name,fn)};
   const gaps=new Map(),documentEvents=new Map(),windowEvents=new Map();
   const subscribe=(events,name,fn)=>events.set(name,[...(events.get(name)||[]),fn]);
   const clock={pending:()=>[...gaps.values()].map(t=>t.ms),fire(ms){
@@ -113,6 +113,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       originals.set(id,value);return value;
     }
     if (url.pathname.startsWith("/interaction/inputs/")) {
+      statusReads.push(url.pathname);
       if (heldStatus) {const held=heldStatus;heldStatus=undefined;held.started();await held.promise;if(held.fail)throw new TypeError("Delayed status failure");}
       return originals.get(url.pathname.split("/").at(-1));
     }
@@ -122,7 +123,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       rows.sort((a,b)=>direction==="after"?a.sequence-b.sequence:b.sequence-a.sequence);
       const selected=rows.slice(0,8);
       const snapshot={binding:"fixture",csrf:"synthetic",routing_choices:[{selector:"t7",label:"Alpha"},{selector:"t8",label:"Beta"}],items:selected.map(v=>({...v})),cursor:selected.at(-1)?.sequence||0,newest:Math.max(0,...selected.map(v=>v.sequence)),more:rows.length>8};
-      if (heldInputs) {const held=heldInputs;heldInputs=undefined;held.started();await held.promise;}
+      if (heldInputs && (!heldInputs.direction || heldInputs.direction===direction)) {const held=heldInputs;heldInputs=undefined;held.started();await held.promise;}
       return snapshot;
     }
     if (url.pathname.endsWith("/part")) {
@@ -150,7 +151,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
-  const context = vm.createContext({window:{navigator:{mediaSession,clipboard:options.copyRich?{write:async items=>{copied.push(await (await items[0].data['text/plain']).text());}}:{writeText:async text=>{if(options.copyDenied)throw Error("Clipboard permission denied");copied.push(text);}}},ClipboardItem:options.copyRich?class{constructor(data){this.data=data;}}:undefined,localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
+  const context = vm.createContext({Date:optionsForFixture.confirmNow===undefined?Date:class extends Date{static now(){return optionsForFixture.confirmNow;}},window:{navigator:{mediaSession,clipboard:options.copyRich?{write:async items=>{copied.push(await (await items[0].data['text/plain']).text());}}:{writeText:async text=>{if(options.copyDenied)throw Error("Clipboard permission denied");copied.push(text);}}},ClipboardItem:options.copyRich?class{constructor(data){this.data=data;}}:undefined,localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
     URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:options.immediateHash?{...require("node:crypto"),subtle:{digest:(_algorithm,bytes)=>Promise.resolve(require("node:crypto").createHash('sha256').update(new Uint8Array(bytes)).digest())}}:options.hashHold?{...require("node:crypto"),subtle:{digest:(algorithm,bytes)=>options.hashHold.active?new Promise(resolve=>options.hashHold.releases.push(()=>resolve(require("node:crypto").createHash('sha256').update(bytes).digest()))):require("node:crypto").subtle.digest(algorithm,bytes)}}:require("node:crypto"),
     fetch:(_route, options) => {
@@ -201,7 +202,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     assert(document.querySelector("#conversation-sound").children.includes(document.querySelector("#conversation-sound-controls")));
   }
   ui.authenticated();
-  return {ui, copied, nodes, requests, originals,replyTexts,partReads,humanTasks,streamedTransports,
+  return {ui, copied,statusReads, nodes, requests, originals,replyTexts,partReads,humanTasks,streamedTransports,
     continuous:()=>({hooks:continuousHooks,mode:continuousMode,session:continuousSession,calls:continuousCalls}),microphoneState:(value,detail)=>capture.onActivity(value,detail),
     rangeGeometry(fn){context.document.createRange=fn;},
     reducedMotion(value){context.window.matchMedia=()=>({matches:value});},
@@ -249,10 +250,10 @@ function boot(readOnly=false,standalone=false,options={}) {
       const entered=new Promise(yes=>{started=yes;}),promise=new Promise(yes=>{release=yes;});
       heldRequests={promise,started};return {entered,release};
     },
-    holdInputs() {
+    holdInputs(direction) {
       let release, started;
       const entered=new Promise(yes=>{started=yes;}), promise=new Promise(yes=>{release=yes;});
-      heldInputs={promise,started};return {entered,release};
+      heldInputs={promise,started,direction};return {entered,release};
     },
     posting() {return !!heldPost?.started;},
     holdPost() {let release; const promise = new Promise(yes=>{release=yes;}); heldPost={promise}; return release;},
@@ -1487,6 +1488,37 @@ function boot(readOnly=false,standalone=false,options={}) {
   voiceHistory.originals.set("voice-original",{id:"voice-original",sequence:1,preview:"A finalized automatic transcript",phase:"accepted",voice:{audio_sha256:"a",transcription:{capture_id:"voice-original"}}});
   await voiceHistory.ui.refresh();
   assert.equal(voiceHistory.nodes.get("#conversation-inputs").children[0].children[0].textContent,"Automatic voice transcript:\nA finalized automatic transcript","Preparing empty text cannot hide the later history transcript preview");
+  // A slow response/question refresh must not keep a saved voice transcript in preparing.
+  const confirming=boot();
+  confirming.originals.set('confirmed-voice',{id:'confirmed-voice',sequence:1,text:'',phase:'preparing',voice:{audio_sha256:'owned'}});
+  await confirming.ui.refresh();
+  const slowQuestions=confirming.holdRequests(),slowRefresh=confirming.ui.refresh();await slowQuestions.entered;
+  confirming.originals.set('confirmed-voice',{id:'confirmed-voice',sequence:1,text:'Already committed transcript',phase:'accepted',voice:{audio_sha256:'owned',transcription:{capture_id:'confirmed-voice'}}});
+  try {
+    const statusHold=confirming.holdStatus();
+    await confirming.ui.refresh();await statusHold.entered;
+    await confirming.ui.refresh();assert.equal(confirming.statusReads.length,1,'One confirmation read at a time');
+    statusHold.release();
+    await until(()=>confirming.nodes.get('#conversation-inputs').children[0].children[0].textContent.includes('Already committed transcript'));
+    assert.equal(confirming.nativePosts.length,0,'Confirmation refresh must not submit native work');
+  } finally {slowQuestions.release();await slowRefresh;}
+  const lateConfirm=boot();
+  lateConfirm.originals.set('late-confirm',{id:'late-confirm',sequence:1,text:'',phase:'preparing',voice:{audio_sha256:'late'}});
+  await lateConfirm.ui.refresh();
+  const lateQuestions=lateConfirm.holdRequests(),lateRefresh=lateConfirm.ui.refresh();await lateQuestions.entered;
+  const lateStatus=lateConfirm.holdStatus();await lateConfirm.ui.refresh();await lateStatus.entered;
+  const oldInput=lateConfirm.holdInputs("before");lateQuestions.release();await oldInput.entered;
+  lateConfirm.originals.set('late-confirm',{id:'late-confirm',sequence:1,text:'Confirmed while a newer snapshot was stale',phase:'accepted',voice:{audio_sha256:'late',transcription:{capture_id:'late-confirm'}}});
+  oldInput.release();await lateRefresh;lateStatus.release();
+  await until(()=>lateConfirm.nodes.get('#conversation-inputs').children[0].children[0].textContent.includes('Confirmed while a newer snapshot was stale'));
+  const boundedOptions={confirmNow:Date.now()},boundedConfirm=boot(false,false,boundedOptions);
+  boundedConfirm.originals.set('still-preparing',{id:'still-preparing',sequence:1,text:'',phase:'preparing',voice:{audio_sha256:'bounded'}});
+  await boundedConfirm.ui.refresh();
+  const heldConfirm=boundedConfirm.holdRequests(),heldRefresh=boundedConfirm.ui.refresh();await heldConfirm.entered;
+  try {
+    for(let n=0;n<8;n++){await boundedConfirm.ui.refresh();await new Promise(setImmediate);if(n===0){await boundedConfirm.ui.refresh();assert.equal(boundedConfirm.statusReads.length,1,'Refresh bursts must not bypass confirmation pacing');}boundedOptions.confirmNow+=2000;}
+    assert.equal(boundedConfirm.statusReads.length,4,'Saved confirmation checks have a finite per-original budget');
+  } finally {heldConfirm.release();await heldRefresh;}
   const routed=boot();
   routed.originals.set("routing-original",{id:"routing-original",text:"#Unknown Work",sequence:1,phase:"awaiting_target"});
   await routed.ui.refresh();

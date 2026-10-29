@@ -51,6 +51,16 @@ including keyboard/zoom bounds. Long press opens the same explanation with no
 native title/callout. It closes on state change, another tap, Escape, viewport
 change or after8seconds; keyboard/screen-reader labels retain full meaning.
 
+A foreground refresh already waiting on response/question snapshots uses the
+existing saved-original status reader for at most two `preparing` voice cards.
+The existing refresh cadence supplies at most four single-flight reads per
+original within30seconds, spaced at least2seconds; no extra timer, provider
+request, submission or retry.
+This lets a committed transcript leave "Confirming transcript" before a slow
+response snapshot finishes. Retired/read-only/hidden captures are excluded and
+binding generations retain their existing fence. Browser-stage attribution of a
+particular phone delay remains separate from server preparation receipts.
+
 The pilot's speech driver reuses the canonical web player's source validation
 and complete, integrity-checked response bytes. Only after source validation
 unmutes that exact segment does it transfer bounded bytes to the native decoder.

@@ -724,7 +724,9 @@ window.Conversation = (() => {
         continueButton.addEventListener("click",()=>card.value.continuation&&selectFocus(card.value.continuation,`#${card.value.routing?.label||"session"}`));
         select.addEventListener("change",()=>renderRoute(card));
         routeButton.addEventListener("click",()=>routeInput(card,card.routePending||{binding,selector:select.value})); inputs.set(value.id, card);
-        check.addEventListener("click", async () => {
+        card.checkStatus = async () => {
+          if(card.checking)return;
+          card.checking=true;
           const owned = inputGeneration, observation = ++inputObservation;
           check.disabled = true;
           try {
@@ -735,8 +737,9 @@ window.Conversation = (() => {
             if (owned !== inputGeneration) return;
             if (observation >= card.observed) status.textContent = phaseText(card.value) + " Status check unavailable; no resend was made.";
             if (e.status === 401 || e.status === 403) failed(e);
-          } finally { check.disabled = false; }
-        });
+          } finally { card.checking=false;check.disabled = false; }
+        };
+        check.addEventListener("click",card.checkStatus);
         retry.addEventListener("click", async () => {
           const recovery=savedRecovery(card);
           if (readOnly || (card.value.phase && !recovery) || retry.disabled) return;
@@ -759,6 +762,13 @@ window.Conversation = (() => {
             (!["answered","matrix_requested"].includes(card.value.phase) || value.phase===card.value.phase)) {
           if (!card.value.phase && draft.value === card.value.text) draft.value = "";
           card.value.phase = value.phase;
+          // Adopt only a first committed voice body for this exact recording;
+          // a late read cannot replace already observed text or another capture.
+          if(card.value.voice&&!card.value.text&&!card.value.preview&&value.voice?.transcription?.capture_id===value.id&&value.voice.audio_sha256===card.value.voice.audio_sha256){
+            if(typeof value.text==="string"&&value.text)card.value.text=value.text;
+            else if(typeof value.preview==="string"&&value.preview)card.value.preview=value.preview;
+            card.value.voice={...card.value.voice,...value.voice};
+          }
         }
         if(value.routing && (!card.value.routing || (value.routing.phase==="accepted" && card.value.routing.instruction===value.routing.instruction))){
           card.value.routing=value.routing;card.value.phase=value.phase;
@@ -766,6 +776,9 @@ window.Conversation = (() => {
         }
         card.value.retired = !!card.value.retired || !!value.retired;
         if(card.value.phase && card.value.focusVersion===focusVersion)clearFocus();
+        // A later-completing status read can carry the first committed transcript,
+        // even when a newer-started history request sampled the pending state.
+        card.text.textContent = card.value.voice ? (card.value.text || card.value.preview ? "Automatic voice transcript:\n"+(card.value.text || card.value.preview) : "Original voice recording saved.") : card.value.text ?? card.value.preview;
         card.status.textContent = phaseText(card.value);
         microphone?.observe(card.value,phaseText(card.value));
       taskControls?.observeInput?.(card.value);
@@ -1535,7 +1548,17 @@ window.Conversation = (() => {
     }
     let refreshAgain = false, questionRefreshPending = false;
     async function refresh(force = false) {
-      if(reading){refreshAgain ||= force;return;}
+      if(reading){
+        refreshAgain ||= force;
+        // Reuse the saved-status reader while a slow reply/question snapshot is
+        // in flight. Confirmation must not wait for a model's response to finish.
+        if(!readOnly&&!document.hidden)for(const card of [...inputs.values()].filter(card=>card.value.voice&&card.value.phase==="preparing"&&!card.value.retired&&!card.value.read_only).slice(0,2)){
+          card.confirmUntil ??= Date.now()+30000;
+          if(card.checking||(card.confirmChecks||0)>=4||Date.now()>card.confirmUntil||Date.now()<(card.confirmNextAt||0))continue;
+          card.confirmNextAt=Date.now()+2000;card.confirmChecks=(card.confirmChecks||0)+1;void card.checkStatus();
+        }
+        return;
+      }
       if (!enabled || !ready || (!playbackAllowed() && !force)) return;
       drainText();
       reading = true;questionRefreshPending=!readOnly;
