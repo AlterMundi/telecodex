@@ -1,7 +1,6 @@
 package homes.dmn.interaction;
 
 import android.Manifest;
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -25,12 +24,14 @@ import android.widget.TextView;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+import androidx.activity.ComponentActivity;
+import androidx.activity.OnBackPressedCallback;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import org.json.JSONObject;
 
 /** Thin independent client; authority, originals and work remain on the selected receiver. */
-public final class MainActivity extends Activity {
+public final class MainActivity extends ComponentActivity {
     private WebView web;
     private SpeechOutput speech;
     private JavaScriptReplyProxy reply;
@@ -42,6 +43,9 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() { navigateBack(); }
+        });
         String saved = getPreferences(MODE_PRIVATE).getString("home", "");
         if (saved.isEmpty()) setup(); else open(saved);
     }
@@ -160,7 +164,7 @@ public final class MainActivity extends Activity {
         if (web != null) web.evaluateJavascript("window.NativeSpeechAudio?.background()", null);
         super.onStop();
     }
-    @Override public void onBackPressed() {
+    private void navigateBack() {
         if (web != null && web.canGoBack()) web.goBack();
         else new AlertDialog.Builder(this).setMessage("Leave this conversation?")
             .setPositiveButton("Close", (d,w) -> finish()).setNeutralButton("Change home", (d,w) -> {
