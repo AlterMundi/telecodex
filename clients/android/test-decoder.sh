@@ -15,22 +15,24 @@ cleanup() {
 }
 trap cleanup EXIT
 test "$(df --output=avail -k . | tail -1)" -gt 10000000
-timeout 600s "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'system-images;android-35;google_apis;x86_64' >decoder-evidence/sdk.log 2>&1
+timeout 600s "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'system-images;android-35;google_apis;x86_64' >decoder-evidence/sdk.log 2>&1
 echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd --name interaction-decoder --package 'system-images;android-35;google_apis;x86_64' --force
 sudo chmod a+rw /dev/kvm
 "$ANDROID_HOME/emulator/emulator" -avd interaction-decoder -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 1536 -cores 2 -no-snapshot -camera-back none -camera-front none >decoder-evidence/emulator.log 2>&1 &
 decoder_emulator_pid=$!
-timeout 120s adb wait-for-device
+decoder_adb="$ANDROID_HOME/platform-tools/adb"
+test -x "$decoder_adb"
+timeout 120s "$decoder_adb" wait-for-device
 for attempt in $(seq 1 60); do
   kill -0 "$decoder_emulator_pid"
-  if [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; then break; fi
+  if [ "$("$decoder_adb" shell getprop sys.boot_completed | tr -d '\r')" = 1 ]; then break; fi
   sleep 2
 done
-test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
-adb shell input keyevent 82
-adb install -t "$1/debug/app-debug.apk"
-adb install -t "$1/androidTest/debug/app-debug-androidTest.apk"
-timeout 75s adb shell am instrument -w -r -e class homes.dmn.interaction.ProgressiveSpeechTest homes.dmn.interaction.pilot.test/androidx.test.runner.AndroidJUnitRunner | tee decoder-evidence/test.log
-adb logcat -d -t 2000 >decoder-evidence/logcat.log
+test "$("$decoder_adb" shell getprop sys.boot_completed | tr -d '\r')" = 1
+"$decoder_adb" shell input keyevent 82
+"$decoder_adb" install -t "$1/debug/app-debug.apk"
+"$decoder_adb" install -t "$1/androidTest/debug/app-debug-androidTest.apk"
+timeout 75s "$decoder_adb" shell am instrument -w -r -e class homes.dmn.interaction.ProgressiveSpeechTest homes.dmn.interaction.pilot.test/androidx.test.runner.AndroidJUnitRunner | tee decoder-evidence/test.log
+"$decoder_adb" logcat -d -t 2000 >decoder-evidence/logcat.log
 grep -q 'OK (1 test)' decoder-evidence/test.log
 test "$(du -sk decoder-evidence | cut -f1)" -lt 2048
