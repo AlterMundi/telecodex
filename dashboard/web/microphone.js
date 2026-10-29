@@ -68,6 +68,14 @@ window.VoiceInput = (() => {
     const remaining=document.querySelector('#conversation-voice-remaining');
     const RECORDING_MILLIS=120000,clock=()=>window.performance?.now?.()??Date.now();
     const recovery=recoveryStore();let restoreBinding,restoring=false,continuousOwned=false,recoveryFree=false,lastConfirmed;
+    let checking=false,statusTimer;const statusAttempts=new Map();
+    function clearStatusTimer(){clearTimeout(statusTimer);statusTimer=undefined;}
+    function scheduleStatus(immediate=false){
+      if(!available||!pending?.uncertainSubmission||pending.binding!==getBinding()||document.hidden||window.navigator.onLine===false)return;
+      const used=statusAttempts.get(pending.id)||0;if(used>=4)return;
+      if(statusTimer!==undefined&&!immediate)return;
+      clearStatusTimer();statusTimer=setTimeout(()=>{statusTimer=undefined;void checkStatus(true);},immediate?0:[1000,3000,10000,30000][used]);
+    }
     function notice(text,attention=false){state.removeAttribute?.('data-live-caption');state.setAttribute('aria-live','polite');state.textContent=text;state.setAttribute('data-attention',String(attention));}
     function caption(text){notice(text);state.setAttribute('data-live-caption','true');state.setAttribute('aria-live','off');state.scrollLeft=state.scrollWidth;}
     let available=false, liveAvailable=false, liveMode='prepared', generation=0, recorder, stream, parts=[], bytes=0, timer, pending, latestSaved, uploading=false, controller;
@@ -106,15 +114,16 @@ window.VoiceInput = (() => {
       discard.hidden=!pending&&!['permission','recording','ready','finalizing'].includes(phase);discard.disabled=uploading;
       if(save){save.hidden=!pending;save.disabled=uploading;}if(review)review.hidden=!pending;
       discard.textContent='×';discard.setAttribute('aria-label',pending?'Discard local recording':'Discard recording');discard.title=pending?'Discard local recording':'Discard recording';
-      check.hidden=!pending; check.disabled=uploading;
+      check.hidden=!pending; check.disabled=uploading||checking;check.textContent=checking?'Checking delivery…':'Check delivery';
       onActivity(uploading || ['permission','recording','ready','finalizing'].includes(phase) || latestSaved?.phase==='preparing', {phase,uploading,pending:!!pending,message:state.textContent,transcribing:latestSaved?.phase==='preparing'});
     }
     function stopTracks() {if(stream)for(const track of stream.getTracks())track.stop();stream=undefined;clearTimeout(timer);clearTimeout(countdownTimer);}
     function cancelRecording(message='Recording discarded. Nothing was sent.') {
-      generation++;commit=false;latestSaved=undefined;const old=recorder;recorder=undefined;
+      clearStatusTimer();checking=false;generation++;commit=false;latestSaved=undefined;const old=recorder;recorder=undefined;
       if(old?.discard)old.discard();else if(old && old.state!=='inactive')old.stop();stopTracks();parts=[];bytes=0;phase='idle';notice(message,!!message && message!=='Recording discarded. Nothing was sent.');controls();
     }
     function reset() {
+      clearStatusTimer();statusAttempts.clear();checking=false;
       restoreBinding=undefined;
       controller?.abort();controller=undefined;pending=undefined;uploading=false;
       cancelRecording('');available=false;controls();
@@ -140,7 +149,7 @@ window.VoiceInput = (() => {
           pending={...value,uncertainSubmission:true,localRecovery:true};notice('An unfinished recording was recovered. '+(value.captureStop==='audio_flush_unconfirmed'?'The final audio buffer was not confirmed; its ending may be missing. ':value.captureStop==='duration_limit'?'It reached the duration limit; its ending may be incomplete. ':'')+'Check its status, retry the same recording, or save a copy. Nothing was resent.',true);
         }
       }catch(_){if(owned===generation)notice('Local recovery unavailable. Keep this page open until your recording is confirmed.',true);}
-      finally{if(owned===generation){restoring=false;controls();}}
+      finally{if(owned===generation){restoring=false;controls();scheduleStatus();}}
     }
     async function confirmed(value,frozen) {
       if(pending!==frozen || frozen.binding!==getBinding())return;
@@ -149,7 +158,7 @@ window.VoiceInput = (() => {
       if(!!frozen.visual!==!!value.visual||Array.isArray(frozen.visual)!==Array.isArray(value.visual)||Array.isArray(frozen.visual)&&frozen.visual.length!==value.visual.length||frozen.visual&&Object.keys(frozen.visual).some(k=>JSON.stringify(frozen.visual[k])!==JSON.stringify(value.visual[k])))throw Error('Visual capture does not match this recording.');
       const fileValues=refs=>(refs||[]).map(file=>['file_id','sha256','name','mime','size'].map(key=>file[key]));
       if(JSON.stringify(fileValues(frozen.files))!==JSON.stringify(fileValues(value.files)))throw Error('Original files do not match this recording.');
-      onTiming(frozen.id,'retained');
+      clearStatusTimer();onTiming(frozen.id,'retained');
       latestSaved={id:frozen.id,binding:frozen.binding,audio_sha256:frozen.audio_sha256,phase:value.phase,preparedText:frozen.preparedText};
       lastConfirmed=value;
       onInput(value,frozen.focusVersion);onVisualSent(frozen.visual);onFilesSent(frozen.files);pending=undefined;phase='idle';
@@ -158,6 +167,7 @@ window.VoiceInput = (() => {
         value.phase==='retained_unsent'?'Recording saved; no work was submitted. You can keep writing.':
         value.phase==='preparation_unconfirmed'?'Recording saved; transcription unconfirmed. Nothing was resubmitted.':
         value.phase==='preparing'?'Confirming transcript…':
+        value.phase==='accepted'?'Recording confirmed and message sent.':
         'Recording and automatic transcript saved. Work may continue.',value.retired || ['retained_unsent','preparation_unconfirmed'].includes(value.phase));
       if(value.phase==='preparing'&&frozen.preparedText)caption(frozen.preparedText);
       controls();
@@ -176,7 +186,7 @@ window.VoiceInput = (() => {
         try{const original=pending,visual=await getVisual();if(pending!==original||original.binding!==getBinding())return;pending={...original,id:window.crypto.randomUUID(),visual,needsVisualSelection:false};}
         catch(_){notice('Point again or remove the image before retrying this recording.',true);return;}
       }
-      const frozen=pending;onTiming(frozen.id,'send');uploading=true;controller=new AbortController();const active=controller;
+      clearStatusTimer();const frozen=pending;onTiming(frozen.id,'send');uploading=true;controller=new AbortController();const active=controller;
       const deadline=setTimeout(()=>active.abort(),20000);if(frozen.preparedText)caption(frozen.preparedText);else notice('Saving your recording…');controls();
       try {
         const response=await fetch(frozen.captureStop?'api/interaction/voice/limited':'api/interaction/voice',{method:'POST',credentials:'same-origin',signal:active.signal,
@@ -194,7 +204,7 @@ window.VoiceInput = (() => {
         pending={...frozen,uncertainSubmission:true};
         notice('Recording unconfirmed. Check its status or retry this same recording. Nothing is resent automatically.'+(!frozen.localRecovery?' Keep this page open or save an audio copy before leaving.':''),true);
         if(e.status===401 || e.status===403)unauthorized(e);
-      } finally {clearTimeout(deadline);if(controller===active){controller=undefined;uploading=false;controls();}}
+      } finally {clearTimeout(deadline);if(controller===active){controller=undefined;uploading=false;controls();scheduleStatus();}}
     }
     async function finish(owned,binding,mime,selection) {
       if(owned!==generation)return;
@@ -335,14 +345,19 @@ window.VoiceInput = (() => {
       document.body.append(link);link.click();link.remove();setTimeout(()=>window.URL.revokeObjectURL(url),10000);
       notice('Recording copy offered for download. Check its saved status or retry the same original; nothing was resent.',true);
     });
-    check.addEventListener('click',async()=>{
-      if(!pending || uploading)return;const frozen=pending,owned=generation;uploading=true;notice('Checking whether this recording was saved…');controls();
+    async function checkStatus(automatic=false){
+      if(!pending||uploading||checking||pending.binding!==getBinding()||automatic&&(!available||document.hidden||window.navigator.onLine===false))return;
+      const frozen=pending,owned=generation;clearStatusTimer();
+      if(automatic){const used=statusAttempts.get(frozen.id)||0;if(used>=4)return;statusAttempts.set(frozen.id,used+1);while(statusAttempts.size>2)statusAttempts.delete(statusAttempts.keys().next().value);}
+      checking=true;notice('Your recording is kept. Checking whether the message arrived…');controls();
       try {await confirmed(await api(`interaction/inputs/${frozen.id}`),frozen);}
       catch(e){if(pending===frozen){notice([404,409].includes(e.status)?'No saved capture was confirmed. The local recording is kept: retry the same recording, save a copy, or discard the local copy.':'Could not confirm the saved recording. The local audio is kept; check again or retry the same recording. Nothing was resent.',true);if(e.status===401 || e.status===403)unauthorized(e);}}
-      finally{if(owned===generation){uploading=false;controls();}}
-    });
-    document.addEventListener('visibilitychange',()=>{if(document.hidden)deactivate();});
-    window.addEventListener('pagehide',deactivate);telegram?.onEvent?.('deactivated',deactivate);
+      finally{if(owned===generation){checking=false;controls();scheduleStatus();}}
+    }
+    check.addEventListener('click',()=>checkStatus());
+    document.addEventListener('visibilitychange',()=>{if(document.hidden){clearStatusTimer();deactivate();}else scheduleStatus(true);});
+    window.addEventListener('online',()=>scheduleStatus(true));
+    window.addEventListener('pagehide',()=>{clearStatusTimer();deactivate();});telegram?.onEvent?.('deactivated',()=>{clearStatusTimer();deactivate();});
     controls();return {configure,reset,deactivate,observe,submit,ownsSend,hold,startConversation:()=>liveAvailable&&liveMode==='prepared'&&start(true),retainContinuous,commitContinuous,reviewContinuous,continuousOwner,canStartContinuous:()=>!!recovery&&recoveryFree&&available&&liveAvailable&&liveMode==='prepared'&&supported()&&!restoring&&!ownsSend(),syncControls:syncSend};
   }
   return {mount};
