@@ -18,8 +18,15 @@ The voice view uses the same PCM, final-flush confirmation, UUID/hash, prepared
 transcript and one-original upload/recovery path. It does not inherit a worker
 reply selection, selected image or attached draft files. Leaving or hiding it
 keeps captured audio for explicit review; it never retries an uncertain upload.
-A temporary Conversation-only audio mix also silences Beacon without overwriting
-the ordinary mix. Keyboard exit and the prior avatar/draft are preserved.
+In continuous mode, hiding the page stops capture but retains the open voice view
+and its Conversation-only audio mix, so the current and later replies can keep
+playing through the existing player and media controls. Returning never reopens
+the microphone automatically. Explicit exit, page navigation, lost authorization
+and the existing five-minute view limit still close the view and restore the
+prior audio choice. Browser or OS suspension can still delay playback; these
+client transitions do not establish physical mobile background acceptance.
+The temporary mix also silences Beacon without overwriting the ordinary mix.
+Keyboard exit and the prior avatar/draft are preserved.
 
 Silero establishes speech before Smart Turn scores a pause. A current endpoint
 and nonempty recognition can finalize only the explicitly selected trial.
