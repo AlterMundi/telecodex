@@ -27,6 +27,21 @@ document picker, without broad storage permission. Page navigation/destruction
 releases native output. The0.1/0.2 pilots stop speech when backgrounded. The0.3 candidate below stops
 microphone capture while allowing an explicitly enabled speech session to continue.
 
+Android0.5 corrects a missing manifest permission: `MODIFY_AUDIO_SETTINGS` is
+required alongside runtime `RECORD_AUDIO` for Chromium's communication input
+device enumeration. Granting the latter alone does not satisfy that contract;
+see [Chromium AudioManagerAndroid](https://chromium.googlesource.com/chromium/src/media/+/refs/heads/main/base/android/java/src/org/chromium/media/AudioManagerAndroid.java).
+The added permission is normal/install-time, not another user permission dialog.
+The exact-origin, foreground and audio-only WebView grant remains unchanged.
+A real API35 WebView test exercises the host permission callback, opens emulator
+input and records a short nonempty MediaRecorder result without any upload,
+provider, physical capture or retained recording. It does not establish Redmi
+acceptance or test the Android runtime permission dialog itself. The reported
+Redmi `NotReadableError` after granting microphone permission is consistent with
+the missing prerequisite; the phone's exact underlying exception is unobserved.
+Upgrade with the same package/signing key and higher versionCode; retain login
+and app data. Do not clear data or reinstall to repair this permission.
+
 The pilot's speech driver reuses the canonical web player's source validation
 and complete, integrity-checked response bytes. Only after source validation
 unmutes that exact segment does it transfer bounded bytes to the native decoder.
