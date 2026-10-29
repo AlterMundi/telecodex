@@ -1041,15 +1041,29 @@ window.Conversation = (() => {
       $("#conversation-player").hidden=false;
       voiceStatus();
     }
-    const audioIndicator=$("#conversation-audio-state"),audioHint=$("#conversation-audio-hint");let audioHintTimer;
+    const audioIndicator=$("#conversation-audio-state"),audioHint=$("#conversation-audio-hint");let audioHintTimer,audioHintHeldUntil=0;
+    // Keep the explanation outside the dock's clipping/layout ancestors.
+    document.body.append(audioHint);
     const closeAudioHint=()=>{clearTimeout(audioHintTimer);audioHint.hidden=true;audioIndicator.setAttribute("aria-expanded","false");};
-    audioIndicator.addEventListener("click",()=>{
-      const reveal=audioHint.hidden;closeAudioHint();
-      if(reveal){audioHint.textContent=audioIndicator.textContent;audioHint.hidden=false;audioIndicator.setAttribute("aria-expanded","true");audioHintTimer=setTimeout(closeAudioHint,8000);}
-    });
+    const showAudioHint=()=>{
+      closeAudioHint();audioHint.textContent=audioIndicator.textContent;audioHint.hidden=false;audioIndicator.setAttribute("aria-expanded","true");
+      const rect=audioIndicator.getBoundingClientRect?.(),viewport=window.visualViewport;
+      if(rect){
+        const x=viewport?.offsetLeft||0,y=viewport?.offsetTop||0,width=viewport?.width||window.innerWidth,height=viewport?.height||window.innerHeight;
+        audioHint.style.maxWidth=Math.max(1,width-16)+"px";audioHint.style.maxHeight=Math.max(1,height-16)+"px";
+        const size=audioHint.getBoundingClientRect();
+        audioHint.style.left=Math.max(x+8,Math.min(rect.left,x+width-size.width-8))+"px";
+        const above=rect.top-size.height-8,top=above>=y+8?above:rect.bottom+8;
+        audioHint.style.top=Math.max(y+8,Math.min(top,y+height-size.height-8))+"px";
+      }
+      audioHintTimer=setTimeout(closeAudioHint,8000);
+    };
+    audioIndicator.addEventListener("click",()=>{if(Date.now()<audioHintHeldUntil)return;if(audioHint.hidden)showAudioHint();else closeAudioHint();});
+    audioIndicator.addEventListener("contextmenu",event=>{event.preventDefault();audioHintHeldUntil=Date.now()+1000;showAudioHint();});
     window.addEventListener("keydown",event=>{if(event.key==="Escape")closeAudioHint();});
+    window.addEventListener("resize",closeAudioHint);window.visualViewport?.addEventListener("resize",closeAudioHint);window.visualViewport?.addEventListener("scroll",closeAudioHint);
     const audioState = (text) => {
-      closeAudioHint();audioIndicator.textContent=text;audioIndicator.title=text;audioIndicator.setAttribute("aria-label",text);
+      closeAudioHint();audioIndicator.textContent=text;audioIndicator.removeAttribute("title");audioIndicator.setAttribute("aria-label",text);
       audioIndicator.dataset.audioState=text==="Audio off"?"off":text.startsWith("Waiting")||text.startsWith("A short pause")?"waiting":
         text.startsWith("Preparing")?"preparing":text.startsWith("Listening")?"listening":text.startsWith("Recovering")?"recovering":
         text.startsWith("End of")?"done":text.startsWith("Question finished")?"question":text.startsWith("Connection unavailable")?"offline":

@@ -43,11 +43,13 @@ Upgrade with the same package/signing key and higher versionCode; retain login
 and app data. Do not clear data or reinstall to repair this permission.
 
 The ordinary audio dock uses one speaker enable/off control and one shared slot
-for Play/Pause or a state icon. Follow is the only visible text, beneath them;
-removing the track/status paragraphs reduces the dock to92px and returns36px
-to the composer. Tapping a state icon explains its current meaning without
-playing or requesting audio. The explanation closes on state change, another
-tap, Escape or after8seconds; keyboard/screen-reader labels retain full meaning.
+for Play/Pause or a state icon. The controls form one vertical column: speaker, state/Play/Pause, then Follow
+as the only visible text. A64px dock uses36px buttons with20px glyphs, fitting
+beside the composer and returning64px compared with the former128px dock. Tapping a state icon explains its current meaning without
+playing or requesting audio. The explanation is a body-level fixed overlay clamped to the visual viewport,
+including keyboard/zoom bounds. Long press opens the same explanation with no
+native title/callout. It closes on state change, another tap, Escape, viewport
+change or after8seconds; keyboard/screen-reader labels retain full meaning.
 
 The pilot's speech driver reuses the canonical web player's source validation
 and complete, integrity-checked response bytes. Only after source validation
