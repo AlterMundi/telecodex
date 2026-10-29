@@ -7,7 +7,7 @@ const vm = require("node:vm");
 function boot(readOnly=false,standalone=false,options={}) {
   const optionsForFixture=options;const streamedTransports=[];
   const nodes = new Map(), requests = [], audioCalls=[], sourceOverrides=new Map();
-  const recoveryPosts=[],mediaActions=new Map();const mediaSession={setActionHandler:(name,fn)=>mediaActions.set(name,fn)};
+  const copied=[],recoveryPosts=[],mediaActions=new Map();const mediaSession={setActionHandler:(name,fn)=>mediaActions.set(name,fn)};
   const gaps=new Map(),documentEvents=new Map(),windowEvents=new Map();
   const subscribe=(events,name,fn)=>events.set(name,[...(events.get(name)||[]),fn]);
   const clock={pending:()=>[...gaps.values()].map(t=>t.ms),fire(ms){
@@ -150,7 +150,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       items:selected.map(source), cursor:{delivery:0,native:selected.at(-1) || cursor},
       newest:{delivery:0,native:Math.max(0,...selected)}, more:numbers.length > 8};
   };
-  const context = vm.createContext({window:{navigator:{mediaSession},localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
+  const context = vm.createContext({window:{navigator:{mediaSession,clipboard:options.copyRich?{write:async items=>{copied.push(await (await items[0].data['text/plain']).text());}}:{writeText:async text=>{if(options.copyDenied)throw Error("Clipboard permission denied");copied.push(text);}}},ClipboardItem:options.copyRich?class{constructor(data){this.data=data;}}:undefined,localStorage:options.followStorage?{getItem:key=>options.followStorage.get(key)??null,setItem:(key,value)=>options.followStorage.set(key,value)}:undefined,addEventListener(name,fn) {subscribe(windowEvents,name,fn);}}, document,
     location:{href:"https://fixture.invalid/?view=conversation"}, history:{replaceState() {}},
     URL, URLSearchParams, AbortController, setTimeout:timeout, clearTimeout:cancelTimeout, TextEncoder, Blob, crypto:options.immediateHash?{...require("node:crypto"),subtle:{digest:(_algorithm,bytes)=>Promise.resolve(require("node:crypto").createHash('sha256').update(new Uint8Array(bytes)).digest())}}:options.hashHold?{...require("node:crypto"),subtle:{digest:(algorithm,bytes)=>options.hashHold.active?new Promise(resolve=>options.hashHold.releases.push(()=>resolve(require("node:crypto").createHash('sha256').update(bytes).digest()))):require("node:crypto").subtle.digest(algorithm,bytes)}}:require("node:crypto"),
     fetch:(_route, options) => {
@@ -201,7 +201,7 @@ function boot(readOnly=false,standalone=false,options={}) {
     assert(document.querySelector("#conversation-sound").children.includes(document.querySelector("#conversation-sound-controls")));
   }
   ui.authenticated();
-  return {ui, nodes, requests, originals,replyTexts,partReads,humanTasks,streamedTransports,
+  return {ui, copied, nodes, requests, originals,replyTexts,partReads,humanTasks,streamedTransports,
     continuous:()=>({hooks:continuousHooks,mode:continuousMode,session:continuousSession,calls:continuousCalls}),microphoneState:(value,detail)=>capture.onActivity(value,detail),
     rangeGeometry(fn){context.document.createRange=fn;},
     reducedMotion(value){context.window.matchMedia=()=>({matches:value});},
@@ -1105,6 +1105,27 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(telegramDenied.nodes.get('#conversation-message').value,'Unsent draft');
   assert.equal(telegramDenied.nodes.get('#conversation-timeline').children.length,retainedReplies);
   telegramDenied.ui.stop();
+
+  const copyFixture=boot(false,true,{capture:true});await copyFixture.ui.refresh();
+  const copyLane=copyFixture.nodes.get('#conversation-timeline');
+  const copyCard=copyLane.children.find(c=>c.dataset.sourceId==='native:8');
+  const copyAction=box=>{const visit=n=>n.className==='message-copy'?n:(n.children||[]).map(visit).find(Boolean);return visit(box);};
+  const fullCopy='🙂 **Whole message**\n'+('A paragraph with code `git status`.\n'.repeat(110));
+  copyFixture.replyTexts.set('native:8',fullCopy);copyFixture.overrideSource(8,{preview:'🙂 Preview',text_characters:Array.from(fullCopy).length});await copyFixture.ui.refresh();
+  await copyAction(copyCard).handlers.click();assert.equal(copyFixture.copied.at(-1),fullCopy,'Copy resolves all exact Unicode pages, preserving source text rather than its preview');
+  assert.equal(copyAction(copyCard).textContent,'Copied');assert(copyFixture.partReads.filter(v=>v.source==='native:8').length>1);
+  copyFixture.capturedInput({id:'11111111-1111-4111-8111-111111111111',text:'My full message 🙂',phase:'accepted'});
+  const ownCopy=copyLane.children.find(c=>c.dataset.timelineKey==='input:11111111-1111-4111-8111-111111111111');await copyAction(ownCopy).handlers.click();assert.equal(copyFixture.copied.at(-1),'My full message 🙂');
+  copyFixture.overrideSource(9,{kind:'worker_progress',target:{chat_id:100,thread_id:7},preview:'Update preview',text_characters:30});copyFixture.addReplies(1);copyFixture.replyTexts.set('native:9','The complete update, not preview');await copyFixture.ui.refresh();
+  const copiedUpdate=copyLane.children.find(c=>c.dataset.sourceId==='native:9');await copyAction(copiedUpdate).handlers.click();assert.equal(copyFixture.copied.at(-1),'The complete update, not preview');
+  const historicalId='22222222-2222-4222-8222-222222222222';copyFixture.originals.set(historicalId,{id:historicalId,text:'Historical complete input 🙂',phase:'accepted'});copyFixture.capturedInput({id:historicalId,preview:'Historical preview',phase:'accepted'});
+  const historicalCard=copyLane.children.find(c=>c.dataset.timelineKey==='input:'+historicalId);await copyAction(historicalCard).handlers.click();assert.equal(copyFixture.copied.at(-1),'Historical complete input 🙂','History preview resolves the original text endpoint');
+  copyFixture.nativeRequest();await copyFixture.ui.refresh();const questionCopy=copyFixture.nodes.get('#conversation-request-cards').children[0];await copyAction(questionCopy).handlers.click();assert.equal(copyFixture.copied.at(-1),'Choose scope');assert.equal(copyFixture.nativePosts.length,0,'Copying a question cannot answer or approve it');
+  const copiedBeforeChange=copyFixture.copied.length,heldCopy=copyFixture.holdReplyText('native:8'),copying=copyAction(copyCard).handlers.click();await heldCopy.entered;copyFixture.overrideSource(8,{revision:'new-copy-revision'});await copyFixture.ui.refresh();heldCopy.release();await copying;assert.equal(copyFixture.copied.length,copiedBeforeChange,'Revision change during paging cannot copy a partial or mixed message');assert.equal(copyAction(copyCard).textContent,'Copy failed');
+  const copyTask={id:'copy-task',binding:'fixture',revision:'task-copy-rev',label:'Conversation',title:'A human action',body:'Complete human action body',preview:'Action preview',state:'pending',can_dismiss:true};copyFixture.humanTasks.set(copyTask.id,copyTask);await copyFixture.ui.refresh();await copyAction(copyFixture.nodes.get('#conversation-task-cards').children[0]).handlers.click();assert.equal(copyFixture.copied.at(-1),copyTask.body);assert.equal(copyFixture.taskPosts.length,0,'Copy cannot dismiss, reply to or complete a human action');
+  assert.equal(copyFixture.audioCalls.length,0,'Copy never synthesizes speech');assert.equal(copyFixture.recoveryPosts.length,0,'Copy never resends input');copyFixture.ui.stop();
+  const richCopy=boot(false,true,{copyRich:true});await richCopy.ui.refresh();await copyAction(richCopy.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8')).handlers.click();assert.equal(richCopy.copied[0],'Selected reply','ClipboardItem accepts a promised full-text Blob');richCopy.ui.stop();
+  const deniedCopy=boot(false,true,{copyDenied:true});await deniedCopy.ui.refresh();const deniedCard=deniedCopy.nodes.get('#conversation-timeline').children.find(c=>c.dataset.sourceId==='native:8');await copyAction(deniedCard).handlers.click();assert.equal(copyAction(deniedCard).textContent,'Copy failed');assert.equal(deniedCopy.copied.length,0);deniedCopy.ui.stop();
 
   const noPlayer=boot(false,false,{clock:true});noPlayer.audio();await noPlayer.ui.refresh();
   noPlayer.nodes.get('#conversation-voice-replies').handlers.click();noPlayer.failAudio();noPlayer.addReplies(2);await noPlayer.ui.refresh();
