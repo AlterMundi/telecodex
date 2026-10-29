@@ -2,14 +2,19 @@
 /* Loaded only by the Android host, on its exact selected HTTPS main origin. */
 window.NativeSpeechAudio=(()=>{
   const bridge=window.DaimonAudio,outputs=new Map(),streams=new Set();
-  let serial=0;
+  let serial=0,captureEpoch=0;
   if(!bridge?.postMessage)return;
   const send=value=>bridge.postMessage(JSON.stringify(value));
   bridge.onmessage=event=>{try{const value=JSON.parse(event.data);outputs.get(value.id)?.receive(value);}catch{}};
   send({command:"hello"});
   const devices=navigator.mediaDevices,original=devices?.getUserMedia?.bind(devices);
   if(original)devices.getUserMedia=async constraints=>{
-    const stream=await original(constraints);streams.add(stream);
+    // Explicit track.stop() does not dispatch ended. Drop finished captures
+    // before another recording so the foreground registry cannot accumulate.
+    for(const previous of streams)if(previous.getTracks().every(track=>track.readyState==="ended"))streams.delete(previous);
+    const epoch=captureEpoch,stream=await original(constraints);
+    if(epoch!==captureEpoch){for(const track of stream.getTracks())track.stop();throw new DOMException("Capture interrupted by app lifecycle","AbortError");}
+    streams.add(stream);
     stream.getTracks().forEach(track=>track.addEventListener("ended",()=>{if(stream.getTracks().every(t=>t.readyState==="ended"))streams.delete(stream);},{once:true}));
     return stream;
   };
@@ -26,7 +31,7 @@ window.NativeSpeechAudio=(()=>{
     function command(command,extra={}){if(id)send({command,id,...extra});}
     function receive(value){
       if(value.id!==id)return;
-      if(Number.isFinite(value.position))position=value.position;
+      if(value.type!=="loaded" && Number.isFinite(value.position))position=value.position;
       if(Number.isFinite(value.duration))duration=value.duration;
       if(value.type==="error"){paused=true;fail(Error("Android audio unavailable"));element.dispatchEvent(new Event("error"));return;}
       if(value.type==="playing"){paused=false;ended=false;}
@@ -92,6 +97,7 @@ window.NativeSpeechAudio=(()=>{
     return element;
   }
   function background(){
+    captureEpoch++;
     window.dispatchEvent(new Event("pagehide"));
     for(const output of [...outputs.values()])output.reset();
     for(const stream of streams)for(const track of stream.getTracks())track.stop();streams.clear();

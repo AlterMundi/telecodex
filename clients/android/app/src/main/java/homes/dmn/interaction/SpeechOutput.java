@@ -26,7 +26,7 @@ final class SpeechOutput {
     private ByteArrayOutputStream pending;
     private String id, hash;
     private int expected, sequence;
-    private boolean prepared;
+    private boolean prepared, seeking, playWhenSeekDone;
     private float volume = 1;
 
     SpeechOutput(Context context, Handler handler, Consumer<JSONObject> emit) {
@@ -47,11 +47,13 @@ final class SpeechOutput {
         if (focus != null) { manager.abandonAudioFocusRequest(focus); focus = null; }
     }
     private void pause(String reason) {
+        playWhenSeekDone = false;
         if (prepared && player != null && player.isPlaying()) player.pause();
         releaseFocus(); event(reason);
     }
     private void play() {
         if (!prepared || player == null) throw new IllegalStateException("Audio not prepared");
+        if (seeking) { playWhenSeekDone = true; return; }
         if (focus == null) {
             focus = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
                 .setAudioAttributes(attributes).setAcceptsDelayedFocusGain(false)
@@ -71,7 +73,7 @@ final class SpeechOutput {
         }
     };
     void stop() {
-        handler.removeCallbacks(tick); releaseFocus(); prepared = false;
+        handler.removeCallbacks(tick); releaseFocus(); prepared = seeking = playWhenSeekDone = false;
         if (player != null) { player.release(); player = null; }
         if (pending != null) { pending.reset(); pending = null; }
         id = hash = null;
@@ -120,13 +122,21 @@ final class SpeechOutput {
                         if (p != player) return;
                         prepared = true; event("loaded");
                     });
+                    owned.setOnSeekCompleteListener(p -> {
+                        if (p != player) return;
+                        seeking = false;
+                        if (playWhenSeekDone) {
+                            playWhenSeekDone = false;
+                            try { play(); } catch (Exception error) { event("error"); stop(); }
+                        }
+                    });
                     owned.setOnCompletionListener(p -> { if (p == player) { releaseFocus(); handler.removeCallbacks(tick); event("ended"); } });
                     owned.setOnErrorListener((p, what, extra) -> { if (p == player) { event("error"); stop(); } return true; });
                     owned.prepareAsync(); break;
                 }
                 case "play": play(); break;
                 case "pause": pause("pause"); break;
-                case "seek": if (prepared) player.seekTo(Math.max(0, Math.min(player.getDuration(), value.getInt("millis")))); break;
+                case "seek": if (prepared) { seeking = true; player.seekTo(Math.max(0, Math.min(player.getDuration(), value.getInt("millis")))); } break;
                 case "volume": volume = (float)Math.max(0, Math.min(1, value.getDouble("value"))); if (player != null && prepared) player.setVolume(volume, volume); break;
                 case "stop": stop(); break;
                 default: throw new IllegalArgumentException();
