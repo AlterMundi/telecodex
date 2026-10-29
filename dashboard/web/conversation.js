@@ -973,7 +973,15 @@ window.Conversation = (() => {
     let enabled = false, ready = false, reading = false, binding, canListen = false, canStreamSpeech = false, canReportPlayback=false,canReportWordPosition=false,canLimitCaptureQuestions=false;
     let newest = {delivery:0, native:0, matrix:0}, oldest = {delivery:0, native:0, matrix:0};
     let initialized = false, active, generation = 0, requestAbort, blobUrl, prefetched;
-    const audioState = (text) => { $("#conversation-audio-state").textContent = text; };
+    function playerStatus() {
+      const playable=!!active && !!blobUrl && !active.segmentEnded && !audio.ended;
+      toggle.hidden=!playable;
+      $("#conversation-audio-state").hidden=playable;
+      $("#conversation-player").hidden=false;
+      voiceStatus();
+    }
+    const audioState = (text) => { $("#conversation-audio-state").textContent = text;playerStatus(); };
+    audioState("Audio off");
     const initialMode = () => readOnly || new URL(location.href).searchParams.get("view") === "conversation"
       || new URLSearchParams(telegram?.initData || "").get("start_param") === "conversation";
 
@@ -981,11 +989,11 @@ window.Conversation = (() => {
     function voiceKey(source) {return source.kind==="native_question"?`${source.id}:${source.revision}`:source.id;}
     function voiceStatus() {
       const button=$("#conversation-voice-replies");
-      const state=voiceEnabled?(voiceSuspended?"paused":"on"):"off";
+      const state=voiceEnabled || active && blobUrl && !audio.ended?"on":"off";
       button.dataset.voiceState=state;
       button.setAttribute("aria-pressed",String(state==="on"));
-      button.setAttribute("aria-label",state==="on"?"Disable spoken replies":state==="paused"?"Resume spoken replies":"Enable spoken replies");
-      button.title=voiceSuspended?"Voice replies paused · tap to resume":`Read new replies aloud${voiceQueue.length?` · ${voiceQueue.length} waiting`:""}`;
+      button.setAttribute("aria-label",state==="on"?"Stop audio and disable spoken replies":"Enable spoken replies");
+      button.title=state==="on"?"Stop audio and disable spoken replies":"Enable spoken replies";
     }
     function enableVoice() {
       if(readOnly || !canListen)return;
@@ -1202,7 +1210,7 @@ window.Conversation = (() => {
       voiceEnabled=false;voiceBusy=false;clearVoiceQueue();voiceFinalTimes.clear();voiceContext=undefined;voiceStatus();stop();
     }
     $("#conversation-voice-replies").addEventListener("click",()=>{
-      if(voiceEnabled && !voiceSuspended)disableVoice();else {
+      if(voiceEnabled || active && blobUrl && !audio.ended){sound?.disable();disableVoice();}else {
         enableVoice();
         if(captureBusy){voiceBusy=false;return;}
         if(active && blobUrl && !audio.ended){
@@ -1211,11 +1219,11 @@ window.Conversation = (() => {
           // A cancelled preparation or ended segment cannot own the queue
           // forever. Release it without retrying its synthesis automatically.
           if(active)stop();
-          voiceBusy=false;drainVoice();
+          voiceBusy=false;audioState("Waiting for replies");drainVoice();
         }
       }
     });
-    function stop(text = "Audio stopped.") {
+    function stop(text = voiceEnabled?"Waiting for replies":"Audio off") {
       rememberPosition();
       presentState({playback:undefined});
       cancelSpeechWait();voiceBusy=false;generation++;
@@ -1227,10 +1235,10 @@ window.Conversation = (() => {
       audio.removeAttribute("src"); audio.load();
       if (blobUrl) URL.revokeObjectURL(blobUrl);
       blobUrl = undefined;
-      toggle.disabled = true;
+      toggle.disabled = true;playLabel("Play audio");
       if(mediaSession)try{mediaSession.playbackState="none";}catch{}
       audioState(text);
-      $("#conversation-player").hidden = true;
+      $("#conversation-playing").textContent="Audio";playerStatus();
     }
     function pause(reason="manual") {
       if(voiceEnabled && !voiceSuspended){
@@ -1697,13 +1705,13 @@ window.Conversation = (() => {
         $("#conversation-state").textContent = e.name === "AbortError" ? "Audio preparation ended. Your text replies remain available."
           : e.message || "Audio unavailable. Text replies remain available.";
         return {failed:true,generation};
-      } finally { if (requestAbort === controller) requestAbort = undefined; }
+      } finally { if (requestAbort === controller) requestAbort = undefined;playerStatus(); }
     }
     audio.addEventListener("error",()=>{void audioDecodeFailed();});
-    audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort){playLabel("Play audio");presentState({playback:undefined});}});
+    audio.addEventListener("pause",()=>{if(active && !active.verifying && !requestAbort){playLabel("Play audio");playerStatus();presentState({playback:undefined});}});
     audio.addEventListener("timeupdate",()=>followPlayback());
     audio.addEventListener("playing",()=>{
-      if(active && !active.verifying && !audio.muted){if(active.queued)timing?.source(active.source,true);playLabel("Pause audio");presentState({playback:"playing"});}
+      if(active && !active.verifying && !audio.muted){if(active.queued)timing?.source(active.source,true);playLabel("Pause audio");playerStatus();presentState({playback:"playing"});}
     });
     audio.addEventListener("ended", async () => {
       if (!audio.ended || !active || active.segmentEnded || active.verifying || !active.auto || !playbackAllowed() || !enabled) return;
@@ -1737,7 +1745,6 @@ window.Conversation = (() => {
       if (audio.paused) { cancelSpeechWait();continueSpeech();voiceSuspended=false;voiceStatus();if (audio.ended) audio.currentTime = 0; startPlayback(); }
       else pause("player");
     });
-    $("#conversation-stop").addEventListener("click",()=>{sound?.disable();disableVoice();});
     $("#conversation-open").addEventListener("click", () => setMode(true));
     $("#conversation-back").addEventListener("click", () => setMode(false));
     $("#conversation-refresh").addEventListener("click", () => refresh(true));

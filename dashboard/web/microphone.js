@@ -96,8 +96,8 @@ window.VoiceInput = (() => {
     const ownsSend=()=>['permission','recording','ready','finalizing'].includes(phase) || uploading || !!pending;
     let ownedSend=false;
     function syncSend(){
-      const owned=ownsSend();button.hidden=owned&&(!pending || phase==='ready');
-      if(send){send.type=owned?'button':'submit';send.setAttribute('aria-label',owned?'Send voice message':'Send text message');
+      const owned=ownsSend();button.hidden=owned;
+      if(send){send.type=owned?'button':'submit';send.textContent=pending?'Retry send':'Send';send.setAttribute('aria-label',pending?'Retry sending the same recording':owned?'Send voice message':'Send text message');
         if(owned)send.disabled=button.disabled || !(['recording','ready'].includes(phase)||pending);else if(ownedSend)send.disabled=!getBinding();}
       ownedSend=owned;
     }
@@ -107,7 +107,8 @@ window.VoiceInput = (() => {
       if(phase==='idle' && !pending && microphoneIcon)button.replaceChildren(microphoneIcon.cloneNode(true));
       else button.textContent=phase==='recording'||phase==='ready'?'↑':pending?'↻':['permission','finalizing'].includes(phase)||uploading?'…':'🎙';
       if(pending)button.innerHTML='<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2 5"/></svg>';
-      button.setAttribute('aria-label',phase==='recording'?'Send voice message':phase==='ready'?'Send recording':pending?'Retry this recording':'Record a voice message');
+      button.setAttribute('aria-label',phase==='recording'?'Send voice message':phase==='ready'?'Send recording':pending?'Retry sending this recording':'Record a voice message');
+      button.title=pending?'Retry sending the same recording':'Record a voice message';
       button.disabled=!available || !getBinding() || !supported() || restoring || uploading || phase==='permission' || phase==='finalizing';
       button.setAttribute('aria-pressed',String(phase==='recording'));
       syncSend();
@@ -146,7 +147,7 @@ window.VoiceInput = (() => {
         const value=await recovery.read();recoveryFree=!value;
         if(owned!==generation || binding!==getBinding() || phase!=='idle' || pending)return;
         if(value?.binding===binding && value.blob?.size>0 && value.blob.size<=20*1024*1024){
-          pending={...value,uncertainSubmission:true,localRecovery:true};notice('An unfinished recording was recovered. '+(value.captureStop==='audio_flush_unconfirmed'?'The final audio buffer was not confirmed; its ending may be missing. ':value.captureStop==='duration_limit'?'It reached the duration limit; its ending may be incomplete. ':'')+'Check its status, retry the same recording, or save a copy. Nothing was resent.',true);
+          pending={...value,uncertainSubmission:true,localRecovery:true};notice('An unfinished recording was recovered. '+(value.captureStop==='audio_flush_unconfirmed'?'The final audio buffer was not confirmed; its ending may be missing. ':value.captureStop==='duration_limit'?'It reached the duration limit; its ending may be incomplete. ':'')+'Check delivery, retry sending the same recording, or save a copy. Nothing was resent.',true);
         }
       }catch(_){if(owned===generation)notice('Local recovery unavailable. Keep this page open until your recording is confirmed.',true);}
       finally{if(owned===generation){restoring=false;controls();scheduleStatus();}}
@@ -180,15 +181,24 @@ window.VoiceInput = (() => {
       if(value.phase==='preparing'&&latestSaved.preparedText)caption(latestSaved.preparedText);
       else notice('');
     }
-    async function upload() {
+    async function upload(automatic=false) {
       if(!pending || uploading || pending.binding!==getBinding())return;
       if(pending.needsVisualSelection&&!pending.uncertainSubmission){
         try{const original=pending,visual=await getVisual();if(pending!==original||original.binding!==getBinding())return;pending={...original,id:window.crypto.randomUUID(),visual,needsVisualSelection:false};}
         catch(_){notice('Point again or remove the image before retrying this recording.',true);return;}
       }
-      clearStatusTimer();const frozen=pending;onTiming(frozen.id,'send');uploading=true;controller=new AbortController();const active=controller;
+      clearStatusTimer();
+      // Record Send intent and the retry budget before any POST. Review-only
+      // recordings and legacy recovery records never acquire automatic Send.
+      const persistIntent=!pending.submissionRequested || automatic;
+      if(persistIntent){
+        pending={...pending,submissionRequested:true,automaticRetries:(pending.automaticRetries||0)+(automatic?1:0)};
+      }
+      const frozen=pending;onTiming(frozen.id,'send');uploading=true;controller=new AbortController();const active=controller;
       const deadline=setTimeout(()=>active.abort(),20000);if(frozen.preparedText)caption(frozen.preparedText);else notice('Saving your recording…');controls();
       try {
+        if(persistIntent){try{await recovery?.put(frozen,continuousOwned);}catch{if(automatic){notice('Automatic recovery paused. Your recording is kept; retry or save a copy.',true);return;}}}
+        if(pending!==frozen || frozen.binding!==getBinding() || active.signal.aborted)return;
         const response=await fetch(frozen.captureStop?'api/interaction/voice/limited':'api/interaction/voice',{method:'POST',credentials:'same-origin',signal:active.signal,
           headers:{...headers(),...(frozen.reply?{'X-Reply-Source':(frozen.reply.context_only?'context:':'')+frozen.reply.source,'X-Reply-Revision':frozen.reply.revision}:{}),...(frozen.visual?{'X-Visual-Reference':JSON.stringify(frozen.visual)}:{}),...(frozen.playback?{'X-Playback-Context':JSON.stringify(frozen.playback)}:{}),...(frozen.captureQuestions!==undefined?{'X-Capture-Questions':JSON.stringify(frozen.captureQuestions)}:{}),...(frozen.captureStop?{'X-Recording-Stop':frozen.captureStop}:{}),...(frozen.files?.length?{'X-File-References':encodeURIComponent(JSON.stringify(frozen.files))}:{}),'Content-Type':frozen.mime,'X-Input-Binding':frozen.binding,'X-Input-Id':frozen.id,'X-Audio-Sha256':frozen.audio_sha256},body:frozen.blob});
         const value=await response.json();
@@ -202,7 +212,7 @@ window.VoiceInput = (() => {
           pending={...frozen,needsVisualSelection:true};notice('This attempt did not submit the recording. Point again or remove the image, then retry this recording.',true);return;
         }
         pending={...frozen,uncertainSubmission:true};
-        notice('Recording unconfirmed. Check its status or retry this same recording. Nothing is resent automatically.'+(!frozen.localRecovery?' Keep this page open or save an audio copy before leaving.':''),true);
+        notice('Recording unconfirmed. Check its status or retry this same recording. Delivery will be checked before a limited retry.'+(!frozen.localRecovery?' Keep this page open or save an audio copy before leaving.':''),true);
         if(e.status===401 || e.status===403)unauthorized(e);
       } finally {clearTimeout(deadline);if(controller===active){controller=undefined;uploading=false;controls();scheduleStatus();}}
     }
@@ -351,7 +361,15 @@ window.VoiceInput = (() => {
       if(automatic){const used=statusAttempts.get(frozen.id)||0;if(used>=4)return;statusAttempts.set(frozen.id,used+1);while(statusAttempts.size>2)statusAttempts.delete(statusAttempts.keys().next().value);}
       checking=true;notice('Your recording is kept. Checking whether the message arrived…');controls();
       try {await confirmed(await api(`interaction/inputs/${frozen.id}`),frozen);}
-      catch(e){if(pending===frozen){notice([404,409].includes(e.status)?'No saved capture was confirmed. The local recording is kept: retry the same recording, save a copy, or discard the local copy.':'Could not confirm the saved recording. The local audio is kept; check again or retry the same recording. Nothing was resent.',true);if(e.status===401 || e.status===403)unauthorized(e);}}
+      catch(e){if(pending===frozen){
+        if(automatic && e.status===404 && frozen.submissionRequested===true && (frozen.automaticRetries||0)<2
+          && available && !document.hidden && window.navigator.onLine!==false && owned===generation){
+          checking=false;notice('Message not received yet. Retrying the same recording…');await upload(true);
+        }else{
+          notice([404,409].includes(e.status)?'No saved capture was confirmed. The local recording is kept: retry the same recording, save a copy, or discard the local copy.':'Could not confirm the saved recording. The local audio is kept; check again or retry the same recording. Nothing was resent.',true);
+          if(e.status===401 || e.status===403)unauthorized(e);
+        }
+      }}
       finally{if(owned===generation){checking=false;controls();scheduleStatus();}}
     }
     check.addEventListener('click',()=>checkStatus());

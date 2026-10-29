@@ -595,7 +595,7 @@ function boot(readOnly=false,standalone=false,options={}) {
       pending.capture();pending.finishCapture();await new Promise(resolve=>setImmediate(resolve));
       assert.equal(player.paused,true,'Capture pauses the question and holds the parked live item');
     }else if(invalidate==='stop'){
-      pending.nodes.get('#conversation-stop').handlers.click();
+      pending.nodes.get('#conversation-voice-replies').handlers.click();
     }else {
       pendingOptions.responseDraft=null;pendingOptions.liveText='A changed canonical response.';pending.addReplies(1);
       pending.overrideSource(9,{native_turn:'parked-'+invalidate,native_item:'item',text_characters:pendingOptions.liveText.length,preview:pendingOptions.liveText});pending.replyTexts.set('native:9',pendingOptions.liveText);
@@ -865,8 +865,9 @@ function boot(readOnly=false,standalone=false,options={}) {
   const speakerResume=boot(false,true,{clock:true});speakerResume.audio();await speakerResume.ui.refresh();
   speakerResume.nodes.get('#conversation-voice-replies').handlers.click();speakerResume.addReplies(1);await speakerResume.ui.refresh();
   const srPlayer=speakerResume.nodes.get('#conversation-audio');await until(()=>speakerResume.audioCalls.length===1&&!srPlayer.paused);
-  speakerResume.mediaActions.get('pause')();assert.equal(srPlayer.paused,true);
-  speakerResume.nodes.get('#conversation-voice-replies').handlers.click();
+  assert.equal(srPlayer.beforeNodes[0].hidden,false,'Playing reply exposes Pause in the persistent panel');
+  speakerResume.mediaActions.get('pause')();assert.equal(srPlayer.paused,true);assert.equal(srPlayer.beforeNodes[0].hidden,false,'Pause keeps the same item resumable');
+  srPlayer.beforeNodes[0].handlers.click();
   await until(()=>!srPlayer.paused);
   assert.equal(speakerResume.audioCalls.length,1,'Speaker resume reuses the loaded reply, without another synthesis');
   speakerResume.addReplies(1);await speakerResume.ui.refresh();srPlayer.ended=true;await srPlayer.handlers.ended();speakerResume.clock.fire(450);
@@ -874,13 +875,13 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(speakerResume.audioCalls[1].source,'native:10','New replies remain audible after speaker resume, without a Stop cycle');speakerResume.ui.stop();
   const emptyResume=boot(false,true,{clock:true});await emptyResume.ui.refresh();emptyResume.nodes.get('#conversation-voice-replies').handlers.click();emptyResume.addReplies(1);await emptyResume.ui.refresh();
   await until(()=>emptyResume.audioCalls.length===1);emptyResume.ui.pause();
-  emptyResume.nodes.get('#conversation-voice-replies').handlers.click();emptyResume.audio();emptyResume.addReplies(1);await emptyResume.ui.refresh();
+  emptyResume.nodes.get('#conversation-voice-replies').handlers.click();emptyResume.nodes.get('#conversation-voice-replies').handlers.click();emptyResume.audio();emptyResume.addReplies(1);await emptyResume.ui.refresh();
   await until(()=>emptyResume.audioCalls.length===2&&!emptyResume.nodes.get('#conversation-audio').paused);
   assert.equal(emptyResume.audioCalls[1].source,'native:10','An aborted preparation cannot hold the resumed voice queue');
   assert.equal(emptyResume.audioCalls.filter(call=>call.source==='native:9').length,1,'Resuming never automatically retries the cancelled/uncertain synthesis');emptyResume.ui.stop();
   const captureResume=boot(false,true,{clock:true,capture:true});captureResume.audio();await captureResume.ui.refresh();captureResume.nodes.get('#conversation-voice-replies').handlers.click();captureResume.addReplies(1);await captureResume.ui.refresh();
   const crPlayer=captureResume.nodes.get('#conversation-audio');await until(()=>captureResume.audioCalls.length===1&&!crPlayer.paused);
-  captureResume.capture();captureResume.mediaActions.get('pause')();captureResume.nodes.get('#conversation-voice-replies').handlers.click();
+  captureResume.capture();captureResume.mediaActions.get('pause')();captureResume.nodes.get('#conversation-voice-replies').handlers.click();captureResume.nodes.get('#conversation-voice-replies').handlers.click();
   captureResume.addReplies(1);await captureResume.ui.refresh();assert.equal(crPlayer.paused,true,'Resuming Voice cannot play output during recording');
   captureResume.finishCapture();await until(()=>captureResume.audioCalls.length===2&&!crPlayer.paused);
   assert.equal(captureResume.audioCalls[1].source,'native:10','Recording release drains the resumed queue without a Stop cycle');captureResume.ui.stop();
@@ -955,7 +956,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(followSwitch.checked,true,'Follow is enabled by default');
   await listenButton(spokenCard(8)).handlers.click();followSwitch.handlers.change();
   assert.equal(scrolls.length,0,'Voice off preserves the reader position even with Follow enabled');
-  followed.nodes.get('#conversation-voice-replies').handlers.click();
+  followed.nodes.get('#conversation-voice-replies').handlers.click();followed.nodes.get('#conversation-voice-replies').handlers.click();
   followed.ui.pause();followSwitch.checked=false;await listenButton(spokenCard(8)).handlers.click();assert.equal(scrolls.length,0,'Follow off never moves the chat');
   followSwitch.checked=true;followSwitch.handlers.change();assert.equal(scrolls.length,1);assert.equal(scrolls[0].top,200,'Follow targets the verified spoken answer within the timeline');
   await listenButton(spokenCard(7)).handlers.click();assert.equal(scrolls.length,2,'A new answer follows its own source');
@@ -1108,7 +1109,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   const noPlayer=boot(false,false,{clock:true});noPlayer.audio();await noPlayer.ui.refresh();
   noPlayer.nodes.get('#conversation-voice-replies').handlers.click();noPlayer.failAudio();noPlayer.addReplies(2);await noPlayer.ui.refresh();
   await until(()=>noPlayer.clock.pending().includes(450));
-  assert.equal(noPlayer.nodes.get('#conversation-player').hidden,true);
+  assert.equal(noPlayer.nodes.get('#conversation-player').hidden,false,'Audio controls remain visible after failure');
   noPlayer.ui.pause();noPlayer.clock.fire(450);await noPlayer.ui.refresh();
   assert.equal(noPlayer.audioCalls.length,1,'Pause cancels an interreply gap even without an active audio element');noPlayer.ui.stop();
 
@@ -1119,10 +1120,10 @@ function boot(readOnly=false,standalone=false,options={}) {
   reconnectVoice.addReplies(2);reconnectVoice.event('online');
   await until(()=>!reconnectVoice.nodes.get('#conversation-refresh').disabled);await reconnectVoice.ui.refresh();
   assert.equal(reconnectVoice.audioCalls.length,1,'Reconnect must not resume old queued audio or arrivals during suspension');
-  assert.equal(reconnectVoice.nodes.get('#conversation-voice-replies').dataset.voiceState,'paused');
-  assert.equal(reconnectVoice.nodes.get('#conversation-voice-replies')['aria-pressed'],'false');
-  assert.equal(reconnectVoice.nodes.get('#conversation-voice-replies')['aria-label'],'Resume spoken replies');
-  reconnectVoice.nodes.get('#conversation-voice-replies').handlers.click();
+  assert.equal(reconnectVoice.nodes.get('#conversation-voice-replies').dataset.voiceState,'on');
+  assert.equal(reconnectVoice.nodes.get('#conversation-voice-replies')['aria-pressed'],'true');
+  assert.equal(reconnectVoice.nodes.get('#conversation-voice-replies')['aria-label'],'Stop audio and disable spoken replies');
+  reconnectVoice.nodes.get('#conversation-voice-replies').handlers.click();reconnectVoice.nodes.get('#conversation-voice-replies').handlers.click();
   await reconnectVoice.ui.refresh();assert.equal(reconnectVoice.audioCalls.length,1,'Explicit resume starts from the loaded current conversation, not old audio');
   reconnectVoice.addReplies(1);await reconnectVoice.ui.refresh();await until(()=>reconnectVoice.audioCalls.length===2&&!rp.paused);
   assert.equal(reconnectVoice.audioCalls[1].source,'native:13');reconnectVoice.ui.stop();

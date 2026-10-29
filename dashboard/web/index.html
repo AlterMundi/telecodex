@@ -115,7 +115,7 @@
             </div>
           </details>
         <section id="conversation-voice" hidden aria-label="Speak to your conversation">
-          <div class="conversation-tools"><button id="conversation-voice-replies" class="voice-output-toggle" type="button" data-voice-state="off" aria-pressed="false" aria-label="Enable spoken replies" title="Enable spoken replies"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 9h4l5-4v14l-5-4H3z"/><path class="voice-waves" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="voice-muted" d="m17 10 4 4m0-4-4 4"/><path class="voice-paused" d="M17 9v6m4-6v6"/></svg></button><button id="conversation-talk" type="button" aria-pressed="false" disabled aria-label="Record a voice message" title="Record a voice message"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg></button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button></div>
+          <div class="conversation-tools"><button id="conversation-talk" type="button" aria-pressed="false" disabled aria-label="Record a voice message" title="Record a voice message"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg></button><button id="conversation-voice-discard" type="button" hidden>Discard recording</button></div>
         </section>
 <button id="conversation-send" type="submit" disabled>Send</button></div>
         </form>
@@ -124,8 +124,8 @@
         <div id="conversation-sound-controls" hidden><label for="conversation-sound-volume">Beacon volume</label><input id="conversation-sound-volume" type="range" min="0" max="1" step="0.05" value="0.3"></div>
         <p id="conversation-sound-feedback" class="note" role="status" aria-live="polite" hidden></p>
 
-        <section id="conversation-player" hidden aria-label="Reply audio">
-          <div class="conversation-tools"><strong id="conversation-playing"></strong><button id="conversation-stop" type="button" aria-label="Stop audio" title="Stop audio">Stop audio</button></div>
+        <section id="conversation-player" aria-label="Reply audio">
+          <div class="conversation-tools"><strong id="conversation-playing">Audio</strong><button id="conversation-voice-replies" class="voice-output-toggle" type="button" data-voice-state="off" aria-pressed="false" aria-label="Enable spoken replies" title="Enable spoken replies"><svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 9h4l5-4v14l-5-4H3z"/><path class="voice-waves" d="M16 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="voice-muted" d="m17 10 4 4m0-4-4 4"/><path class="voice-paused" d="M17 9v6m4-6v6"/></svg></button></div>
           <audio id="conversation-audio" controls preload="none"></audio>
           <p id="conversation-audio-state" role="status" aria-live="polite"></p>
           <label id="conversation-follow-control" hidden><input id="conversation-follow" type="checkbox"> Follow</label>
