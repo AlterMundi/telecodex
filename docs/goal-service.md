@@ -267,3 +267,18 @@ by all affected CompAII sessions; publish through AlterMundi/Skills. Capability
 publication, local installation, receiving adoption and actual use are separate.
 Do not claim that existing sessions or other daimons learned a capability merely
 because this draft describes it.
+
+## Integrating entry and dormant receivers
+
+Goal selection includes the integrating entry through `self` or its exact `tID`,
+without making that entry an ordinary routing destination. An owned integrating
+session uses the same conditional revision, source/delegation and accounting
+checks as a work session; a blocked goal is edited before explicit resumption,
+never falsely completed or replaced to clear an unfinished-goal refusal.
+
+A cached receiver channel is not an active native writer. When no attached
+subscriber exists, metadata controls refuse an actual preparing execution
+(the receiver's active cancellation slot), but a dormant channel can use the
+existing conditional metadata RPC. Native revision/admission checks still apply;
+uncertain receipts, preparation, Stop and maintenance fences do not authorize
+independent retry. Check live admission, not only map membership or native idle.

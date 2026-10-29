@@ -242,7 +242,63 @@ def staged_pause(binary):
         j.close()
 
 
+def own_and_dormant_controls(binary):
+    j = Controls(binary)
+    try:
+        j.prepare(seed_entry=True)
+        j.allow_native_launch = True
+        j.admit('Edit my current goal while preserving accounting.', topic=1)
+        j.wait(lambda: 'native-topic-9' in j.runs)
+        entry = j.access(1)
+        baseline = {'objective':'Earlier unfinished roadmap', 'status':'blocked',
+                    'tokenBudget':100,'tokensUsed':80,'timeUsedSeconds':5,'createdAt':1,'updatedAt':2}
+        j.goals['native-topic-9'] = {**baseline, 'threadId':'native-topic-9'}
+        seen = j.cli(entry, 'goal_inspect', {'selector':'self'})
+        explicit = j.cli(entry, 'goal_inspect', {'selector':'t1'})
+        assert seen['target_binding'] == explicit['target_binding']
+        reference = j.cli(entry, 'inputs')['inputs'][0]['input_ref']
+        args = {'selector':'self','target_binding':seen['target_binding'],
+                'input_ref':reference,'reason':'Explicit human own-goal edit',
+                'plan':{'action':'edit','expected':seen['snapshot'],
+                        'objective':'Focused work; earlier unfinished roadmap remains pending.',
+                        'token_budget':None,'followup':None}}
+        selected=j.cli(entry,'goal_prepare',args)['control']['id']
+        assert j.cli(entry,'goal_execute',{'id':selected})['phase']=='acknowledged'
+        assert j.goals['native-topic-9']['tokensUsed']==80
+        assert j.goals['native-topic-9']['status']=='blocked'
+
+        # Complete actual Alpha work. Its receiver channel stays cached/dormant;
+        # that is not a preparation in progress and must not block metadata edits.
+        j.admit('Finish this ordinary Alpha turn.',topic=7)
+        j.wait(lambda:'native-topic-7' in j.runs)
+        j.broadcast('native-topic-7','turn/completed',{'turn':{'id':j.runs['native-topic-7'],'status':'completed'}})
+        j.wait(lambda:j.row('SELECT busy FROM sessions WHERE thread_id=7')==[(0,)])
+        j.goals['native-topic-7']={**baseline,'threadId':'native-topic-7'}
+        old=reference
+        j.admit('Edit the current Alpha goal to the new focused objective.',topic=1)
+        j.wait(lambda:j.cli(entry,'inputs')['inputs'][0]['input_ref']!=old)
+        reference=j.cli(entry,'inputs')['inputs'][0]['input_ref']
+        seen=j.cli(entry,'goal_inspect',{'selector':'Alpha'})
+        args.update(selector='Alpha',target_binding=seen['target_binding'],input_ref=reference)
+        args['plan'].update(expected=seen['snapshot'])
+        before=sum(m.get('method') in ('turn/start','turn/steer') for m in j.rpc)
+        selected=j.cli(entry,'goal_prepare',args)['control']['id']
+        done=j.cli(entry,'goal_execute',{'id':selected})
+        assert done['phase']=='acknowledged',done
+        assert j.goals['native-topic-7']['tokensUsed']==80 and j.goals['native-topic-7']['status']=='blocked'
+        assert sum(m.get('method') in ('turn/start','turn/steer') for m in j.rpc)==before
+        # Idempotent acknowledged execution cannot submit metadata twice.
+        count=sum(m.get('method')=='thread/goal/conditionalSet' for m in j.rpc)
+        j.cli(entry,'goal_execute',{'id':selected})
+        assert sum(m.get('method')=='thread/goal/conditionalSet' for m in j.rpc)==count
+        j.broadcast('native-topic-9','turn/completed',{'turn':{'id':j.runs['native-topic-9'],'status':'completed'}})
+        j.idle()
+        print('PASS explicit own-entry controls and dormant writer metadata preserve accounting without new native work')
+    finally:j.close()
+
+
 if __name__ == '__main__':
     binary = str(Path(sys.argv[1]).resolve())
     qualify(binary)
     staged_pause(binary)
+    own_and_dormant_controls(binary)

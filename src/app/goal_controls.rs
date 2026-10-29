@@ -126,7 +126,7 @@ pub(super) async fn tool(
                     .store
                     .goal_delegation_allows_actor(human, key, &request.thread_id)?;
             let targets = if integrator && !delegated {
-                super::routing::profile(&app.shared)?.resolve(selector)
+                super::goals::resolve_goal_target(super::routing::profile(&app.shared)?, selector)
             } else {
                 app.shared
                     .store
@@ -271,7 +271,7 @@ pub(super) async fn tool(
             let (phase,receipt)=match super::goals::control_live(app,&target_session,control).await {
                 Ok(true)=>receipt_slot.lock().expect("goal control receipt mutex poisoned").clone().unwrap_or_else(||("uncertain".into(),json!({"error":"Subscriber returned without a matched goal receipt","automatic_retry":false}))),
                 Ok(false)=>{
-                    if app.workers.lock().await.contains_key(&target) {
+                    if app.workers.lock().await.get(&target).is_some_and(|w| w.cancel.lock().expect("cancel mutex poisoned").is_some()) {
                         ("known_unsent".into(),json!({"error":"Selected writer is preparing; no independent goal mutation submitted","automatic_retry":false}))
                     }else{app.shared.codex.conditional_goal_metadata(native,&plan,&admission,mutation_origin(&value)).await}
                 },

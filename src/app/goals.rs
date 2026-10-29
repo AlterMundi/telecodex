@@ -772,6 +772,19 @@ struct GoalInspection {
     selector: String,
 }
 
+/// Goal controls can target the integrating entry itself. This does not enroll
+/// that entry as an ordinary routing destination or permit creating new work.
+pub(super) fn resolve_goal_target(
+    cfg: &crate::interaction::InteractionConfig,
+    selector: &str,
+) -> Vec<SessionKey> {
+    if selector == "self" || selector == format!("t{}", cfg.entry().thread_id) {
+        vec![cfg.entry()]
+    } else {
+        cfg.resolve(selector)
+    }
+}
+
 /// Inspect only: a native goal status is never a proxy for current execution.
 pub(super) async fn inspect(
     app: &App,
@@ -788,7 +801,7 @@ pub(super) async fn inspect(
         .strip_prefix("/self#")
         .or_else(|| args.selector.strip_prefix('#'))
         .unwrap_or(&args.selector);
-    let targets = cfg.resolve(selector);
+    let targets = resolve_goal_target(cfg, selector);
     if targets.len() != 1 {
         return Ok(
             json!({"kind":"clarification_required","selector":args.selector,"candidates":targets,"read_only":true}),
