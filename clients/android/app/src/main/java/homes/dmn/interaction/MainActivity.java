@@ -35,6 +35,7 @@ import org.json.JSONObject;
 public final class MainActivity extends ComponentActivity {
     private WebView web;
     private SpeechService speech;
+    private FileExport exports;
     private ServiceConnection connection;
     private boolean bound;
     private JavaScriptReplyProxy reply;
@@ -45,6 +46,13 @@ public final class MainActivity extends ComponentActivity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        exports = new FileExport(this, value -> { if (reply != null) try { reply.postMessage(value.toString()); } catch (Exception ignored) { } },
+            (name, mime) -> {
+                if (!foreground || !appPage()) { exports.cancel("Save interrupted; the original remains available"); return; }
+                try { startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(mime).putExtra(Intent.EXTRA_TITLE, name), 3); }
+                catch (RuntimeException error) { exports.cancel("Save destination unavailable; the original remains available"); }
+            });
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() { navigateBack(); }
         });
@@ -117,17 +125,26 @@ public final class MainActivity extends ComponentActivity {
             String data = message.getData(); if (data == null || data.length() > 45000) return;
             try {
                 JSONObject value = new JSONObject(data); reply = proxy;
+                if (value.optString("command").startsWith("file_")) {
+                    if (foreground) exports.command(value); return;
+                }
                 if (value.optString("command").equals("session") && value.optBoolean("enabled") && !foreground) return;
                 if (!value.optString("command").equals("hello")) speech.command(value);
             } catch (Exception ignored) { }
         });
         try {
             java.io.ByteArrayOutputStream scriptBytes = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream input = getAssets().open("native-files.js")) {
+                byte[] buffer = new byte[8192]; int count;
+                while ((count = input.read(buffer)) != -1) scriptBytes.write(buffer, 0, count);
+            }
+            String script = scriptBytes.toString(StandardCharsets.UTF_8.name()) + "\n";
+            scriptBytes.reset();
             try (java.io.InputStream input = getAssets().open("native-audio.js")) {
                 byte[] buffer = new byte[8192]; int count;
                 while ((count = input.read(buffer)) != -1) scriptBytes.write(buffer, 0, count);
             }
-            String script = scriptBytes.toString(StandardCharsets.UTF_8.name());
+            script += scriptBytes.toString(StandardCharsets.UTF_8.name());
             WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton(home));
         } catch (Exception error) { throw new IllegalStateException("Missing native audio adapter", error); }
         web.setWebViewClient(new WebViewClient() {
@@ -139,7 +156,7 @@ public final class MainActivity extends ComponentActivity {
                 return true;
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                speech.shutdown(); reply = null;
+                exports.cancel("Page changed; the original remains available"); speech.shutdown(); reply = null;
                 if (microphone != null) { microphone.deny(); microphone = null; }
             }
         });
@@ -172,12 +189,14 @@ public final class MainActivity extends ComponentActivity {
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == 3) exports.result(result == RESULT_OK && data != null ? data.getData() : null);
         if (request == 2 && chooser != null) { chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result, data)); chooser = null; }
     }
     @Override protected void onResume() { super.onResume(); foreground = true; if (web != null) web.onResume(); }
     @Override protected void onStop() {
         foreground = false;
         if (microphone != null) { microphone.deny(); microphone = null; }
+        if (!exports.choosing()) exports.cancel("Save interrupted; the original remains available");
         boolean keepPlayback = speech != null && speech.enabled();
         if (speech != null && !keepPlayback) speech.shutdown();
         if (web != null) web.evaluateJavascript("window.NativeSpeechAudio?.background(" + keepPlayback + ")", null);
@@ -187,9 +206,9 @@ public final class MainActivity extends ComponentActivity {
         if (web != null && web.canGoBack()) web.goBack();
         else new AlertDialog.Builder(this).setMessage("Leave this conversation?")
             .setPositiveButton("Close", (d,w) -> finish()).setNeutralButton("Change home", (d,w) -> {
-                if (speech != null) speech.shutdown(); if (web != null) { web.destroy(); web = null; }
+                exports.cancel("Conversation changed; the original remains available"); if (speech != null) speech.shutdown(); if (web != null) { web.destroy(); web = null; }
                 getPreferences(MODE_PRIVATE).edit().remove("home").apply(); setup();
             }).setNegativeButton("Stay", null).show();
     }
-    @Override protected void onDestroy() { if (speech != null) speech.shutdown(); if (bound) { unbindService(connection); bound = false; } if (web != null) web.destroy(); if (chooser != null) chooser.onReceiveValue(null); super.onDestroy(); }
+    @Override protected void onDestroy() { exports.close(); if (speech != null) speech.shutdown(); if (bound) { unbindService(connection); bound = false; } if (web != null) web.destroy(); if (chooser != null) chooser.onReceiveValue(null); super.onDestroy(); }
 }

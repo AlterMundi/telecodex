@@ -5,7 +5,7 @@ window.NativeSpeechAudio=(()=>{
   let serial=0,captureEpoch=0,controls,sessionEnabled=false;
   if(!bridge?.postMessage)return;
   const send=value=>bridge.postMessage(JSON.stringify(value));
-  bridge.onmessage=event=>{try{const value=JSON.parse(event.data);if(value.type==="control"){controls?.[value.action]?.();return;}outputs.get(value.id)?.receive(value);}catch{}};
+  bridge.onmessage=event=>{try{const value=JSON.parse(event.data);if(value.type==="file"){window.NativeFiles?.receive(value);return;}if(value.type==="control"){controls?.[value.action]?.();return;}outputs.get(value.id)?.receive(value);}catch{}};
   send({command:"hello"});
   const devices=navigator.mediaDevices,original=devices?.getUserMedia?.bind(devices);
   if(original)devices.getUserMedia=async constraints=>{

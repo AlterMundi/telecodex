@@ -1,6 +1,10 @@
 package homes.dmn.interaction;
 
+import android.app.Notification;
 import android.app.NotificationManager;
+import android.media.session.MediaController;
+import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -42,14 +46,16 @@ public class BackgroundSpeechTest {
                 activity.moveToState(Lifecycle.State.CREATED);
                 assertTrue(service.get().enabled());
                 NotificationManager notifications = context.getSystemService(NotificationManager.class);
-                assertEquals(1, notifications.getActiveNotifications().length);
+                Notification initial = awaitNotification(notifications, "Play");
+                MediaController media = new MediaController(context, (MediaSession.Token)initial.extras.getParcelable(Notification.EXTRA_MEDIA_SESSION));
                 // Finish one complete segment, then prepare a distinct later reply
                 // with the actual Activity stopped and focus reacquired natively.
                 for (int reply = 0; reply < 2; reply++) {
                     String id = "background_synthetic_" + reply;
                     CountDownLatch ready = new CountDownLatch(1), played = new CountDownLatch(1), ended = new CountDownLatch(1), pause = new CountDownLatch(1);
-                    AtomicReference<String> error = new AtomicReference<>();
+                    AtomicReference<String> error = new AtomicReference<>(); StringBuffer phases = new StringBuffer();
                     InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> service.get().attach(value -> {
+                        if (!value.optString("type").equals("timeupdate")) phases.append(value.toString()).append("\n");
                         switch (value.optString("type")) {
                             case "loaded": ready.countDown(); break;
                             case "playing": played.countDown(); break;
@@ -67,9 +73,11 @@ public class BackgroundSpeechTest {
                     command(service, id, "play", new JSONObject());
                     assertTrue("Background native focus/play: " + error.get(), played.await(5, TimeUnit.SECONDS));
                     if (reply == 1) {
+                        Notification speaking = awaitNotification(notifications, "Pause");
+                        assertEquals(phases.toString(), PlaybackState.STATE_PLAYING, media.getPlaybackState().getState());
                         command(service, "background_synthetic_0", "stop", new JSONObject());
-                        assertEquals("Late old-source stop cannot change current notification", "Pause", notifications.getActiveNotifications()[0].getNotification().actions[0].title.toString());
-                        notifications.getActiveNotifications()[0].getNotification().actions[0].actionIntent.send();
+                        assertEquals("Late old-source stop cannot change native session: " + phases, PlaybackState.STATE_PLAYING, media.getPlaybackState().getState());
+                        speaking.actions[0].actionIntent.send();
                         assertTrue("Notification pause returns to canonical web control", pause.await(5, TimeUnit.SECONDS));
                         // Simulate only that canonical controller's accepted resume.
                         command(service, id, "play", new JSONObject());
@@ -87,6 +95,18 @@ public class BackgroundSpeechTest {
                 context.unbindService(connection);
             }
         }
+    }
+    private Notification awaitNotification(NotificationManager manager, String title) throws Exception {
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        // notify() queues publication in Android; observe that same notification,
+        // do not replay playback or substitute a locally constructed notification.
+        while (System.nanoTime() < until) {
+            android.service.notification.StatusBarNotification[] active = manager.getActiveNotifications();
+            if (active.length == 1 && active[0].getNotification().actions != null
+                && title.contentEquals(active[0].getNotification().actions[0].title)) return active[0].getNotification();
+            Thread.sleep(20);
+        }
+        throw new AssertionError("Android did not publish the expected " + title + " notification");
     }
     private void command(AtomicReference<SpeechService> service, String id, String type, JSONObject value) throws Exception {
         value.put("id", id).put("command", type);

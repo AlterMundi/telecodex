@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Test APK only: a fixed synthetic byte sink, no production file surface. -->
+        <provider android:name="homes.dmn.interaction.SyntheticSaveProvider"
+            android:authorities="homes.dmn.interaction.pilot.test.saved"
+            android:exported="true" />
+    </application>
+</manifest>
