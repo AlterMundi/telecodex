@@ -670,7 +670,16 @@ human input. Selected context does not authorize repeating source effects.
 An interaction profile may start with no enrolled targets; an empty inventory
 is not by itself a reason to create a session. One immutable creation intent
 reserves the original input before any topic RPC.
-The existing Telegram topic adapter waits for outbound capacity, revalidates
+With `telegram.enabled=false`, creation reserves a receiver-local destination in
+the same SQLite transaction as its receipt. It reserves configured target IDs,
+stored sessions and retained creation destinations, including targets that have
+not initialized a session yet. No Telegram request or token is required. The
+existing initialization, enrollment and exact-original dispatch follow unchanged;
+these local destination IDs do not claim Telegram topic creation. Recover an
+interrupted known-unsent creation with `creation_resume` and its retained original,
+not a replacement input or a new creation ID.
+
+The enabled Telegram topic adapter waits for outbound capacity, revalidates
 original ownership, native binding and ingress generation, and marks the one
 mutation immediately before HTTP. A failed pre-send check is known unsent. A
 lost or invalid topic receipt is uncertain and is never retried automatically.

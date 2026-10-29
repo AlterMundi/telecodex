@@ -309,7 +309,16 @@ async fn execute_claimed(
     let intent = &operation["intent"];
     let name = intent["name"].as_str().context("Missing retained name")?;
     let reference: InputReference = serde_json::from_value(intent["input_update"].clone())?;
-    let topic = if operation["phase"] == "prepared" {
+    let topic = if operation["phase"] == "prepared" && !shared.config.telegram.enabled {
+        let reserved = super::routing::profile(shared)?
+            .targets
+            .iter()
+            .map(|target| target.topic_id)
+            .collect::<Vec<_>>();
+        shared
+            .store
+            .interaction_creation_local_topic(id, human, &reserved)?
+    } else if operation["phase"] == "prepared" {
         let topic = shared
             .telegram
             .create_forum_topic_checked(key.chat_id, name, || {
