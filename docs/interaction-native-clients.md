@@ -24,8 +24,8 @@ links cannot control speech. Microphone access requires the page's existing
 explicit capture action plus Android runtime permission and the exact receiving
 origin. Other WebView media permissions are denied. Attachments use Android's
 document picker, without broad storage permission. Page navigation/destruction
-releases native output. Backgrounding stops microphone tracks and speech; it
-does not start a service or promise background capture/playback.
+releases native output. The0.1/0.2 pilots stop speech when backgrounded. The0.3 candidate below stops
+microphone capture while allowing an explicitly enabled speech session to continue.
 
 The pilot's speech driver reuses the canonical web player's source validation
 and complete, integrity-checked response bytes. Only after source validation
@@ -66,8 +66,38 @@ a12s synthetic MP3 prefix must start and advance playback before terminal bytes,
 then finish after verified EOF; releasing a partial source must not block the UI.
 The emulator has no physical audio/microphone/camera and uses no provider/model.
 
-There is no foreground media service/notification yet, so this is a foreground
-pilot, not the completed mobile experience. Native Beacon synthesis, filters,
+The delivered0.2 pilot is foreground only. The0.3 candidate binds the same single
+`SpeechOutput` to an unexported Android `mediaPlayback` foreground service and
+framework MediaSession. Enabling spoken replies in the visible app starts a
+notification and a maximum two-hour session; repeated status refreshes do not
+extend it. Audio off, notification Stop, task removal, page/auth navigation,
+Activity destruction or the deadline release the player, focus, wake lock and
+notification. No boot restart, sticky service, capture, synthesis or input replay.
+The partial CPU wake lock has the same two-hour bound; the foreground service
+keeps the existing WebView conversation/SSE queue available between replies,
+without a second server reader or source store. Android/browser power policy and
+real-device late-result behavior still need qualification; do not promise survival
+of OS process destruction or automatic listening after restart.
+
+Notification/headset Play/Pause/Audio off return to the canonical web controls;
+Pause silences native output immediately before that reconciliation. The browser
+MediaSession is not installed beside this native session. Noisy-route changes
+pause rather than emitting speech onto the speaker. One transient speech-focus
+owner remains; no commands are sent to resume another music app. Background
+capture always stops (including late permission grants), and cannot restart from
+notification Play. The exact selected HTTPS home/main frame/application path
+still owns the bridge. Background audio commands require an already-enabled
+session; background code cannot start or extend it. Navigation/auth pages retain
+no bridge or active listening grant. Ordinary browsers and older APKs retain
+existing behavior.
+
+CI adds a real Android service journey with synthetic local MP3: stop the Activity,
+finish one reply, prepare/play another while still stopped, exercise notification
+Pause and Audio off, and verify notification teardown. This proves service/decoder
+mechanics, not the complete WebView/provider late-result path or phone acceptance.
+Native JS tests separately keep the player on background while closing capture,
+route media controls, and retain later-source selection. The candidate is not
+received merely because those checks pass. Native Beacon synthesis, filters,
 mixing, output-route changes and iOS are not implemented. Native file export/
 download is also unfinished: existing browser Blob downloads need an explicit
 native save/share bridge before sole-client acceptance. Never label a shell,

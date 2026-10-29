@@ -1047,6 +1047,7 @@ window.Conversation = (() => {
     function voiceStatus() {
       const button=$("#conversation-voice-replies");
       const state=voiceEnabled || active && blobUrl && !audio.ended?"on":"off";
+      window.NativeSpeechAudio?.setSession?.(state==="on");
       button.dataset.voiceState=state;
       button.setAttribute("aria-pressed",String(state==="on"));
       button.setAttribute("aria-label",state==="on"?"Stop audio and disable spoken replies":"Enable spoken replies");
@@ -1846,12 +1847,14 @@ window.Conversation = (() => {
         refresh(true);
       }
     });
-    const mediaSession=standalone?window.navigator?.mediaSession:undefined;
+    const mediaActions={
+      play:()=>{voiceSuspended=false;voiceStatus();if(active && blobUrl)startPlayback();else {enableVoice();drainVoice();}},
+      pause:()=>pause("media-session"),stop:()=>disableVoice()
+    };
+    window.NativeSpeechAudio?.setControls?.(mediaActions);
+    const mediaSession=standalone && !window.NativeSpeechAudio?.backgroundPlayback?window.navigator?.mediaSession:undefined;
     if(mediaSession){
-      for(const [action,handler] of Object.entries({
-        play:()=>{voiceSuspended=false;voiceStatus();if(active && blobUrl)startPlayback();else {enableVoice();drainVoice();}},
-        pause:()=>pause("media-session"),stop:()=>disableVoice()
-      }))try{mediaSession.setActionHandler(action,handler);}catch{}
+      for(const [action,handler] of Object.entries(mediaActions))try{mediaSession.setActionHandler(action,handler);}catch{}
     }
     telegram?.onEvent?.("deactivated", pause);
     telegram?.BackButton?.onClick?.(() => setMode(false));
