@@ -1,6 +1,6 @@
 // Shipped fullscreen controller with synthetic callbacks; no capture or models.
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-function boot(){
+function boot({suspend=false}={}){
  const timers=[],listeners={},nodes=[];
  class Node{
   constructor(tag){this.tag=tag;this.children=[];this.attributes={};this.events={};this.hidden=false;this.dataset={};this.classList={add(){},remove(){}};nodes.push(this);}
@@ -17,9 +17,9 @@ function boot(){
  const document={body,hidden:false,createElement:tag=>new Node(tag),createComment:()=>new Node('comment'),addEventListener:(name,fn)=>listeners[name]=fn};
  const window={addEventListener:(name,fn)=>listeners[name]=fn};
  vm.runInNewContext(fs.readFileSync('dashboard/web/voice-mode.js','utf8'),{window,document,setTimeout:(fn,ms)=>{const timer={fn,ms};timers.push(timer);return timer;},clearTimeout:t=>{if(t)t.cancelled=true;}});
- let starts=0,enters=0,leaves=0,canStart=true,canEnter=true;
- const mode=window.ConversationVoiceMode.mount({portrait,onEnter:()=>{enters++;},onLeave:()=>{leaves++;},onSpeak:()=>starts++,canStart:()=>canStart,canEnter:()=>canEnter});
- return {mode,portrait,header,nodes,timers,document,listeners,counts:()=>({starts,enters,leaves}),canStart:value=>canStart=value,canEnter:value=>canEnter=value};
+ let starts=0,enters=0,leaves=0,suspends=0,canStart=true,canEnter=true;
+ const mode=window.ConversationVoiceMode.mount({portrait,...(suspend?{onSuspend:()=>suspends++}:{}),onEnter:()=>{enters++;},onLeave:()=>{leaves++;},onSpeak:()=>starts++,canStart:()=>canStart,canEnter:()=>canEnter});
+ return {mode,portrait,header,nodes,timers,document,listeners,counts:()=>({starts,enters,leaves}),suspends:()=>suspends,canStart:value=>canStart=value,canEnter:value=>canEnter=value};
 }
 const f=boot();f.mode.configure(false);f.portrait.events.click();assert.equal(f.counts().starts,0);
 f.mode.configure(true);f.canEnter(false);f.portrait.events.click();assert.equal(f.counts().starts,0,'An unfinished original prevents opening');
@@ -51,4 +51,13 @@ direct.mode.update({continuousState:{active:true,remaining:Infinity}});assert.eq
 direct.mode.update({continuousState:{active:false,starting:false,pending:true,working:false}});direct.mode.update({pending:false,uploading:true,capture:'idle'});
 assert.equal(direct.nodes.find(n=>n.className==='voice-mode-state').textContent,'Recording needs review','An old ordinary upload cannot clear continuous recovery state');
 direct.mode.configure(true,false);assert(!direct.mode.active);assert.equal(direct.portrait.parent,direct.header);
+const background=boot({suspend:true});background.mode.configure(true,true);background.portrait.events.click();
+background.mode.update({continuousState:{active:true,starting:false,pending:false,working:false}});background.mode.update({playback:'playing'});
+background.document.hidden=true;background.listeners.visibilitychange();
+assert(background.mode.active,'Hiding a continuous view pauses capture without leaving its Conversation-only audio mix');
+assert.equal(background.suspends(),1);assert.equal(background.counts().leaves,0);
+background.mode.update({continuousState:{active:false,starting:false,pending:false,working:false}});
+assert.equal(background.nodes.find(n=>n.className==='voice-mode-state').textContent,'Speaking · microphone paused');
+background.document.hidden=false;background.listeners.visibilitychange();assert.equal(background.counts().starts,1,'Showing the view never reopens the microphone');
+background.listeners.pagehide();assert(!background.mode.active,'Leaving the page still closes the bounded view');assert.equal(background.counts().leaves,1);
 console.log('Fullscreen voice: avatar identity, explicit opt-in, response/rearm fences, review, Escape, hidden and bounded exit passed.');

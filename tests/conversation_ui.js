@@ -180,7 +180,7 @@ function boot(readOnly=false,standalone=false,options={}) {
   if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.(),canStartContinuous:()=>true,continuousOwner:v=>continuousCalls.push(['owner',v]),retainContinuous:v=>{continuousCalls.push(['retain',v]);return v;},commitContinuous:v=>{continuousCalls.push(['commit',v]);return v;},reviewContinuous:v=>continuousCalls.push(['review',v]),hold:()=>continuousCalls.push(['ordinary-hold']),startConversation:()=>continuousCalls.push(['ordinary-start'])};}};
   if(options.continuous){
     context.window.ContinuousConversation={create(hooks){continuousHooks=hooks;return continuousSession={active:false,floor:false,originals:[],start(){this.active=true;continuousCalls.push(['start']);hooks.onState({active:true,starting:false,floor:false,pending:false});},hold(){this.active=false;continuousCalls.push(['hold']);},release:id=>continuousCalls.push(['release',id])};}};
-    context.window.ConversationVoiceMode={mount(hooks){let enabled=false,direct=false;return continuousMode={active:false,updates:[],configure(value,next){if(this.active&&(!value||direct!==next))this.close();enabled=value;direct=next;},update:v=>continuousMode.updates.push(v),open(){if(!enabled||!hooks.canEnter())return;hooks.onEnter();this.active=true;hooks.onSpeak();},close(){if(!this.active)return;this.active=false;hooks.onLeave();}};}};
+    context.window.ConversationVoiceMode={mount(hooks){let enabled=false,direct=false;return continuousMode={active:false,updates:[],configure(value,next){if(this.active&&(!value||direct!==next))this.close();enabled=value;direct=next;},update:v=>continuousMode.updates.push(v),open(){if(!enabled||!hooks.canEnter())return;hooks.onEnter();this.active=true;hooks.onSpeak();},suspend(){if(this.active)hooks.onSuspend();},close(){if(!this.active)return;this.active=false;hooks.onLeave();}};}};
   }
   if(options.progressive)context.window.SpeechStream={available:()=>true,open(_response,signal){
     const value={url:'blob:fixture-stream',signal,done:options.streamDone || Promise.resolve({complete:true,blob:new Blob(['verified encoded sample'],{type:'audio/mpeg'})}),onDecoderError(fn){this.decoderError=fn;},position:seconds=>options.wordPosition?.(seconds,Number(_response.headers.get("x-presentation-offset"))),cancelled:false,cancel(){this.cancelled=true;},onError(){}};streamedTransports.push(value);return value;
@@ -466,6 +466,18 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(direct.nativePosts.length,0,'Result playback cannot cancel or answer native work');
   await direct.ui.refresh();
   assert.equal(direct.audioCalls.length,interruptedCalls+1,'Repeated result observation cannot repeat speech or resume the interrupted old answer');
+  const hiddenDirect=boot(false,true,{capture:true,continuous:true,playback:true,immediateHash:true,clock:true});hiddenDirect.audio();await hiddenDirect.ui.refresh();
+  const hiddenBridge=hiddenDirect.continuous();hiddenBridge.mode.open();hiddenDirect.addReplies(1);await hiddenDirect.ui.refresh();
+  const hiddenPlayer=hiddenDirect.nodes.get('#conversation-audio');await until(()=>!hiddenPlayer.paused);
+  hiddenBridge.mode.suspend();hiddenDirect.hide();
+  assert(hiddenBridge.mode.active);assert(!hiddenBridge.session.active);assert(hiddenBridge.calls.some(v=>v[0]==='hold'));
+  assert.equal(hiddenDirect.nodes.get('#conversation-voice-replies').dataset.voiceState,'on','Hidden capture cannot restore Voice off while the avatar reply is playing');
+  assert.equal(hiddenPlayer.paused,false);assert(!hiddenBridge.calls.some(v=>v[0]==='owner'&&v[1]===false),'The Conversation-only mix stays owned until explicit exit');
+  hiddenDirect.overrideSource(10,{kind:'worker_result',target:{chat_id:100,thread_id:7},label:'Alpha'});hiddenDirect.addReplies(2);await hiddenDirect.ui.refresh();
+  hiddenPlayer.ended=true;await hiddenPlayer.handlers.ended();hiddenDirect.clock.fire(450);
+  await until(()=>hiddenDirect.audioCalls.length===2&&!hiddenPlayer.paused);assert.equal(hiddenDirect.audioCalls.at(-1).source,'native:11','A later Conversation reply can play hidden while direct internal output stays muted');
+  hiddenDirect.show();assert.equal(hiddenBridge.calls.filter(v=>v[0]==='start').length,1,'Returning cannot automatically reopen capture');
+  hiddenBridge.mode.close();assert.equal(hiddenDirect.nodes.get('#conversation-voice-replies').dataset.voiceState,'off','Explicit exit still restores the previous Voice choice');hiddenDirect.ui.stop();
   directOptions.continuous=false;await direct.ui.refresh();assert(!bridge.mode.active);assert(bridge.calls.some(v=>v[0]==='hold'));
   assert(!bridge.calls.some(v=>v[0]==='ordinary-hold'),'A configuration change closes the previously selected continuous owner');
   assert.equal(direct.nodes.get('#conversation-message').value,'Keep this ordinary draft');direct.ui.stop();
