@@ -372,7 +372,7 @@ def qwen_wav(data):
     return data
 
 
-def render(binding, request):
+def render_plan(binding, request):
     if (not isinstance(request, dict) or set(request) != {'scope', 'text'}
             or not isinstance(request['scope'], str) or not 1 <= len(request['scope']) <= 128
             or not isinstance(request['text'], str) or not request['text'].strip()
@@ -395,6 +395,11 @@ def render(binding, request):
         identity['source_text_sha256'] = sha(request['text'].encode())
         identity['text_projection'] = 'markdown-v1'
     ident = sha(canonical(identity))
+    return config, fields, ident
+
+
+def render(binding, request):
+    config, fields, ident = render_plan(binding, request)
     job = directory(directory(config['cache_root']) / ident)
     prune_audio(config, exclude=ident)
     state_file, audio_file = job / 'state.json', job / 'audio.wav'
