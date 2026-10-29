@@ -15,7 +15,7 @@ window.RequestControls = (() => {
         unknown:"Earlier response remains unconfirmed.", cancelled:"Cancellation requested.",
         expired:"This request is closed.", source_changed:"This request is no longer current."})[value.state]
       || "This request has no live response channel.";
-  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false, getCanDecide=()=>true,onSource=()=>{},prefix="conversation",allowCancel=true,maxCards=200}) {
+  function mount({api, getBinding, setCsrf, unauthorized, onReply, onListen, getCanListen=()=>false, getCanDecide=()=>true,onSource=()=>{},makeCopy,prefix="conversation",allowCancel=true,maxCards=200}) {
     const cards = new Map(), section = $(`#${prefix}-requests`), container = $(`#${prefix}-request-cards`);
     const state = $(`#${prefix}-request-state`), more = $(`#${prefix}-requests-more`);
     let generation = 0, observation = 0, cursor = 0, reading = false, probeCursor = 0, refreshTask;
@@ -120,6 +120,20 @@ window.RequestControls = (() => {
       const card = {id:value.id,box,title,status,preview,body,read,choices,form,text,submit,reply,listen,cancel,check,retry,dismiss,note,saved,
         observed:0,readVersion:0,complete:false,expanded:false,busy:false,loading:false,closed:false};
       cards.set(value.id,card);
+      if(typeof makeCopy==="function"){
+        let copySelection;
+        actions.append(makeCopy(async offset=>{
+          if(offset===0)copySelection={revision:(card.view||card.meta)?.revision,binding:getBinding(),generation};
+          const frozen=copySelection;
+          if(!frozen?.revision || !owns(card,frozen.generation) || getBinding()!==frozen.binding)throw Error("Request changed. Try again.");
+          const query=new URLSearchParams({offset:String(offset),revision:frozen.revision});
+          const value=await api(`interaction/requests/${card.id}?${query}`);
+          if(!owns(card,frozen.generation)||getBinding()!==frozen.binding)throw Error("Request changed. Try again.");
+          selected(value,card,frozen.revision);
+          return {text:value.body,offset:value.offset,next_offset:value.next_offset};
+        }));
+      }
+
       read.addEventListener("click", () => readRequest(card,false,true));
       check.addEventListener("click", () => checkDecision(card));
       retry.addEventListener("click", () => card.pending && sendDecision(card,card.pending));

@@ -564,3 +564,24 @@ evidence. Back to message, graph close or inspector close restores the invoking
 message focus and reading position. This is navigation only, never dispatch or
 proof of incorporation. The plain Inspect update answer-list shortcut remains
 removed.
+
+
+## Copy conversation text
+
+Every ordinary human message, assistant reply, session update and native question
+has an explicit Copy action beside its existing actions. It copies the message
+body from the source, preserving text/Markdown, Unicode and line breaks rather
+than labels, controls or an excerpt. A complete loaded body is reused; otherwise
+Copy reads the existing exact source or original-text endpoint through all pages.
+Native question copying does not mark its proposal reviewed, answer it or enable
+approval. It uses the existing read-only revision-fenced detail API.
+
+The clipboard write begins from the click; ClipboardItem can carry a promised
+text Blob on browsers requiring activation before asynchronous reads complete.
+Other browsers use writeText. Missing clipboard access or stale/failed/incomplete
+reads show Copy failed, without replacing the clipboard with a partial result.
+Copying is bounded to128 pages,262144 UTF-16 code units and15 seconds before
+starting another page (plus the existing in-flight API deadline). Source/binding
+changes stop the read. Copy does not generate speech, resend input or run work.
+The button reports Copied only after browser clipboard confirmation. Local
+clipboard success is separate from real phone/browser acceptance.

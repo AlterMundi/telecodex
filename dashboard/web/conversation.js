@@ -138,7 +138,7 @@ window.Conversation = (() => {
       read:key=>window.localStorage?.getItem(key),write:(key,value)=>window.localStorage?.setItem(key,value)
     }:undefined);let canSpeakLive=false;
     let pendingNavigation,internalNavigation,internalControls;
-    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:(...args)=>{pendingNavigation?.close(false);return selectFocus(...args);},onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,onSource:offerVoice});
+    const requestControls = window.RequestControls.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,onReply:(...args)=>{pendingNavigation?.close(false);return selectFocus(...args);},onListen:listenTo,getCanListen:()=>canListen,getCanDecide:()=>!readOnly&&!standalone,makeCopy:read=>copyButton(()=>copyParts(read)),onSource:offerVoice});
     const taskControls=window.HumanTaskControls?.mount({api,getBinding:()=>binding,setCsrf,unauthorized:failed,canReply:()=>!readOnly,onReply:task=>{
       if(readOnly || posting || draft.value.trim())return false;
       pendingNavigation?.close(false);voiceContext=undefined;selectFocus({source:`task:${task.id}`,revision:task.revision,context_only:true},`${task.label} · ${task.title}`);return true;
@@ -387,6 +387,52 @@ window.Conversation = (() => {
       if(!card.muteAttached){card.audioControls.replaceChildren(card.mute,card.solo,card.reset);card.title.append(card.audioControls);card.muteAttached=true;}
     }
     function clearProgress(){for(const card of progressCards.values())card.box.remove();progressCards.clear();settledProgress.clear();}
+    async function copyParts(read,valid=()=>true){
+      let text="",offset=0;const deadline=Date.now()+15000;
+      for(let n=0;n<128;n++){
+        if(!valid() || Date.now()>deadline)throw Error("Message changed or copying took too long. Try again.");
+        const value=await read(offset);
+        if(!valid() || typeof value.text!=="string" || value.offset!==undefined && value.offset!==offset)throw Error("Message changed. Try again.");
+        text+=value.text;
+        if(text.length>262144)throw Error("Message is too large to copy at once.");
+        if(value.next_offset===null)return text;
+        if(!Number.isSafeInteger(value.next_offset)||value.next_offset<=offset)throw Error("Complete message unavailable. Try again.");
+        offset=value.next_offset;
+      }
+      throw Error("Complete message unavailable. Try again.");
+    }
+    function copyButton(read){
+      const button=node("button","Copy");button.type="button";button.className="message-copy";
+      button.setAttribute("aria-label","Copy message text");button.setAttribute("aria-live","polite");
+      button.addEventListener("click",async()=>{
+        if(button.disabled)return;
+        button.disabled=true;button.textContent="Copying…";button.title="Copy message text";
+        try{
+          const clipboard=window.navigator?.clipboard;
+          if(!clipboard)throw Error("Clipboard unavailable. Select the text to copy it.");
+          // Start the clipboard write during the click, even when a complete
+          // immutable message still needs paging (including Safari activation).
+          const complete=()=>Promise.resolve().then(read).then(text=>{
+            if(typeof text!=="string" || !text.length)throw Error("No message text is available yet.");return text;
+          });
+          if(clipboard.write && window.ClipboardItem){
+            const payload=complete().then(text=>new Blob([text],{type:"text/plain"}));payload.catch(()=>{});
+            await clipboard.write([new window.ClipboardItem({"text/plain":payload})]);
+          }else if(clipboard.writeText)await clipboard.writeText(await complete());
+          else throw Error("Clipboard unavailable. Select the text to copy it.");
+          button.textContent="Copied";button.title="Message text copied";button.setAttribute("aria-label","Message copied. Copy again");
+        }catch(error){button.textContent="Copy failed";button.title=error.message||"Could not copy. Try again.";button.setAttribute("aria-label",`Copy failed: ${button.title}`);}
+        finally{button.disabled=false;}
+      });
+      return button;
+    }
+    async function copySource(card){
+      if(!card)throw Error("Message unavailable. Refresh before copying.");
+      const source=card.source,owned=binding;
+      const valid=()=>binding===owned && cards.get(source.id)===card && card.source.revision===source.revision;
+      if(card.expanded && card.offset===null && valid())return replyText(card.body);
+      return copyParts(offset=>part(source,offset),valid);
+    }
     const replyText=body=>window.ConversationMarkdown?.source(body) ?? body.textContent;
     const setReplyText=(body,text)=>window.ConversationMarkdown?window.ConversationMarkdown.render(body,text):(body.textContent=text);
     function sessionProgress(source){
@@ -401,7 +447,7 @@ window.Conversation = (() => {
       if(!card){
         const box=node("article",undefined,"reply session-update"),title=node("h3"),body=node("p",undefined,"reply-text"),listen=node("button","Listen");
         const time=node("time",undefined,"message-time"),reply=node("button","Reply to this update");reply.type="button";reply.className="session-update-reply";
-        listen.type="button";listen.className="session-update-listen";box.append(title,body,listen,reply,routingMapButton(()=>cards.get(card.source)?.source),time);card={box,title,body,listen,reply,time};progressCards.set(key,card);
+        listen.type="button";listen.className="session-update-listen";box.append(title,body,listen,reply,routingMapButton(()=>cards.get(card.source)?.source),copyButton(()=>copySource(cards.get(card.source))),time);card={box,title,body,listen,reply,time};progressCards.set(key,card);
         reply.addEventListener("click",()=>{const original=cards.get(card.source);if(!original || original.source.revision!==card.revision || !canReplyUpdates || readOnly)return;selectFocus({source:card.source,revision:card.revision},original.source.label||"this session");});
         listen.addEventListener("click",()=>{const original=cards.get(card.source);if(!original || original.source.revision!==card.revision || !canListen)return;return listenCard(original);});
       }
@@ -628,8 +674,18 @@ window.Conversation = (() => {
         const text = node("div", "", "reply-text"), status = node("p", "", "reply-status");
         const check = node("button", "Check status / read message"); check.type = "button";
         const retry = node("button", "Retry this same message"); retry.type = "button"; retry.hidden = true;
-        const actions = node("div", undefined, "reply-actions"); actions.append(check,retry);
-        const continueButton=node("button","Reply to this session");continueButton.type="button";continueButton.hidden=true;actions.append(continueButton);
+        const actions = node("div", undefined, "reply-actions"); actions.append(check,retry);const copy=copyButton(async()=>{
+          const selected=card.value,owned=inputGeneration;
+          const valid=()=>inputGeneration===owned && inputs.get(selected.id)===card;
+          if(!valid())throw Error("Message changed. Try again.");
+          if(typeof selected.text==="string")return selected.text;
+          return copyParts(async offset=>{
+            const value=await api(`interaction/inputs/${encodeURIComponent(selected.id)}/trace/original?offset=${offset}`);
+            if(value.id!==selected.id || value.source!=="original")throw Error("Wrong saved message");
+            return value;
+          },valid);
+        });
+        const continueButton=node("button","Reply to this session");continueButton.type="button";continueButton.hidden=true;actions.append(continueButton,copy);
         const routeBox=node("div",undefined,"reply-route"),select=node("select"),routeButton=node("button","Send to session"),routeNote=node("p","","reply-error");
         select.setAttribute("aria-label","Destination session");routeButton.type="button";routeBox.hidden=true;routeBox.append(select,routeButton,routeNote);
         const imageButton=node("button","Show selected image"),imageView=node("div");imageButton.type="button";imageButton.hidden=true;imageView.hidden=true;imageView.className="input-visual";imageView.setAttribute("role","img");
@@ -1322,7 +1378,7 @@ window.Conversation = (() => {
         const error = node("p", "", "reply-error"); error.setAttribute("role", "status");
         const reply=node("button",source.kind.startsWith("integrator_")?"Reply to this message":"Reply to this session");reply.type="button";reply.hidden=readOnly || !["worker_result","matrix_result","integrator_answer","integrator_progress"].includes(source.kind);
         const time=node("time",undefined,"message-time");
-        actions.append(read, listen,reply,routingMapButton(()=>card.source)); box.append(title, status, body, actions, error,time);
+        actions.append(read, listen,reply,routingMapButton(()=>card.source),copyButton(()=>copySource(card))); box.append(title, status, body, actions, error,time);
         box.dataset.sequence = String(source.sequence);
         const following = [...container.children].find((item) => Number(item.dataset.sequence) < source.sequence);
         if(!timeline || source.kind==="worker_progress")container.insertBefore(box, following || null);
