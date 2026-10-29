@@ -847,7 +847,7 @@ scheduling evidence, not a measured device or provider latency improvement.
 ## Unconfirmed recording review and local recovery
 
 An interrupted final upload retains the exact capture ID, audio digest, bytes and
-selected context. Checking status is read-only; explicit retry uses that same
+selected context. Checking status is read-only; retries use that same
 original, while a local discard does not cancel already saved server work.
 After a lost upload response, the visible page automatically checks that same
 original through the existing read-only status API. It makes at most four
@@ -858,8 +858,19 @@ binding change or a matching receipt prevents later reconciliation. Manual Check
 delivery remains available after the automatic budget ends. These reads never
 upload audio, run ASR, start native work or reopen a microphone. Confirming an
 already accepted message restores the ordinary composer and recording control.
-An unknown or mismatched outcome keeps the original; it is never treated as
-permission to resend or discard it.
+A network failure, auth failure, conflict or mismatched outcome keeps the
+original without automatic resubmission. If the exact status API returns404,
+a recording with retained explicit Send intent can retry the same POST at most
+twice within the four checks. The retry count is saved with local recovery before
+POST and survives reload. Every attempt preserves the ID, bytes, digest, reply,
+files, visual, playback and frozen question context; native capture reservation
+already deduplicates that ID. Review-only recordings and legacy recovery records
+without Send intent are never automatically sent. Hidden/offline, auth/binding
+changes and local-storage failure prevent automatic retry. Existing accepted,
+preparing, unconfirmed or retained-unsent server rows are observed, never retried
+through a new native input. Exhaustion leaves Check delivery, explicit Retry
+sending, Save audio and discard available. The composer exposes one labeled
+Retry send action, replacing the duplicate circular-arrow retry control.
 The shared recording-review controls keep Check, retry, Save audio and explicit
 local discard reachable, including when capture is unconfirmed. The composer
 buttons remain contained at narrow widths; pending text is separate from playback.
@@ -1050,3 +1061,17 @@ as completed answers and worker updates. A list preview is only an initial
 placeholder, never the complete displayed reply. Keep both integrator kinds in
 automatic expansion; retain the existing visibility, source-revision and reader
 limits, and manual continuation for messages exceeding the automatic bound.
+
+
+## Persistent audio controls
+
+The ordinary conversation keeps its audio panel visible, including idle and
+failed playback. The speaker has one on/off purpose: turn spoken replies on,
+or stop the current output and disable spoken replies (also quieting Beacon,
+as the former Stop did). It lives beside playback, outside the text composer.
+Pause appears only for a currently playable item; paused items offer Play in
+the same slot without another synthesis. At completion, preparation, idle or
+failure, that slot shows the existing status instead. Pausing retains listening
+intent; the speaker remains enabled until explicitly switched off. Follow and
+session Mute/Solo/reset remain unchanged. Avatar mode retains its own opt-in,
+Conversation-only mix and exit recovery.
