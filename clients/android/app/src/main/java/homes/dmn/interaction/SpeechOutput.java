@@ -24,6 +24,7 @@ final class SpeechOutput {
     private AudioFocusRequest focus;
     private MediaPlayer player;
     private ByteArrayOutputStream pending;
+    private VerifiedAudioBuffer liveSource;
     private String id, hash;
     private int expected, sequence;
     private boolean prepared, seeking, playWhenSeekDone;
@@ -38,8 +39,10 @@ final class SpeechOutput {
         JSONObject value = new JSONObject();
         try {
             value.put("id", id).put("type", type);
-            if (prepared && player != null) value.put("position", player.getCurrentPosition() / 1000.0)
-                .put("duration", player.getDuration() / 1000.0);
+            if (prepared && player != null) {
+                value.put("position", player.getCurrentPosition() / 1000.0);
+                if (player.getDuration() > 0) value.put("duration", player.getDuration() / 1000.0);
+            }
         } catch (Exception ignored) { }
         emit.accept(value);
     }
@@ -74,6 +77,8 @@ final class SpeechOutput {
     };
     void stop() {
         handler.removeCallbacks(tick); releaseFocus(); prepared = seeking = playWhenSeekDone = false;
+        // Wake the codec reader before release(), which can wait for its I/O.
+        if (liveSource != null) { liveSource.close(); liveSource = null; }
         if (player != null) { player.release(); player = null; }
         if (pending != null) { pending.reset(); pending = null; }
         id = hash = null;
@@ -90,8 +95,27 @@ final class SpeechOutput {
                 handler.postDelayed(() -> { if (requested.equals(id) && pending != null) { event("error"); stop(); } }, 30000);
                 return;
             }
+            if (command.equals("stream_begin")) {
+                stop(); id = requested; liveSource = new VerifiedAudioBuffer();
+                VerifiedAudioBuffer buffer = liveSource;
+                prepare(new MediaDataSource() {
+                    public int readAt(long position, byte[] target, int offset, int length) throws java.io.IOException { return buffer.readAt(position, target, offset, length); }
+                    public long getSize() { return buffer.size(); }
+                    public void close() { buffer.close(); }
+                });
+                return;
+            }
             if (!requested.equals(id)) return; // Late commands cannot affect another source.
             switch (command) {
+                case "stream_chunk": {
+                    String encoded = value.getString("data");
+                    if (liveSource == null || encoded.length() > 44000) throw new IllegalArgumentException();
+                    liveSource.append(value.getInt("sequence"), android.util.Base64.decode(encoded, android.util.Base64.NO_WRAP), value.getString("sha256"));
+                    break;
+                }
+                case "stream_end":
+                    if (liveSource == null) throw new IllegalArgumentException();
+                    liveSource.finish(value.getInt("bytes"), value.getString("sha256")); break;
                 case "chunk": {
                     String encoded = value.getString("data");
                     if (pending == null || encoded.length() > 44000 || value.getInt("sequence") != sequence++) throw new IllegalArgumentException();
@@ -105,9 +129,7 @@ final class SpeechOutput {
                     StringBuilder digest = new StringBuilder();
                     for (byte b : MessageDigest.getInstance("SHA-256").digest(bytes)) digest.append(String.format("%02x", b & 255));
                     if (!hash.contentEquals(digest)) throw new IllegalArgumentException("Audio integrity mismatch");
-                    MediaPlayer owned = new MediaPlayer(); player = owned;
-                    owned.setAudioAttributes(attributes);
-                    owned.setDataSource(new MediaDataSource() {
+                    prepare(new MediaDataSource() {
                         private byte[] audio = bytes;
                         public int readAt(long position, byte[] target, int offset, int length) {
                             if (audio == null || position >= audio.length) return -1;
@@ -118,29 +140,38 @@ final class SpeechOutput {
                         public long getSize() { return audio == null ? 0 : audio.length; }
                         public void close() { audio = null; }
                     });
-                    owned.setOnPreparedListener(p -> {
-                        if (p != player) return;
-                        prepared = true; event("loaded");
-                    });
-                    owned.setOnSeekCompleteListener(p -> {
-                        if (p != player) return;
-                        seeking = false;
-                        if (playWhenSeekDone) {
-                            playWhenSeekDone = false;
-                            try { play(); } catch (Exception error) { event("error"); stop(); }
-                        }
-                    });
-                    owned.setOnCompletionListener(p -> { if (p == player) { releaseFocus(); handler.removeCallbacks(tick); event("ended"); } });
-                    owned.setOnErrorListener((p, what, extra) -> { if (p == player) { event("error"); stop(); } return true; });
-                    owned.prepareAsync(); break;
+                    break;
                 }
                 case "play": play(); break;
                 case "pause": pause("pause"); break;
-                case "seek": if (prepared) { seeking = true; player.seekTo(Math.max(0, Math.min(player.getDuration(), value.getInt("millis")))); } break;
+                case "seek": if (prepared && (liveSource == null || liveSource.complete())) {
+                    int position = Math.max(0, value.getInt("millis")), duration = player.getDuration();
+                    seeking = true; player.seekTo(duration > 0 ? Math.min(duration, position) : position);
+                } break;
                 case "volume": volume = (float)Math.max(0, Math.min(1, value.getDouble("value"))); if (player != null && prepared) player.setVolume(volume, volume); break;
                 case "stop": stop(); break;
                 default: throw new IllegalArgumentException();
             }
         } catch (Exception error) { event("error"); stop(); }
+    }
+    private void prepare(MediaDataSource data) throws java.io.IOException {
+        MediaPlayer owned = new MediaPlayer(); player = owned;
+        owned.setAudioAttributes(attributes); owned.setDataSource(data);
+        owned.setOnPreparedListener(p -> { if (p == player) { prepared = true; event("loaded"); } });
+        owned.setOnSeekCompleteListener(p -> {
+            if (p != player) return;
+            seeking = false;
+            if (playWhenSeekDone) {
+                playWhenSeekDone = false;
+                try { play(); } catch (Exception error) { event("error"); stop(); }
+            }
+        });
+        owned.setOnCompletionListener(p -> {
+            if (p != player) return;
+            if (liveSource != null && !liveSource.complete()) { event("error"); stop(); return; }
+            releaseFocus(); handler.removeCallbacks(tick); event("ended");
+        });
+        owned.setOnErrorListener((p, what, extra) -> { if (p == player) { event("error"); stop(); } return true; });
+        owned.prepareAsync();
     }
 }

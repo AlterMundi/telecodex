@@ -45,11 +45,32 @@ actual resume behavior must be tested; a successful focus API call is not proof
 that YouTube Music resumed. See #454 and Android's
 [audio focus contract](https://developer.android.com/media/optimize/audio-focus).
 
-This first pilot deliberately buffers each speech segment. Native progressive
-decoding is unfinished; the normal browser keeps its existing progressive path.
+The first0.1 pilot deliberately buffers each speech segment. The0.2 candidate
+reuses the existing verified NDJSON speech reader for progressive native output:
+each checked block is passed to Android, whose bounded random-access source
+waits for missing bytes rather than returning premature EOF. Android repeats
+sequence/block-digest checks and exposes EOF only after the terminal size/hash
+match. Prefetched streams remain in JS until the exact source has been validated
+and unmuted; preparation cannot replace the active native player or acquire focus.
+At most3 prepared/active stream descriptors,8MiB per source,32KiB blocks,30s
+missing-data/readiness bounds and145s stream lifetime reuse the existing transport
+limits. Encoded prefetch data stays in memory. Cancel/stop/background closes the
+source and wakes decoder I/O before releasing the player. Decode recovery uses
+the existing completed verified Blob, never a second provider request. If native decoding fails before transport completion, detach only the decoder and retain the bounded verified transport until that Blob is available; failure must not cancel its own recovery bytes.
+
+Android0.1 remains on the complete-byte path when the web reader is updated;
+ordinary browsers keep their existing MediaSource path. The candidate is not
+received or physically accepted solely because bridge/buffer tests pass. The
+scoped CI additionally exercises the actual Android decoder on an API35 emulator:
+a12s synthetic MP3 prefix must start and advance playback before terminal bytes,
+then finish after verified EOF; releasing a partial source must not block the UI.
+The emulator has no physical audio/microphone/camera and uses no provider/model.
+
 There is no foreground media service/notification yet, so this is a foreground
 pilot, not the completed mobile experience. Native Beacon synthesis, filters,
-mixing, output-route changes and iOS are not implemented. Never label a shell,
+mixing, output-route changes and iOS are not implemented. Native file export/
+download is also unfinished: existing browser Blob downloads need an explicit
+native save/share bridge before sole-client acceptance. Never label a shell,
 compiled APK or synthetic bridge test as completed stages2/3/required4.
 
 ## Build, delivery and operator path
@@ -58,8 +79,13 @@ JDK17, Android SDK36, Android build tools35 and the checksum-pinned Gradle8.13
 wrapper build this project. AGP8.13.2 and AndroidX Webkit1.14.0 are pinned in the
 owning Gradle files. `clients/android/gradlew --no-daemon :app:assembleRelease
 :app:lintRelease` (from that directory) creates an **unsigned** release APK.
-The scoped Android CI performs the same build/lint and native-adapter tests and
-retains that artifact for7days. Build success is not signing or installation.
+The scoped Android CI performs the same build/lint, native-adapter and JVM
+verified-buffer tests and retains that artifact for7days. Debug APKs used only
+by the decoder emulator expire after1day; compact decoder evidence after7days.
+The emulator job has a15-minute limit,2virtual cores/1536MiB RAM,10GiB initial
+runner headroom, bounded SDK/boot/test commands and a trap that stops its own
+emulator. AVD creation and emulator lookup use the same explicit task-owned Android user/AVD directories; the AVD index must exist before launch. The trap removes that directory after stopping its emulator. SDK state is ephemeral to that hosted job. Build success is not
+signing, receiving selection or installation.
 
 Sign the exact qualified release with the receiving operator's retained private
 Android signing key using the standard SDK `apksigner`; verify the signature and
