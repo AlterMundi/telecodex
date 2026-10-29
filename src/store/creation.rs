@@ -236,6 +236,56 @@ impl Store {
         Ok(())
     }
 
+    /// Allocate a destination in this standalone receiver, without a Telegram
+    /// effect. Reservation and receipt share one transaction, so a lost return
+    /// resumes the same destination rather than allocating another one.
+    pub fn interaction_creation_local_topic(
+        &self,
+        id: &str,
+        human: i64,
+        reserved: &[i64],
+    ) -> Result<i64> {
+        if reserved.len() > 64 || reserved.iter().any(|id| *id <= 0) {
+            bail!("Invalid configured destination reservations");
+        }
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let operation = creation_on(&tx, id, human)?;
+        eligible(&tx, &operation)?;
+        let current: bool = tx.query_row(
+            "SELECT instance_id=?1 FROM interaction_creations WHERE id=?2 AND human_id=?3",
+            params![self.instance_id, id, human],
+            |r| r.get(0),
+        )?;
+        if !current {
+            bail!("Creation is not claimed by this receiver");
+        }
+        if operation["phase"] == "topic_known" {
+            return operation["topic"]
+                .as_i64()
+                .context("Local destination receipt missing");
+        }
+        if operation["phase"] != "prepared" {
+            bail!("Local creation is not claimed for execution");
+        }
+        let chat = operation["intent"]["entry"]["chat_id"]
+            .as_i64()
+            .context("Missing entry")?;
+        let previous: i64 = tx.query_row(
+            "SELECT MAX(value) FROM (SELECT 0 AS value UNION ALL SELECT thread_id FROM sessions WHERE chat_id=?1 UNION ALL SELECT topic FROM interaction_creations WHERE entry_chat=?1 AND topic IS NOT NULL)",
+            [chat], |r| r.get(0),
+        )?;
+        let previous = previous.max(reserved.iter().copied().max().unwrap_or(0));
+        let topic = previous
+            .checked_add(1)
+            .context("Local destination namespace exhausted")?;
+        if tx.execute("UPDATE interaction_creations SET topic=?1,phase='topic_known' WHERE id=?2 AND human_id=?3 AND phase='prepared' AND instance_id=?4",params![topic,id,human,self.instance_id])? != 1 {
+            bail!("Local destination reservation changed");
+        }
+        tx.commit()?;
+        Ok(topic)
+    }
+
     pub fn interaction_creation_topic(&self, id: &str, human: i64, topic: i64) -> Result<()> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         if topic<=0 || conn.execute("UPDATE interaction_creations SET topic=?1,phase='topic_known' WHERE id=?2 AND human_id=?3 AND phase='creating_topic' AND instance_id=?4",params![topic,id,human,self.instance_id])?!=1 {return Err(anyhow!("Creation topic receipt unavailable"));}
@@ -458,6 +508,145 @@ mod tests {
             .execute("UPDATE users SET allowed=0 WHERE tg_user_id=100", [])
             .unwrap();
         assert_eq!(store.interaction_profile(&cfg).unwrap().targets.len(), 1);
+    }
+
+    #[test]
+    fn standalone_creation_retains_one_local_destination_across_restart() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let defaults = super::super::tests::defaults();
+        let store = Store::open(file.path(), &[100], &defaults).unwrap();
+        let entry = SessionKey::new(100, Some(1));
+        let source = store.ensure_session(entry, 100, &defaults).unwrap();
+        store
+            .set_session_codex_thread(entry, "entry-native")
+            .unwrap();
+        let update:crate::telegram::Update=serde_json::from_value(json!({"update_id":20,"message":{"message_id":20,"message_thread_id":1,"from":{"id":100,"is_bot":false,"first_name":"Human"},"chat":{"id":100,"type":"private"},"text":"Start a distinct new task"}})).unwrap();
+        store.admit_update(&update).unwrap();
+        store.begin_update(20).unwrap();
+        store.mark_update_queued(20).unwrap();
+        let turn = store
+            .record_turn_started(
+                source.id,
+                &TurnRequest {
+                    session_key: entry,
+                    from_user_id: 100,
+                    prompt: "Runtime envelope differs from original".into(),
+                    runtime_instructions: None,
+                    attachments: vec![],
+                    review_mode: None,
+                    override_search_mode: None,
+                },
+            )
+            .unwrap();
+        store
+            .record_turn_native_thread(turn, "entry-native")
+            .unwrap();
+        store.link_update_turn(20, turn).unwrap();
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel();
+        let prepare = |token: &tokio_util::sync::CancellationToken| {
+            store.interaction_prepare_creation(
+                entry,
+                100,
+                "entry-native",
+                20,
+                "Gamma",
+                "This is a distinct task",
+                &json!({"sources":[]}),
+                2,
+                token,
+            )
+        };
+        assert!(prepare(&token).is_err());
+        let token = tokio_util::sync::CancellationToken::new();
+        let (intent, fresh) = prepare(&token).unwrap();
+        assert!(fresh);
+        let id = intent["id"].as_str().unwrap();
+        assert!(!prepare(&token).unwrap().1);
+
+        // Reserve against both current sessions and other retained creations.
+        store
+            .ensure_session(SessionKey::new(100, Some(90)), 100, &defaults)
+            .unwrap();
+        assert!(
+            store
+                .interaction_creation_local_topic(id, 101, &[100])
+                .is_err()
+        );
+        let topic = store
+            .interaction_creation_local_topic(id, 100, &[100])
+            .unwrap();
+        assert_eq!(topic, 101);
+        assert!(
+            store
+                .get_session(SessionKey::new(100, Some(100)))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            store
+                .interaction_creation_local_topic(id, 100, &[100])
+                .unwrap(),
+            topic
+        );
+        store.interaction_creation_suspend(id, 100).unwrap();
+        assert_eq!(
+            store.interaction_creation(id, 100).unwrap()["phase"],
+            "retained_topic"
+        );
+        assert!(
+            store
+                .interaction_creation_local_topic(id, 100, &[100])
+                .is_err()
+        );
+        let id = id.to_owned();
+        drop(store);
+        let store = Store::open(file.path(), &[100], &defaults).unwrap();
+        let (retained, claimed) = store
+            .interaction_creation_resume(entry, 100, 20, &token)
+            .unwrap();
+        assert!(claimed);
+        assert_eq!(retained["topic"], topic);
+        assert_eq!(
+            store
+                .interaction_creation_local_topic(&id, 100, &[100])
+                .unwrap(),
+            topic
+        );
+        let key = SessionKey::new(100, Some(topic));
+        store.ensure_session(key, 100, &defaults).unwrap();
+        let mut template = source;
+        template.codex_thread_id = None;
+        template.force_fresh_thread = true;
+        template.session_title = Some("Gamma".into());
+        store
+            .apply_empty_session_template(key, &template, 100)
+            .unwrap();
+        let instruction = store
+            .interaction_creation_finish(&id, 100, "unused-disabled-telegram")
+            .unwrap();
+        assert_eq!(instruction.text, "Start a distinct new task");
+        assert_eq!(instruction.target, key);
+        assert_eq!(
+            store.interaction_creation(&id, 100).unwrap()["phase"],
+            "ready"
+        );
+        assert!(
+            store
+                .interaction_creation_local_topic(&id, 100, &[100])
+                .is_err()
+        );
+        let cfg: InteractionConfig = serde_json::from_value(json!({
+            "human_id":100,"chat_id":100,"topic_id":1,
+            "targets":[{"topic_id":100,"name":"Existing"}]
+        }))
+        .unwrap();
+        let profile = store.interaction_profile(&cfg).unwrap();
+        assert_eq!(
+            profile.resolve("Existing"),
+            vec![SessionKey::new(100, Some(100))]
+        );
+        assert_eq!(profile.resolve("Gamma"), vec![key]);
     }
 
     #[test]

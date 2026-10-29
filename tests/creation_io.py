@@ -5,6 +5,8 @@ All native, HTTP, user and model boundaries are synthetic.
 import json
 import pathlib
 import sys
+import subprocess
+import uuid
 from semantic_routing_io import Semantic
 from routing_io import Routing
 
@@ -90,6 +92,67 @@ class InvalidTitle(Creation):
             self.call('create','create',self.create_args())
             return True
         return super().handle_extra_rpc(m,send)
+
+
+class Standalone(Creation):
+    def handle_extra_rpc(self, message, send):
+        if not self.routed:
+            return Routing.handle_extra_rpc(self, message, send)
+        if message.get('method') is None and message.get('id') == 'inputs':
+            value = message['result']
+            assert value['success'], value
+            rows = json.loads(value['contentItems'][0]['text'])['inputs']
+            current = next(row for row in rows if 'NATURAL-ROUTE' in row['text_excerpt'])
+            self.input_ref = current.get('input_ref') or current['input_update']
+            self.source_text = current['text_excerpt']
+            self.call('create', 'create', self.create_args())
+            return True
+        if message.get('method') is None and message.get('id') == 'create':
+            value = message['result']
+            assert value['success'], {'reply':value,
+                'creation':self.row('SELECT phase,topic,doc FROM interaction_creations'),
+                'entry':self.row('SELECT thread_id,codex_thread_id,busy FROM sessions'),
+                'input':self.row('SELECT phase,doc FROM conversation_inputs')}
+            result = json.loads(value['contentItems'][0]['text'])
+            assert result['selector'] == 't77' and result['dispatch_error'] is None
+            self.creation_outputs.append(result)
+            send({'method':'turn/completed','params':{'threadId':self.entry,'turn':{'id':self.entry_turn,'status':'completed'}}})
+            return True
+        return super().handle_extra_rpc(message, send)
+
+
+def standalone_destination(binary):
+    j = Standalone(binary)
+    try:
+        j.prepare(seed_entry=True)
+        j.stop()
+        j.socket = j.root / 'owner.sock'
+        text = j.config.read_text().replace('[telegram]\n', '[telegram]\nenabled=false\n')
+        text = '\n'.join(line for line in text.splitlines() if not line.startswith('bot_token_file='))
+        j.config.write_text(text + '\n[[interaction.targets]]\nname="Existing"\ntopic_id=76\n'
+                            + '\n[session_control]\nhuman_id=100\nsocket_path=' + json.dumps(str(j.socket)) + '\n')
+        before = j.row('SELECT count(*) FROM incoming_updates')
+        j.start()
+        j.wait_control_socket(j.socket)
+        def owner(*args):
+            result = subprocess.run([j.binary, '--control', str(j.config), *args], capture_output=True, text=True, timeout=15)
+            assert result.returncode == 0, result.stderr
+            return json.loads(result.stdout)['result']
+        binding = owner('presentation', 'list', '0', '0')['binding']
+        original = str(uuid.uuid4())
+        owner('input', 'submit', json.dumps({'id':original,'binding':binding,'text':'NATURAL-ROUTE Start one standalone task from this exact browser original.'}))
+        j.wait(lambda: len(j.creation_outputs) == 1)
+        j.wait(lambda: len(j.instructions(77)) == 1 and j.instructions(77)[0][1] == 'accepted')
+        assert j.topic_calls == 0
+        assert j.row('SELECT count(*) FROM incoming_updates') == before
+        assert j.row('SELECT count(*) FROM sessions WHERE thread_id=76') == [(0,)]
+        assert j.row('SELECT count(*) FROM interaction_enrollments') == [(1,)]
+        assert json.loads(j.instructions(77)[0][2])['text'] == j.source_text
+        j.stop(); j.start()
+        assert j.topic_calls == 0 and j.row('SELECT count(*) FROM interaction_creations') == [(1,)]
+        print('PASS standalone original creates one local worker without Telegram API/token, reserves uninitialized targets and retains enrollment across restart')
+    finally:
+        j.close()
 
 
 def invalid_title_then_corrected(binary):
@@ -182,6 +245,7 @@ def retired_before_send(binary):
 
 if __name__=='__main__':
     binary=str(pathlib.Path(sys.argv[1]).resolve())
+    standalone_destination(binary)
     created_destination(binary)
     created_destination(binary,"Diamond Badge")
     invalid_title_then_corrected(binary)
