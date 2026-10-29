@@ -3,12 +3,13 @@ package homes.dmn.interaction;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.ComponentName;
+import android.content.ServiceConnection;
+import android.os.IBinder;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.webkit.CookieManager;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
@@ -33,13 +34,14 @@ import org.json.JSONObject;
 /** Thin independent client; authority, originals and work remain on the selected receiver. */
 public final class MainActivity extends ComponentActivity {
     private WebView web;
-    private SpeechOutput speech;
+    private SpeechService speech;
+    private ServiceConnection connection;
+    private boolean bound;
     private JavaScriptReplyProxy reply;
     private String origin;
     private boolean foreground;
     private PermissionRequest microphone;
     private ValueCallback<Uri[]> chooser;
-    private final Handler handler = new Handler(Looper.getMainLooper());
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -55,7 +57,7 @@ public final class MainActivity extends ComponentActivity {
         box.setBackgroundColor(Color.rgb(11,16,24));
         TextView title = new TextView(this); title.setText("Daimon Interaction\nAndroid pilot"); title.setTextColor(Color.rgb(134,210,230)); title.setTextSize(24); box.addView(title);
         TextView description = new TextView(this);
-        description.setText("Enter your daimon’s HTTPS home address. Sign in with the existing shared login. Telegram is not required. This pilot plays completed speech through Android; progressive native playback and background operation are still being developed.");
+        description.setText("Enter your daimon’s HTTPS home address. Sign in with the existing shared login. Telegram is not required. Enable spoken replies for up to two hours of background listening. Audio off or closing the app ends that listening session.");
         description.setTextColor(Color.WHITE); box.addView(description);
         EditText input = new EditText(this); input.setSingleLine(true); input.setHint("https://your-daimon.example"); input.setInputType(17); box.addView(input);
         Button start = new Button(this); start.setText("Open my daimon"); box.addView(start);
@@ -77,6 +79,21 @@ public final class MainActivity extends ComponentActivity {
         Uri uri = Uri.parse(web.getUrl()); return sameOrigin(uri) && "/interaction/".equals(uri.getPath());
     }
     private void open(String home) {
+        if (speech != null) { openWeb(home); return; }
+        TextView waiting = new TextView(this); waiting.setText("Opening conversation…"); setContentView(waiting);
+        connection = new ServiceConnection() {
+            @Override public void onServiceConnected(ComponentName name, IBinder binder) {
+                speech = ((SpeechService.LocalBinder) binder).service(); openWeb(home);
+            }
+            @Override public void onServiceDisconnected(ComponentName name) {
+                speech = null;
+                if (web != null) web.evaluateJavascript("window.NativeSpeechAudio?.serviceLost()", null);
+            }
+        };
+        bound = bindService(new Intent(this, SpeechService.class), connection, BIND_AUTO_CREATE);
+        if (!bound) { waiting.setText("Audio service unavailable. Close and reopen the app."); }
+    }
+    private void openWeb(String home) {
         origin = home;
         web = new WebView(this); web.setBackgroundColor(Color.rgb(11,16,24));
         web.setFitsSystemWindows(true);
@@ -89,17 +106,18 @@ public final class MainActivity extends ComponentActivity {
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
         CookieManager.getInstance().setAcceptCookie(true); CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
-        speech = new SpeechOutput(this, handler, value -> { if (reply != null) try { reply.postMessage(value.toString()); } catch (Exception ignored) { } });
+        speech.attach(value -> { if (reply != null) try { reply.postMessage(value.toString()); } catch (Exception ignored) { } });
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
             || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             new AlertDialog.Builder(this).setMessage("Update Android System WebView to use this pilot’s native audio.")
                 .setPositiveButton("Close", (d,w) -> finish()).show(); return;
         }
         WebViewCompat.addWebMessageListener(web, "DaimonAudio", Collections.singleton(home), (view, message, sourceOrigin, mainFrame, proxy) -> {
-            if (!mainFrame || !sameOrigin(sourceOrigin) || !appPage() || !foreground) return;
+            if (!mainFrame || !sameOrigin(sourceOrigin) || !appPage() || speech == null || (!foreground && !speech.enabled())) return;
             String data = message.getData(); if (data == null || data.length() > 45000) return;
             try {
                 JSONObject value = new JSONObject(data); reply = proxy;
+                if (value.optString("command").equals("session") && value.optBoolean("enabled") && !foreground) return;
                 if (!value.optString("command").equals("hello")) speech.command(value);
             } catch (Exception ignored) { }
         });
@@ -121,7 +139,7 @@ public final class MainActivity extends ComponentActivity {
                 return true;
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                speech.stop(); reply = null;
+                speech.shutdown(); reply = null;
                 if (microphone != null) { microphone.deny(); microphone = null; }
             }
         });
@@ -160,17 +178,18 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onStop() {
         foreground = false;
         if (microphone != null) { microphone.deny(); microphone = null; }
-        if (speech != null) speech.background();
-        if (web != null) web.evaluateJavascript("window.NativeSpeechAudio?.background()", null);
+        boolean keepPlayback = speech != null && speech.enabled();
+        if (speech != null && !keepPlayback) speech.shutdown();
+        if (web != null) web.evaluateJavascript("window.NativeSpeechAudio?.background(" + keepPlayback + ")", null);
         super.onStop();
     }
     private void navigateBack() {
         if (web != null && web.canGoBack()) web.goBack();
         else new AlertDialog.Builder(this).setMessage("Leave this conversation?")
             .setPositiveButton("Close", (d,w) -> finish()).setNeutralButton("Change home", (d,w) -> {
-                if (speech != null) speech.stop(); if (web != null) { web.destroy(); web = null; }
+                if (speech != null) speech.shutdown(); if (web != null) { web.destroy(); web = null; }
                 getPreferences(MODE_PRIVATE).edit().remove("home").apply(); setup();
             }).setNegativeButton("Stay", null).show();
     }
-    @Override protected void onDestroy() { if (speech != null) speech.stop(); if (web != null) web.destroy(); if (chooser != null) chooser.onReceiveValue(null); super.onDestroy(); }
+    @Override protected void onDestroy() { if (speech != null) speech.shutdown(); if (bound) { unbindService(connection); bound = false; } if (web != null) web.destroy(); if (chooser != null) chooser.onReceiveValue(null); super.onDestroy(); }
 }

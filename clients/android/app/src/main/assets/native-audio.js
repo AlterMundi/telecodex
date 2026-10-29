@@ -2,10 +2,10 @@
 /* Loaded only by the Android host, on its exact selected HTTPS main origin. */
 window.NativeSpeechAudio=(()=>{
   const bridge=window.DaimonAudio,outputs=new Map(),streams=new Set(),encodedStreams=new Map();
-  let serial=0,captureEpoch=0;
+  let serial=0,captureEpoch=0,controls,sessionEnabled=false;
   if(!bridge?.postMessage)return;
   const send=value=>bridge.postMessage(JSON.stringify(value));
-  bridge.onmessage=event=>{try{const value=JSON.parse(event.data);outputs.get(value.id)?.receive(value);}catch{}};
+  bridge.onmessage=event=>{try{const value=JSON.parse(event.data);if(value.type==="control"){controls?.[value.action]?.();return;}outputs.get(value.id)?.receive(value);}catch{}};
   send({command:"hello"});
   const devices=navigator.mediaDevices,original=devices?.getUserMedia?.bind(devices);
   if(original)devices.getUserMedia=async constraints=>{
@@ -139,12 +139,19 @@ window.NativeSpeechAudio=(()=>{
     });
     return element;
   }
-  function background(){
+  function setSession(enabled){
+    enabled=!!enabled;if(enabled===sessionEnabled)return;sessionEnabled=enabled;
+    send({command:"session",enabled});
+  }
+  function serviceLost(){background();controls?.stop?.();}
+  function background(keepPlayback=false){
     captureEpoch++;
-    window.dispatchEvent(new Event("pagehide"));
-    for(const output of [...outputs.values()])output.reset();
-    for(const stream of [...encodedStreams.values()])stream.cancel();
+    window.dispatchEvent(new Event(keepPlayback?"nativecapturebackground":"pagehide"));
+    if(!keepPlayback){
+      for(const output of [...outputs.values()])output.reset();
+      for(const stream of [...encodedStreams.values()])stream.cancel();
+    }
     for(const stream of streams)for(const track of stream.getTracks())track.stop();streams.clear();
   }
-  return {mount,background,openStream,progressive:true};
+  return {mount,background,openStream,progressive:true,backgroundPlayback:true,setSession,serviceLost,setControls:value=>{controls=value;}};
 })();

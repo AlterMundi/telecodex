@@ -375,6 +375,7 @@ window.VoiceInput = (() => {
     check.addEventListener('click',()=>checkStatus());
     document.addEventListener('visibilitychange',()=>{if(document.hidden){clearStatusTimer();deactivate();}else scheduleStatus(true);});
     window.addEventListener('online',()=>scheduleStatus(true));
+    window.addEventListener('nativecapturebackground',()=>{clearStatusTimer();deactivate();});
     window.addEventListener('pagehide',()=>{clearStatusTimer();deactivate();});telegram?.onEvent?.('deactivated',()=>{clearStatusTimer();deactivate();});
     controls();return {configure,reset,deactivate,observe,submit,ownsSend,hold,startConversation:()=>liveAvailable&&liveMode==='prepared'&&start(true),retainContinuous,commitContinuous,reviewContinuous,continuousOwner,canStartContinuous:()=>!!recovery&&recoveryFree&&available&&liveAvailable&&liveMode==='prepared'&&supported()&&!restoring&&!ownsSend(),syncControls:syncSend};
   }

@@ -143,6 +143,7 @@ window.ContinuousConversation=(()=>{
       }catch{if(owned!==epoch)return false;hold('Voice could not start. You can keep using the ordinary conversation.');closeGraph();stopTracks();return false;}
     }
     document.addEventListener('visibilitychange',()=>{if(document.hidden)hold();});
+    window.addEventListener('nativecapturebackground',()=>hold());
     window.addEventListener('pagehide',()=>hold());
     return {start,hold,get active(){return active||starting;},get floor(){return floor;},
       get originals(){return [...slots.values()].filter(s=>s.original).map(s=>s.original);},
