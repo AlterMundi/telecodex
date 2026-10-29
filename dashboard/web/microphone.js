@@ -182,10 +182,11 @@ window.VoiceInput = (() => {
         const response=await fetch(frozen.captureStop?'api/interaction/voice/limited':'api/interaction/voice',{method:'POST',credentials:'same-origin',signal:active.signal,
           headers:{...headers(),...(frozen.reply?{'X-Reply-Source':(frozen.reply.context_only?'context:':'')+frozen.reply.source,'X-Reply-Revision':frozen.reply.revision}:{}),...(frozen.visual?{'X-Visual-Reference':JSON.stringify(frozen.visual)}:{}),...(frozen.playback?{'X-Playback-Context':JSON.stringify(frozen.playback)}:{}),...(frozen.captureQuestions!==undefined?{'X-Capture-Questions':JSON.stringify(frozen.captureQuestions)}:{}),...(frozen.captureStop?{'X-Recording-Stop':frozen.captureStop}:{}),...(frozen.files?.length?{'X-File-References':encodeURIComponent(JSON.stringify(frozen.files))}:{}),'Content-Type':frozen.mime,'X-Input-Binding':frozen.binding,'X-Input-Id':frozen.id,'X-Audio-Sha256':frozen.audio_sha256},body:frozen.blob});
         const value=await response.json();
-        if(!response.ok){const error=new Error('Recording not confirmed');error.status=response.status;if(value.code==='visual_reselection'&&value.submission_attempted===false)error.visualReselection=true;throw error;}
+        if(!response.ok){const error=new Error('Recording not confirmed');error.status=response.status;if(response.status===507)error.retentionFull=true;if(value.code==='visual_reselection'&&value.submission_attempted===false)error.visualReselection=true;throw error;}
         await confirmed(value,frozen);
       } catch(e) {
         if(pending!==frozen)return;
+        if(e.retentionFull){notice('Original audio retention is full or unavailable. Existing originals and this local recording are preserved. Save a copy and resolve the retention limit before sending.',true);return;}
         if(e.visualReselection){
           if(frozen.uncertainSubmission){pending={...frozen,needsVisualSelection:false};notice('An earlier submission is still unconfirmed. Keep this recording identity and check its status before starting another attempt.',true);return;}
           pending={...frozen,needsVisualSelection:true};notice('This attempt did not submit the recording. Point again or remove the image, then retry this recording.',true);return;

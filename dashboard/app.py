@@ -27,6 +27,7 @@ from .traffic import Traffic
 from .menu_attention import attention_projection
 from .operator import sessions_selection
 from .speech import Speech, SpeechUnavailable, speech_part
+from .media_retention import MediaRetention, RetentionUnavailable
 from .companion import Grants as CompanionGrants, permitted as companion_permitted
 from .home_auth import HomeAuth
 from scripts.speech_render import RenderError
@@ -60,6 +61,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
     companions = CompanionGrants(config, provider)
     home_auth = HomeAuth(config, provider)
     speech = Speech(config['speech']) if config.get('speech') else None
+    if speech:
+        speech.media_retention = MediaRetention(config['media_retention']) if config.get('media_retention') else None
     origin = config['origin']
     prefix = config.get('prefix', '/sessions')
     additional_origins = config.get('additional_origins', [])
@@ -688,6 +691,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             data = await request.body()
             from starlette.concurrency import run_in_threadpool
             result = await run_in_threadpool(provider.conversation_voice_submit, metadata, data)
+        except RetentionUnavailable as exc:
+            raise HTTPException(507, str(exc)) from None
         except VisualSelectionInvalid:
             return JSONResponse({'detail':'Select the captured image again. This attempt did not submit a recording.','code':'visual_reselection','submission_attempted':False},status_code=400)
         except (ValueError, UnicodeError):
@@ -985,6 +990,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
                             if latest!=canonical:
                                 raise SpeechUnavailable('Presentation source changed')
                             yield json.dumps(frame,separators=(',',':'))+'\n'
+                except RetentionUnavailable:
+                    yield json.dumps({'type':'error','message':'Original audio retention is full or unavailable. Protected originals remain saved; new speech was stopped.'})+'\n'
                 except (SpeechUnavailable,RenderError,ProviderUnavailable,OSError,ValueError,KeyError,TimeoutError,HTTPException):
                     yield json.dumps({'type':'error','message':'Speech stopped. Text remains available; no automatic retry.'})+'\n'
             return StreamingResponse(audio_frames(),media_type='application/x-ndjson',headers={
@@ -1001,6 +1008,8 @@ def create_app(config=None, provider=None, validator=validate_launch, alerts=Non
             latest = await run_in_threadpool(provider.presentation_part, body['source'], body['revision'], body['offset'])
             if latest != canonical:
                 raise SpeechUnavailable('Presentation source changed')
+        except RetentionUnavailable as exc:
+            raise HTTPException(507, str(exc)) from None
         except (SpeechUnavailable, RenderError, ProviderUnavailable, OSError, ValueError, KeyError, TimeoutError):
             raise HTTPException(409, 'Speech outcome retained; refresh before continuing') from None
         await authorize_async(request)

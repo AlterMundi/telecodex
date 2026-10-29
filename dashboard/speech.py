@@ -1,5 +1,6 @@
 """Source-linked synthesis; delivery to a client never claims playback."""
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -10,6 +11,16 @@ import stat
 import sys
 
 from scripts import speech_render
+
+
+async def retain_io(method, *args, **kwargs):
+    """Keep disk waits off the shared event loop, completing an owned write on cancel."""
+    task = asyncio.create_task(asyncio.to_thread(method, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await task
+        raise
 
 
 class SpeechUnavailable(Exception):
@@ -107,7 +118,33 @@ class Speech:
         if self.capacity.locked():
             raise SpeechUnavailable('Speech preparation capacity is occupied')
         async with self.capacity:
-            return await self._render(source)
+            retention = getattr(self, 'media_retention', None)
+            original = await retain_io(retention.begin, source, 'assistant', 'audio/wav', speech_render.MAX_AUDIO) if retention else None
+            fallback = None
+            try:
+                if original:
+                    route = speech_render.route(self.binding)
+                    payload = speech_request(source, route['language'])
+                    _, _, ident = speech_render.render_plan(self.binding, payload)
+                    fallback = Path(route['cache_root']) / ident
+                data, result = await self._render(source)
+                if original:
+                    await retain_io(original.append, data)
+                    await retain_io(original.finish, complete=True)
+                return data, result
+            finally:
+                if original and not original.closed:
+                    # A renderer may have durably generated the WAV before its
+                    # stdout/parent confirmation was cancelled. Reuse the same
+                    # supported identity plan; never discover an unrelated job.
+                    if fallback and not original.used:
+                        try:
+                            data = speech_render.private_bytes(fallback / 'audio.wav', speech_render.MAX_AUDIO)
+                            speech_render.audio_info(data)
+                            await retain_io(original.append, data)
+                        except (OSError, ValueError, speech_render.RenderError):
+                            pass
+                    await retain_io(original.finish, complete=False)
 
     async def _render(self, source):
         # The caller supplies a controller-certified part, never browser-authored text.
@@ -167,6 +204,9 @@ class Speech:
         if not self.streaming or self.capacity.locked():
             raise SpeechUnavailable('Streaming speech unavailable or occupied')
         async with self.capacity:
+            retention = getattr(self, 'media_retention', None)
+            original = await retain_io(retention.begin, source, 'assistant', 'audio/mpeg', speech_render.MAX_AUDIO) if retention else None
+            audio_hash = hashlib.sha256()
             config_bytes = speech_render.private_bytes(self.binding,16384)
             command = [sys.executable,str(Path(speech_render.__file__).resolve()),'--binding',str(self.binding),'--stream']
             child = await asyncio.create_subprocess_exec(*command,stdin=asyncio.subprocess.PIPE,
@@ -192,9 +232,19 @@ class Speech:
                             # Retain the terminal frame until the process confirms success.
                             terminal=value
                         else:
+                            if original:
+                                data = base64.b64decode(value['data'], validate=True)
+                                if hashlib.sha256(data).hexdigest() != value.get('sha256'):
+                                    raise SpeechUnavailable('Streamed original integrity failed')
+                                await retain_io(original.append, data)
+                                audio_hash.update(data)
                             yield value
                     if await child.wait()!=0 or not ended:
                         raise SpeechUnavailable('Streaming speech incomplete')
+                    if original:
+                        if terminal.get('audio_bytes') != original.used or terminal.get('audio_sha256') != audio_hash.hexdigest():
+                            raise SpeechUnavailable('Streamed original terminal integrity failed')
+                        await retain_io(original.finish, complete=True)
                     alignment=canonical_word_alignment(source,payload,language,terminal.pop('alignment',None))
                     if alignment is not None:
                         terminal['alignment']=alignment
@@ -203,3 +253,5 @@ class Speech:
                 try:os.killpg(child.pid,signal.SIGKILL)
                 except ProcessLookupError:pass
                 await child.wait()
+                if original and not original.closed:
+                    await retain_io(original.finish, complete=False)

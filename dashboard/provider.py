@@ -18,6 +18,7 @@ import tomllib
 
 from scripts.activity_indicator import Native, Rollout, linked_child, readonly, timestamp, read_topic_inventory, topic_activity_inventory, pending_requests, goal_recovery_state, read_owner_json, inventory_source
 from scripts.speech_render import sync_directory
+from .media_retention import RetentionUnavailable
 
 
 class ProviderUnavailable(Exception):
@@ -116,6 +117,8 @@ class Host:
 class Provider:
     def __init__(self, config):
         self.config = config
+        from .media_retention import MediaRetention
+        self.media_retention = MediaRetention(config["media_retention"]) if config.get("media_retention") else None
         self.receiver_path = Path(config['receiver_config'])
         self.receiver_bytes = self.receiver_path.read_bytes()
         self.receiver = tomllib.loads(self.receiver_bytes.decode())
@@ -385,7 +388,7 @@ class Provider:
         page = self.presentation(f'input list {before} {direction}')
         for item in page['items']:
             self.decorate_input(item,page.get('routing_choices'),page['entry_binding'],page['binding'])
-            self.retire_voice_capture(item)
+            self.retire_voice_capture(item, page["entry_binding"])
         return page
 
     def conversation_input_status(self, ident):
@@ -393,7 +396,7 @@ class Provider:
         self.retire_voice_capture(value)
         return value
 
-    def retire_voice_capture(self, value):
+    def retire_voice_capture(self, value, entry_binding=None):
         """Dispose only this receiver's clip after its matching durable transcript.
 
         Admission/delivery may still be pending: the retained transcript is the
@@ -426,10 +429,18 @@ class Provider:
                 current = path.lstat()
                 if (current.st_dev,current.st_ino) != (info.st_dev,info.st_ino):
                     return False
+                retention = getattr(self, 'media_retention', None)
+                if retention:
+                    source.seek(0)
+                    selected = value if entry_binding is None else {**value, 'entry_binding':entry_binding}
+                    retention.retain(selected, 'human', voice.get('mime', 'application/octet-stream'), source.read(20*1024*1024+1))
                 path.unlink()
                 sync_directory(directory)
             return True
         except FileNotFoundError:
+            return False
+        except RetentionUnavailable:
+            value['media_retention'] = {'state':'blocked', 'message':'Original audio protection unavailable; source clip preserved. Resolve retention before new audio.'}
             return False
         except (OSError, ValueError, KeyError, TypeError):
             # Cleanup cannot turn an already committed input into a failed or
@@ -689,6 +700,13 @@ class Provider:
             raise ProviderUnavailable('Voice recording storage unavailable')
         # Persist the newly created directory name before retaining any clip/capture.
         sync_directory(directory.parent)
+        retention = getattr(self, 'media_retention', None)
+        if retention:
+            current = self.presentation('input list 0 before')
+            if current['binding'] != metadata['binding']:
+                raise ProviderUnavailable('Original conversation binding changed')
+            retention.retain({'id':metadata['id'], 'entry_binding':current['entry_binding']},
+                             'human', metadata['mime'], data)
         self.retain_voice_capture(directory, metadata['id'], data, metadata['audio_sha256'])
         # The controller reserves original order/authority before asynchronous ASR.
         # A retry names the same clip and only inspects existing capture state.
