@@ -989,9 +989,12 @@ intervals use the server monotonic clock and must not be added to browser marks
 or called final intended speech-to-sound latency. The provider reader and finish
 writer may overlap; the intervals are not an additive phase decomposition.
 
-Presentation drafts and canonical native sources expose optional `local_turn`
-metadata from the already-authorized turn. The browser joins only accepted
-originals and Conversation output in that same local turn, never worker returns,
+Input submit/status responses, input history, presentation drafts and canonical
+native sources expose optional `local_turn` metadata from the already-authorized
+turn. Input readers take it from the current journal row, including late native
+acknowledgment, rather than a stale original document. A missing turn remains
+null; it is not inferred from the latest session activity. The browser joins only
+accepted originals and Conversation output in that same local turn, never worker returns,
 old history before Send or a guessed latest reply. When several recorded inputs
 share a steered turn, it leaves response timing unassigned. This observation is
 not proof that a correction was incorporated. Older receivers without the field
