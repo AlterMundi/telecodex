@@ -26,20 +26,25 @@ public class MicrophoneCaptureTest {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         assertEquals("Chromium input-device permission", PackageManager.PERMISSION_GRANTED,
             context.checkSelfPermission(Manifest.permission.MODIFY_AUDIO_SETTINGS));
-        try (android.os.ParcelFileDescriptor descriptor = InstrumentationRegistry.getInstrumentation()
-                .getUiAutomation().executeShellCommand("pm grant " + context.getPackageName() + " android.permission.RECORD_AUDIO")) {
-            try (java.io.FileInputStream input = new java.io.FileInputStream(descriptor.getFileDescriptor())) {
-                byte[] buffer = new byte[256]; while (input.read(buffer) != -1) { }
-            }
-        }
+        InstrumentationRegistry.getInstrumentation().getUiAutomation()
+            .grantRuntimePermission(context.getPackageName(), Manifest.permission.RECORD_AUDIO);
         assertEquals(PackageManager.PERMISSION_GRANTED, context.checkSelfPermission(Manifest.permission.RECORD_AUDIO));
-        android.content.SharedPreferences preferences = context.getSharedPreferences("MainActivity", Context.MODE_PRIVATE);
-        String previous = preferences.getString("home", null);
-        preferences.edit().putString("home", "https://capture.invalid").commit();
+        AtomicReference<android.content.SharedPreferences> preferences = new AtomicReference<>();
+        AtomicReference<String> previous = new AtomicReference<>();
         Field field = MainActivity.class.getDeclaredField("web"); field.setAccessible(true);
         Receipt receipt = new Receipt();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             AtomicReference<WebView> view = new AtomicReference<>();
+            scenario.onActivity(activity -> {
+                // Activity.getPreferences uses getLocalClassName, not a guessed preference filename.
+                preferences.set(activity.getPreferences(Context.MODE_PRIVATE));
+                previous.set(preferences.get().getString("home", null));
+                preferences.get().edit().putString("home", "https://capture.invalid").commit();
+                try {
+                    java.lang.reflect.Method open = MainActivity.class.getDeclaredMethod("open", String.class);
+                    open.setAccessible(true); open.invoke(activity, "https://capture.invalid");
+                } catch (Exception error) { throw new AssertionError(error); }
+            });
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             while (view.get() == null && System.nanoTime() < deadline) {
                 scenario.onActivity(activity -> { try { view.set((WebView)field.get(activity)); } catch (Exception error) { throw new AssertionError(error); } });
@@ -60,8 +65,10 @@ public class MicrophoneCaptureTest {
             assertTrue("Capture completed: " + receipt.result, receipt.done.await(15, TimeUnit.SECONDS));
             assertEquals("Actual WebView capture", "recorded", receipt.result);
         } finally {
-            if (previous == null) preferences.edit().remove("home").commit();
-            else preferences.edit().putString("home", previous).commit();
+            if (preferences.get() != null) {
+                if (previous.get() == null) preferences.get().edit().remove("home").commit();
+                else preferences.get().edit().putString("home", previous.get()).commit();
+            }
         }
     }
 }
