@@ -152,7 +152,13 @@ Sign the exact qualified release with the receiving operator's retained private
 Android signing key using the standard SDK `apksigner`; verify the signature and
 SHA-256 before distributing. Keep custody material/passwords outside the source,
 artifacts and public logs. Preserve the same key for future upgrades. A debug key
-or a new key on every CI run is not the update strategy. A private pilot APK may
+or a new key on every CI run is not the update strategy.
+Android [prevents normal lower-versionCode installs](https://developer.android.com/studio/publish/versioning).
+An installed-client rollback is a forward release of known code with a higher
+versionCode and the same package/key, retaining app data and login. Do not uninstall
+or clear app data to restore older code. Retained older APKs are evidence/source
+references, not direct downgrade instructions; compatible web rollback can be
+selected independently. A private pilot APK may
 be sent directly to the selected human without Play Store publication. General
 public distribution and iOS signing/store delivery remain separate selections.
 
