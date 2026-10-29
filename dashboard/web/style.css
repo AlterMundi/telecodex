@@ -1022,7 +1022,7 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 /* Compact audio dock: explanation on demand, never a paragraph beside the composer. */
 .standalone-conversation #conversation-dock:has(#conversation-player:not([hidden])) {grid-template-columns:92px minmax(0,1fr);}
 .standalone-conversation #conversation-dock #conversation-audio-tools {width:92px;}
-.standalone-conversation #conversation-audio-tools #conversation-player:not([hidden]) {position:relative;grid-template-columns:44px 44px;gap:4px;}
+.standalone-conversation #conversation-audio-tools #conversation-player:not([hidden]) {position:relative;left:auto;bottom:auto;grid-template-columns:44px 44px;gap:4px;}
 .standalone-conversation #conversation-player #conversation-playing {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);}
 .standalone-conversation #conversation-player #conversation-voice-replies {grid-column:1;grid-row:1;}
 .standalone-conversation #conversation-player #conversation-play,.standalone-conversation #conversation-player #conversation-audio-state {grid-column:2;grid-row:1;}
