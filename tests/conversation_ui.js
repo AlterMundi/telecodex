@@ -181,6 +181,21 @@ function boot(readOnly=false,standalone=false,options={}) {
   if(options.capture)context.window.VoiceInput={mount(value){capture=value;return {configure(){},reset(){},deactivate(){},observe(){},ownsSend:()=>!!options.ownsVoice,submit:()=>options.voiceSubmit?.(),canStartContinuous:()=>true,continuousOwner:v=>continuousCalls.push(['owner',v]),retainContinuous:v=>{continuousCalls.push(['retain',v]);return v;},commitContinuous:v=>{continuousCalls.push(['commit',v]);return v;},reviewContinuous:v=>continuousCalls.push(['review',v]),hold:()=>continuousCalls.push(['ordinary-hold']),startConversation:()=>continuousCalls.push(['ordinary-start'])};}};
   if(options.continuous){
     context.window.ContinuousConversation={create(hooks){continuousHooks=hooks;return continuousSession={active:false,floor:false,originals:[],start(){this.active=true;continuousCalls.push(['start']);hooks.onState({active:true,starting:false,floor:false,pending:false});},hold(){this.active=false;continuousCalls.push(['hold']);},release:id=>continuousCalls.push(['release',id])};}};
+    if(options.continuousDriver){
+      const driver=options.continuousDriver;
+      context.window.crypto=context.crypto;
+      context.window.navigator.mediaDevices={getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})};
+      const source={bytes:0,subscribe(fn){this.listener=fn;return ()=>{this.listener=undefined;};},observe(){},close(){},
+        emit(n){this.bytes+=n;this.listener?.({pcm:new ArrayBuffer(n),totalBytes:this.bytes});}};
+      context.window.StreamingVoice={
+        openActivity:async hooks=>{driver.activity=hooks.onActivity;return {feed:()=>true,boundary:()=>true,close(){}};},
+        openCapture:async()=>{driver.source=source;return source;},
+        create:async()=>({state:'inactive',addEventListener(){},start(){this.state='recording';driver.ready=true;},stop(){this.state='inactive';}})
+      };
+      vm.runInContext(fs.readFileSync('dashboard/web/voice-session.js','utf8'),context);
+      const create=context.window.ContinuousConversation.create;
+      context.window.ContinuousConversation={create(hooks){continuousHooks=hooks;return continuousSession=create(hooks);}};
+    }
     context.window.ConversationVoiceMode={mount(hooks){let enabled=false,direct=false;return continuousMode={active:false,updates:[],configure(value,next){if(this.active&&(!value||direct!==next))this.close();enabled=value;direct=next;},update:v=>continuousMode.updates.push(v),open(){if(!enabled||!hooks.canEnter())return;hooks.onEnter();this.active=true;hooks.onSpeak();},suspend(){if(this.active)hooks.onSuspend();},close(){if(!this.active)return;this.active=false;hooks.onLeave();}};}};
   }
   if(options.progressive)context.window.SpeechStream={available:()=>true,open(_response,signal){
@@ -467,6 +482,21 @@ function boot(readOnly=false,standalone=false,options={}) {
   assert.equal(direct.nativePosts.length,0,'Result playback cannot cancel or answer native work');
   await direct.ui.refresh();
   assert.equal(direct.audioCalls.length,interruptedCalls+1,'Repeated result observation cannot repeat speech or resume the interrupted old answer');
+  const floorDriver={},floorUI=boot(false,true,{capture:true,continuous:true,continuousDriver:floorDriver,immediateHash:true});
+  floorUI.audio();await floorUI.ui.refresh();const floorBridge=floorUI.continuous();floorBridge.mode.open();await until(()=>floorDriver.ready);
+  floorUI.addReplies(1);await floorUI.ui.refresh();const floorPlayer=floorUI.nodes.get('#conversation-audio');await until(()=>!floorPlayer.paused);
+  floorDriver.source.emit(3200);floorDriver.activity({generation:1,onset:{generation:1,audio_bytes:3200},speaking:true});
+  assert(floorPlayer.paused,'The real continuous coordinator interrupts the mounted player before captions');
+  const beforeFloorRelease=floorUI.audioCalls.length;
+  floorUI.overrideSource(10,{kind:'worker_result',target:{chat_id:100,thread_id:7},label:'Alpha',preview:'Internal report ready'});
+  floorUI.addReplies(2);await floorUI.ui.refresh();assert.equal(floorUI.audioCalls.length,beforeFloorRelease);
+  floorDriver.activity({generation:1,endpoint:{generation:1,audio_bytes:3200},speaking:false});
+  await until(()=>floorUI.audioCalls.length>beforeFloorRelease&&!floorPlayer.paused);
+  assert.equal(floorUI.audioCalls.at(-1).source,'native:11','A queued Conversation result can speak after the acoustic endpoint without waiting for an ASR caption');
+  floorDriver.source.emit(3200);floorDriver.activity({generation:2,onset:{generation:2,audio_bytes:6400},speaking:true});
+  assert(floorPlayer.paused,'Renewed speech reacquires the floor through the actual coordinator/player connection');
+  assert.equal(floorUI.nativePosts.length,0);assert(!floorBridge.calls.some(v=>v[0]==='commit'),'Acoustic floor release cannot commit an original');
+  floorBridge.mode.close();
   const hiddenDirect=boot(false,true,{capture:true,continuous:true,playback:true,immediateHash:true,clock:true});hiddenDirect.audio();await hiddenDirect.ui.refresh();
   const hiddenBridge=hiddenDirect.continuous();hiddenBridge.mode.open();hiddenDirect.addReplies(1);await hiddenDirect.ui.refresh();
   const hiddenPlayer=hiddenDirect.nodes.get('#conversation-audio');await until(()=>!hiddenPlayer.paused);
