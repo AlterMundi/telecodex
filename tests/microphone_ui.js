@@ -163,6 +163,24 @@ function boot(live=false,recovery,status404=false){
  assert.equal(continuous.uploads.length,1,'Leaving or restoring never retries a retained original');
  await continuous.click();await until(()=>continuous.received.length===2);assert.equal(continuous.uploads[1].headers['X-Input-Id'],second.id);assert.equal(continuousStore.values.size,0);
 
+ // A lost continuous upload response must recover only that accepted original.
+ const lostPairStore=memoryRecovery(),lostPair=boot(true,lostPairStore);
+ await until(()=>lostPair.ui.canStartContinuous());lostPair.ui.continuousOwner(true);
+ const acceptedPair=await lostPair.ui.retainContinuous({...first,id:crypto.randomUUID()});
+ const unsentPair=await lostPair.ui.retainContinuous({...second,id:crypto.randomUUID()});
+ lostPair.mode('after');const uncertainPair=await lostPair.ui.commitContinuous(acceptedPair);
+ assert.equal(uncertainPair.confirmed,false);assert.equal(lostPair.uploads.length,1);
+ assert.equal(lostPairStore.values.get('pending').items.length,2);
+ const pairReload=boot(true,lostPairStore);
+ pairReload.originals.set(acceptedPair.id,lostPair.originals.get(acceptedPair.id));
+ await until(()=>pairReload.state().startsWith('An unfinished recording was recovered'));
+ await pairReload.check();
+ assert.equal(pairReload.uploads.length,0,'Receipt recovery after reload never resends the accepted original');
+ assert.equal(pairReload.mediaRequests(),0,'Receipt recovery never reopens capture');
+ assert.equal(lostPairStore.values.get('pending').id,unsentPair.id,'The distinct next continuous fragment remains recoverable');
+ assert.equal(lostPairStore.values.get('pending').audio_sha256,unsentPair.audio_sha256);
+ assert.equal(pairReload.received[0].id,acceptedPair.id);
+
  const discardStore=memoryRecovery();discardStore.values.set('pending',{schema:'telecodex.voice-recovery/v2',items:[first,second]});
  const queueReview=boot(false,discardStore);await until(()=>queueReview.state().startsWith('An unfinished recording was recovered'));
  queueReview.cancel();await until(()=>queueReview.state().startsWith('An unfinished recording was recovered'));
