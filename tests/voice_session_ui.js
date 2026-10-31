@@ -5,7 +5,7 @@ const until=async f=>{for(let i=0;i<100;i++){if(f())return;await new Promise(yes
 const deferred=()=>{let resolve;return {promise:new Promise(yes=>resolve=yes),resolve};};
 function boot(){
  const events={},timers=[],analyses=[],sources=[],recorders=[],medias=[],retained=[],commits=[],sent=[],reviews=[],states=[],captions=[],timings=[];
- let binding='a'.repeat(64),interrupts=0,permission,commitHold,questions={old:'v1'};
+ let binding='a'.repeat(64),interrupts=0,permission,commitHold,questions={old:'v1'},playback={source:'synthetic-reply',position_millis:123};
  const document={hidden:false,addEventListener:(n,f)=>events[n]=f};
  const window={crypto,addEventListener:(n,f)=>events[n]=f,navigator:{mediaDevices:{async getUserMedia(options){
   assert.equal(options.audio.echoCancellation,true);assert.equal(options.video,false);
@@ -31,7 +31,7 @@ function boot(){
   }
  };
  vm.runInNewContext(fs.readFileSync('dashboard/web/voice-session.js','utf8'),{window,document,AbortController,ArrayBuffer,JSON,Map,Promise,Infinity,setTimeout:(fn,ms)=>{const t={fn,ms};timers.push(t);return t;},clearTimeout:t=>{if(t)t.closed=true;}});
- const session=window.ContinuousConversation.create({headers:()=>({}),getBinding:()=>binding,getQuestions:()=>questions,getPlayback:()=>({source:'synthetic-reply',position_millis:123}),
+ const session=window.ContinuousConversation.create({headers:()=>({}),getBinding:()=>binding,getQuestions:()=>questions,getPlayback:()=>playback,
   async retain(original){const v={...original,audio_sha256:Buffer.from(await crypto.subtle.digest('SHA-256',await original.blob.arrayBuffer())).toString('hex')};retained.push(v);return v;},
   async commit(original){commits.push(original);if(commitHold)return commitHold.promise;return {confirmed:true,value:{id:original.id,voice:{audio_sha256:original.audio_sha256}}};},
   onTiming:(id,stage,detail)=>timings.push({id,stage,detail}),onState:v=>states.push(v),onCaption:v=>captions.push(v),onInterrupt:()=>interrupts++,onSent:v=>sent.push(v),onReview:v=>reviews.push(v)
@@ -39,7 +39,7 @@ function boot(){
  const activity=(generation,onset,endpoint)=>analyses.at(-1).emit({schema:'telecodex.turn-activity/v1',type:'activity',generation,audio_bytes:sources.at(-1).bytes,speech_seen:true,speaking:!endpoint,
   ...(onset?{onset:{generation,audio_bytes:sources.at(-1).bytes}}:{}),...(endpoint?{endpoint:{generation,audio_bytes:sources.at(-1).bytes,probability:.9,authority:'analysis_only'}}:{})});
  return {session,analyses,sources,recorders,medias,retained,commits,sent,reviews,states,captions,timings,document,events,timers,activity,interrupts:()=>interrupts,
-  questions:v=>questions=v,bind:v=>binding=v,permission:()=>{permission=deferred();return permission;},holdCommit:()=>{commitHold=deferred();return commitHold;}};
+  questions:v=>questions=v,playback:v=>playback=v,bind:v=>binding=v,permission:()=>{permission=deferred();return permission;},holdCommit:()=>{commitHold=deferred();return commitHold;}};
 }
 (async()=>{
  const countdown=boot();await countdown.session.start();assert.equal(countdown.states.at(-1).remaining,120);
@@ -52,11 +52,30 @@ function boot(){
  countdown.recorders[0].complete('Frase');await until(()=>countdown.commits.length===1);countdown.session.hold();countdown.recorders[1].complete();await tick();
  const delayed=boot();await delayed.session.start();delayed.sources[0].emit(3200);delayed.activity(1,true,false);
  delayed.activity(1,false,true);delayed.sources[0].emit(64000,0);
+ assert.equal(delayed.session.floor,false,'A confirmed acoustic endpoint releases playback while captions are still pending');
+ assert.equal(delayed.recorders[0].state,'recording','Releasing playback must not discard or dispatch the unconfirmed recording');
+ assert.equal(delayed.commits.length,0);
  delayed.recorders[0].partial('Una frase completa que llegó después del silencio');
  assert.equal(delayed.recorders[0].state,'inactive','Silent PCM cannot invalidate an exact endpoint while captions arrive late');
  await until(()=>delayed.recorders.length===2);delayed.recorders[0].complete('Una frase completa');await until(()=>delayed.commits.length===1);
  assert.equal(delayed.retained[0].blob.size,67200);assert.equal(delayed.analyses[0].boundaries.length,1);
  delayed.session.hold();delayed.recorders[1].complete();await tick();
+ const silent=boot();await silent.session.start();silent.sources[0].emit(3200);silent.activity(1,true,false);silent.activity(1,false,true);
+ assert.equal(silent.session.floor,false,'A brief detected sound without words cannot hold playback for the entire capture budget');
+ silent.activity(1,true,false);assert.equal(silent.session.floor,false,'A repeated old onset cannot reacquire a released floor');
+ silent.questions({arrivedWhileWaiting:'v2'});
+ silent.playback({source:'new-integrated-result',position_millis:456});
+ silent.sources[0].emit(3200);silent.activity(2,true,false);
+ assert(silent.session.floor,'Renewed speech interrupts playback even before the delayed first caption');
+ assert.equal(silent.interrupts(),2);
+ silent.analyses[0].emit({generation:1,speaking:false,endpoint:{generation:1,audio_bytes:3200}});
+ assert(silent.session.floor,'An earlier endpoint cannot release the renewed human turn');
+ silent.activity(2,false,true);assert.equal(silent.session.floor,false);
+ assert.equal(silent.recorders.length,1);assert.equal(silent.commits.length,0);
+ silent.session.hold();silent.recorders[0].complete();await until(()=>silent.retained.length===1);
+ assert.equal(silent.session.originals.length,1,'The original sound remains available for review on exit');
+ assert.equal(silent.retained[0].playback.source,'new-integrated-result','The frozen original refers to the reply interrupted on reacquiring the floor, not an older sound');
+ assert.equal(JSON.stringify(silent.retained[0].captureQuestions),JSON.stringify({old:'v1'}),'Reacquiring playback cannot widen the original question snapshot');
  const renewed=boot();await renewed.session.start();renewed.sources[0].emit(3200);renewed.activity(1,true,false);renewed.activity(1,false,true);
  renewed.sources[0].emit(64000,0);renewed.sources[0].acoustic(67200,67200);renewed.recorders[0].partial('La persona volvió a hablar');
  assert.equal(renewed.recorders[0].state,'recording','New acoustic activity still fences an earlier endpoint');

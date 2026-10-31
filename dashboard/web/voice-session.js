@@ -30,10 +30,14 @@ window.ContinuousConversation=(()=>{
     }
     function consider(){
       const slot=current,a=verdict;
-      if(!active||stopping||!slot?.recorder||slot.recorder.state!=='recording'||!slot.words||!slot.speech||!a?.endpoint)return;
+      if(!active||stopping||!slot?.recorder||slot.recorder.state!=='recording'||!slot.speech||!a?.endpoint)return;
       const end=a.endpoint;
       if(end.generation!==slot.generation||a.speaking!==false||end.audio_bytes<=slot.start
          ||end.audio_bytes>bytes||lastEnergy>end.audio_bytes)return;
+      // Acoustic turn ownership is independent of ASR readiness. Keep the
+      // exact recording pending, but do not hold playback behind late captions.
+      if(floor){floor=false;state('Listening');}
+      if(!slot.words)return;
       // Captions can arrive after the analyzer's exact endpoint. Advancing
       // silence is not renewed speech; the acoustic fence above still owns it.
       // Keep the next recorder's prefix within the existing eight-second ring.
@@ -44,9 +48,11 @@ window.ContinuousConversation=(()=>{
     function activity(a){
       if(!active||stopping||binding!==getBinding()){if(active)hold('Conversation changed. Your recordings are kept.');return;}
       const slot=current;
-      if(slot&&a.onset?.audio_bytes>slot.start){
+      if(slot&&a.onset?.audio_bytes>slot.start
+         &&(slot.generation===undefined||a.onset.generation>slot.generation)){
         slot.generation=a.onset.generation;
-        if(!slot.speech){slot.scopeFrozen=true;slot.speech=true;slot.playback=getPlayback();floor=true;onInterrupt();state('Listening');}
+        if(!slot.speech){slot.scopeFrozen=true;slot.speech=true;}
+        if(!floor){slot.playback=getPlayback();floor=true;onInterrupt();state('Listening');}
       }
       if(a.endpoint)verdict=a;else if(verdict&&a.generation!==verdict.generation)verdict=undefined;
       consider();

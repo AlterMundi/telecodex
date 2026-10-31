@@ -410,6 +410,17 @@ expired-window cases; an observed browser stall is consistent with it, but that
 browser did not retain every analyzer verdict needed to prove its individual
 timing cause.
 
+A current acoustic endpoint also releases the playback floor while ASR captions
+are still pending. The recording remains open and unsent: floor ownership is not
+input confirmation. A newer speech generation can interrupt again before those
+captions arrive, capturing the playback context of that interruption without
+widening the original's frozen question scope. Repeated old onsets and stale
+endpoints cannot reacquire/release the newer turn. The actual continuous
+coordinator connected to the mounted conversation player is covered: an integrated
+result waits during speech, plays after the endpoint with no ASR caption, and
+pauses on renewed speech. This is synthetic state-machine evidence, not physical
+echo/noise or provider acceptance.
+
 
 ## Useful internal-return speech
 
