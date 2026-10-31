@@ -58,12 +58,20 @@ window.LiveSpeech=(()=>{
     async function next(){
       if(!draft || draft.record.canonical || draft.record.pending || draft.record.interrupted)return;
       const {value,record}=draft,chars=Array.from(value.text),start=record.attempted;
-      const window=chars.slice(start,start+(start?640:240)).join("");
-      // A complete sentence/paragraph is useful speech; incomplete punctuation,
-      // links and code remain visible but wait for more text or confirmation.
+      const bound=start?640:240,window=chars.slice(start,start+bound).join("");
+      // Prefer complete sentences/paragraphs. A full window can start useful
+      // speech at a whole-word boundary while the longer sentence is written.
+      // Short unfinished thoughts, incomplete links and code still wait.
       const matches=[...window.matchAll(/[.!?]["'”’)]*\s+|\n+/gu)];
-      if(!matches.length)return;
-      const match=matches.at(-1),prefixWindow=window.slice(0,match.index+match[0].length);
+      let prefixWindow;
+      if(matches.length){const match=matches.at(-1);prefixWindow=window.slice(0,match.index+match[0].length);}
+      else {
+        if(chars.length<=start+bound)return;
+        const space=[...window.matchAll(/\s+/gu)].at(-1);
+        if(!space)return;
+        prefixWindow=window.slice(0,space.index+space[0].length);
+        if(Array.from(prefixWindow).length<60 || !prefixWindow.trim())return;
+      }
       const prefix=chars.slice(0,start).join("")+prefixWindow;
       if((prefix.match(/```/g)||[]).length%2 || (prefix.replace(/```[^]*?```/g,"").match(/`/g)||[]).length%2
         || (prefix.match(/\[/g)||[]).length!==(prefix.match(/\]/g)||[]).length
