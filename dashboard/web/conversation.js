@@ -946,16 +946,17 @@ window.Conversation = (() => {
     };
     playLabel("Play audio");
     const follow = $("#conversation-follow");
+    let followEnabled=true,followHintHeldUntil=0;
+    const showFollow=()=>follow.setAttribute("aria-pressed",String(followEnabled));
     const followPointers=new Set();let followTouch=false,followSettle;
     const followHeld=()=>followPointers.size>0 || followTouch || !!followSettle;
     const resumeFollow=()=>{if(!followHeld())followPlayback(true);};
-    const saveFollow=()=>{try{window.localStorage?.setItem("interaction-follow-audio",String(follow.checked));}catch{}};
+    const saveFollow=()=>{try{window.localStorage?.setItem("interaction-follow-audio",String(followEnabled));}catch{}};
     if(standalone && follow){
       $("#conversation-follow-control").hidden=false;
-      follow.checked=true;
-      follow.title="Follow spoken progress; position within each audio segment is approximate";
-      try{follow.checked=window.localStorage?.getItem("interaction-follow-audio")!=="false";}catch{}
-      follow.addEventListener("change",()=>{saveFollow();if(follow.checked)followPlayback(true);});
+      try{followEnabled=window.localStorage?.getItem("interaction-follow-audio")!=="false";}catch{}
+      showFollow();
+      follow.addEventListener("click",()=>{if(Date.now()<followHintHeldUntil)return;followEnabled=!followEnabled;showFollow();saveFollow();if(followEnabled)followPlayback(true);});
       const settleFollow=()=>{clearTimeout(followSettle);followSettle=setTimeout(()=>{followSettle=undefined;resumeFollow();},180);};
       timeline.addEventListener("wheel",settleFollow,{passive:true});
       timeline.addEventListener("pointerdown",event=>{followPointers.add(event.pointerId);});
@@ -972,7 +973,7 @@ window.Conversation = (() => {
       });
     }
     function followingSpeech(){
-      return standalone && follow?.checked && !followHeld() && voiceEnabled && !voiceSuspended && !document.hidden
+      return standalone && follow && followEnabled && !followHeld() && voiceEnabled && !voiceSuspended && !document.hidden
         && active?.auto && !active.verifying && !audio.paused && !audio.muted;
     }
     function followCard(){
@@ -1057,10 +1058,10 @@ window.Conversation = (() => {
     const audioIndicator=$("#conversation-audio-state"),audioHint=$("#conversation-audio-hint");let audioHintTimer,audioHintHeldUntil=0;
     // Keep the explanation outside the dock's clipping/layout ancestors.
     document.body.append(audioHint);
-    const closeAudioHint=()=>{clearTimeout(audioHintTimer);audioHint.hidden=true;audioIndicator.setAttribute("aria-expanded","false");};
-    const showAudioHint=()=>{
-      closeAudioHint();audioHint.textContent=audioIndicator.textContent;audioHint.hidden=false;audioIndicator.setAttribute("aria-expanded","true");
-      const rect=audioIndicator.getBoundingClientRect?.(),viewport=window.visualViewport;
+    const closeAudioHint=()=>{clearTimeout(audioHintTimer);audioHint.hidden=true;audioIndicator.setAttribute("aria-expanded","false");follow?.setAttribute("aria-expanded","false");};
+    const showAudioHint=(anchor=audioIndicator,text=audioIndicator.textContent)=>{
+      closeAudioHint();audioHint.textContent=text;audioHint.hidden=false;anchor.setAttribute("aria-expanded","true");
+      const rect=anchor.getBoundingClientRect?.(),viewport=window.visualViewport;
       if(rect){
         const x=viewport?.offsetLeft||0,y=viewport?.offsetTop||0,width=viewport?.width||window.innerWidth,height=viewport?.height||window.innerHeight;
         audioHint.style.maxWidth=Math.max(1,width-16)+"px";audioHint.style.maxHeight=Math.max(1,height-16)+"px";
@@ -1073,6 +1074,9 @@ window.Conversation = (() => {
     };
     audioIndicator.addEventListener("click",()=>{if(Date.now()<audioHintHeldUntil)return;if(audioHint.hidden)showAudioHint();else closeAudioHint();});
     audioIndicator.addEventListener("contextmenu",event=>{event.preventDefault();audioHintHeldUntil=Date.now()+1000;showAudioHint();});
+    const explainFollow=()=>showAudioHint(follow,"Follow: keep the spoken passage in view. Tap to turn following on or off.");
+    follow?.addEventListener("contextmenu",event=>{event.preventDefault();followHintHeldUntil=Date.now()+1000;explainFollow();});
+    follow?.addEventListener("keydown",event=>{if(event.key==="F1"){event.preventDefault();explainFollow();}});
     window.addEventListener("keydown",event=>{if(event.key==="Escape")closeAudioHint();});
     window.addEventListener("resize",closeAudioHint);window.visualViewport?.addEventListener("resize",closeAudioHint);window.visualViewport?.addEventListener("scroll",closeAudioHint);
     const audioState = (text) => {
