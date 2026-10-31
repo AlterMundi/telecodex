@@ -421,6 +421,35 @@ result waits during speech, plays after the endpoint with no ASR caption, and
 pauses on renewed speech. This is synthetic state-machine evidence, not physical
 echo/noise or provider acceptance.
 
+### Current-receiver provider observation —31 October2026
+
+A bounded current-stack avatar case used generated PCM, real Gemini prepared
+ASR, the CPU analyzer, Sol6.1/openai/medium and the selected Qwen voice. Two
+generated clips produced three distinct confirmed voice originals: the correction's
+machine transcript split into “Ahora no repitas lo anterior” and “Decime solamente cuánto es ocho
+menos tres.” The native history contains those originals and the answer “Cinco.”
+Two concurrent result/question packets were retained together in one physical
+native turn. Receipt of both packets did not mean they were incorporated: neither
+was marked reported while the later original explicitly requested only the
+arithmetic answer. This does not establish that pending evidence was lost.
+
+The scenario stopped before further planned clips to preserve its utterance
+budget. One distinct diagnostic text original in the same retained context later
+recovered and reported Alpha's exact result. Beta's synthetic question was expired
+during retained-fixture recovery; the agent reported the missing question text
+and did not answer it or start work. No accepted original or return packet was
+replayed. The task-owned native history was retained and its completed thread
+archived. The uninterrupted full voice journey and useful-sound distributions
+were **not qualified** by this case; physical echo/noise/hearing remain separate.
+
+Bound actual committed utterance originals and provider connections, not generated
+clip counts: endpointing may legitimately split a clip. Preserve source-matched
+browser checkpoints before teardown and independently of the final report's HTTP
+submission; a server shutdown can make that submission unavailable. Retain the
+failed operation and repair the verifier from existing evidence rather than
+repeating paid inputs to recover missing timestamps. A strict “only this answer”
+correction is not a sound assertion point for immediate unrelated spoken offers.
+
 
 ## Useful internal-return speech
 
