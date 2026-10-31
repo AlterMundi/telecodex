@@ -1092,3 +1092,37 @@ failure, that slot shows the existing status instead. Pausing retains listening
 intent; the speaker remains enabled until explicitly switched off. Follow and
 session Mute/Solo/reset remain unchanged. Avatar mode retains its own opt-in,
 Conversation-only mix and exit recovery.
+
+## Continuous voice: lost response and reload recovery — 31 October 2026
+
+One bounded receiving-host journey exercised the shipped Chromium avatar,
+worklet, CPU endpoint analysis, ordinary HTTP/SQLite/native wrapper, real media
+element and IndexedDB. ASR, native peers and output tones were synthetic: zero
+real provider/model requests and no physical capture or hearing. The voice
+original interrupted playback after one question was actually observed; a later
+question remained outside its frozen scope. Two synthetic workers stayed busy,
+with no native question answer. The accepted original retained its exact
+recording hash and interrupted playback source/revision/position.
+
+The fixture deliberately lost the HTTP reply after server acceptance. Exactly
+one voice upload occurred. After same-profile reload, the ordinary status read
+recovered the committed transcript without another upload or microphone. The
+journal retained four originals (two workers, one local setup and one voice),
+two integrating native packets and no question answer. Confirmation retired
+only that voice original's local recovery copy.
+
+The original browser verifier incorrectly required an empty recovery store.
+Its retained failure was investigated through read-only inspection of the exact
+browser profile and original SQLite journal, without restarting the server or
+replaying an input. The remaining IndexedDB item was a distinct following
+continuous fragment, preserved with its exact hash. The corrected assertion
+matches the confirmed original by ID/hash and requires every other original to
+remain recoverable. `tests/microphone_ui.js` now also covers lost continuous
+upload acknowledgment, reload/status confirmation and preservation of the next
+fragment, with zero reupload or microphone acquisition.
+
+This closes that synthetic accepted-response-loss/reload observation gap. It
+is not actual provider outage, acoustic echo/noise, physical device/background
+acceptance, semantic model interpretation or a useful-speech latency distribution.
+The original failure and read-only continuation remain in the receiving work
+record. The full stages2/3/required4 outcome remains incomplete.

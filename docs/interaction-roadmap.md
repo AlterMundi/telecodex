@@ -7,6 +7,16 @@ parallel-work attention coordination as one coherent delivery.
 
 ## Navigation and current selection
 
+Human priority restored, 31 October 2026: close stage2 continuous avatar voice
+with the responsive foreground from stage3 and the attention required from
+stage4 as one usable experience. The same native goal/accounting continues.
+The independent Android client remains supported with its unfinished native
+mixing/Beacon/iOS work; it does not displace this current outcome. Accepted detail
+fixes and earlier maintenance are not work to repeat. The
+[lost-response/reload journey](interaction-streaming.md#continuous-voice-lost-response-and-reload-recovery--31-october-2026)
+adds synthetic integrated recovery evidence; actual provider/device/echo/noise
+and useful-latency acceptance remain distinct and unfinished.
+
 Human selection, 2026-10-29: the next delivery focus also includes an independent
 Android APK with native audio ownership, usable as the sole client of a hosted
 daimon. Reuse the web conversation and shared login; Telegram stays optional.
