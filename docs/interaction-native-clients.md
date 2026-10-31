@@ -43,8 +43,8 @@ Upgrade with the same package/signing key and higher versionCode; retain login
 and app data. Do not clear data or reinstall to repair this permission.
 
 The ordinary audio dock uses one speaker enable/off control and one shared slot
-for Play/Pause or a state icon. The controls form one vertical column: speaker, state/Play/Pause, then Follow
-as the only visible text. A64px dock uses36px buttons with20px glyphs, fitting
+for Play/Pause or a state icon. The controls form one vertical column: speaker, state/Play/Pause, then a compact Follow toggle. All three controls are icons without background
+fills. A64px dock uses36px audio buttons with20px glyphs and a24px-high Follow row, fitting
 beside the composer and returning64px compared with the former128px dock. Tapping a state icon explains its current meaning without
 playing or requesting audio. The explanation is a body-level fixed overlay clamped to the visual viewport,
 including keyboard/zoom bounds. Long press opens the same explanation with no
@@ -228,3 +228,11 @@ Background functionality is separately qualified after its service exists.
 Synthetic JS tests prove byte/source/bridge fences; Android build/lint prove
 compilability/API discipline. Neither proves hearing, physical mic quality,
 external music recovery, phone login or complete mobile usability.
+
+The Follow control is a pressed button with a focus-target icon in the bottom
+audio-dock row. Accent color, heavier strokes and `aria-pressed` expose the
+enabled preference; inactive uses muted strokes. It reuses the existing persisted
+Follow setting and manual-scroll hold/resume behavior. Long press (context menu)
+or keyboard F1 opens the existing viewport-clamped explanation headed “Follow”,
+without toggling the preference or starting audio. The dock has no background
+fills; keyboard focus outlines and accessible button names remain available.

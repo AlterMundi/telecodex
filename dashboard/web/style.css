@@ -890,7 +890,10 @@ main > #conversation { overflow: auto; overscroll-behavior: contain; }
 .standalone-conversation #conversation-play::before { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
 .standalone-conversation #conversation-play[data-playback-state="play"]::before { transform:translate(calc(-50% + 1px),-50%); }
 .standalone-conversation #conversation-follow-control:not([hidden]) { grid-column:1 / -1; grid-row:4; display:flex; align-items:center; justify-content:center; gap:6px; min-height:28px; font-size:12px; font-weight:400; }
-.standalone-conversation #conversation-follow { width:18px; height:18px; margin:0; accent-color:var(--accent); }
+.standalone-conversation #conversation-player #conversation-follow { display:grid; place-items:center; width:36px; min-width:36px; height:24px; min-height:24px; margin:0; padding:0; border:1px solid transparent; background:transparent; color:var(--muted); user-select:none; -webkit-touch-callout:none; }
+.standalone-conversation #conversation-follow .control-icon {width:18px;height:18px;}
+.standalone-conversation #conversation-player #conversation-follow[aria-pressed="true"] { color:var(--accent); }
+.standalone-conversation #conversation-follow[aria-pressed="true"] .control-icon {stroke-width:2.5;}
 
 /* The inspector owns a readable overlay, leaving the underlying chat/capture mounted. */
 .standalone-conversation main > #conversation { grid-template-rows:auto minmax(0,1fr) auto; }
@@ -1047,3 +1050,13 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 #conversation-audio-state[data-audio-state="playing"] { --audio-status-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M8%204l12%208-12%208z%22/%3E%3C/svg%3E"); }
 #conversation-audio-state[data-audio-state="paused"] { --audio-status-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M8%204v16M16%204v16%22/%3E%3C/svg%3E"); }
 #conversation-audio-state[data-audio-state="warning"] { --audio-status-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%203L2%2021h20zM12%209v5M12%2017v1%22/%3E%3C/svg%3E"); }
+
+/* The audio dock floats directly on the application background. */
+.standalone-conversation #conversation-player #conversation-play,
+.standalone-conversation #conversation-player #conversation-voice-replies,
+.standalone-conversation #conversation-player #conversation-audio-state,
+.standalone-conversation #conversation-player #conversation-follow {background:transparent;border-color:transparent;box-shadow:none;}
+.standalone-conversation #conversation-player #conversation-play {color:var(--accent);}
+
+.standalone-conversation #conversation-audio-tools #conversation-player:not([hidden]) {background:transparent;}
+.standalone-conversation #conversation-player #conversation-voice-replies[data-voice-state="on"] {color:var(--accent);}
