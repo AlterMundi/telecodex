@@ -162,3 +162,18 @@ the launcher removes summaries and shows unknown, inviting the user to reopen or
 check Sessions. Non-Telegram anonymous browsing carries no private alert summary.
 The current receiving adoption is CompAII-only; another bot needs its own configured
 route and signature/grant verification, not reuse of this body's credentials.
+
+## Incident dates in Sessions and Interaction
+
+Each incident shows its original **Issued** date (`projection.source_at`) and,
+when different, its latest **Updated** date (`projection.updated_at`). Dates use
+the viewer's local timezone, with an ISO timestamp on the time element. Polling
+and receiving timestamps never replace the issue date; missing or invalid source
+dates are explicitly unavailable. Dates appear on both active and resolved cards.
+
+Old open incidents do not expire merely because of age. A stale observation is
+not proof of recovery. Reconcile the owning producer or its explicit retirement
+after verified successor coverage; preserve receipts and original provenance.
+Resolved incidents remain in the bounded, initially collapsed history and do not
+contribute to active attention. This display change performs no acknowledgment,
+resolution, deletion or replay.
