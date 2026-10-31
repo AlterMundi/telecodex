@@ -266,6 +266,20 @@ const hung = (options) => new Promise((resolve, reject) => {
   assert.equal(article.children[1].textContent,"fixture · index");
   assert.equal(article.children[2].textContent,"Reported by: fixture · Resource: Unspecified");
   assert.equal(article.children[3].textContent,incident.projection.summary);
+  assert.equal(article.children[5].children[0].textContent,"Issue date unavailable");
+  const dated = {...incident, accepted_at:1793470000, observed_at:1793470000,
+    projection:{...incident.projection,source_at:1792000000,updated_at:1793000000}};
+  vm.runInContext('alerts('+JSON.stringify({...operations,incidents:[dated]})+')',independent.context);
+  const dates = activeArticle().children[5];
+  assert.equal(dates.children[0].textContent,"Issued: ");
+  assert.equal(dates.children[1].datetime,new Date(dated.projection.source_at*1000).toISOString());
+  assert.equal(dates.children[2].textContent," · Updated: ");
+  assert.equal(dates.children[3].datetime,new Date(dated.projection.updated_at*1000).toISOString());
+  vm.runInContext('alerts('+JSON.stringify({...operations,incidents:[],resolved_incidents:[{...dated,
+    projection:{...dated.projection,processing_state:"resolved"}}]})+')',independent.context);
+  const datedHistory = independent.nodes.get("#incidents").children.find(n=>n.className==="incident-history");
+  assert.equal(datedHistory.open,false);
+  assert.equal(datedHistory.children[1].children[5].children[2].textContent," · Updated: ");
   // Current and legacy memory producers identify DMK without hiding exact provenance.
   for (const producer of ["hmk-compaii", "dmk-oliva", "other-reporter"]) {
     const attributed = {...incident, projection:{...incident.projection,producer_id:producer,

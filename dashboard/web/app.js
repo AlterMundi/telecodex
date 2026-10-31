@@ -393,6 +393,20 @@ function alerts(data) {
     item.append(badges, el("h3", `${trailSymbol ? trailSymbol + " " : ""}${source} · ${p.phase}`),
       el("p", `Reported by: ${p.producer_id} · Resource: ${p.resource_ref || "Unspecified"}`, "note"),
       el("p", p.summary), el("p", p.processing_state === "resolved" ? `Previous action: ${p.action}` : p.action));
+    const dates = el("p", undefined, "note incident-dates");
+    const appendDate = (label, seconds) => {
+      const date = new Date(seconds * 1000);
+      if (!Number.isSafeInteger(seconds) || seconds < 0 || !Number.isFinite(date.getTime())) return false;
+      const stamp = el("time", date.toLocaleString(undefined, {timeZoneName:"short"}));
+      stamp.setAttribute("datetime", date.toISOString());
+      stamp.title = date.toISOString();
+      dates.append(el("span", `${dates.children.length ? " · " : ""}${label}: `), stamp);
+      return true;
+    };
+    // source_at is immutable incident provenance; receipt/poll times are not emission dates.
+    if (!appendDate("Issued", p.source_at)) dates.append(el("span", "Issue date unavailable"));
+    if (p.updated_at !== p.source_at) appendDate("Updated", p.updated_at);
+    item.append(dates);
     const deliveries = incident.deliveries.map((d) => d.state).join(", ") || "No receiving route configured";
     item.append(el("p", `Observation ${incident.freshness} · Delivery: ${deliveries}`, "note"));
     if (incident.acknowledgments.length) item.append(el("p", "Acknowledged. Producer recovery remains separate.", "note"));
