@@ -1132,3 +1132,42 @@ is not actual provider outage, acoustic echo/noise, physical device/background
 acceptance, semantic model interpretation or a useful-speech latency distribution.
 The original failure and read-only continuation remain in the receiving work
 record. The full stages2/3/required4 outcome remains incomplete.
+
+## Current-stack digital latency observations —31 October2026
+
+Three new generated voice originals on ITACA used actual Gemini prepared ASR,
+CPU endpointing, Sol6.1/openai/medium and Qwen/longanlufeng. Each has its own
+native local turn and an exact canonical response with positive digital output
+and media completion. Two isolated synthetic workers remained active; no native
+question was answered or production input submitted.
+
+| Retained input | Last generated energy → exact-source positive audio | Send → positive audio | Server finish → prepared |
+| --- | ---: | ---: | ---: |
+| Spanish question about latency | 6.759s | 5.994s | 0.299s |
+| Mixed-language question, imperfect ASR | 7.106s | 6.342s | 0.255s |
+| Spanish pause/cancel question | 9.880s | 9.121s | 0.256s |
+
+The small series has a7.106s median and6.759–9.880s range. The third response
+includes waiting for the preceding response's playback. Device-local Send to
+same-turn text was2.79/4.10/2.51s; first text is not necessarily a useful complete
+speech prefix. The first prefix's speech request to encoded bytes took1.603s,
+then positive digital output followed0.117s later. These observations do not
+meet a subsecond speech-response target and do not justify attributing the
+remaining delay to final ASR confirmation alone.
+
+The verifier initially selected the preceding original before the next input
+appeared. Its final assertion failed; preliminary mismatched/negative intervals
+are excluded. Read-only recovery joined unique original IDs/local turns and
+native final items to retained submission and exact-source output/completion
+events. No ASR, model, TTS or original was replayed. The future selector now
+requires the newly submitted original and rejects already measured IDs/earlier
+playback. A fourth generated clip was not admitted before teardown, so the
+planned four-original journey remains unqualified.
+
+The mixed-language transcript omitted “buenas noches”; its answer followed the
+retained shorter transcript. This is not mixed-language accuracy acceptance.
+The metric begins at a generated-energy proxy, not final intended human speech,
+and ends at positive digital energy, not verified intelligibility or hearing.
+This is neither a controlled baseline comparison nor a population distribution.
+Real Redmi echo/noise/interruption and full coherent-product acceptance remain
+separate; the unchanged selected model/voice and ordinary chat are preserved.
