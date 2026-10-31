@@ -1137,8 +1137,9 @@ record. The full stages2/3/required4 outcome remains incomplete.
 
 Three new generated voice originals on ITACA used actual Gemini prepared ASR,
 CPU endpointing, Sol6.1/openai/medium and Qwen/longanlufeng. Each has its own
-native local turn and an exact canonical response with positive digital output
-and media completion. Two isolated synthetic workers remained active; no native
+native local turn and an exact canonical response with positive digital output.
+The first two response projections completed playback; the third has only its
+first segment completion observed. Two isolated synthetic workers remained active; no native
 question was answered or production input submitted.
 
 | Retained input | Last generated energy → exact-source positive audio | Send → positive audio | Server finish → prepared |
@@ -1163,6 +1164,16 @@ events. No ASR, model, TTS or original was replayed. The future selector now
 requires the newly submitted original and rejects already measured IDs/earlier
 playback. A fourth generated clip was not admitted before teardown, so the
 planned four-original journey remains unqualified.
+
+The third canonical ID covers two distinct adjacent ranges,0–195 and195–269.
+Both raw-text hashes match separate retained renderer entries. Its second
+playback was a continuation, not a repeated range: the first segment ended and
+the tail started before the next capture/teardown. The earlier statement of
+whole-response completion was too broad and is corrected here. A canonical
+source ID can span several media segments; one `ended` event does not prove the
+whole response finished. Verification must retain offset/end/next-offset with
+each media event and require the final range, not merely the source ID. These
+completion limits do not change first-positive-audio timing.
 
 The mixed-language transcript omitted “buenas noches”; its answer followed the
 retained shorter transcript. This is not mixed-language accuracy acceptance.
