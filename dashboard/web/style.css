@@ -1059,3 +1059,4 @@ body.conversation-mode #operations[data-conversation-overlay="true"] #incidents 
 .standalone-conversation #conversation-player #conversation-play {color:var(--accent);}
 
 .standalone-conversation #conversation-audio-tools #conversation-player:not([hidden]) {background:transparent;}
+.standalone-conversation #conversation-player #conversation-voice-replies[data-voice-state="on"] {color:var(--accent);}
