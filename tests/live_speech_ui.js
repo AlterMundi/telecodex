@@ -32,6 +32,25 @@ const deadline=setTimeout(()=>{throw Error("Live speech test did not settle");},
  const pending=raced.next();await raced.reconcile(canonical,()=>assert.fail('No paid prefix existed'));
  releases.shift()();await new Promise(resolve=>setImmediate(resolve));assert.equal(releases.length,1);releases.shift()();assert.equal(await pending,undefined);
  assert.equal(await raced.next(),undefined,'Canonical answer cannot race a late prefix');
+ // A long first sentence must not hold useful output until canonical completion.
+ const longState=context.window.LiveSpeech.mount();
+ const longText='Puedo conservar el texto exacto y comenzar a explicar cada paso mientras seguimos trabajando juntos sin esperar a que termine toda la respuesta porque las palabras ya disponibles describen una acción concreta y útil para nuestra conversación y después continuamos con más detalles';
+ longState.observe({...key,text:longText,provisional:true},'long-binding');
+ const longFirst=await longState.next();assert(longFirst,'A full first window can use a complete-word boundary without punctuation');
+ assert.equal(longFirst.speech_start,0);assert(longFirst.speech_end<=240);assert(/\s$/u.test(longFirst.preview));
+ assert.equal(longFirst.preview,Array.from(longText).slice(0,longFirst.speech_end).join(''));
+ assert(longState.admit(longFirst));assert.equal(await longState.next(),undefined,'The shorter trailing fragment waits for a useful boundary');
+ longState.observe({...key,text:longText+'. Más detalles',provisional:true},'long-binding');
+ const longSecond=await longState.next();assert(longSecond);assert.equal(longSecond.speech_start,longFirst.speech_end);
+ assert.equal(longFirst.preview+longSecond.preview,longText+'. ');
+ const unicodeLong=context.window.LiveSpeech.mount();const unicodeText='Más información 🚀 para comprender el trabajo pendiente y seguir nuestra conversación sin interrumpir las tareas. '.replace('.', '').repeat(4);
+ unicodeLong.observe({...key,text:unicodeText,provisional:true},'unicode-long');
+ const unicodePrefix=await unicodeLong.next();assert(unicodePrefix);assert(unicodePrefix.speech_end<=240);
+ assert.equal(unicodePrefix.preview,Array.from(unicodeText).slice(0,unicodePrefix.speech_end).join(''));
+ for(const opening of ['An unfinished `','An unfinished [','An unfinished (']){
+   const guarded=context.window.LiveSpeech.mount();guarded.observe({...key,text:opening+longText,provisional:true},'guarded-long');assert.equal(await guarded.next(),undefined,'Long text cannot release an unclosed code/link/parenthesis span');
+ }
+ const shortDraft=context.window.LiveSpeech.mount();shortDraft.observe({...key,text:'A short unfinished thought without punctuation'},'short');assert.equal(await shortDraft.next(),undefined);
  const interruptedState=context.window.LiveSpeech.mount();interruptedState.observe({...key,text:'One useful sentence. Next'},'binding');
  const owned=await interruptedState.next();assert(interruptedState.admit(owned));interruptedState.interrupt(owned);
  interruptedState.observe({...key,text:'One useful sentence. Another sentence. More'},'binding');assert.equal(await interruptedState.next(),undefined);

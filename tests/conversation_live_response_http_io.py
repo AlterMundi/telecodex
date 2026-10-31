@@ -5,6 +5,7 @@ import os
 import queue
 import re
 import uuid
+import time
 from urllib.parse import urlencode, urlparse, parse_qs
 import sys
 from pathlib import Path
@@ -70,6 +71,24 @@ def qualify(binary):
         emit('item/completed',item={'id':'matching','type':'agentMessage','phase':'final_answer','text':'Exactly the spoken prefix. Still writing a confirmed continuation.'})
         j.wait(lambda:draft()is None)
         assert b.get(frozen_match)==selected,'Confirmation retains the exact frozen speech source'
+        # A whole-word prefix of a long, unfinished first sentence uses the
+        # same frozen reader before and after canonical confirmation.
+        long_text='Las palabras disponibles permiten explicar el trabajo mientras la conversación continúa sin esperar el final de una respuesta extensa y mantienen el vínculo exacto con el texto original y con los trabajos que siguen en ejecución mientras agregamos más detalles a esta explicación'
+        emit('item/started',item={'id':'long-first','type':'agentMessage','phase':'final_answer'})
+        emit('item/agentMessage/delta',itemId='long-first',delta=long_text)
+        j.wait(lambda:draft()is not None and draft()['native_item']=='long-first')
+        prefix=long_text[:240].rsplit(' ',1)[0]+' '
+        assert 60<len(prefix)<=240 and long_text.startswith(prefix)
+        long_selection=frozen({**draft(),'text':prefix});long_part=b.get(long_selection)
+        assert long_part['text']==prefix and long_part['provisional']is True
+        # Native draft projection is capped at one snapshot per200ms.
+        time.sleep(.21)
+        emit('item/agentMessage/delta',itemId='long-first',delta=' sin perder las palabras anteriores')
+        j.wait(lambda:draft()['text'].endswith('anteriores'))
+        assert b.get(long_selection)==long_part,'Appending text preserves the selected whole-word prefix'
+        emit('item/completed',item={'id':'long-first','type':'agentMessage','phase':'final_answer','text':long_text+' sin perder las palabras anteriores.'})
+        j.wait(lambda:draft()is None)
+        assert b.get(long_selection)==long_part,'Canonical confirmation preserves the exact long-sentence prefix'
         # Partial worker output has no entry audience and cannot replace this draft.
         worker_original,_=b.text('#Alpha Work independently.')
         j.wait(lambda:j.instructions(7)and j.instructions(7)[0][1]=='accepted')

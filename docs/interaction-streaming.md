@@ -580,9 +580,15 @@ routing repair or a reason to replay an original. Other final357 checks passed.
 
 ## Live native speech prefixes (opt-in)
 
-`speech.live_response` defaults to false. A compatible browser can select complete
+`speech.live_response` defaults to false. A compatible browser prefers complete
 sentence/paragraph prefixes from the actual integrating response while it is being
-written. The dedicated `presentation speech` reader verifies the owned current
+written. If a sentence has filled the existing first240-character window (or
+640-character continuation window), it can start at the last complete-word
+boundary instead of waiting for canonical completion. This fallback needs at
+least60 Unicode characters and text beyond the window; short unfinished thoughts
+still wait. Existing unclosed code/link/parenthesis guards apply to both paths.
+Selected text is the exact original prefix, with unchanged hashes, source ranges
+and no synthetic introduction or filler. The dedicated `presentation speech` reader verifies the owned current
 native identity, entry generation, Unicode range and exact prefix hash. These
 selectors are not canonical answer, reply, question or artifact sources. They
 use the existing source-linked renderer, progressive player, explicit Voice
