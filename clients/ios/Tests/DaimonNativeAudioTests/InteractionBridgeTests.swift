@@ -45,4 +45,22 @@ final class InteractionBridgeTests: XCTestCase {
         }
         XCTAssertEqual(try message(["command":"session","enabled":false]).command,"session")
     }
+    func testCaptureOwnershipCommandsAreClosedAndDoNotGrantMediaOrAcceptOtherDocuments() throws {
+        let owner = UUID().uuidString.lowercased()
+        func raw(_ value: [String:Any]) throws -> String {
+            String(data:try JSONSerialization.data(withJSONObject:value),encoding:.utf8)!
+        }
+        let fields: [String:Any] = ["command":"capture_begin","document_id":document,"owner":owner]
+        XCTAssertEqual(try CaptureBridgeMessage(raw(fields)).owner.uuidString.lowercased(),owner)
+        var end = fields; end["command"] = "capture_end"
+        XCTAssertEqual(try CaptureBridgeMessage(raw(end)).command,"capture_end")
+        for (key,value) in [("command","grant"),("owner","other"),("document_id","invalid")] {
+            var changed = fields; changed[key] = value
+            XCTAssertThrowsError(try CaptureBridgeMessage(raw(changed)))
+        }
+        var extra = fields; extra["seconds"] = 601
+        XCTAssertThrowsError(try CaptureBridgeMessage(raw(extra)))
+        XCTAssertThrowsError(try CaptureBridgeMessage(String(repeating:" ",count:513)))
+    }
+
 }

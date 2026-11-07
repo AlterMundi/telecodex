@@ -16,6 +16,7 @@ else
   test "$#" -eq 1
 fi
 cp "$ios_repo/clients/android/app/src/main/assets/native-audio.js" "$ios_app/native-audio.js"
+cp "$ios_root/Resources/native-capture.js" "$ios_app/native-capture.js"
 python3 - "$ios_app" "$ios_identifier" <<'PY'
 import hashlib, plistlib, sys
 from pathlib import Path
@@ -27,6 +28,7 @@ value={'CFBundleIdentifier':sys.argv[2],'CFBundleName':'Daimon','CFBundleDisplay
        'UIApplicationSceneManifest':{'UIApplicationSupportsMultipleScenes':False},'UILaunchScreen':{},
        'UISupportedInterfaceOrientations':['UIInterfaceOrientationPortrait','UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight'],
        'NSMicrophoneUsageDescription':'Record the voice messages you choose to send to your daimon.',
+       'NativeCaptureSHA256':hashlib.sha256((app/'native-capture.js').read_bytes()).hexdigest(),
        'NativeAdapterSHA256':hashlib.sha256((app/'native-audio.js').read_bytes()).hexdigest()}
 with (app/'Info.plist').open('wb') as f:plistlib.dump(value,f)
 PY

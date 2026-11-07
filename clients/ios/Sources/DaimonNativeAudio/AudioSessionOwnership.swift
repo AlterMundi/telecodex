@@ -1,7 +1,9 @@
 import Foundation
 
+enum AudioSessionMode { case spokenOutput, duplexVoice }
+
 @MainActor protocol AudioSessionDevice: AnyObject {
-    func activate() throws
+    func activate(mode: AudioSessionMode) throws
     func deactivate() throws
 }
 
@@ -13,27 +15,33 @@ import Foundation
     private let device: AudioSessionDevice
     private var holders: [UUID: () -> Void] = [:]
     private var cancelling = false
+    private(set) var mode: AudioSessionMode?
     private(set) var unconfirmedRelease: UUID?
     var count: Int { holders.count }
     init(device: AudioSessionDevice) { self.device = device }
 
-    func acquire(_ owner: UUID, cancelled: @escaping () -> Void) throws {
+    func acquire(_ owner: UUID, mode requested: AudioSessionMode = .spokenOutput, cancelled: @escaping () -> Void) throws {
         guard !cancelling, unconfirmedRelease == nil else { throw Refusal.unavailable }
-        if holders[owner] != nil { return }
+        if holders[owner] != nil {
+            guard mode == requested else { throw Refusal.unavailable }; return
+        }
+        guard holders.isEmpty || mode == requested else { throw Refusal.unavailable }
         guard holders.count < 2 else { throw Refusal.capacity }
         if holders.isEmpty {
-            do { try device.activate() }
+            do { try device.activate(mode: requested) }
             catch {
                 // Clean only this attempted activation; failure remains visible.
                 do { try device.deactivate() } catch { unconfirmedRelease = owner }
                 throw error
             }
         }
+        mode = requested
         holders[owner] = cancelled
     }
     @discardableResult func release(_ owner: UUID) -> Bool {
         guard holders.removeValue(forKey: owner) != nil else { return unconfirmedRelease == nil }
         if holders.isEmpty {
+            mode = nil
             do { try device.deactivate() } catch { unconfirmedRelease = owner; return false }
         }
         return true

@@ -1,0 +1,14 @@
+<!doctype html><title>Native capture iframe refusal probe</title>
+<script>
+(async()=>{
+ let result;
+ try{
+   await window.webkit.messageHandlers.capture.postMessage(JSON.stringify({command:'capture_begin',document_id:parent.__DaimonAudioDocument,owner:crypto.randomUUID()}));
+   result={kind:'capture_iframe',refused:false};
+ }catch(error){
+   const reason=String(error).slice(0,256);
+   result={kind:'capture_iframe',refused:reason.includes('Capture owner unavailable'),reason};
+ }
+ parent.postMessage(result,parent.location.origin);
+})();
+</script>

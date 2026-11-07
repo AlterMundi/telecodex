@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Exercise capture ownership and late permission races without a microphone
+        run: node clients/ios/test-native-capture.cjs
       - name: Build and test the bounded native audio core
         working-directory: clients/ios
         run: swift test --jobs 2 --scratch-path "$RUNNER_TEMP/daimon-ios-build"

@@ -17,7 +17,10 @@ def serve(state):
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             print(json.dumps({'fixture_get': self.path[:256]}), flush=True)
-            name = 'conversation.html' if self.path.startswith('/interaction/') else 'outside.html'
+            path = self.path.split('?',1)[0]
+            children = {'/interaction/audio-iframe/':'audio-iframe.html',
+                        '/interaction/capture-iframe/':'capture-iframe.html'}
+            name = children.get(path) or ('conversation.html' if path.startswith('/interaction/') else 'outside.html')
             body = (ROOT / 'Tests/Fixtures' / name).read_bytes()
             self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
@@ -97,7 +100,7 @@ def qualify(app):
             device = run(['xcrun','simctl','create','Daimon-'+uuid.uuid4().hex[:12],phone['identifier'],runtime['identifier']]).strip()
             print(json.dumps({'device':device,'runtime':runtime['identifier'],'phone':phone['name']}),flush=True)
             run(['xcrun','simctl','boot',device]); run(['xcrun','simctl','bootstatus',device,'-b'],timeout=120)
-            run(['xcrun','simctl','keychain',device,'add-root-cert',str(state/'ca.crt')])
+            run(['xcrun','simctl','keychain',device,'add-root-cert',str(state/'ca.crt')],timeout=90)
             try:
                 run(['xcrun','simctl','install',device,str(app)],timeout=90)
             except subprocess.TimeoutExpired:
@@ -132,7 +135,10 @@ def qualify(app):
                     print(json.dumps({'native_log':'unconfirmed','error':str(error)[-512:]}),flush=True)
                 raise RuntimeError('No terminal WebView/native receipt within35seconds; no relaunch')
             result = json.loads((state/'result.json').read_text()); print(json.dumps(result),flush=True)
-            assert result.get('state')=='passed' and result.get('played_bytes')==28800, result
+            assert (result.get('state')=='passed' and result.get('played_bytes')==28800
+                    and result.get('capture_iframe')=='refused'
+                    and result.get('duplex_reservation')=='held_across_pcm_idle'
+                    and result.get('microphone_requested') is False), result
             passed = True
         finally:
             cleanup = []

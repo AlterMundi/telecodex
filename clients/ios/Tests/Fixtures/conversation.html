@@ -3,32 +3,66 @@
 <script>
 window.runQualification=async()=>{
   if(window.started)return;window.started=true;
-  let output;
+  let output,captureOwner;
+  const capture=(command,owner,extra={})=>window.webkit.messageHandlers.capture.postMessage(JSON.stringify({command,owner,document_id:window.__DaimonAudioDocument,...extra}));
   const sleep=ms=>new Promise(r=>setTimeout(r,ms)),positions=new Map();
   const failures=[],phases=[];
   const wait=async predicate=>{for(let n=0;n<80&&!predicate()&&!failures.length;n++)await sleep(50);if(!predicate()||failures.length)throw Error(JSON.stringify({failures,phases}));};
   try{
     if(!window.NativeSpeechAudio||NativeSpeechAudio.pcm!==false)throw Error('Unexpected capability advertisement');
     // Same-origin iframe knows the main document token but cannot reserve native output.
-    const iframe=document.createElement('iframe');iframe.srcdoc='<script>window.webkit.messageHandlers.audio.postMessage(JSON.stringify({command:"pcm_begin",document_id:parent.__DaimonAudioDocument,id:"pcm_999",seconds:600}));<\/script>';
-    document.body.append(iframe);await sleep(250);iframe.remove();
+    const iframe=document.createElement('iframe');
+    const audioFrameResult=new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{window.removeEventListener('message',receive);reject(Error('No audio iframe submission receipt'));},4000);
+      const receive=event=>{
+        if(event.source!==iframe.contentWindow||event.data?.kind!=='audio_iframe')return;
+        clearTimeout(timer);window.removeEventListener('message',receive);resolve(event.data.submitted);
+      };
+      window.addEventListener('message',receive);
+    });
+    iframe.src='/interaction/audio-iframe/';document.body.append(iframe);
+    if(await audioFrameResult!==true)throw Error('Audio iframe did not exercise native handler');
+    iframe.remove();
+    const captureFrame=document.createElement('iframe');
+    const captureResult=new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{window.removeEventListener('message',receive);reject(Error('No capture iframe refusal receipt'));},4000);
+      const receive=event=>{
+        if(event.source!==captureFrame.contentWindow||event.data?.kind!=='capture_iframe')return;
+        clearTimeout(timer);window.removeEventListener('message',receive);resolve(event.data.refused);
+      };
+      window.addEventListener('message',receive);
+    });
+    captureFrame.src='/interaction/capture-iframe/';
+    document.body.append(captureFrame);
+    if(await captureResult!==true)throw Error('Iframe acquired native microphone session');
+    captureFrame.remove();
+    // Reserve the duplex session only. This never invokes getUserMedia, changes
+    // OS permissions, creates a recording or calls a provider.
+    captureOwner=crypto.randomUUID();await capture('capture_begin',captureOwner);
+    let duplicateRefused=false;
+    try{await capture('capture_begin',crypto.randomUUID());}catch{duplicateRefused=true;}
+    if(!duplicateRefused)throw Error('Concurrent microphone session admitted');
     output=NativeSpeechAudio.openPcm({sessionSeconds:600,onProgress:(id,count)=>positions.set(id,count),onState:s=>phases.push(s),onUnavailable:s=>failures.push(s)});
     await output.ready;
     const tone=new Uint8Array(9600),view=new DataView(tone.buffer);
     for(let n=0;n<4800;n++)view.setInt16(n*2,Math.round(Math.sin(n*2*Math.PI*440/24000)*2048),true);
     const first=crypto.randomUUID();await output.append(first,tone.length,tone);
     await wait(()=>positions.get(first)===tone.length);
+    let idleCaptureHeld=false;
+    try{await capture('capture_begin',crypto.randomUUID());}catch{idleCaptureHeld=true;}
+    if(!idleCaptureHeld)throw Error('Output idle dropped capture ownership');
     output.pause();const next=crypto.randomUUID();await output.append(next,tone.length,tone);
     await sleep(250);if(positions.has(next))throw Error('Paused bytes became playback receipts');
     output.resume();await wait(()=>positions.get(next)===tone.length);
     output.flush();const last=crypto.randomUUID();await output.append(last,tone.length,tone);
     await wait(()=>positions.get(last)===tone.length);
     output.close();output=undefined;
+    await capture('capture_end',captureOwner);captureOwner=undefined;
     if(failures.length)throw Error(JSON.stringify(failures));
-    sessionStorage.setItem('qualification',JSON.stringify({state:'native_bridge_passed',played_bytes:3*tone.length,iframe_attempt:'could_not_reserve_owner',phases}));
+    sessionStorage.setItem('qualification',JSON.stringify({state:'native_bridge_passed',played_bytes:3*tone.length,iframe_attempt:'could_not_reserve_owner',capture_iframe:'refused',duplex_reservation:'held_across_pcm_idle',microphone_requested:false,phases}));
     location.href='/outside/';
   }catch(error){
     await fetch('/result',{method:'POST',body:JSON.stringify({state:'failed',message:error.name+': '+error.message})});
-  }finally{output?.close();}
+  }finally{output?.close();if(captureOwner)await capture('capture_end',captureOwner).catch(()=>{});}
 };
 </script>

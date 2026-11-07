@@ -419,3 +419,13 @@ Follow setting and manual-scroll hold/resume behavior. Long press (context menu)
 or keyboard F1 opens the existing viewport-clamped explanation headed “Follow”,
 without toggling the preference or starting audio. The dock has no background
 fills; keyboard focus outlines and accessible button names remain available.
+
+### Foreground iOS capture ownership preparation
+
+PR728 adds a bundled iOS-only wrapper around the shared recorder/adapter. One
+UUID/document-scoped capture holder selects duplex before WebKit/OS permission;
+PCM idle cannot release it or change its frozen mode. Native WebKit microphone
+state none must be observed before holder release. Preserve permission prompts,
+600second stop request, unknown cleanup, no automatic resume and disabled native
+capabilities. Source/SDK/bridge-session simulation is not actual microphone,
+account, device or hearing acceptance. See clients/ios/README.md for exact scope.

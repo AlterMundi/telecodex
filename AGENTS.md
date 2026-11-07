@@ -1,3 +1,12 @@
+iOS foreground capture uses the bundled native-capture.js wrapper and exact UUID/
+document reply handler before getUserMedia. Session ownership never grants mic
+permission; keep selected HTTPS main-frame microphone prompt and camera refusal.
+Freeze duplex/spoken session mode while holders remain; output idle cannot release
+an active capture. Stop WebKit's actual microphone before exact-holder release;
+unknown stop/deactivation stays held, no refresh retry. Late permissions stop their
+old tracks. Native capabilities remain off until actual duplex/account/device
+acceptance. Preserve the shared Android adapter and hosted recorder/provider paths.
+
 iOS preparation is in clients/ios. Keep the Android-compatible verified PCM span
 contract, one serial owner, bounded queue/source metadata and nonrenewable lifetime
 across flush. Submission is not playback; the prepared audio driver fences stale owner/epoch

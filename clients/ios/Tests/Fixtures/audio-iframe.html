@@ -1,0 +1,7 @@
+<!doctype html><title>Native audio iframe refusal probe</title>
+<script>
+try{
+ window.webkit.messageHandlers.audio.postMessage(JSON.stringify({command:'pcm_begin',document_id:parent.__DaimonAudioDocument,id:'pcm_999',seconds:600}));
+ parent.postMessage({kind:'audio_iframe',submitted:true},parent.location.origin);
+}catch(error){parent.postMessage({kind:'audio_iframe',submitted:false,reason:String(error).slice(0,256)},parent.location.origin);}
+</script>

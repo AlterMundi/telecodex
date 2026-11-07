@@ -81,9 +81,14 @@ import WebKit
             guard let url = Bundle.main.url(forResource:"native-audio",withExtension:"js"),
                   let expected = Bundle.main.object(forInfoDictionaryKey:"NativeAdapterSHA256") as? String,
                   let session = (UIApplication.shared.delegate as? AppDelegate)?.audioSession else { throw InteractionHome.Refusal.invalidHome }
+            guard let captureURL = Bundle.main.url(forResource:"native-capture",withExtension:"js"),
+                  let captureHash = Bundle.main.object(forInfoDictionaryKey:"NativeCaptureSHA256") as? String else { throw InteractionHome.Refusal.invalidHome }
+            let captureBytes = try Data(contentsOf:captureURL)
+            guard PCMPlaybackQueue.digest(captureBytes) == captureHash,
+                  let captureSource = String(data:captureBytes,encoding:.utf8) else { throw InteractionHome.Refusal.invalidHome }
             let bytes = try Data(contentsOf:url)
             guard PCMPlaybackQueue.digest(bytes) == expected, let source = String(data:bytes,encoding:.utf8) else { throw InteractionHome.Refusal.invalidHome }
-            let controller = try InteractionWebViewController(home:home,session:session,adapterSource:source)
+            let controller = try InteractionWebViewController(home:home,session:session,adapterSource:source,captureSource:captureSource)
             controller.title = "Conversation"
             navigationController?.pushViewController(controller,animated:false)
             UserDefaults.standard.set(home.origin.absoluteString,forKey:"home"); error.text = nil

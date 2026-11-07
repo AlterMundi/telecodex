@@ -46,8 +46,9 @@ The iOS-only `IOSSpokenAudioSession` supplies `.playback`/`.spokenAudio` ducking
 and deactivation notification to other apps. It closes prepared as well as active
 outputs on background, interruption begin or selected route loss/change. Returning
 to the foreground allows a later explicit start; no notification resumes sound.
-One instance belongs to the app, not one per buffer. This is a spoken-output
-policy, not a duplex capture policy or background entitlement. Actual session,
+One instance belongs to the app, not one per buffer. Output alone uses this
+policy; the explicit foreground capture extension below adds frozen duplex
+ownership without a background entitlement. Actual session,
 route and music behavior is not qualified by source/SDK compilation.
 
 CI also compiles every source against the actual iOS Simulator SDK with an iOS17
@@ -124,3 +125,55 @@ References:
 - [Apple playback completion types](https://developer.apple.com/documentation/avfaudio/avaudioplayernodecompletioncallbacktype)
 - [Swift Package Manager](https://docs.swift.org/main/documentation/packagemanagerdocs/)
 - [Standard GitHub runner contract](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+
+## Prepared foreground duplex capture
+
+The iOS-only native-capture.js hook wraps the existing shared adapter, without
+changing Android or the hosted recorder. Before getUserMedia it acquires one
+UUID-owned native session holder. WebKit and the OS still prompt; only the selected
+HTTPS main-frame microphone request can reach that prompt, never camera/iframe or
+SSO. The closed reply handler accepts only begin/end with canonical document and
+owner UUIDs, with at most128 nonreusable capture identities per controller. This is ownership, not permission or proof of recording.
+
+A duplex holder selects playAndRecord/voiceChat before microphone permission.
+PCM output joins that same mode and cannot deactivate it when becoming idle.
+Mode stays frozen while any holder remains; starting capture during existing
+spoken-only playback refuses before asking permission, instead of changing an
+active audio graph. Capture and output share the existing two-holder bound.
+A capture stop is requested at600seconds, route/interruption/background, explicit
+track stop or page exit. Native cancellation requests actual WebKit microphone state none;
+only its observed completion releases that exact session holder. Unknown stop or
+session-deactivation outcomes stay held, never retried by refresh. A late device
+permission closes its returned tracks after the old capture epoch has ended.
+Returning foreground never resumes an old capture or sound.
+
+Synthetic Node checks cover explicit track stop (which emits no ended event),
+concurrent requests, late native/OS grants, permission refusal and lifecycle.
+Foundation cases cover frozen mode/independent capture-output holders and the
+closed native contract. These are not real microphone, permission, WebKit duplex,
+route/interruption or phone acceptance. Native audio capabilities remain off;
+no production build, provider call, entitlement or distribution is selected.
+Apple references: [voiceChat](https://developer.apple.com/documentation/avfaudio/avaudiosession/mode-swift.struct/voicechat),
+[media permission delegate](https://developer.apple.com/documentation/webkit/wkuidelegate),
+[actual capture stop](https://developer.apple.com/documentation/webkit/wkwebview/setmicrophonecapturestate(_:completionhandler:)).
+
+The first duplex source9eacc4b passed20Swift cases, Node capture races and the
+actual iOS app build in CI42382542969. Its runtime stopped before installation
+at the fixture CA admission30second timeout; shutdown/delete/server cleanup
+passed. Two consecutive runs hit this same prerequisite. The fixture now gives
+that single certificate operation90seconds, without retrying an uncertain write
+or weakening TLS/PCM assertions. Runtime capture/permission acceptance is pending.
+
+The extended simulator fixture tests the actual with-reply capture bridge from
+its own same-origin iframe (must refuse), then reserves one main-frame duplex
+session across real PCM playback/idle/pause/flush. It never requests getUserMedia
+or changes a microphone permission. This checks session/bridge coexistence only;
+actual microphone permission, audio input, duplex processing and physical hearing
+remain unqualified. Source20tests/SDK evidence is separate from this runtime result.
+
+Extended fixturea251f42 reached the actual app in CI42383442620 but received no
+capture iframe reply. Its srcdoc frame was incompatible with the shell's
+HTTPS-only navigation contract. The probes now load distinct same-origin HTTPS
+child documents and require their own submission/reply receipts before proceeding;
+no production navigation or frame authorization policy was widened. Earlier
+srcdoc non-reservation does not prove the native handler saw a frame request.
