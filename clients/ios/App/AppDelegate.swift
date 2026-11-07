@@ -104,18 +104,97 @@ import WebKit
 /// Test-only start after observed foreground + actual page readiness. It never
 /// enters the normal application build or simulates a human voice original.
 @MainActor private enum QualificationStart {
-    static func run(_ controller: UIViewController, attempt: Int = 0) {
-        guard attempt < 200 else { qualificationStage("page_readiness_expired"); return }
+    static func run(_ controller: UIViewController, expires: TimeInterval = ProcessInfo.processInfo.systemUptime+40) {
+        guard ProcessInfo.processInfo.systemUptime < expires else { qualificationStage("page_readiness_expired"); return }
         guard UIApplication.shared.applicationState == .active, let web = controller.view as? WKWebView else {
-            DispatchQueue.main.asyncAfter(deadline:.now()+0.1) { run(controller,attempt:attempt+1) }; return
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.1) { run(controller,expires:expires) }; return
         }
         web.evaluateJavaScript("typeof window.runQualification==='function'") { ready,error in
+            guard ProcessInfo.processInfo.systemUptime < expires else { qualificationStage("page_readiness_expired"); return }
             if (ready as? Bool) == true {
                 qualificationStage("fixture_start_submitted")
-                web.evaluateJavaScript("window.runQualification()")
+                guard let session = (UIApplication.shared.delegate as? AppDelegate)?.audioSession else { return }
+                NativeBeaconProbe.run(session) { observed in
+                    var result = observed; result["tls_fixture"] = QualificationTLS.evidence
+                    let data = try! JSONSerialization.data(withJSONObject:result)
+                    let text = String(data:data,encoding:.utf8)!
+                    web.evaluateJavaScript("window.__nativeBeaconQualification=\(text);window.runQualification()")
+                }
             }
-            else { DispatchQueue.main.asyncAfter(deadline:.now()+0.1) { run(controller,attempt:attempt+1) } }
+            else { DispatchQueue.main.asyncAfter(deadline:.now()+0.1) { run(controller,expires:expires) } }
         }
     }
 }
+/// Actual native device/session qualification only. No WebKit microphone grant,
+/// provider, human original, operational observer or production activation.
+@MainActor private final class NativeBeaconProbe {
+    private static var active: NativeBeaconProbe?
+    private let session: IOSSpokenAudioSession
+    private let completion: ([String:Any]) -> Void
+    private var output: BeaconPlaybackDriver?
+    private var timeout: DispatchWorkItem?
+    private var phase = 0, played = 0
+    private var phases: [String] = []
+    private var finished = false
+    private init(_ session: IOSSpokenAudioSession, completion: @escaping ([String:Any]) -> Void) {
+        self.session = session; self.completion = completion
+    }
+    static func run(_ session: IOSSpokenAudioSession, completion: @escaping ([String:Any]) -> Void) {
+        guard active == nil else { return }
+        let probe = NativeBeaconProbe(session,completion:completion); active = probe
+        probe.start()
+    }
+    private func frame() throws -> BeaconPlaybackDriver.Frame {
+        try .init(frequencies:[40.4,80.8,121.2,161.6,282.8,444.4],pulses:Array(repeating:0,count:6),
+                  weights:[1,0,0,0,0,0],depth:0,level:0.2,transitionMilliseconds:20,
+                  expiresAtUptime:ProcessInfo.processInfo.systemUptime+0.3)
+    }
+    private func start() {
+        let deadline = DispatchWorkItem { [weak self] in
+            Task { @MainActor in self?.finish(false,reason:"native_probe_timeout") }
+        }
+        timeout = deadline; DispatchQueue.main.asyncAfter(deadline:.now()+12,execute:deadline)
+        do {
+            output = try session.makeBeacon { [weak self] event in self?.receive(event) }
+            try output?.frame(frame())
+        } catch { finish(false,reason:"native_start_failed") }
+    }
+    private func receive(_ event: BeaconPlaybackDriver.Event) {
+        guard !finished else { return }
+        do {
+            switch event {
+            case .ready: break
+            case .playing(let count,_):
+                played = count
+                if phase == 0 { phases.append("playing"); phase = 1 }
+                else if phase == 2 {
+                    phases.append("fresh_playing"); phase = 3; try output?.level(0,milliseconds:80)
+                } else if phase == 4 {
+                    phases.append("restored_playing"); phase = 5; session.leaveForeground()
+                }
+            case .quiet:
+                if phase == 1 {
+                    phases.append("stale_quiet"); phase = 2; try output?.frame(frame())
+                } else if phase == 3 {
+                    phases.append("duck_quiet"); phase = 4; try output?.frame(frame())
+                }
+            case .closed:
+                if phase == 5 { phases.append("foreground_closed"); finish(true,reason:"qualified_native_output") }
+                else { finish(false,reason:"unexpected_native_close") }
+            case .unavailable: finish(false,reason:"native_output_unavailable")
+            }
+        } catch { finish(false,reason:"native_control_failed") }
+    }
+    private func finish(_ passed: Bool, reason: String) {
+        guard !finished else { return }; finished = true
+        timeout?.cancel(); timeout = nil; output?.close(); output = nil; session.enterForeground()
+        let result: [String:Any] = ["state":passed ? "passed" : "failed","reason":reason,
+                                   "phase":phase,"phases":phases,"played_frames":played,"microphone_requested":false]
+        Self.active = nil
+        // Allow an in-progress host cancellation to finish before the WebView
+        // reserves another output; never restart this failed owner or probe.
+        DispatchQueue.main.async { self.completion(result) }
+    }
+}
+
 #endif

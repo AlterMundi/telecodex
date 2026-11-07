@@ -1,5 +1,18 @@
-Prepared iOS BeaconSynth is the pure six-carrier Android-compatible DSP core,
-not native playback or an advertised capability. Preserve normalized mix,
+Prepared iOS Beacon IPC reuses the existing Android beacon_begin/frame/level/stop
+contract under the exact main origin/frame/document fence. Strict canonical UUID
+owners stay separate from PCM; at most128starts/controller, no accepted ID reuse.
+Frames retain absolute monotonic milliseconds; gain cannot carry a new deadline.
+Navigation/process/background closes both outputs. Normal capability stays OFF;
+source/SDK tests do not establish actual bridge/runtime or physical acceptance.
+Independent review is required before integration of this new message boundary.
+
+Prepared iOS BeaconSynth is the six-carrier Android-compatible DSP core.
+BeaconPlaybackDriver now prepares foreground native output through the existing
+shared session; its qualification-only app probe does not advertise a capability.
+Keep at most two40ms buffers and one reschedulable timer, contiguous played
+callbacks, a two-second stalled-output close, stale fade and independent holder
+release. The native probe exercises synthetic output and host foreground-exit
+policy, not physical hearing, OS background, music routes or capture overlap. Preserve normalized mix,
 phase/ramp continuity on identical refresh, exact silence and PCM16 rounding.
 Future output must reuse the shared session,<=20s observation expiry without
 cached-refresh renewal, two-hour nonrenewable owner and bounded latest controls.
@@ -25,9 +38,15 @@ capabilities still stay off pending real duplex/capture/account/device acceptanc
 Navigation, process loss and foreground exit close sound/capture without replay.
 The simulator app uses the exact existing adapter bytes/hash. Keep QUALIFICATION
 code and its separate bundle ID out of normal builds. Its disposable loopback TLS
-fixture may trust a one-day CA only in its own new simulator; never weaken the
-production TLS policy or existing device trust. No capture/provider/human-original
+fixture now uses only a qualification-bundle custom anchor for exact localhost443,
+with bounded public launch anchors, wrong-host/alien-anchor refusal and system
+trust unchanged. No app-container read/copy is needed before the single launch. Compile the normal
+app without FixtureTrust.swift and verify its symbols contain no QualificationTLS.
+Never weaken production TLS or mutate existing device trust. No capture/provider/human-original
 fixture, automatic timeout relaunch or permanent simulator/server/cache is allowed.
+Qualification page readiness has a40s absolute monotonic deadline, including late
+JS callbacks; outer terminal observation65s includes cold WebKit plus12s probe.
+Keep the ten-minute job cap and native close receipt before retired-ID testing.
 
 Native Beacon preparation reuses the existing Sonic score/explicit activation.
 Keep six normalized phase-continuous sine carriers, bounded latest frame/level,

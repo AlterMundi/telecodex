@@ -3,7 +3,7 @@ import Foundation
 import UIKit
 import WebKit
 
-/// Existing hosted Conversation and shared SSO, with a main-frame-only PCM bridge.
+/// Existing hosted Conversation and shared SSO, with a main-frame-only PCM/Beacon bridge.
 /// adapterSource must be the app-bundled native-audio.js, never downloaded input.
 @MainActor public final class InteractionWebViewController: UIViewController, WKNavigationDelegate, WKScriptMessageHandler {
     private let home: InteractionHome
@@ -14,6 +14,11 @@ import WebKit
     private var retired: Set<String> = []
     private var output: PCMPlaybackDriver?
     private var outputID: String?
+    private var beacon: BeaconPlaybackDriver?
+    private var beaconID: String?
+    // Never admit the same owner identity twice, even across documents. Bound
+    // one controller to128explicit starts; a new view is a deliberate lifetime.
+    private var beaconIDs: Set<String> = []
     private var backgroundObserver: NSObjectProtocol?
 
     public init(home: InteractionHome, session: IOSSpokenAudioSession, adapterSource: String) throws {
@@ -50,19 +55,23 @@ import WebKit
     private func closeOutput() {
         let old = output; output = nil; outputID = nil; old?.close()
     }
+    private func closeBeacon() {
+        let old = beacon, id = beaconID; beacon = nil; beaconID = nil; old?.close()
+        if let id, let document { send(["type":"beacon_closed"],id:id,page:document) }
+    }
     private func suspendPage() {
         if let document {
             web.evaluateJavaScript("if(window.__DaimonAudioDocument===\(Self.literal(document))){window.NativeSpeechAudio?.background();}")
         }
-        closeOutput(); session.leaveForeground()
+        closeOutput(); closeBeacon(); session.leaveForeground()
     }
     public func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if let document { retired.insert(document) }
-        document = nil; closeOutput()
+        document = nil; closeOutput(); closeBeacon()
     }
     public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if let document { retired.insert(document) }
-        document = nil; closeOutput() // No automatic page/input or media replay.
+        document = nil; closeOutput(); closeBeacon() // No automatic page/input or media replay.
     }
     public func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -86,6 +95,7 @@ import WebKit
         }
         guard value.document == document else { return }
         if value.command == "session" { return } // No background-listening grant.
+        if value.command.hasPrefix("beacon_") { receiveBeacon(value); return }
         guard let id = value.id else { return }
         if value.command == "stop" { if outputID == id { closeOutput() }; return }
         guard UIApplication.shared.applicationState == .active else { return }
@@ -122,6 +132,43 @@ import WebKit
             default: throw PCMBridgeMessage.Refusal.invalid
             }
         } catch { if outputID == id { closeOutput() }; send(["type":"error"],id:id,page:value.document) }
+    }
+    private func receiveBeacon(_ value: PCMBridgeMessage) {
+        guard let id = value.id else { return }
+        if value.command == "beacon_stop" { if beaconID == id { closeBeacon() }; return }
+        guard UIApplication.shared.applicationState == .active else { return }
+        do {
+            if value.command == "beacon_begin" {
+                guard beacon == nil, beaconIDs.count < 128, !beaconIDs.contains(id) else { throw PCMBridgeMessage.Refusal.invalid }
+                let page = value.document
+                beaconIDs.insert(id); beaconID = id
+                beacon = try session.makeBeacon { [weak self] event in
+                    guard let self, self.document == page, self.beaconID == id else { return }
+                    switch event {
+                    case .ready:
+                        self.send(["type":"beacon_ready","clock_ms":Int(ProcessInfo.processInfo.systemUptime*1000)],id:id,page:page)
+                    case .playing(let played,let control):
+                        self.send(["type":"beacon_playing","played_frames":played,"control":control],id:id,page:page)
+                    case .quiet(let control): self.send(["type":"beacon_quiet","control":control],id:id,page:page)
+                    case .closed:
+                        self.beacon = nil; self.beaconID = nil; self.send(["type":"beacon_closed"],id:id,page:page)
+                    case .unavailable: self.send(["type":"beacon_error"],id:id,page:page)
+                    }
+                }
+                return
+            }
+            guard beaconID == id, let beacon else { return }
+            switch value.command {
+            case "beacon_frame": try beacon.frame(value.beaconFrame())
+            case "beacon_level": try beacon.level(value.number("level",0...0.8),milliseconds:value.integer("transition_ms",20...2000))
+            default: throw PCMBridgeMessage.Refusal.invalid
+            }
+        } catch {
+            if value.command == "beacon_begin" {
+                if beaconID == id && beacon == nil { beaconID = nil }
+            } else if beaconID == id { closeBeacon() }
+            send(["type":"beacon_error"],id:id,page:value.document)
+        }
     }
     private func send(_ fields: [String: Any], id: String, page: String) {
         var value = fields; value["id"] = id

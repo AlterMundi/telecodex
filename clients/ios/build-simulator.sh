@@ -8,9 +8,11 @@ ios_repo=$(cd "$ios_root/../.." && pwd)
 mkdir -p "$ios_output/Daimon.app"
 ios_app="$ios_output/Daimon.app"
 ios_flags=()
+ios_qualification_sources=()
 ios_identifier='homes.dmn.interaction.pilot'
 if [ "${2:-}" = '--qualification' ]; then
   ios_flags=(-D QUALIFICATION)
+  ios_qualification_sources=("$ios_root/Qualification/FixtureTrust.swift")
   ios_identifier='homes.dmn.interaction.qualification'
 else
   test "$#" -eq 1
@@ -32,8 +34,8 @@ with (app/'Info.plist').open('wb') as f:plistlib.dump(value,f)
 PY
 xcrun --sdk iphonesimulator swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" -target arm64-apple-ios17.0-simulator \
-  -module-name DaimonApp "${ios_flags[@]}" "$ios_root"/Sources/DaimonNativeAudio/*.swift \
-  "$ios_root/App/AppDelegate.swift" -o "$ios_app/Daimon"
+  -module-name DaimonApp ${ios_flags[@]+"${ios_flags[@]}"} "$ios_root"/Sources/DaimonNativeAudio/*.swift \
+  "$ios_root/App/AppDelegate.swift" ${ios_qualification_sources[@]+"${ios_qualification_sources[@]}"} -o "$ios_app/Daimon"
 codesign --force --sign - "$ios_app"
 codesign --verify --strict "$ios_app"
 python3 - "$ios_app" "$ios_repo" <<'PY'

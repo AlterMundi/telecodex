@@ -22,5 +22,9 @@ jobs:
       - name: Build the actual iOS Simulator app with the existing adapter
         run: |
           bash clients/ios/build-simulator.sh "$RUNNER_TEMP/daimon-ios-app" --qualification
+      - name: Build the normal app without fixture trust code
+        run: |
+          bash clients/ios/build-simulator.sh "$RUNNER_TEMP/daimon-ios-pilot"
+          nm -j "$RUNNER_TEMP/daimon-ios-pilot/Daimon.app/Daimon" | python3 -c 'import sys; assert "QualificationTLS" not in sys.stdin.read()'
       - name: Exercise the actual WebView and native PCM bridge without capture
         run: python3 clients/ios/test-simulator.py --app "$RUNNER_TEMP/daimon-ios-app/Daimon.app"

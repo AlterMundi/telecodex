@@ -1,5 +1,6 @@
 """One disposable simulator and loopback HTTPS fixture; no capture/provider/login."""
 import argparse
+import base64
 import http.server
 import json
 import os
@@ -66,8 +67,8 @@ def qualify(app):
     with tempfile.TemporaryDirectory(prefix='daimon-ios-', dir=os.environ.get('RUNNER_TEMP')) as temporary:
         state = Path(temporary)
         try:
-            # A one-day fixture CA is trusted only by this newly created simulator.
-            # Production app trust and every existing device/keychain stay unchanged.
+            # One-day public anchors belong only to this disposable test bundle.
+            # No simulator/system trust store mutation or production TLS override.
             (state/'ca.cnf').write_text('[req]\ndistinguished_name=dn\n[dn]\n[v3_ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n')
             run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-sha256','-days','1',
                  '-subj','/CN=Daimon Simulator Fixture CA','-config',str(state/'ca.cnf'),'-extensions','v3_ca',
@@ -78,6 +79,11 @@ def qualify(app):
             run(['openssl','x509','-req','-in',str(state/'server.csr'),'-CA',str(state/'ca.crt'),
                  '-CAkey',str(state/'ca.key'),'-CAcreateserial','-days','1','-sha256',
                  '-extfile',str(state/'server.ext'),'-out',str(state/'server.crt')])
+            run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-sha256','-days','1',
+                 '-subj','/CN=Unrelated Fixture CA','-config',str(state/'ca.cnf'),'-extensions','v3_ca',
+                 '-keyout',str(state/'alien.key'),'-out',str(state/'alien.crt')])
+            for name in ['ca','alien']:
+                run(['openssl','x509','-in',str(state/f'{name}.crt'),'-outform','DER','-out',str(state/f'{name}.der')])
             server_log = (state/'server.log').open('wb')
             server = subprocess.Popen(['sudo','-n','python3',str(Path(__file__).resolve()),'--serve',str(state)],
                                       stdout=server_log, stderr=server_log)
@@ -97,7 +103,6 @@ def qualify(app):
             device = run(['xcrun','simctl','create','Daimon-'+uuid.uuid4().hex[:12],phone['identifier'],runtime['identifier']]).strip()
             print(json.dumps({'device':device,'runtime':runtime['identifier'],'phone':phone['name']}),flush=True)
             run(['xcrun','simctl','boot',device]); run(['xcrun','simctl','bootstatus',device,'-b'],timeout=120)
-            run(['xcrun','simctl','keychain',device,'add-root-cert',str(state/'ca.crt')],timeout=90)
             try:
                 run(['xcrun','simctl','install',device,str(app)],timeout=90)
             except subprocess.TimeoutExpired:
@@ -107,12 +112,18 @@ def qualify(app):
                                       'homes.dmn.interaction.qualification','app'],timeout=15).strip())
                 assert (installed/'native-audio.js').read_bytes()==(app/'native-audio.js').read_bytes()
                 print('Exact installed adapter observed after lost install receipt; no reinstall',flush=True)
+            anchors = []
+            for name,target in [('ca','qualification-ca'),('alien','qualification-alien-ca')]:
+                public = (state/f'{name}.der').read_bytes()
+                assert 0 < len(public) <= 16384
+                anchors.extend([f'--{target}',base64.b64encode(public).decode('ascii')])
+            print('Public fixture anchors selected only for the exact qualification launch; system trust unchanged',flush=True)
             launch_attempted = True
             try:
-                run(['xcrun','simctl','launch',device,'homes.dmn.interaction.qualification','--qualification-home','https://localhost'],timeout=90)
+                run(['xcrun','simctl','launch',device,'homes.dmn.interaction.qualification','--qualification-home','https://localhost',*anchors],timeout=90)
             except subprocess.TimeoutExpired:
                 print('Launch receipt unconfirmed; observing this same fixture result without relaunch',flush=True)
-            until = time.monotonic()+35
+            until = time.monotonic()+65
             while not (state/'result.json').exists() and time.monotonic()<until:
                 if server.poll() is not None: raise RuntimeError('HTTPS fixture stopped during the journey: '+(state/'server.log').read_text()[-8192:])
                 time.sleep(.2)
@@ -130,9 +141,17 @@ def qualify(app):
                                '--predicate','process == "Daimon"'],timeout=10)[-16384:])
                 except (subprocess.TimeoutExpired,RuntimeError) as error:
                     print(json.dumps({'native_log':'unconfirmed','error':str(error)[-512:]}),flush=True)
-                raise RuntimeError('No terminal WebView/native receipt within35seconds; no relaunch')
+                raise RuntimeError('No terminal WebView/native receipt within65seconds; no relaunch')
             result = json.loads((state/'result.json').read_text()); print(json.dumps(result),flush=True)
             assert result.get('state')=='passed' and result.get('played_bytes')==28800, result
+            beacon = result.get('beacon_qualification',{})
+            assert (beacon.get('state')=='passed' and beacon.get('microphone_requested') is False
+                    and beacon.get('played_frames',0)>0 and beacon.get('phases')==[
+                        'playing','stale_quiet','fresh_playing','duck_quiet','restored_playing','foreground_closed']), beacon
+            assert beacon.get('tls_fixture') == {'valid_chain':True,'wrong_host_refused':True,
+                    'wrong_anchor_refused':True,'system_trust_modified':False}, beacon
+            assert result.get('beacon_bridge') == {'states':['beacon_playing','beacon_quiet','beacon_playing','beacon_quiet'],
+                    'replay_refused':True,'microphone_requested':False}, result
             passed = True
         finally:
             cleanup = []

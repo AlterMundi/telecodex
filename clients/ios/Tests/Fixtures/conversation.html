@@ -3,21 +3,39 @@
 <script>
 window.runQualification=async()=>{
   if(window.started)return;window.started=true;
-  let output;
+  let output,beaconOutput;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms)),positions=new Map();
-  const failures=[],phases=[];
+  const failures=[],phases=[],beaconStates=[];let replayRefused=false;
   const wait=async predicate=>{for(let n=0;n<80&&!predicate()&&!failures.length;n++)await sleep(50);if(!predicate()||failures.length)throw Error(JSON.stringify({failures,phases}));};
   try{
-    if(!window.NativeSpeechAudio||NativeSpeechAudio.pcm!==false)throw Error('Unexpected capability advertisement');
+    if(!window.NativeSpeechAudio||NativeSpeechAudio.pcm!==false||NativeSpeechAudio.beacon!==false)throw Error('Unexpected capability advertisement');
+    const beacon=window.__nativeBeaconQualification;
+    if(beacon?.state!=='passed'||beacon.microphone_requested!==false||!(beacon.played_frames>0))throw Error('Native Beacon probe: '+JSON.stringify(beacon));
+    if(beacon.tls_fixture?.valid_chain!==true||beacon.tls_fixture?.wrong_host_refused!==true||beacon.tls_fixture?.wrong_anchor_refused!==true||beacon.tls_fixture?.system_trust_modified!==false)throw Error('Fixture TLS evidence missing');
     // Same-origin iframe knows the main document token but cannot reserve native output.
     const iframe=document.createElement('iframe');iframe.srcdoc='<script>window.webkit.messageHandlers.audio.postMessage(JSON.stringify({command:"pcm_begin",document_id:parent.__DaimonAudioDocument,id:"pcm_999",seconds:600}));<\/script>';
     document.body.append(iframe);await sleep(250);iframe.remove();
+    beaconOutput=NativeSpeechAudio.openBeacon({onState:s=>beaconStates.push(s),onUnavailable:s=>failures.push(s)});
+    await beaconOutput.ready;
+    const frame=valid_for_ms=>({frequencies:[40.4,80.8,121.2,161.6,282.8,444.4],pulses:[0,0,0,0,0,0],weights:[1,0,0,0,0,0],depth:0,level:0.2,transition_ms:20,valid_for_ms});
+    beaconOutput.frame(frame(200));await wait(()=>beaconStates.includes('beacon_playing'));
+    await wait(()=>beaconStates.includes('beacon_quiet'));
+    beaconOutput.frame(frame(10000));await wait(()=>beaconStates.filter(s=>s==='beacon_playing').length===2);
     output=NativeSpeechAudio.openPcm({sessionSeconds:600,onProgress:(id,count)=>positions.set(id,count),onState:s=>phases.push(s),onUnavailable:s=>failures.push(s)});
     await output.ready;
     const tone=new Uint8Array(9600),view=new DataView(tone.buffer);
     for(let n=0;n<4800;n++)view.setInt16(n*2,Math.round(Math.sin(n*2*Math.PI*440/24000)*2048),true);
     const first=crypto.randomUUID();await output.append(first,tone.length,tone);
     await wait(()=>positions.get(first)===tone.length);
+    if(beaconStates.at(-1)!=='beacon_playing')throw Error('Speech completion displaced Beacon');
+    beaconOutput.level(0,80);await wait(()=>beaconStates.filter(s=>s==='beacon_quiet').length===2);
+    const retired=beaconOutput.id,previous=DaimonAudio.onmessage;let nativeClosed=false;
+    try{
+      DaimonAudio.onmessage=event=>{const message=JSON.parse(event.data);if(message.id===retired){if(message.type==='beacon_closed')nativeClosed=true;if(message.type==='beacon_error')replayRefused=true;}previous?.(event);};
+      beaconOutput.close();beaconOutput=undefined;await wait(()=>nativeClosed);
+      DaimonAudio.postMessage(JSON.stringify({command:'beacon_begin',id:retired}));
+      await wait(()=>replayRefused);
+    }finally{DaimonAudio.onmessage=previous;}
     output.pause();const next=crypto.randomUUID();await output.append(next,tone.length,tone);
     await sleep(250);if(positions.has(next))throw Error('Paused bytes became playback receipts');
     output.resume();await wait(()=>positions.get(next)===tone.length);
@@ -25,10 +43,10 @@ window.runQualification=async()=>{
     await wait(()=>positions.get(last)===tone.length);
     output.close();output=undefined;
     if(failures.length)throw Error(JSON.stringify(failures));
-    sessionStorage.setItem('qualification',JSON.stringify({state:'native_bridge_passed',played_bytes:3*tone.length,iframe_attempt:'could_not_reserve_owner',phases}));
+    sessionStorage.setItem('qualification',JSON.stringify({state:'native_bridge_passed',played_bytes:3*tone.length,beacon_qualification:window.__nativeBeaconQualification,beacon_bridge:{states:beaconStates,replay_refused:replayRefused,microphone_requested:false},iframe_attempt:'could_not_reserve_owner',phases}));
     location.href='/outside/';
   }catch(error){
     await fetch('/result',{method:'POST',body:JSON.stringify({state:'failed',message:error.name+': '+error.message})});
-  }finally{output?.close();}
+  }finally{output?.close();beaconOutput?.close();}
 };
 </script>

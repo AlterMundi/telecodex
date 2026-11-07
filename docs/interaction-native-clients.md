@@ -384,11 +384,23 @@ iframe unable to reserve output and native facade absent outside the app path.
 Ad-hoc simulator build, exact adapter, install/launch and complete scoped fixture/
 device/CA cleanup passed. Earlier timeout/cleanup failures retain their outcomes;
 the supported fixture observes unknown install/launch without replay. A bounded
-one-day CA is trusted only on the new disposable simulator, never production.
+one-day CA was trusted only on that new disposable simulator, never production.
+The current PR731 fixture instead uses a separate qualification-only localhost
+anchor evaluator, with wrong-host/wrong-anchor refusals and no system trust store
+mutation. CI also compiles the normal app without the helper.
 These are synthetic source/device observations, not physical hearing or shared
 login/passkey/capture acceptance. Native capabilities stay off pending those paths.
+The iOS Beacon DSP now has a prepared foreground output driver and independent
+shared-session holder: two40ms buffers, one reschedulable timer, unchanged20s
+observation expiry, one-second stale fade and a nonrenewable two-hour owner.
+A qualification-only native probe requires played/stale-quiet/fresh/duck/restored/
+foreground-close receipts before the PCM WebView journey. It requests no mic,
+provider or observer. The prepared closed Beacon bridge reuses existing commands,
+exact document/owner fences and absolute deadlines; capability remains off pending
+actual runtime/capture/account qualification and independent boundary review.
 Normal device packaging/signing, real account, duplex/progressive/background,
-Beacon and physical iPhone acceptance remain open. No iOS distribution is claimed.
+Beacon bridge and physical iPhone/music/hearing acceptance remain open. No iOS
+distribution is claimed.
 
 1. Build/sign/install the pilot; qualify shared login, complete text/voice input,
    reply/source binding, copy/files, native speech and music recovery on Android.
