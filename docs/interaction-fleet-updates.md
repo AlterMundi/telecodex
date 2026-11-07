@@ -140,3 +140,20 @@ bootstrap through the current observed-idle route and record that limitation;
 do not silently bypass or pretend it had atomic admission exclusion. Once the
 reader is selected, ordinary later updates must use the shared fence. Publication
 or source tests alone do not establish receiving/device acceptance.
+
+## Collector verification after a listener replacement
+
+A failed `attach-active` command must retain its actual stdout/stderr. It is not
+proof that the native turn stopped or that attachment should be repeated. Read
+the current physical turn and the retained collector/admission records first.
+Startup recovery can already own a replacement collector. Later accepted routed
+input can also own the same physical turn through an ordinary worker rather
+than an explicit attachment. Preserve that input and its publication authority;
+do not create another attachment or repeat the input to repair the verifier.
+
+For the selected physical turn, verify either a fresh current collector receipt,
+or a current running worker with an accepted source correlated to that exact
+native turn after the replacement. A running local row or an owner-command ACK
+alone is insufficient. If the native turn has finished, observe its retained
+terminal/result path instead. Keep the failed operator receipt and record the
+separate verification outcome; never rerun its completed selection phases.
